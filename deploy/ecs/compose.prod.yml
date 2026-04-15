@@ -1,0 +1,11 @@
+services:
+  public-web:
+    image: ghcr.io/example/public-web:latest
+  admin-ui:
+    image: ghcr.io/example/admin-ui:latest
+  backend-api:
+    image: ghcr.io/example/backend-api:latest
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+  postgres:
+    image: postgres:16

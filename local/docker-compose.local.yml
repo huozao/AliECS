@@ -1,0 +1,36 @@
+services:
+  public-web:
+    build: ../services/public-web
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend-api
+
+  admin-ui:
+    build: ../services/admin-ui
+    ports:
+      - "8081:80"
+
+  backend-api:
+    build: ../services/backend-api
+    environment:
+      DATABASE_URL: postgresql://app:app@postgres:5432/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../db/migrations:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+
+volumes:
+  pgdata:
