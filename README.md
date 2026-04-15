@@ -32,3 +32,7 @@ docker compose -f local/docker-compose.local.yml up --build
 - ECS 部署入口：`deploy/ecs/deploy.sh`
 - 数据库迁移入口：`deploy/ecs/migrate.sh`
 - 健康检查入口：`deploy/ecs/healthcheck.sh`
+
+
+## 贡献规范
+- 贡献流程与中文提交说明：`CONTRIBUTING.md`
