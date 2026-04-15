@@ -2,5 +2,5 @@ from __future__ import annotations
 
 
 def upsert_domain(stage_records: list[dict[str, str]]) -> int:
-    """Phase 1 no-op upsert placeholder."""
+    """阶段一：写入更新占位逻辑，返回记录数。"""
     return len(stage_records)

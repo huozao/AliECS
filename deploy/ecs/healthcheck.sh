@@ -6,13 +6,13 @@ source "$ROOT_DIR/release-meta.env"
 
 for ((i=1; i<=HEALTHCHECK_RETRIES; i++)); do
   if curl -fsS "$HEALTHCHECK_URL" >/dev/null; then
-    echo "[healthcheck] healthy"
+    echo "[健康检查] 通过"
     exit 0
   fi
 
-  echo "[healthcheck] waiting ($i/$HEALTHCHECK_RETRIES)"
+  echo "[健康检查] 等待中（$i/$HEALTHCHECK_RETRIES）"
   sleep "$HEALTHCHECK_INTERVAL_SECONDS"
 done
 
-echo "[healthcheck] failed" >&2
+echo "[健康检查] 失败" >&2
 exit 1

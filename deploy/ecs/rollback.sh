@@ -6,11 +6,11 @@ source "$ROOT_DIR/release-meta.env"
 
 PREVIOUS_ENV="$METADATA_DIR/previous.env"
 if [[ ! -f "$PREVIOUS_ENV" ]]; then
-  echo "[rollback] previous metadata not found, skip rollback" >&2
+  echo "[回滚] 未找到上一版本元信息，无法回滚" >&2
   exit 1
 fi
 
 cp "$PREVIOUS_ENV" "$RUNTIME_ENV_FILE"
 docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" up -d
 
-echo "[rollback] switched to previous release"
+echo "[回滚] 已切回上一版本"

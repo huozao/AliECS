@@ -2,5 +2,6 @@ from __future__ import annotations
 
 
 def writeback_guard(stage_records: list[dict[str, str]]) -> bool:
-    """Guardrail for writeback; Phase 1 keeps disabled by default."""
+    """阶段一：回写保护默认关闭。"""
+    _ = stage_records
     return False

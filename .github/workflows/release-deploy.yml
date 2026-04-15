@@ -1,4 +1,4 @@
-name: release-deploy
+name: 发布并部署
 
 on:
   push:
@@ -14,29 +14,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set image tag
+      - name: 设置镜像标签
         id: vars
         run: echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
 
-      - name: Log in to GHCR
+      - name: 登录 GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      - name: Build and push public-web
+      - name: 构建并推送 public-web
         run: |
           docker build -t ghcr.io/${{ github.repository_owner }}/public-web:${{ steps.vars.outputs.tag }} services/public-web
           docker push ghcr.io/${{ github.repository_owner }}/public-web:${{ steps.vars.outputs.tag }}
 
-      - name: Build and push admin-ui
+      - name: 构建并推送 admin-ui
         run: |
           docker build -t ghcr.io/${{ github.repository_owner }}/admin-ui:${{ steps.vars.outputs.tag }} services/admin-ui
           docker push ghcr.io/${{ github.repository_owner }}/admin-ui:${{ steps.vars.outputs.tag }}
 
-      - name: Build and push backend-api
+      - name: 构建并推送 backend-api
         run: |
           docker build -t ghcr.io/${{ github.repository_owner }}/backend-api:${{ steps.vars.outputs.tag }} services/backend-api
           docker push ghcr.io/${{ github.repository_owner }}/backend-api:${{ steps.vars.outputs.tag }}
 
-      - name: Trigger ECS deploy script over SSH
+      - name: 通过 SSH 触发 ECS 部署脚本
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.ECS_HOST }}

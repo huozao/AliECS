@@ -1,4 +1,4 @@
-"""Future Sync Pipeline main flow (Phase 1 executable skeleton)."""
+"""Future Sync 主流程骨架（阶段一可执行形态）。"""
 
 
 def run_sync_once() -> dict[str, int]:

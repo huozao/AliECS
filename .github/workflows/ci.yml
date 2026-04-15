@@ -1,4 +1,4 @@
-name: ci
+name: 持续集成检查
 
 on:
   pull_request:
@@ -11,14 +11,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Python syntax check
+      - name: Python 语法检查
         run: python -m py_compile services/backend-api/app/main.py sync-pipeline/main_flow.py
 
-      - name: Shell syntax check
+      - name: Shell 语法检查
         run: bash -n deploy/ecs/deploy.sh deploy/ecs/migrate.sh deploy/ecs/healthcheck.sh deploy/ecs/rollback.sh
 
-      - name: Compose config check
+      - name: Compose 配置检查
         run: docker compose -f local/docker-compose.local.yml config >/dev/null
 
-      - name: Build local images
+      - name: 构建本地镜像
         run: docker compose -f local/docker-compose.local.yml build
