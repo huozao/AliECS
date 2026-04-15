@@ -1,29 +1,34 @@
-# AliECS AI-Friendly Project Skeleton (Phase 1)
+# AliECS AI 协作友好项目（Phase 1）
 
-## What this repository is
-This repository is the **source of truth** for an AI-friendly ECS deployment project:
-- GitHub: source code truth
-- GHCR: image truth
-- Alibaba ECS: runtime host
-- Local Docker Compose: primary verification environment
-- Codex: collaboration entry only (not deploy/source truth)
+## 项目定位
+- **GitHub**：源码事实来源（仓库：`https://github.com/huozao/AliECS`）。
+- **GHCR**：镜像事实来源。
+- **阿里云 ECS**：运行节点。
+- **Codex**：协作入口（读仓库、提建议、给补丁），不是事实来源和自动上线入口。
 
-## Phase 1 goal
-Deliver a minimal runnable skeleton:
-1. Local run: public-web + backend-api + postgres
-2. GitHub Actions: build & push images to GHCR
-3. GitHub Actions: trigger ECS host deploy script over SSH
-4. Admin UI: placeholder only
-5. Future Sync Pipeline: folder + explicit main flow skeleton only
+## 已完成范围（Phase 1）
+- 本地可运行：`public-web + admin-ui(占位) + backend-api + postgres`。
+- API 提供健康检查和就绪检查（含数据库连通探测）。
+- CI 做语法与 compose 校验。
+- 发布流支持构建/推送三类镜像并通过 SSH 触发 ECS 部署。
+- ECS 部署主流程明确：`先迁移 -> 再切换 -> 再健康检查 -> 失败回滚`。
+- Future Sync Pipeline 只保留可执行骨架，不实现复杂业务。
 
-## Quick start (local)
+## 本地快速启动
 ```bash
 docker compose -f local/docker-compose.local.yml up --build
 ```
 
-## Human/AI navigation
-- Project map: `docs/project-navigation.md`
-- Architecture boundary: `docs/architecture-boundaries.md`
-- ECS deploy entry: `deploy/ecs/deploy.sh`
-- DB migration entry: `deploy/ecs/migrate.sh`
-- Health check entry: `deploy/ecs/healthcheck.sh`
+访问地址：
+- 公网展示页（本地）: http://localhost:8080
+- 管理后台占位页（本地）: http://localhost:8081
+- API 健康检查（本地）: http://localhost:8000/healthz
+
+## 入口导航
+- 架构边界：`docs/architecture-boundaries.md`
+- 修改导航：`docs/project-navigation.md`
+- Ubuntu 24.04 新手部署说明：`docs/ubuntu-24.04-ecs-部署指南.md`
+- 本地运行入口：`local/docker-compose.local.yml`
+- ECS 部署入口：`deploy/ecs/deploy.sh`
+- 数据库迁移入口：`deploy/ecs/migrate.sh`
+- 健康检查入口：`deploy/ecs/healthcheck.sh`
