@@ -1,0 +1,45 @@
+name: release-deploy
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-push-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set image tag
+        id: vars
+        run: echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build and push public-web
+        run: |
+          docker build -t ghcr.io/${{ github.repository_owner }}/public-web:${{ steps.vars.outputs.tag }} services/public-web
+          docker push ghcr.io/${{ github.repository_owner }}/public-web:${{ steps.vars.outputs.tag }}
+
+      - name: Build and push admin-ui
+        run: |
+          docker build -t ghcr.io/${{ github.repository_owner }}/admin-ui:${{ steps.vars.outputs.tag }} services/admin-ui
+          docker push ghcr.io/${{ github.repository_owner }}/admin-ui:${{ steps.vars.outputs.tag }}
+
+      - name: Build and push backend-api
+        run: |
+          docker build -t ghcr.io/${{ github.repository_owner }}/backend-api:${{ steps.vars.outputs.tag }} services/backend-api
+          docker push ghcr.io/${{ github.repository_owner }}/backend-api:${{ steps.vars.outputs.tag }}
+
+      - name: Trigger ECS deploy script over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ECS_HOST }}
+          username: ${{ secrets.ECS_USER }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          script: /opt/app/deploy/ecs/deploy.sh ${{ steps.vars.outputs.tag }}

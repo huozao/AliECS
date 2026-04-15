@@ -1,0 +1,24 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python syntax check
+        run: python -m py_compile services/backend-api/app/main.py sync-pipeline/main_flow.py
+
+      - name: Shell syntax check
+        run: bash -n deploy/ecs/deploy.sh deploy/ecs/migrate.sh deploy/ecs/healthcheck.sh deploy/ecs/rollback.sh
+
+      - name: Compose config check
+        run: docker compose -f local/docker-compose.local.yml config >/dev/null
+
+      - name: Build local images
+        run: docker compose -f local/docker-compose.local.yml build
