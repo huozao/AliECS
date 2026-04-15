@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS app_health_log (
+  id BIGSERIAL PRIMARY KEY,
+  checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  note TEXT NOT NULL DEFAULT 'bootstrap'
+);

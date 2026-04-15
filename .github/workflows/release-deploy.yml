@@ -1,0 +1,27 @@
+name: release-deploy
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-push-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      - name: Build and push backend-api
+        run: |
+          docker build -t ghcr.io/${{ github.repository_owner }}/backend-api:${{ github.ref_name }} services/backend-api
+          docker push ghcr.io/${{ github.repository_owner }}/backend-api:${{ github.ref_name }}
+      - name: Trigger ECS deploy script over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ECS_HOST }}
+          username: ${{ secrets.ECS_USER }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          script: /opt/app/deploy/ecs/deploy.sh
