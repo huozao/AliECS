@@ -14,5 +14,5 @@ for ((i=1; i<=HEALTHCHECK_RETRIES; i++)); do
   sleep "$HEALTHCHECK_INTERVAL_SECONDS"
 done
 
-echo "[健康检查] 失败" >&2
+echo "[健康检查] 失败：$HEALTHCHECK_URL" >&2
 exit 1

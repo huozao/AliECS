@@ -1,2 +1,244 @@
 <!doctype html>
-<html><body><h1>Public Web Placeholder</h1><p>Phase 1 skeleton running.</p></body></html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AliECS · 自动部署与运维首页</title>
+  <style>
+    :root {
+      --bg: #f5f4ed;
+      --surface: #faf9f5;
+      --text: #141413;
+      --muted: #5e5d59;
+      --border: #e8e6dc;
+      --brand: #c96442;
+      --brand-hover: #b85a3a;
+      --ring: rgba(20, 20, 19, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+      line-height: 1.6;
+    }
+
+    .container { width: min(1080px, 92vw); margin: 0 auto; }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      backdrop-filter: blur(6px);
+      background: color-mix(in srgb, var(--bg) 88%, white);
+      border-bottom: 1px solid var(--border);
+      z-index: 10;
+    }
+
+    .topbar-inner {
+      height: 64px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .brand {
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 1.2rem;
+      letter-spacing: 0.2px;
+    }
+
+    .top-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 10px;
+      padding: 9px 14px;
+      text-decoration: none;
+      border: 1px solid transparent;
+      font-size: 0.95rem;
+      transition: all 0.18s ease;
+      cursor: pointer;
+    }
+
+    .btn-primary {
+      color: #fff;
+      background: var(--brand);
+      border-color: var(--brand);
+    }
+
+    .btn-primary:hover { background: var(--brand-hover); border-color: var(--brand-hover); }
+
+    .btn-secondary {
+      color: var(--text);
+      background: var(--surface);
+      border-color: var(--border);
+    }
+
+    .btn-secondary:hover { box-shadow: 0 0 0 4px var(--ring); }
+
+    main { padding: 40px 0 56px; }
+
+    .hero {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 44px clamp(20px, 5vw, 46px);
+      box-shadow: 0 8px 28px rgba(20, 20, 19, 0.03);
+      margin-bottom: 28px;
+    }
+
+    h1, h2, h3 {
+      font-family: Georgia, "Times New Roman", serif;
+      font-weight: 500;
+      margin: 0 0 12px;
+      line-height: 1.2;
+    }
+
+    h1 { font-size: clamp(2rem, 4.2vw, 3rem); }
+    h2 { font-size: clamp(1.45rem, 2.6vw, 2rem); margin-bottom: 14px; }
+    h3 { font-size: 1.12rem; margin-bottom: 8px; }
+
+    .lead { max-width: 760px; color: var(--muted); margin-bottom: 18px; }
+
+    .hero-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+    }
+
+    .card p { margin: 0; color: var(--muted); }
+
+    .pipeline {
+      background: #141413;
+      color: #f2f0e8;
+      border-radius: 16px;
+      padding: 20px;
+      margin-bottom: 24px;
+    }
+
+    .pipeline ol {
+      margin: 10px 0 0;
+      padding-left: 20px;
+      color: #d7d1c6;
+    }
+
+    .pipeline code,
+    .docs code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: rgba(249, 247, 239, 0.13);
+      border: 1px solid rgba(230, 224, 210, 0.25);
+      border-radius: 8px;
+      padding: 2px 8px;
+      color: #f7f2e9;
+    }
+
+    .docs {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 20px;
+      margin-bottom: 22px;
+    }
+
+    .docs ul { margin: 10px 0 0; padding-left: 18px; }
+    .docs li { margin-bottom: 8px; }
+
+    .footer {
+      border-top: 1px solid var(--border);
+      padding-top: 14px;
+      color: var(--muted);
+      font-size: 0.93rem;
+    }
+
+    @media (max-width: 860px) {
+      .grid { grid-template-columns: 1fr; }
+      .topbar-inner { height: auto; padding: 10px 0; align-items: flex-start; flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <div class="brand">AliECS</div>
+      <nav class="top-actions">
+        <a class="btn btn-secondary" href="/admin/">管理后台</a>
+        <a class="btn btn-secondary" href="/api/healthz">API 健康检查</a>
+        <a class="btn btn-primary" href="https://github.com/huozao/AliECS" target="_blank" rel="noreferrer">GitHub 仓库</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <h1>可重复、可记录、可迁移的 ECS 自动部署骨架</h1>
+      <p class="lead">
+        AliECS 面向 AI / 开发工具型项目：保留本地快速验证体验，同时将生产发布标准化为
+        <strong>GitHub tag → Actions → GHCR → ECS deploy.sh</strong>。
+      </p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="/api/readyz">查看就绪状态</a>
+        <a class="btn btn-secondary" href="https://github.com/huozao/AliECS/blob/main/docs/auto-deploy-guide.md" target="_blank" rel="noreferrer">自动部署指南</a>
+      </div>
+    </section>
+
+    <section class="grid" aria-label="当前能力概览">
+      <article class="card">
+        <h3>项目简介</h3>
+        <p>本地与 ECS 手工链路均可运行，当前重点是把手工流程收敛为稳定自动发布链路。</p>
+      </article>
+      <article class="card">
+        <h3>架构概览</h3>
+        <p>宿主机 Nginx 统一入口；应用由 public-web/admin-ui/backend-api/postgres 组成并在 Docker Compose 运行。</p>
+      </article>
+      <article class="card">
+        <h3>自动部署能力</h3>
+        <p>支持 tag 发布与 workflow_dispatch；deploy.sh 内置迁移、健康检查、失败回滚和日志落盘。</p>
+      </article>
+      <article class="card">
+        <h3>文档入口</h3>
+        <p>仓库内提供自动部署总说明、首次部署清单和 ECS 运维记录模板，可直接复用到新服务器。</p>
+      </article>
+    </section>
+
+    <section class="pipeline">
+      <h2>自动部署流程概览</h2>
+      <ol>
+        <li>本地改代码并通过 <code>local/docker-compose.local.yml</code> 验证</li>
+        <li>推送到 GitHub，并创建版本标签（如 <code>v0.1.0</code>）</li>
+        <li>Actions 构建并推送三类镜像到 GHCR</li>
+        <li>SSH 到 ECS 执行 <code>/opt/app/deploy/ecs/deploy.sh &lt;tag&gt;</code></li>
+        <li>执行迁移、切换、健康检查；失败自动回滚</li>
+      </ol>
+    </section>
+
+    <section class="docs">
+      <h2>文档与入口</h2>
+      <ul>
+        <li><a href="https://github.com/huozao/AliECS/blob/main/docs/auto-deploy-guide.md" target="_blank" rel="noreferrer">docs/auto-deploy-guide.md</a></li>
+        <li><a href="https://github.com/huozao/AliECS/blob/main/docs/ecs-first-deploy-checklist.md" target="_blank" rel="noreferrer">docs/ecs-first-deploy-checklist.md</a></li>
+        <li><a href="https://github.com/huozao/AliECS/blob/main/docs/ecs-operation-record-template.md" target="_blank" rel="noreferrer">docs/ecs-operation-record-template.md</a></li>
+        <li><a href="https://github.com/huozao/AliECS/blob/main/DESIGN.md" target="_blank" rel="noreferrer">DESIGN.md（页面设计依据）</a></li>
+      </ul>
+    </section>
+
+    <footer class="footer">
+      AliECS · 面向 AI 工具链项目的最小可用自动部署骨架（Phase 1）
+    </footer>
+  </main>
+</body>
+</html>
