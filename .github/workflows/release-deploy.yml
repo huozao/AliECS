@@ -4,6 +4,16 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "要部署的镜像标签（例如 v0.1.0）"
+        required: true
+        type: string
+
+concurrency:
+  group: release-deploy
+  cancel-in-progress: false
 
 jobs:
   build-push-deploy:
@@ -16,7 +26,12 @@ jobs:
 
       - name: 设置镜像标签
         id: vars
-        run: echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "tag=${{ inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: 登录 GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
