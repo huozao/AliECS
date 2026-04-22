@@ -19,6 +19,21 @@ fi
 echo "[迁移] 先确保 postgres 已启动"
 docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" up -d postgres
 
+echo "[迁移] 等待 postgres 就绪"
+for ((i=1; i<=30; i++)); do
+  if docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" exec -T postgres     pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
+    echo "[迁移] postgres 已就绪"
+    break
+  fi
+
+  if (( i == 30 )); then
+    echo "[迁移] postgres 未在预期时间内就绪" >&2
+    exit 1
+  fi
+
+  sleep 2
+done
+
 echo "[迁移] 执行 $MIGRATIONS_DIR 下的 SQL"
 shopt -s nullglob
 sql_files=("$MIGRATIONS_DIR"/*.sql)

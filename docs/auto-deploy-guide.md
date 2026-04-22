@@ -10,7 +10,7 @@
 
 ### 1.2 已有部署脚本链
 - `deploy.sh`：拉镜像 -> 迁移 -> 切换 -> 健康检查 -> 失败回滚。
-- `migrate.sh`：确保 postgres 启动后执行 `db/migrations/*.sql`。
+- `migrate.sh`：确保 postgres 启动并等待就绪（`pg_isready`）后执行 `db/migrations/*.sql`。
 - `healthcheck.sh`：轮询 `HEALTHCHECK_URL`。
 - `rollback.sh`：读取上一版元信息并回滚。
 
