@@ -24,6 +24,23 @@ docker compose -f local/docker-compose.local.yml up --build
 - 管理后台占位页（本地）: http://localhost:8081
 - API 健康检查（本地）: http://localhost:8000/healthz
 
+
+## 自动化部署与日志
+- **主路径（推荐）**：`v*` tag 触发 `.github/workflows/release-deploy.yml`，Actions 构建并推送 GHCR 镜像后，SSH 到 ECS 执行 `deploy/ecs/deploy.sh <tag>`。
+- **过渡路径（可选）**：ECS 侧 `deploy/ecs/auto-sync.sh` 可做“拉代码 + 重建 + 健康检查”的一次性自动化。
+- **镜像命名规范**：
+  - `ghcr.io/<owner>/public-web:<tag>`
+  - `ghcr.io/<owner>/admin-ui:<tag>`
+  - `ghcr.io/<owner>/backend-api:<tag>`
+- **日志查看**：
+  - Actions 发布日志：GitHub Actions 页面（工作流：`发布并部署`）
+  - ECS 发布日志：`/opt/app/deploy/ecs/logs/deploy-YYYYMMDD.log`
+  - 容器运行日志：`docker compose --env-file /opt/app/deploy/ecs/runtime.env -f /opt/app/deploy/ecs/compose.prod.yml logs --tail=200`
+- **详细文档**：
+  - 自动部署总说明：`docs/auto-deploy-guide.md`
+  - ECS 首次部署清单：`docs/ecs-first-deploy-checklist.md`
+  - ECS 运维记录模板：`docs/ecs-operation-record-template.md`
+
 ## 入口导航
 - 架构边界：`docs/architecture-boundaries.md`
 - 修改导航：`docs/project-navigation.md`

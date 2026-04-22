@@ -10,6 +10,11 @@ IMAGE_TAG="$1"
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$ROOT_DIR/release-meta.env"
 
+LOG_DIR="${DEPLOY_LOG_DIR:-$ROOT_DIR/logs}"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/deploy-$(date +%Y%m%d).log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
 mkdir -p "$METADATA_DIR"
 CURRENT_ENV="$METADATA_DIR/current.env"
 PREVIOUS_ENV="$METADATA_DIR/previous.env"
@@ -31,6 +36,11 @@ DATABASE_URL=${DATABASE_URL}
 ENV
 
 cp "$CURRENT_ENV" "$RUNTIME_ENV_FILE"
+
+if [[ -n "${GHCR_USERNAME:-}" && -n "${GHCR_TOKEN:-}" ]]; then
+  echo "[部署] 登录 GHCR"
+  echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
+fi
 
 echo "[部署] 拉取镜像"
 docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" pull
