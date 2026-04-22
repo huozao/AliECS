@@ -36,6 +36,13 @@ docker compose -f local/docker-compose.local.yml up --build
   - Actions 发布日志：GitHub Actions 页面（工作流：`发布并部署`）
   - ECS 发布日志：`/opt/app/deploy/ecs/logs/deploy-YYYYMMDD.log`
   - 容器运行日志：`docker compose --env-file /opt/app/deploy/ecs/runtime.env -f /opt/app/deploy/ecs/compose.prod.yml logs --tail=200`
+- **GitHub Secrets（自动部署必需）**：
+  - `ECS_HOST` / `ECS_USER` / `ECS_SSH_KEY`
+  - 私有 GHCR 推荐再配：`GHCR_USERNAME` / `GHCR_TOKEN`（`read:packages`）
+- **触发方式差异**：
+  - `git tag vX.Y.Z && git push origin vX.Y.Z`：正式发布（推荐）
+  - `workflow_dispatch`：手工重试/补部署（必须输入 `image_tag` 且格式为 `v*`）
+- **主页设计依据**：`DESIGN.md`（参考 VoltAgent/awesome-design-md 的 Claude 设计语言，非像素级复制）。
 - **详细文档**：
   - 自动部署总说明：`docs/auto-deploy-guide.md`
   - ECS 首次部署清单：`docs/ecs-first-deploy-checklist.md`

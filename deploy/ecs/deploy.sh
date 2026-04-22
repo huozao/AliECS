@@ -43,7 +43,13 @@ if [[ -n "${GHCR_USERNAME:-}" && -n "${GHCR_TOKEN:-}" ]]; then
 fi
 
 echo "[部署] 拉取镜像"
-docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" pull
+if ! docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" pull; then
+  echo "[部署] 拉取镜像失败。若报 unauthorized，请检查：" >&2
+  echo "[部署] 1) GHCR 包可见性（public/private）" >&2
+  echo "[部署] 2) GHCR_USERNAME / GHCR_TOKEN 是否在 ECS 或 Actions 中正确提供" >&2
+  echo "[部署] 3) GHCR_BASE 与镜像命名是否一致（例如 ghcr.io/huozao/*）" >&2
+  exit 1
+fi
 
 echo "[部署] 先执行迁移"
 "$ROOT_DIR/migrate.sh"

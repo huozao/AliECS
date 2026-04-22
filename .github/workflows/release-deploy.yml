@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "要部署的镜像标签（例如 v0.1.0）"
+        description: "要部署的镜像标签（必须以 v 开头，例如 v0.1.0）"
         required: true
         type: string
 
@@ -28,12 +28,19 @@ jobs:
         id: vars
         run: |
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            echo "tag=${{ inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+            TAG="${{ inputs.image_tag }}"
           else
-            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            TAG="${GITHUB_REF_NAME}"
           fi
 
-      - name: 登录 GHCR
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-].+)?$ ]]; then
+            echo "镜像标签格式错误：$TAG（必须以 v 开头，例如 v0.1.0）" >&2
+            exit 1
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: 登录 GHCR（用于推送）
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: 构建并推送 public-web
@@ -53,8 +60,15 @@ jobs:
 
       - name: 通过 SSH 触发 ECS 部署脚本
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         with:
           host: ${{ secrets.ECS_HOST }}
           username: ${{ secrets.ECS_USER }}
           key: ${{ secrets.ECS_SSH_KEY }}
-          script: /opt/app/deploy/ecs/deploy.sh ${{ steps.vars.outputs.tag }}
+          envs: GHCR_USERNAME,GHCR_TOKEN
+          script: |
+            export GHCR_USERNAME="${GHCR_USERNAME:-}"
+            export GHCR_TOKEN="${GHCR_TOKEN:-}"
+            /opt/app/deploy/ecs/deploy.sh ${{ steps.vars.outputs.tag }}

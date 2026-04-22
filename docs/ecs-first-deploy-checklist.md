@@ -96,6 +96,8 @@ cat ~/.ssh/aliecs_actions.pub
 - `ECS_HOST`：ECS 公网 IP
 - `ECS_USER`：SSH 用户
 - `ECS_SSH_KEY`：`~/.ssh/aliecs_actions` 私钥全文
+- `GHCR_USERNAME`：GHCR 用户名（私有镜像时必填）
+- `GHCR_TOKEN`：GHCR PAT（`read:packages`，私有镜像时必填）
 
 ---
 
@@ -108,6 +110,9 @@ cat ~/.ssh/aliecs_actions.pub
    - `GHCR_TOKEN=<你的 PAT>`
 
 如果 GHCR 镜像是公开：可留空。
+
+> 常见错误：`unauthorized`  
+> 根因通常是 GHCR 包为私有，但 ECS 拉镜像前没有 `docker login ghcr.io`。本项目已在 `deploy.sh` 中支持通过 `GHCR_USERNAME/GHCR_TOKEN` 自动登录。
 
 ---
 
@@ -193,7 +198,17 @@ git push origin v0.1.0
 
 ---
 
-## 13) 日常更新部署（以后）
+
+## 13) 触发方式说明（tag vs workflow_dispatch）
+- **tag 触发（推荐）**：
+  - 命令：`git tag vX.Y.Z && git push origin vX.Y.Z`
+  - 特点：版本语义清晰，适合正式发布。
+- **workflow_dispatch（手工）**：
+  - 在 Actions 页面手工启动 `发布并部署`。
+  - 必须输入 `image_tag`，且格式必须为 `v*`（例如 `v0.1.0`）。
+  - 适合补部署、重试、回放同一版本。
+
+## 14) 日常更新部署（以后）
 1. 本地改代码 -> 合并到 `main`。
 2. 打新 tag：`vX.Y.Z`。
 3. `git push origin vX.Y.Z`。
@@ -201,7 +216,7 @@ git push origin v0.1.0
 
 ---
 
-## 14) 常用排障命令
+## 15) 常用排障命令
 ```bash
 # 部署日志
 tail -n 300 /opt/app/deploy/ecs/logs/deploy-$(date +%Y%m%d).log
