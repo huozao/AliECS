@@ -3,22 +3,22 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AliECS · AI 工具项目自动部署骨架</title>
+  <title>AliECS · 配方服务器业务入口</title>
   <style>
     :root {
       --bg: #f6f4ee;
       --surface: #fbfaf6;
-      --surface-2: #f0ede4;
+      --surface-2: #f1eee4;
       --text: #171715;
       --muted: #61605c;
       --line: #e7e3d8;
-      --brand: #c76a45;
-      --brand-deep: #b15a3a;
+      --brand: #c86a45;
+      --brand-deep: #b25a3a;
       --ok: #1f7a47;
-      --warn: #926623;
-      --soft-shadow: 0 10px 30px rgba(18, 18, 16, 0.05);
-      --radius-lg: 18px;
-      --radius-md: 12px;
+      --plan: #936724;
+      --shadow: 0 10px 30px rgba(18, 18, 16, 0.05);
+      --r-lg: 18px;
+      --r-md: 12px;
     }
 
     * { box-sizing: border-box; }
@@ -31,14 +31,14 @@
       line-height: 1.6;
     }
 
-    .container { width: min(1100px, 92vw); margin: 0 auto; }
+    .container { width: min(1120px, 92vw); margin: 0 auto; }
 
     .topbar {
       position: sticky;
       top: 0;
-      z-index: 12;
-      backdrop-filter: blur(8px);
+      z-index: 10;
       border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(6px);
       background: color-mix(in srgb, var(--bg) 90%, white);
     }
 
@@ -47,7 +47,7 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
+      gap: 10px;
       padding: 8px 0;
     }
 
@@ -57,20 +57,20 @@
       letter-spacing: 0.2px;
     }
 
-    .nav { display: flex; gap: 8px; flex-wrap: wrap; }
+    .top-links { display: flex; gap: 8px; flex-wrap: wrap; }
 
     .btn {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      gap: 8px;
-      text-decoration: none;
       border-radius: 10px;
       border: 1px solid transparent;
-      font-size: 0.92rem;
+      text-decoration: none;
       padding: 9px 14px;
-      transition: all .18s ease;
+      font-size: 0.92rem;
+      transition: all .16s ease;
       cursor: pointer;
+      white-space: nowrap;
     }
 
     .btn-primary {
@@ -98,146 +98,152 @@
       font-weight: 500;
     }
 
-    h1 { font-size: clamp(2.1rem, 4.8vw, 3.35rem); }
-    h2 { font-size: clamp(1.45rem, 2.8vw, 2.05rem); margin-bottom: 14px; }
+    h1 { font-size: clamp(2rem, 4.6vw, 3.2rem); }
+    h2 { font-size: clamp(1.42rem, 2.6vw, 2rem); }
     h3 { font-size: 1.08rem; }
 
     .hero {
       border: 1px solid var(--line);
+      border-radius: var(--r-lg);
       background: var(--surface);
-      border-radius: var(--radius-lg);
-      box-shadow: var(--soft-shadow);
-      padding: clamp(22px, 5vw, 48px);
-      margin-bottom: 20px;
+      box-shadow: var(--shadow);
+      padding: clamp(22px, 5vw, 46px);
+      margin-bottom: 18px;
     }
 
-    .sub {
-      color: var(--muted);
-      max-width: 760px;
-      margin: 0 0 18px;
-    }
+    .sub { color: var(--muted); max-width: 760px; margin: 0 0 16px; }
 
-    .pill-group { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
-
-    .pill {
-      border-radius: 999px;
+    .entry-toolbar {
       border: 1px solid var(--line);
-      background: var(--surface-2);
-      padding: 4px 10px;
-      font-size: .82rem;
-      color: #46453f;
+      border-radius: var(--r-md);
+      background: #fff;
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+      margin-top: 12px;
     }
 
-    .layout {
-      display: grid;
-      grid-template-columns: 1.4fr .9fr;
-      gap: 14px;
-      margin-bottom: 20px;
+    .entry-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .group-label {
+      font-size: .82rem;
+      color: var(--muted);
+      margin-right: 6px;
     }
 
     .section {
       border: 1px solid var(--line);
+      border-radius: var(--r-lg);
       background: var(--surface);
-      border-radius: var(--radius-lg);
       padding: 18px;
+      margin-bottom: 16px;
+    }
+
+    .intro-grid {
+      display: grid;
+      grid-template-columns: 1.2fr .8fr;
+      gap: 12px;
+    }
+
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
     }
 
     .kpi {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0,1fr));
-      gap: 10px;
-      margin-top: 14px;
-    }
-
-    .kpi .item {
-      border: 1px solid var(--line);
-      border-radius: var(--radius-md);
-      background: #fff;
-      padding: 10px;
-    }
-
-    .kpi strong { font-size: 1.05rem; }
-    .kpi small { display: block; color: var(--muted); }
-
-    .status {
-      display: grid;
-      gap: 8px;
-      margin-top: 12px;
-    }
-
-    .status-row {
-      display: flex;
-      justify-content: space-between;
-      gap: 10px;
       border: 1px solid var(--line);
       border-radius: 10px;
-      padding: 9px 10px;
       background: #fff;
+      padding: 10px;
       font-size: .92rem;
     }
 
-    .tag {
-      padding: 2px 8px;
+    .kpi strong { display: block; font-size: 1rem; }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: var(--r-md);
+      background: #fff;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 176px;
+    }
+
+    .card p { margin: 0; color: var(--muted); font-size: .92rem; }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
       border-radius: 999px;
       font-size: .77rem;
-      white-space: nowrap;
       border: 1px solid transparent;
+      padding: 2px 8px;
+      width: fit-content;
     }
 
-    .tag-ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 34%, white); background: color-mix(in srgb, var(--ok) 10%, white); }
-    .tag-plan { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 34%, white); background: color-mix(in srgb, var(--warn) 12%, white); }
-
-    .modules {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0,1fr));
-      gap: 12px;
-      margin-bottom: 20px;
+    .status-ok {
+      color: var(--ok);
+      border-color: color-mix(in srgb, var(--ok) 35%, white);
+      background: color-mix(in srgb, var(--ok) 12%, white);
     }
 
-    .module {
-      border: 1px solid var(--line);
-      background: var(--surface);
-      border-radius: var(--radius-md);
-      padding: 14px;
-      min-height: 144px;
+    .status-plan {
+      color: var(--plan);
+      border-color: color-mix(in srgb, var(--plan) 35%, white);
+      background: color-mix(in srgb, var(--plan) 12%, white);
     }
 
-    .module p { margin: 0; color: var(--muted); font-size: .93rem; }
+    .status-placeholder {
+      color: #365f8a;
+      border-color: color-mix(in srgb, #365f8a 35%, white);
+      background: color-mix(in srgb, #365f8a 12%, white);
+    }
 
     .flow {
       border: 1px solid var(--line);
-      background: #191916;
-      color: #f2ede2;
-      border-radius: var(--radius-lg);
-      padding: 18px;
-      margin-bottom: 20px;
+      border-radius: var(--r-md);
+      background: var(--surface-2);
+      padding: 12px 14px;
+      margin-top: 10px;
+      color: #43423d;
+      font-size: .92rem;
     }
 
-    .flow ol { margin: 10px 0 0; padding-left: 20px; color: #ddd5c6; }
-    .flow code {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      background: rgba(255,255,255,0.08);
-      border: 1px solid rgba(255,255,255,0.14);
-      border-radius: 8px;
-      padding: 2px 6px;
-      color: #fff;
-    }
-
-    .docs {
+    .tech {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0,1fr));
-      gap: 12px;
-      margin-bottom: 20px;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin: 12px 0;
     }
 
-    .doc-card {
+    .tech-item {
       border: 1px solid var(--line);
-      background: var(--surface);
-      border-radius: var(--radius-md);
-      padding: 14px;
+      background: #fff;
+      border-radius: 10px;
+      padding: 10px;
+      font-size: .9rem;
     }
 
-    .doc-card a { color: inherit; }
+    .meta-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
 
     footer {
       border-top: 1px solid var(--line);
@@ -247,14 +253,13 @@
     }
 
     @media (max-width: 980px) {
-      .layout { grid-template-columns: 1fr; }
-      .modules { grid-template-columns: 1fr 1fr; }
-      .docs { grid-template-columns: 1fr; }
-      .kpi { grid-template-columns: 1fr; }
+      .intro-grid { grid-template-columns: 1fr; }
+      .cards { grid-template-columns: 1fr 1fr; }
+      .tech { grid-template-columns: 1fr 1fr; }
     }
 
-    @media (max-width: 660px) {
-      .modules { grid-template-columns: 1fr; }
+    @media (max-width: 700px) {
+      .cards, .tech, .kpis { grid-template-columns: 1fr; }
       .topbar-inner { align-items: flex-start; }
     }
   </style>
@@ -262,122 +267,115 @@
 <body>
   <header class="topbar">
     <div class="container topbar-inner">
-      <div class="brand">AliECS</div>
-      <nav class="nav">
+      <div class="brand">AliECS · 配方服务器项目</div>
+      <nav class="top-links">
         <a class="btn btn-soft" href="/api/healthz">Health</a>
-        <a class="btn btn-soft" href="/admin/">Admin UI</a>
-        <a class="btn btn-primary" href="https://github.com/huozao/AliECS" target="_blank" rel="noreferrer">GitHub</a>
+        <a class="btn btn-soft" href="https://github.com/huozao/AliECS" target="_blank" rel="noreferrer">GitHub</a>
       </nav>
     </div>
   </header>
 
   <main class="container">
-    <section class="hero">
-      <div class="pill-group">
-        <span class="pill">Phase 1 Skeleton</span>
-        <span class="pill">ECS + GHCR + Actions</span>
-        <span class="pill">Host Nginx Boundary</span>
+    <section class="hero" id="overview">
+      <h1>业务入口首页</h1>
+      <p class="sub">这里是配方服务器项目的统一入口。当前优先提供清晰的业务模块导航，并保留未上线功能的预留状态，不伪装已上线。</p>
+
+      <div class="entry-toolbar" aria-label="首页入口组">
+        <div class="entry-group">
+          <span class="group-label">基础入口</span>
+          <a class="btn btn-primary" href="#project-intro">项目简介</a>
+          <a class="btn btn-primary" href="/admin/">Admin UI</a>
+        </div>
+        <div class="entry-group">
+          <span class="group-label">业务入口</span>
+          <a class="btn btn-soft" href="#formula">配方查询</a>
+          <a class="btn btn-soft" href="#demand">美的需求</a>
+          <a class="btn btn-soft" href="#raw-stock">原材料库存</a>
+          <a class="btn btn-soft" href="#product-stock">成品库存</a>
+        </div>
       </div>
-      <h1>AI 工具项目的自动部署首页（Claude 风格）</h1>
-      <p class="sub">
-        面向“本地可验证、线上可自动发布、迁移可复用”的工程骨架。当前首页预留了项目全部关键能力入口：
-        runtime 服务、发布链路、运维文档、未来 Sync Pipeline 扩展。
-      </p>
-      <a class="btn btn-primary" href="https://github.com/huozao/AliECS/blob/main/docs/auto-deploy-guide.md" target="_blank" rel="noreferrer">查看自动部署总说明</a>
     </section>
 
-    <section class="layout" aria-label="项目概览">
-      <article class="section">
-        <h2>项目简介与能力范围</h2>
-        <p class="sub" style="margin-bottom: 0;">
-          该项目聚焦最小可用交付闭环：本地 compose 验证、GitHub Actions 构建推送 GHCR、SSH 触发 ECS 部署脚本、
-          迁移与健康检查、失败回滚。首页按模块预留功能位，便于后续持续演进。
+    <section class="section" id="project-intro">
+      <h2>项目简介</h2>
+      <div class="intro-grid">
+        <p class="sub" style="margin: 0; max-width: none;">
+          该项目定位为“配方相关业务入口聚合平台”。当前阶段用于承载配方查询、需求管理、库存查询与管理后台入口，
+          并保持与现有技术架构一致：public-web / admin-ui / backend-api / postgres。未实现模块将明确标记为“预留扩展”或“占位入口”。
         </p>
-        <div class="kpi">
-          <div class="item"><strong>4</strong><small>运行服务：web/admin/api/postgres</small></div>
-          <div class="item"><strong>2</strong><small>部署触发：tag / workflow_dispatch</small></div>
-          <div class="item"><strong>3</strong><small>关键脚本：deploy / migrate / rollback</small></div>
+        <div class="kpis">
+          <div class="kpi"><strong>入口聚合</strong>统一管理业务入口与技术入口</div>
+          <div class="kpi"><strong>状态透明</strong>未上线功能明确标注，不伪装</div>
+          <div class="kpi"><strong>部署兼容</strong>不改变现有 Docker / ECS 结构</div>
+          <div class="kpi"><strong>可持续维护</strong>沿用 DESIGN.md 规则迭代</div>
         </div>
-      </article>
-
-      <article class="section">
-        <h2>当前架构状态</h2>
-        <div class="status">
-          <div class="status-row"><span>public-web</span><span class="tag tag-ok">运行中</span></div>
-          <div class="status-row"><span>admin-ui</span><span class="tag tag-ok">运行中</span></div>
-          <div class="status-row"><span>backend-api</span><span class="tag tag-ok">运行中</span></div>
-          <div class="status-row"><span>postgres</span><span class="tag tag-ok">运行中</span></div>
-          <div class="status-row"><span>sync-pipeline</span><span class="tag tag-plan">预留扩展</span></div>
-        </div>
-      </article>
+      </div>
     </section>
 
-    <section>
-      <h2>功能模块预留（全项目视角）</h2>
-      <div class="modules">
-        <article class="module">
-          <h3>Public Web</h3>
-          <p>官网入口与文档导航，承载部署状态与对外说明。</p>
+    <section class="section" id="business-entry">
+      <h2>业务功能入口</h2>
+      <div class="cards">
+        <article class="card" id="formula">
+          <h3>配方查询</h3>
+          <span class="status status-plan">预留扩展</span>
+          <p>用于按配方编码、产品线或版本查询配方数据。当前仅提供入口占位。</p>
+          <a class="btn btn-soft" href="#formula">查看占位说明</a>
         </article>
-        <article class="module">
+
+        <article class="card" id="demand">
+          <h3>美的需求</h3>
+          <span class="status status-plan">预留扩展</span>
+          <p>用于登记与跟踪需求计划、状态与优先级。当前为业务占位入口。</p>
+          <a class="btn btn-soft" href="#demand">查看占位说明</a>
+        </article>
+
+        <article class="card" id="raw-stock">
+          <h3>原材料库存</h3>
+          <span class="status status-placeholder">占位入口</span>
+          <p>用于后续接入原材料库存查询与预警。当前仅展示结构与入口位置。</p>
+          <a class="btn btn-soft" href="#raw-stock">查看占位说明</a>
+        </article>
+
+        <article class="card" id="product-stock">
+          <h3>成品库存</h3>
+          <span class="status status-placeholder">占位入口</span>
+          <p>用于后续接入成品库存查询与库存状态管理。当前为占位。</p>
+          <a class="btn btn-soft" href="#product-stock">查看占位说明</a>
+        </article>
+
+        <article class="card">
           <h3>Admin UI</h3>
-          <p>运营/管理控制台入口，后续可扩展发布记录与任务控制。</p>
-        </article>
-        <article class="module">
-          <h3>Backend API</h3>
-          <p>健康检查、就绪检查、业务 API 与未来自动化控制接口。</p>
-        </article>
-        <article class="module">
-          <h3>Deploy Pipeline</h3>
-          <p>GitHub Actions → GHCR → ECS deploy.sh，支持回滚与日志审计。</p>
-        </article>
-        <article class="module">
-          <h3>Data Layer</h3>
-          <p>Postgres 持久化，迁移由 migrate.sh 驱动并等待 DB ready。</p>
-        </article>
-        <article class="module">
-          <h3>Future Sync Pipeline</h3>
-          <p>scheduler/worker/fetch/validate/upsert/writeback 预留骨架。</p>
+          <span class="status status-ok">已接入</span>
+          <p>当前已可访问管理后台占位页面，后续将承载更多运营功能。</p>
+          <a class="btn btn-primary" href="/admin/">进入 Admin UI</a>
         </article>
       </div>
     </section>
 
-    <section class="flow">
-      <h2>自动部署流程概览</h2>
-      <ol>
-        <li>本地开发并通过 <code>local/docker-compose.local.yml</code> 验证</li>
-        <li>push 到 GitHub，触发 CI 检查</li>
-        <li>创建版本标签（例：<code>v0.1.2</code>）或手工 <code>workflow_dispatch</code></li>
-        <li>Actions 构建并推送镜像：public-web / admin-ui / backend-api</li>
-        <li>SSH 到 ECS 执行 <code>/opt/app/deploy/ecs/deploy.sh &lt;tag&gt;</code></li>
-        <li>先迁移、再切换、再健康检查，失败自动回滚</li>
-      </ol>
-    </section>
+    <section class="section" id="technical-system">
+      <h2>技术与系统（次级信息）</h2>
+      <p class="sub" style="margin-bottom: 8px;">保持技术可见但不抢业务入口主视觉。以下模块与部署结构已在仓库内稳定维护。</p>
 
-    <section>
-      <h2>文档入口</h2>
-      <div class="docs">
-        <article class="doc-card">
-          <h3><a href="https://github.com/huozao/AliECS/blob/main/docs/auto-deploy-guide.md" target="_blank" rel="noreferrer">自动部署总说明</a></h3>
-          <p>架构、Secrets、ECS 约定、回滚、迁移、新服务器复用。</p>
-        </article>
-        <article class="doc-card">
-          <h3><a href="https://github.com/huozao/AliECS/blob/main/docs/ecs-first-deploy-checklist.md" target="_blank" rel="noreferrer">ECS 首次部署清单</a></h3>
-          <p>按命令一步一步执行，支持直接照抄落地。</p>
-        </article>
-        <article class="doc-card">
-          <h3><a href="https://github.com/huozao/AliECS/blob/main/docs/ecs-operation-record-template.md" target="_blank" rel="noreferrer">ECS 运维记录模板</a></h3>
-          <p>用于长期记录每台服务器配置、版本和回滚历史。</p>
-        </article>
-        <article class="doc-card">
-          <h3><a href="https://github.com/huozao/AliECS/blob/main/DESIGN.md" target="_blank" rel="noreferrer">设计规范 DESIGN.md</a></h3>
-          <p>后续 AI/人工继续改版时的统一视觉与结构依据。</p>
-        </article>
+      <div class="tech">
+        <div class="tech-item"><strong>Public Web</strong><br>业务入口与文档导航</div>
+        <div class="tech-item"><strong>Admin UI</strong><br>管理后台占位（可访问）</div>
+        <div class="tech-item"><strong>Backend API</strong><br><code>/api/healthz</code> / <code>/api/readyz</code></div>
+        <div class="tech-item"><strong>Data Layer</strong><br>Postgres 持久化与迁移脚本</div>
+      </div>
+
+      <div class="flow">
+        自动部署简版：本地验证 → push GitHub → Actions 构建/推送镜像 → SSH 执行 deploy.sh → 迁移 + 健康检查 + 回滚。
+      </div>
+
+      <div class="meta-links">
+        <a class="btn btn-soft" href="https://github.com/huozao/AliECS/blob/main/docs/auto-deploy-guide.md" target="_blank" rel="noreferrer">自动部署总说明</a>
+        <a class="btn btn-soft" href="https://github.com/huozao/AliECS/blob/main/docs/ecs-first-deploy-checklist.md" target="_blank" rel="noreferrer">ECS 首次部署清单</a>
+        <a class="btn btn-soft" href="https://github.com/huozao/AliECS" target="_blank" rel="noreferrer">GitHub 仓库</a>
       </div>
     </section>
 
     <footer>
-      AliECS · 自动部署优先，手工部署可回退，设计与运维文档均已仓库化沉淀。
+      AliECS · 业务入口清晰、状态透明、部署结构稳定。
     </footer>
   </main>
 </body>
