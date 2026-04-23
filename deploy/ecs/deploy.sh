@@ -10,6 +10,11 @@ IMAGE_TAG="$1"
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$ROOT_DIR/release-meta.env"
 
+LOG_DIR="${DEPLOY_LOG_DIR:-$ROOT_DIR/logs}"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/deploy-$(date +%Y%m%d).log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
 mkdir -p "$METADATA_DIR"
 CURRENT_ENV="$METADATA_DIR/current.env"
 PREVIOUS_ENV="$METADATA_DIR/previous.env"
@@ -32,8 +37,19 @@ ENV
 
 cp "$CURRENT_ENV" "$RUNTIME_ENV_FILE"
 
+if [[ -n "${GHCR_USERNAME:-}" && -n "${GHCR_TOKEN:-}" ]]; then
+  echo "[部署] 登录 GHCR"
+  echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
+fi
+
 echo "[部署] 拉取镜像"
-docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" pull
+if ! docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" pull; then
+  echo "[部署] 拉取镜像失败。若报 unauthorized，请检查：" >&2
+  echo "[部署] 1) GHCR 包可见性（public/private）" >&2
+  echo "[部署] 2) GHCR_USERNAME / GHCR_TOKEN 是否在 ECS 或 Actions 中正确提供" >&2
+  echo "[部署] 3) GHCR_BASE 与镜像命名是否一致（例如 ghcr.io/huozao/*）" >&2
+  exit 1
+fi
 
 echo "[部署] 先执行迁移"
 "$ROOT_DIR/migrate.sh"

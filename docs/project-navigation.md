@@ -21,12 +21,16 @@
 - 改 Future Sync 骨架：`sync-pipeline/`
 
 ## 3）关键入口（必须显式）
+- 自动部署总说明：`docs/auto-deploy-guide.md`
+- ECS 首次部署清单：`docs/ecs-first-deploy-checklist.md`
+- ECS 运维记录模板：`docs/ecs-operation-record-template.md`
 - 本地运行入口：`local/docker-compose.local.yml`
 - API 主入口：`services/backend-api/app/main.py`
 - 迁移入口：`deploy/ecs/migrate.sh`
 - 部署入口：`deploy/ecs/deploy.sh`
 - 健康检查入口：`deploy/ecs/healthcheck.sh`
 - 回滚入口：`deploy/ecs/rollback.sh`
+- ECS 自动同步入口：`deploy/ecs/auto-sync.sh`
 
 ## 4）不要破坏的边界
 - Nginx 和 sing-box 保持宿主机原生，不容器化。
