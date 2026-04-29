@@ -60,3 +60,9 @@ docker compose -f local/docker-compose.local.yml up --build
 
 ## 贡献规范
 - 贡献流程与中文提交说明：`CONTRIBUTING.md`
+
+
+## 登录与权限（新）
+- `backend-api` 提供 `POST /v1/auth/login`、`GET /v1/auth/me`、`GET /v1/features`。
+- 可通过环境变量 `AUTH_USERS_JSON` 配置用户、密码、角色、权限（如 `personal`）。
+- `public-web` 首页会根据登录状态控制“个人板块（人体周期）”入口是否可访问。
