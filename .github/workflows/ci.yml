@@ -15,10 +15,13 @@ jobs:
         run: python -m py_compile services/backend-api/app/main.py sync-pipeline/main_flow.py
 
       - name: Shell 语法检查
-        run: bash -n deploy/ecs/deploy.sh deploy/ecs/migrate.sh deploy/ecs/healthcheck.sh deploy/ecs/rollback.sh
+        run: bash -n deploy/ecs/auto-sync.sh deploy/ecs/deploy.sh deploy/ecs/migrate.sh deploy/ecs/healthcheck.sh deploy/ecs/rollback.sh
 
-      - name: Compose 配置检查
+      - name: Compose 配置检查（local）
         run: docker compose -f local/docker-compose.local.yml config >/dev/null
+
+      - name: Compose 配置检查（prod）
+        run: docker compose --env-file deploy/ecs/runtime.env.example -f deploy/ecs/compose.prod.yml config >/dev/null
 
       - name: 构建本地镜像
         run: docker compose -f local/docker-compose.local.yml build

@@ -1,2 +1,144 @@
 <!doctype html>
-<html><body><h1>Public Web Placeholder</h1><p>Phase 1 skeleton running.</p></body></html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AliECS · 配方服务器业务入口</title>
+  <style>
+    :root { --bg:#f6f4ee;--surface:#fbfaf6;--line:#e7e3d8;--text:#171715;--muted:#61605c;--brand:#c86a45;--ok:#1f7a47;--plan:#936724; }
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif}
+    .container{width:min(1080px,92vw);margin:0 auto}.topbar{position:sticky;top:0;background:#f6f4eefa;border-bottom:1px solid var(--line);backdrop-filter:blur(6px)}
+    .top{min-height:64px;display:flex;justify-content:space-between;align-items:center;gap:10px}.brand{font-family:Georgia,serif;font-size:1.2rem}
+    .btn{display:inline-flex;padding:8px 12px;border-radius:10px;border:1px solid transparent;text-decoration:none;color:inherit;background:#fff;cursor:pointer}
+    .btn.primary{background:var(--brand);color:#fff}.btn.ghost{border-color:var(--line)} .btn:disabled{opacity:.55;cursor:not-allowed}
+    main{padding:28px 0 56px}.hero,.section{border:1px solid var(--line);background:var(--surface);border-radius:16px;padding:18px;margin-bottom:14px}
+    h1,h2,h3{font-family:Georgia,serif;margin:0 0 10px} p{margin:0 0 10px;color:var(--muted)}
+    .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.card{border:1px solid var(--line);background:#fff;border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:8px}
+    .status{font-size:.78rem;border-radius:999px;padding:2px 8px;border:1px solid transparent;width:fit-content}
+    .ok{color:var(--ok);background:#eaf6ef;border-color:#b9e2c8}.plan{color:var(--plan);background:#f7f0df;border-color:#e8d6ac}.lock{color:#385f87;background:#e8f0fb;border-color:#bfd5f2}
+    .toolbar{display:flex;flex-wrap:wrap;gap:8px}.meta{font-size:.9rem;color:var(--muted)}
+    .login{display:grid;grid-template-columns:1fr 1fr auto;gap:8px}.login input{padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:#fff}
+    .hint{font-size:.85rem;color:var(--muted)}
+    @media (max-width:900px){.grid{grid-template-columns:1fr 1fr}.login{grid-template-columns:1fr}}
+    @media (max-width:640px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<header class="topbar"><div class="container top">
+  <div class="brand">AliECS · 配方服务器</div>
+  <div class="toolbar">
+    <a class="btn ghost" href="#project-intro">项目简介</a>
+    <a class="btn primary" href="/admin/">Admin UI</a>
+    <a class="btn ghost" href="/api/healthz">Health</a>
+  </div>
+</div></header>
+
+<main class="container">
+  <section class="hero">
+    <h1>业务入口首页</h1>
+    <p>该页面用于聚合配方业务入口。未实现模块会明确标记为预留扩展，不伪装为已上线功能。</p>
+    <div class="toolbar">
+      <a class="btn ghost" href="#new-model">新品型号录入表</a>
+      <a class="btn ghost" href="#schedule">排产登记表</a>
+      <a class="btn ghost" href="#pending">待处理+退货提醒</a>
+      <a class="btn ghost" href="#naming">产品命名登记</a>
+      <a class="btn ghost" href="#qc">检测数据登记表</a>
+      <a class="btn ghost" href="#density">配方密度计算器</a>
+    </div>
+  </section>
+
+  <section class="section" id="project-intro">
+    <h2>项目简介</h2>
+    <p>项目当前定位为配方相关业务入口聚合：后续承载配方查询、需求管理、库存查询和管理后台，技术架构保持 public-web / admin-ui / backend-api / postgres。</p>
+    <div class="meta">权限机制：普通业务入口公开；“个人板块”需要登录且具备 <code>personal</code> 权限。</div>
+  </section>
+
+  <section class="section">
+    <h2>登录与权限</h2>
+    <div class="login">
+      <input id="username" placeholder="登录名（例如 admin）" />
+      <input id="password" type="password" placeholder="密码" />
+      <button class="btn primary" id="loginBtn">登录</button>
+    </div>
+    <p class="hint">默认演示账户（仅开发环境）：admin/admin123（含个人权限），operator/operator123（无个人权限）。上线请通过 AUTH_USERS_JSON 覆盖。</p>
+    <p id="loginStatus" class="meta">当前身份：guest（未登录）</p>
+  </section>
+
+  <section class="section">
+    <h2>业务功能入口</h2>
+    <div class="grid">
+      <article class="card" id="new-model"><h3>新品型号录入表</h3><span class="status ok">已接入</span><p>用于新品型号登记。</p><a class="btn ghost" data-link="new_model_form" target="_blank">打开入口</a></article>
+      <article class="card" id="schedule"><h3>排产登记表</h3><span class="status ok">已接入</span><p>用于排产信息登记。</p><a class="btn ghost" data-link="schedule_form" target="_blank">打开入口</a></article>
+      <article class="card" id="pending"><h3>待处理+退货处理自动化提醒</h3><span class="status ok">已接入</span><p>用于待处理和退货提醒登记。</p><a class="btn ghost" data-link="pending_return_alert" target="_blank">打开入口</a></article>
+      <article class="card" id="naming"><h3>产品命名登记</h3><span class="status ok">已接入</span><p>用于产品命名录入。</p><a class="btn ghost" data-link="naming_form" target="_blank">打开入口</a></article>
+      <article class="card" id="qc"><h3>检测数据登记表</h3><span class="status ok">已接入</span><p>用于检测数据登记。</p><a class="btn ghost" data-link="qc_form" target="_blank">打开入口</a></article>
+      <article class="card" id="density"><h3>配方密度计算器</h3><span class="status ok">已接入</span><p>用于密度相关计算登记。</p><a class="btn ghost" data-link="density_calculator" target="_blank">打开入口</a></article>
+      <article class="card" id="personal"><h3>个人板块：人体周期</h3><span class="status lock" id="personalTag">权限受限</span><p>该入口需要个人权限（personal）。</p><a class="btn ghost" id="personalLink" data-link="personal" target="_blank" disabled>登录后可访问</a></article>
+      <article class="card"><h3>Admin UI</h3><span class="status plan">占位入口</span><p>管理后台目前为占位页面，后续接入权限管理细项。</p><a class="btn primary" href="/admin/">进入 Admin UI</a></article>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>技术与系统</h2>
+    <p>Public Web（业务入口） / Admin UI（后台占位） / Backend API（登录与健康检查） / Data Layer（Postgres）。</p>
+    <div class="toolbar"><a class="btn ghost" href="https://github.com/huozao/AliECS" target="_blank">GitHub 仓库</a></div>
+  </section>
+</main>
+
+<script>
+  const apiBase = '/api';
+  const state = { token: localStorage.getItem('aliecs_token') || '', features: null };
+
+  async function fetchFeatures() {
+    const headers = {};
+    if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
+    const resp = await fetch(`${apiBase}/v1/features`, { headers });
+    if (!resp.ok) throw new Error('features load failed');
+    const data = await resp.json();
+    state.features = data;
+    bindLinks(data);
+    const user = data.user || { role: 'guest' };
+    document.getElementById('loginStatus').textContent = `当前身份：${user.username || 'guest'} (${user.role || 'guest'})`;
+  }
+
+  function bindLinks(data) {
+    const links = data.links || {};
+    document.querySelectorAll('[data-link]').forEach((node) => {
+      const key = node.getAttribute('data-link');
+      if (key === 'personal') {
+        const can = !!(data.personal && data.personal.enabled);
+        node.disabled = !can;
+        node.textContent = can ? '打开入口' : '登录后可访问';
+        node.href = can ? data.personal.url : '#personal';
+        document.getElementById('personalTag').textContent = can ? '已授权' : '权限受限';
+        document.getElementById('personalTag').className = `status ${can ? 'ok' : 'lock'}`;
+        return;
+      }
+      if (links[key]) node.href = links[key];
+    });
+  }
+
+  async function login() {
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value;
+    const resp = await fetch(`${apiBase}/v1/auth/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+    if (!resp.ok) {
+      alert('登录失败：用户名或密码错误');
+      return;
+    }
+    const data = await resp.json();
+    state.token = data.token;
+    localStorage.setItem('aliecs_token', data.token);
+    await fetchFeatures();
+  }
+
+  document.getElementById('loginBtn').addEventListener('click', login);
+  fetchFeatures().catch(() => {
+    document.getElementById('loginStatus').textContent = '当前身份：guest（未登录，或后端接口不可用）';
+  });
+</script>
+</body>
+</html>

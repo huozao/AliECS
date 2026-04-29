@@ -13,4 +13,10 @@ fi
 cp "$PREVIOUS_ENV" "$RUNTIME_ENV_FILE"
 docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" up -d
 
-echo "[回滚] 已切回上一版本"
+if "$ROOT_DIR/healthcheck.sh"; then
+  echo "[回滚] 已切回上一版本并通过健康检查"
+  exit 0
+fi
+
+echo "[回滚] 切回上一版本后健康检查仍失败" >&2
+exit 1
