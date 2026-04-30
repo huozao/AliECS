@@ -193,6 +193,27 @@
 
     .hidden { display: none !important; }
     .small { font-size: 12px; }
+
+    .couple-heart {
+      position: fixed;
+      right: 12px;
+      bottom: 10px;
+      font-size: 12px;
+      line-height: 1;
+      color: rgba(149, 104, 120, 0.42);
+      user-select: none;
+      text-decoration: none;
+      cursor: default;
+      background: transparent;
+      border: 0;
+      padding: 0;
+      margin: 0;
+      font-family: inherit;
+    }
+
+    .couple-heart:focus {
+      outline: none;
+    }
   </style>
 </head>
 <body>
@@ -245,6 +266,8 @@
     </section>
   </div>
 
+  <button id="coupleHeart" class="couple-heart" type="button" aria-label="decorative-heart">💗</button>
+
   <script>
     const API_BASE = location.port === "8080" ? "http://localhost:8000" : "/api";
     const state = {
@@ -252,6 +275,44 @@
       user: null,
       features: []
     };
+
+    const coupleDashboardHtml = `
+      <main style="min-height:100vh;padding:28px 16px 44px;background:linear-gradient(150deg,#f9f4ea 0%,#f8f1f5 50%,#fffdfa 100%);">
+        <div style="max-width:1040px;margin:0 auto;">
+          <section style="background:#fffdfa;border:1px solid #eee3d6;border-radius:22px;padding:26px;box-shadow:0 12px 24px rgba(110,86,62,0.08);margin-bottom:16px;">
+            <h1 style="margin:0 0 8px;font-size:34px;color:#3d3025;">两个人的记忆地图</h1>
+            <p style="margin:0 0 10px;color:#7b6755;">把照片、文字、地点和时间，整理成只属于我们的故事。</p>
+            <p style="margin:0;color:#8d7a66;line-height:1.8;">在每一个普通日子里，认真保存彼此走过的路、说过的话和共同期待的未来。</p>
+          </section>
+          <section style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin-bottom:16px;">
+            <article style="background:#fffdf8;border:1px solid #ecdfd1;border-radius:18px;padding:16px;box-shadow:0 8px 18px rgba(80,57,34,0.06);">
+              <div style="font-size:13px;color:#846f5d;">恋爱天数</div><div style="margin-top:8px;font-size:26px;font-weight:700;color:#4b3b2c;">已一起走过 520 天</div>
+            </article>
+            <article style="background:#fffdf8;border:1px solid #ecdfd1;border-radius:18px;padding:16px;box-shadow:0 8px 18px rgba(80,57,34,0.06);">
+              <div style="font-size:13px;color:#846f5d;">下一个纪念日</div><div style="margin-top:8px;font-size:26px;font-weight:700;color:#4b3b2c;">还有 18 天</div>
+            </article>
+          </section>
+          <section style="background:#fffdfa;border:1px solid #eee3d6;border-radius:20px;padding:20px;box-shadow:0 10px 22px rgba(80,57,34,0.06);margin-bottom:16px;">
+            <h2 style="margin:0 0 14px;font-size:20px;color:#403327;">最近回忆</h2>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;">
+              ${[
+                ['初秋散步','2025-09-12','杭州 西湖','晚风很轻，我们沿着湖边走了很久。'],
+                ['第一次做饭挑战','2025-10-03','家里厨房','把盐当成糖的小插曲，最后还是很好吃。'],
+                ['短途看海','2025-11-22','宁波 象山','看日落时你说，想把今天记一辈子。'],
+                ['跨年夜','2025-12-31','上海 外滩','人群很吵，但拥抱的时候很安静。']
+              ].map((m)=>`<article style="border:1px solid #f0e5d8;background:#fff;border-radius:14px;padding:12px;"><div style="font-weight:600;color:#4d3d2f;">${m[0]}</div><div style="font-size:12px;color:#8e7b69;margin:4px 0;">${m[1]} · ${m[2]}</div><p style="margin:0;color:#7e6c5b;line-height:1.7;">${m[3]}</p></article>`).join('')}
+            </div>
+          </section>
+          <section style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;">
+            ${['查看我们去过的地方','按时间回看我们的故事','整理照片和视频回忆','记录每一个重要日子','写下想一起完成的事情'].map((t)=>`<article style="background:#fffdf8;border:1px solid #ecdfd1;border-radius:16px;padding:14px;box-shadow:0 8px 18px rgba(80,57,34,0.06);color:#6d5a49;">${t}</article>`).join('')}
+          </section>
+        </div>
+      </main>
+    `;
+
+    function renderCouplePage() {
+      document.body.innerHTML = coupleDashboardHtml;
+    }
 
     const $ = (id) => document.getElementById(id);
 
@@ -400,7 +461,35 @@
       loadFeatures().catch((e) => showError(e.message));
     }
 
-    document.addEventListener("DOMContentLoaded", () => {
+
+    async function checkCoupleAccess() {
+      try {
+        const data = await api("/couple/access");
+        return data && data.allowed === true && data.route;
+      } catch {
+        return null;
+      }
+    }
+
+    async function maybeEnterCouple() {
+      const route = await checkCoupleAccess();
+      if (route) window.location.assign(route);
+    }
+
+    async function handleCoupleRouteGuard() {
+      if (location.pathname !== "/couple") return false;
+      const route = await checkCoupleAccess();
+      if (!route) {
+        window.location.replace("/");
+        return true;
+      }
+      renderCouplePage();
+      return true;
+    }
+
+    document.addEventListener("DOMContentLoaded", async () => {
+      if (await handleCoupleRouteGuard()) return;
+      $("coupleHeart").addEventListener("click", () => { maybeEnterCouple(); });
       $("loginBtn").addEventListener("click", () => login().catch((e) => showError(e.message)));
       $("logoutBtn").addEventListener("click", logout);
       $("passwordInput").addEventListener("keydown", (e) => {
