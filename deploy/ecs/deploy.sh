@@ -8,7 +8,35 @@ fi
 
 IMAGE_TAG="$1"
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$ROOT_DIR/release-meta.env"
+META_FILE="$ROOT_DIR/release-meta.env"
+
+if [[ ! -f "$META_FILE" ]]; then
+  echo "[部署] 缺少配置文件：$META_FILE" >&2
+  echo "[部署] 请在 ECS 上创建 release-meta.env，并配置镜像、数据库、登录密钥和管理员账号。" >&2
+  exit 1
+fi
+
+# shellcheck disable=SC1090
+source "$META_FILE"
+
+# ===== 必填运行配置校验 =====
+: "${GHCR_BASE:?请在 release-meta.env 设置 GHCR_BASE}"
+: "${POSTGRES_USER:?请在 release-meta.env 设置 POSTGRES_USER}"
+: "${POSTGRES_PASSWORD:?请在 release-meta.env 设置 POSTGRES_PASSWORD}"
+: "${POSTGRES_DB:?请在 release-meta.env 设置 POSTGRES_DB}"
+: "${DATABASE_URL:?请在 release-meta.env 设置 DATABASE_URL}"
+: "${COMPOSE_FILE:?请在 release-meta.env 设置 COMPOSE_FILE}"
+: "${RUNTIME_ENV_FILE:?请在 release-meta.env 设置 RUNTIME_ENV_FILE}"
+: "${METADATA_DIR:?请在 release-meta.env 设置 METADATA_DIR}"
+
+# ===== RBAC / 登录权限配置校验 =====
+: "${AUTH_TOKEN_SECRET:?请在 release-meta.env 设置 AUTH_TOKEN_SECRET}"
+: "${ADMIN_BOOTSTRAP_USERNAME:?请在 release-meta.env 设置 ADMIN_BOOTSTRAP_USERNAME}"
+: "${ADMIN_BOOTSTRAP_PASSWORD:?请在 release-meta.env 设置 ADMIN_BOOTSTRAP_PASSWORD}"
+: "${ADMIN_BOOTSTRAP_DISPLAY_NAME:?请在 release-meta.env 设置 ADMIN_BOOTSTRAP_DISPLAY_NAME}"
+
+# token 默认 8 小时
+AUTH_TOKEN_TTL_SECONDS="${AUTH_TOKEN_TTL_SECONDS:-28800}"
 
 LOG_DIR="${DEPLOY_LOG_DIR:-$ROOT_DIR/logs}"
 mkdir -p "$LOG_DIR"
@@ -24,15 +52,26 @@ if [[ -f "$CURRENT_ENV" ]]; then
   cp "$CURRENT_ENV" "$PREVIOUS_ENV"
 fi
 
-# 生成本次发布的运行时镜像引用
+# 生成本次发布的运行时环境变量
+# 注意：
+# 1. release-meta.env 是 ECS 私有配置，不提交真实版本到 GitHub
+# 2. runtime.env/current.env 由 deploy.sh 自动生成
+# 3. 不建议长期手动修改 runtime.env，因为下次部署会覆盖
 cat > "$CURRENT_ENV" <<ENV
 PUBLIC_WEB_IMAGE=${GHCR_BASE}/public-web:${IMAGE_TAG}
 ADMIN_UI_IMAGE=${GHCR_BASE}/admin-ui:${IMAGE_TAG}
 BACKEND_API_IMAGE=${GHCR_BASE}/backend-api:${IMAGE_TAG}
+
 POSTGRES_USER=${POSTGRES_USER}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 POSTGRES_DB=${POSTGRES_DB}
 DATABASE_URL=${DATABASE_URL}
+
+AUTH_TOKEN_SECRET=${AUTH_TOKEN_SECRET}
+AUTH_TOKEN_TTL_SECONDS=${AUTH_TOKEN_TTL_SECONDS}
+ADMIN_BOOTSTRAP_USERNAME=${ADMIN_BOOTSTRAP_USERNAME}
+ADMIN_BOOTSTRAP_PASSWORD=${ADMIN_BOOTSTRAP_PASSWORD}
+ADMIN_BOOTSTRAP_DISPLAY_NAME=${ADMIN_BOOTSTRAP_DISPLAY_NAME}
 ENV
 
 cp "$CURRENT_ENV" "$RUNTIME_ENV_FILE"
