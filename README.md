@@ -63,6 +63,17 @@ docker compose -f local/docker-compose.local.yml up --build
 
 
 ## 登录与权限（新）
-- `backend-api` 提供 `POST /v1/auth/login`、`GET /v1/auth/me`、`GET /v1/features`。
-- 可通过环境变量 `AUTH_USERS_JSON` 配置用户、密码、角色、权限（如 `personal`）。
+- `backend-api` 提供 `POST /v1/auth/login`、`POST /v1/auth/register`、`GET /v1/auth/me`、`GET /v1/features`。
+- 管理员账号由数据库维护；当 users 为空时通过 `ADMIN_BOOTSTRAP_*` 自动初始化首个管理员。
 - `public-web` 首页会根据登录状态控制“个人板块（人体周期）”入口是否可访问。
+
+
+## Auth/RBAC 基础版
+- `public-web`：普通业务入口（根据 `/v1/features` 展示可访问功能）。
+- `admin-ui`：系统管理后台（仅管理员/具备 `admin.access` 的用户可用）。
+- `backend-api`：唯一登录、鉴权、权限判断中心。
+- `postgres`：保存用户、角色、权限、功能入口、审计日志。
+- 本地默认管理员：`admin / admin123`（仅开发默认）。
+- 生产必须修改：`AUTH_TOKEN_SECRET`、`ADMIN_BOOTSTRAP_PASSWORD`。
+- 企业微信智能表格链接在企微侧仍需配置访问控制，否则复制直链可能绕过网站入口权限。
+- 详见：`docs/auth-rbac-guide.md`。
