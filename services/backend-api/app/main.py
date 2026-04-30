@@ -233,7 +233,7 @@ def _couple_feature_enabled() -> bool:
 
 
 def _couple_route() -> str:
-    route = os.getenv("COUPLE_ROUTE", "/couple").strip()
+    route = os.getenv("COUPLE_ROUTE", "/couple/").strip()
     if not route.startswith("/"):
         return "/couple"
     return route
@@ -247,12 +247,20 @@ def _has_couple_access(user: dict[str, Any]) -> bool:
     if "couple_memory_access" in permissions:
         return True
 
-    allowed_emails = [i.strip().lower() for i in os.getenv("COUPLE_ALLOWED_EMAILS", "").split(",") if i.strip()]
-    if not allowed_emails:
-        return False
-
     username = str(user.get("username") or user.get("sub") or "").strip().lower()
-    return bool(username and username in allowed_emails)
+    roles = [str(r).lower() for r in user.get("roles", [])]
+    if "admin" in roles:
+        return True
+
+    allowed_users = [i.strip().lower() for i in os.getenv("COUPLE_ALLOWED_USERS", "").split(",") if i.strip()]
+    if username and username in allowed_users:
+        return True
+
+    allowed_emails = [i.strip().lower() for i in os.getenv("COUPLE_ALLOWED_EMAILS", "").split(",") if i.strip()]
+    if username and username in allowed_emails:
+        return True
+
+    return False
 
 
 class LoginRequest(BaseModel):

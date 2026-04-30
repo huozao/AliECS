@@ -25,9 +25,9 @@ services:
       ADMIN_BOOTSTRAP_PASSWORD: admin123
       ADMIN_BOOTSTRAP_DISPLAY_NAME: 系统管理员
       COUPLE_FEATURE_ENABLED: "true"
-      COUPLE_ROUTE: /couple
+      COUPLE_ROUTE: /couple/
+      COUPLE_ALLOWED_USERS: "admin"
       COUPLE_ALLOWED_EMAILS: ""
-      COUPLE_ACCESS_PASSWORD: ""
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:

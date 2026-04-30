@@ -3,501 +3,69 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>AliECS · 配方服务器业务入口</title>
+  <title>AliECS · 首页</title>
   <style>
-    :root {
-      --bg: #f7f5f0;
-      --card: #fffdf8;
-      --text: #25211b;
-      --muted: #766f63;
-      --line: #e7dfd0;
-      --primary: #6f5e46;
-      --primary-dark: #4d412f;
-      --ok: #3f7a4c;
-      --warn: #a36b16;
-      --danger: #a6423a;
-      --shadow: 0 12px 30px rgba(69, 56, 38, 0.08);
-    }
-
-    * { box-sizing: border-box; }
-
-    body {
-      margin: 0;
-      background:
-        radial-gradient(circle at top left, rgba(180, 157, 118, 0.18), transparent 35%),
-        var(--bg);
-      color: var(--text);
-      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-        "Microsoft YaHei", sans-serif;
-    }
-
-    .wrap {
-      max-width: 1120px;
-      margin: 0 auto;
-      padding: 30px 18px 56px;
-    }
-
-    .hero {
-      background: rgba(255, 253, 248, 0.9);
-      border: 1px solid var(--line);
-      box-shadow: var(--shadow);
-      border-radius: 24px;
-      padding: 28px;
-      margin-bottom: 18px;
-    }
-
-    h1 {
-      font-size: 34px;
-      margin: 0 0 10px;
-      letter-spacing: -0.04em;
-    }
-
-    h2 {
-      margin: 0 0 14px;
-      font-size: 20px;
-    }
-
-    p {
-      color: var(--muted);
-      line-height: 1.8;
-    }
-
-    .nav {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-      margin-top: 18px;
-    }
-
-    .btn, button {
-      border: 0;
-      border-radius: 999px;
-      padding: 10px 14px;
-      background: #e8dfcf;
-      color: var(--text);
-      cursor: pointer;
-      font-weight: 650;
-      text-decoration: none;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-    }
-
-    .btn.primary, button.primary {
-      background: var(--primary);
-      color: white;
-    }
-
-    .btn.disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-      pointer-events: none;
-    }
-
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 16px;
-    }
-
-    @media (max-width: 900px) {
-      .grid { grid-template-columns: 1fr; }
-    }
-
-    .card {
-      background: rgba(255, 253, 248, 0.92);
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      padding: 18px;
-      box-shadow: var(--shadow);
-    }
-
-    .feature-card {
-      min-height: 190px;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-    }
-
-    .muted { color: var(--muted); }
-
-    input {
-      width: 100%;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 11px 12px;
-      background: white;
-      color: var(--text);
-      outline: none;
-      font-size: 14px;
-    }
-
-    label {
-      display: block;
-      color: var(--muted);
-      font-size: 13px;
-      margin: 8px 0 6px;
-    }
-
-    .row {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-      align-items: center;
-    }
-
-    .tag {
-      display: inline-flex;
-      border-radius: 999px;
-      padding: 4px 8px;
-      font-size: 12px;
-      background: #eee6d8;
-      color: var(--muted);
-      margin: 2px 4px 2px 0;
-      white-space: nowrap;
-    }
-
-    .tag.ok { background: #dfeee3; color: var(--ok); }
-    .tag.warn { background: #f4e4c7; color: var(--warn); }
-    .tag.danger { background: #f1d4d1; color: var(--danger); }
-
-    .notice {
-      border-radius: 14px;
-      padding: 12px 14px;
-      background: #f2eadc;
-      color: var(--muted);
-      line-height: 1.7;
-      margin-bottom: 14px;
-    }
-
-    .error {
-      display: none;
-      border-radius: 14px;
-      padding: 12px 14px;
-      background: #f5d7d3;
-      color: var(--danger);
-      margin-bottom: 14px;
-      white-space: pre-wrap;
-    }
-
-    .success {
-      display: none;
-      border-radius: 14px;
-      padding: 12px 14px;
-      background: #dfeee3;
-      color: var(--ok);
-      margin-bottom: 14px;
-      white-space: pre-wrap;
-    }
-
-    .hidden { display: none !important; }
-    .small { font-size: 12px; }
-
-    .couple-heart {
-      position: fixed;
-      right: 12px;
-      bottom: 10px;
-      font-size: 12px;
-      line-height: 1;
-      color: rgba(149, 104, 120, 0.42);
-      user-select: none;
-      text-decoration: none;
-      cursor: default;
-      background: transparent;
-      border: 0;
-      padding: 0;
-      margin: 0;
-      font-family: inherit;
-    }
-
-    .couple-heart:focus {
-      outline: none;
-    }
+    :root { --bg:#f7f5f0; --card:#fffdf8; --text:#25211b; --muted:#766f63; --line:#e7dfd0; --primary:#6f5e46; --shadow:0 12px 30px rgba(69,56,38,.08); }
+    *{box-sizing:border-box} body{margin:0;background:radial-gradient(circle at top left,rgba(180,157,118,.18),transparent 35%),var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui}
+    .wrap{max-width:1120px;margin:0 auto;padding:20px 18px 56px}
+    .topbar{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap;background:rgba(255,253,248,.92);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:20px;padding:18px 20px;margin-bottom:16px}
+    h1{margin:0;font-size:34px}.subtitle{margin:8px 0 0;color:var(--muted);line-height:1.7}
+    .top-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+    .btn,button{border:0;border-radius:999px;padding:9px 13px;background:#e8dfcf;color:var(--text);cursor:pointer;font-weight:650;text-decoration:none}
+    .btn.primary{background:var(--primary);color:#fff}.btn.subtle{background:#efe8dc;color:#6e6355}
+    .btn.heart{padding:8px 10px;background:transparent;color:rgba(149,104,120,.66);font-size:14px;cursor:default}
+    .card{background:rgba(255,253,248,.92);border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:var(--shadow);margin-bottom:16px}
+    .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+    .feature-card{min-height:190px;display:flex;flex-direction:column;justify-content:space-between}
+    .hidden{display:none!important}.small{font-size:12px}.muted{color:var(--muted)}
+    .notice,.error,.success{border-radius:14px;padding:12px 14px;margin-bottom:14px}
+    .notice{background:#f2eadc;color:var(--muted)} .error{display:none;background:#f5d7d3;color:#a6423a} .success{display:none;background:#dfeee3;color:#3f7a4c}
+    input{width:100%;border:1px solid var(--line);border-radius:12px;padding:11px 12px;background:#fff} label{display:block;color:var(--muted);font-size:13px;margin:8px 0 6px}
+    @media (max-width:900px){.grid{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
   <div class="wrap">
-    <section class="hero">
-      <h1>配方服务器业务入口</h1>
-      <p>
-        这里是工厂配方、需求、排产、库存相关入口的统一导航页。
-        已上线入口可以直接打开；预留入口会明确标记，不伪装成已完成模块。
-      </p>
-      <div class="nav">
-        <a class="btn primary" href="#features">业务入口</a>
+    <header class="topbar">
+      <div>
+        <h1>首页</h1>
+        <p class="subtitle">配方业务入口、系统状态与权限功能的统一导航页。</p>
+      </div>
+      <nav class="top-actions">
+        <a class="btn primary" href="/">首页</a>
         <a class="btn" href="/admin/">Admin UI（仅管理员）</a>
         <a class="btn" href="/api/healthz" target="_blank" rel="noreferrer">API Health</a>
         <a class="btn" href="https://github.com/huozao/AliECS" target="_blank" rel="noreferrer">GitHub</a>
-      </div>
+        <button id="topHeart" class="btn heart" type="button" aria-label="decorative-heart">💗</button>
+        <button id="refreshBtn" class="btn subtle" type="button">刷新数据</button>
+        <button id="topLoginBtn" class="btn" type="button">登录</button>
+        <button id="topRegisterBtn" class="btn hidden" type="button">注册</button>
+        <button id="topLogoutBtn" class="btn hidden" type="button">退出登录</button>
+      </nav>
+    </header>
+    <div id="errorBox" class="error"></div><div id="successBox" class="success"></div>
+    <section class="card"><h2>登录与权限</h2><div id="identityBox" class="notice">当前身份：guest（未登录）。</div>
+      <div id="loginArea"><div class="grid" style="grid-template-columns: repeat(2,minmax(0,1fr));"><div><label for="usernameInput">用户名</label><input id="usernameInput" autocomplete="username" /></div><div><label for="passwordInput">密码</label><input id="passwordInput" type="password" autocomplete="current-password" /></div></div><div style="margin-top:14px;"><button id="loginBtn" class="btn primary" type="button">登录</button></div></div>
+      <div id="logoutArea" class="hidden"><button id="logoutBtn" class="btn" type="button">退出登录</button></div>
     </section>
-
-    <div id="errorBox" class="error"></div>
-    <div id="successBox" class="success"></div>
-
-    <section class="card" style="margin-bottom:16px;">
-      <h2>登录与权限</h2>
-      <div id="identityBox" class="notice">当前身份：guest（未登录）。未登录只显示公开入口。</div>
-      <div id="loginArea">
-        <div class="grid" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
-          <div>
-            <label for="usernameInput">用户名</label>
-            <input id="usernameInput" autocomplete="username" placeholder="请输入用户名" />
-          </div>
-          <div>
-            <label for="passwordInput">密码</label>
-            <input id="passwordInput" type="password" autocomplete="current-password" placeholder="请输入密码" />
-          </div>
-        </div>
-        <div class="row" style="margin-top:14px;">
-          <button id="loginBtn" class="primary" type="button">登录</button>
-          <span class="muted small">登录后显示你的可用功能。</span>
-        </div>
-      </div>
-      <div id="logoutArea" class="hidden">
-        <button id="logoutBtn" type="button">退出登录</button>
-      </div>
-    </section>
-
-    <section id="features" class="card">
-      <h2>业务功能入口</h2>
-      <p class="muted">功能入口由后端 `/v1/features` 按权限返回。没有权限的入口不会显示。</p>
-      <div id="featuresGrid" class="grid"></div>
-    </section>
+    <section id="features" class="card"><h2>主要功能</h2><p class="muted">功能入口由后端 `/v1/features` 按权限返回。</p><div id="featuresGrid" class="grid"></div></section>
   </div>
-
-  <button id="coupleHeart" class="couple-heart" type="button" aria-label="decorative-heart">💗</button>
-
-  <script>
-    const API_BASE = location.port === "8080" ? "http://localhost:8000" : "/api";
-    const state = {
-      token: localStorage.getItem("portal_token") || "",
-      user: null,
-      features: []
-    };
-
-    const coupleDashboardHtml = `
-      <main style="min-height:100vh;padding:28px 16px 44px;background:linear-gradient(150deg,#f9f4ea 0%,#f8f1f5 50%,#fffdfa 100%);">
-        <div style="max-width:1040px;margin:0 auto;">
-          <section style="background:#fffdfa;border:1px solid #eee3d6;border-radius:22px;padding:26px;box-shadow:0 12px 24px rgba(110,86,62,0.08);margin-bottom:16px;">
-            <h1 style="margin:0 0 8px;font-size:34px;color:#3d3025;">两个人的记忆地图</h1>
-            <p style="margin:0 0 10px;color:#7b6755;">把照片、文字、地点和时间，整理成只属于我们的故事。</p>
-            <p style="margin:0;color:#8d7a66;line-height:1.8;">在每一个普通日子里，认真保存彼此走过的路、说过的话和共同期待的未来。</p>
-          </section>
-          <section style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin-bottom:16px;">
-            <article style="background:#fffdf8;border:1px solid #ecdfd1;border-radius:18px;padding:16px;box-shadow:0 8px 18px rgba(80,57,34,0.06);">
-              <div style="font-size:13px;color:#846f5d;">恋爱天数</div><div style="margin-top:8px;font-size:26px;font-weight:700;color:#4b3b2c;">已一起走过 520 天</div>
-            </article>
-            <article style="background:#fffdf8;border:1px solid #ecdfd1;border-radius:18px;padding:16px;box-shadow:0 8px 18px rgba(80,57,34,0.06);">
-              <div style="font-size:13px;color:#846f5d;">下一个纪念日</div><div style="margin-top:8px;font-size:26px;font-weight:700;color:#4b3b2c;">还有 18 天</div>
-            </article>
-          </section>
-          <section style="background:#fffdfa;border:1px solid #eee3d6;border-radius:20px;padding:20px;box-shadow:0 10px 22px rgba(80,57,34,0.06);margin-bottom:16px;">
-            <h2 style="margin:0 0 14px;font-size:20px;color:#403327;">最近回忆</h2>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;">
-              ${[
-                ['初秋散步','2025-09-12','杭州 西湖','晚风很轻，我们沿着湖边走了很久。'],
-                ['第一次做饭挑战','2025-10-03','家里厨房','把盐当成糖的小插曲，最后还是很好吃。'],
-                ['短途看海','2025-11-22','宁波 象山','看日落时你说，想把今天记一辈子。'],
-                ['跨年夜','2025-12-31','上海 外滩','人群很吵，但拥抱的时候很安静。']
-              ].map((m)=>`<article style="border:1px solid #f0e5d8;background:#fff;border-radius:14px;padding:12px;"><div style="font-weight:600;color:#4d3d2f;">${m[0]}</div><div style="font-size:12px;color:#8e7b69;margin:4px 0;">${m[1]} · ${m[2]}</div><p style="margin:0;color:#7e6c5b;line-height:1.7;">${m[3]}</p></article>`).join('')}
-            </div>
-          </section>
-          <section style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;">
-            ${['查看我们去过的地方','按时间回看我们的故事','整理照片和视频回忆','记录每一个重要日子','写下想一起完成的事情'].map((t)=>`<article style="background:#fffdf8;border:1px solid #ecdfd1;border-radius:16px;padding:14px;box-shadow:0 8px 18px rgba(80,57,34,0.06);color:#6d5a49;">${t}</article>`).join('')}
-          </section>
-        </div>
-      </main>
-    `;
-
-    function renderCouplePage() {
-      document.body.innerHTML = coupleDashboardHtml;
-    }
-
-    const $ = (id) => document.getElementById(id);
-
-    function escapeHtml(value) {
-      return String(value ?? "")
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#039;");
-    }
-
-    function showError(message) {
-      $("errorBox").textContent = message;
-      $("errorBox").style.display = "block";
-      $("successBox").style.display = "none";
-    }
-
-    function showSuccess(message) {
-      $("successBox").textContent = message;
-      $("successBox").style.display = "block";
-      $("errorBox").style.display = "none";
-    }
-
-    function clearMessage() {
-      $("errorBox").style.display = "none";
-      $("successBox").style.display = "none";
-    }
-
-    async function api(path, options = {}) {
-      const headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
-      if (state.token) headers.Authorization = `Bearer ${state.token}`;
-
-      const resp = await fetch(`${API_BASE}${path}`, {
-        ...options,
-        headers
-      });
-
-      const text = await resp.text();
-      let data = {};
-      if (text) {
-        try { data = JSON.parse(text); } catch { data = { raw: text }; }
-      }
-
-      if (!resp.ok) {
-        if (resp.status === 401) {
-          localStorage.removeItem("portal_token");
-          state.token = "";
-        }
-        throw new Error(data.detail || `HTTP ${resp.status}`);
-      }
-
-      return data;
-    }
-
-    function renderAuth() {
-      const loggedIn = Boolean(state.token && state.user && state.user.username !== "guest");
-
-      $("loginArea").classList.toggle("hidden", loggedIn);
-      $("logoutArea").classList.toggle("hidden", !loggedIn);
-
-      const user = state.user || { username: "guest", roles: [], permissions: [] };
-      $("identityBox").innerHTML = `
-        当前身份：<strong>${escapeHtml(user.username || user.sub || "guest")}</strong>
-        <div class="small muted" style="margin-top:6px;">
-          角色：${escapeHtml((user.roles || []).join(", ") || "无")}　
-          权限：${escapeHtml((user.permissions || []).join(", ") || "无")}
-        </div>
-      `;
-    }
-
-    function featureStatusTag(status) {
-      if (status === "active") return `<span class="tag ok">已接入</span>`;
-      if (status === "reserved") return `<span class="tag warn">预留</span>`;
-      return `<span class="tag danger">${escapeHtml(status)}</span>`;
-    }
-
-    function renderFeatures() {
-      const items = state.features || [];
-      if (!items.length) {
-        $("featuresGrid").innerHTML = `<div class="notice">当前没有可访问的功能入口。请登录或联系管理员分配权限。</div>`;
-        return;
-      }
-
-      $("featuresGrid").innerHTML = items.map((f) => {
-        const hasUrl = Boolean(f.url);
-        const disabled = !hasUrl || f.status !== "active";
-        return `
-          <article class="feature-card card">
-            <div>
-              <div>${featureStatusTag(f.status)}</div>
-              <h2 style="margin-top:10px;">${escapeHtml(f.title)}</h2>
-              <p>${escapeHtml(f.description || "暂无说明")}</p>
-              <div class="small muted">
-                分类：${escapeHtml(f.category || "未分类")}<br />
-                权限：${escapeHtml(f.required_permission || "公开")}
-              </div>
-            </div>
-            <div style="margin-top:14px;">
-              ${
-                disabled
-                  ? `<span class="btn disabled">${f.status === "reserved" ? "预留中" : "暂无链接"}</span>`
-                  : `<a class="btn primary" href="${escapeHtml(f.url)}" target="_blank" rel="noreferrer">打开入口</a>`
-              }
-            </div>
-          </article>
-        `;
-      }).join("");
-    }
-
-    async function loadFeatures() {
-      clearMessage();
-      const data = await api("/v1/features");
-      state.user = data.user || { username: "guest", roles: [], permissions: [] };
-      state.features = data.features || [];
-      renderAuth();
-      renderFeatures();
-    }
-
-    async function login() {
-      clearMessage();
-      const username = $("usernameInput").value.trim();
-      const password = $("passwordInput").value;
-
-      if (!username || !password) {
-        showError("请输入用户名和密码。");
-        return;
-      }
-
-      const data = await api("/v1/auth/login", {
-        method: "POST",
-        body: JSON.stringify({ username, password })
-      });
-
-      state.token = data.token;
-      localStorage.setItem("portal_token", state.token);
-      showSuccess("登录成功。");
-      await loadFeatures();
-    }
-
-    function logout() {
-      localStorage.removeItem("portal_token");
-      state.token = "";
-      state.user = null;
-      showSuccess("已退出登录。");
-      loadFeatures().catch((e) => showError(e.message));
-    }
-
-
-    async function checkCoupleAccess() {
-      try {
-        const data = await api("/couple/access");
-        return data && data.allowed === true && data.route;
-      } catch {
-        return null;
-      }
-    }
-
-    async function maybeEnterCouple() {
-      const route = await checkCoupleAccess();
-      if (route) window.location.assign(route);
-    }
-
-    async function handleCoupleRouteGuard() {
-      if (location.pathname !== "/couple") return false;
-      const route = await checkCoupleAccess();
-      if (!route) {
-        window.location.replace("/");
-        return true;
-      }
-      renderCouplePage();
-      return true;
-    }
-
-    document.addEventListener("DOMContentLoaded", async () => {
-      if (await handleCoupleRouteGuard()) return;
-      $("coupleHeart").addEventListener("click", () => { maybeEnterCouple(); });
-      $("loginBtn").addEventListener("click", () => login().catch((e) => showError(e.message)));
-      $("logoutBtn").addEventListener("click", logout);
-      $("passwordInput").addEventListener("keydown", (e) => {
-        if (e.key === "Enter") login().catch((err) => showError(err.message));
-      });
-
-      loadFeatures().catch((e) => showError(`加载功能入口失败：${e.message}`));
-    });
-  </script>
-</body>
-</html>
+<script>
+const API_BASE = location.port === '8080' ? 'http://localhost:8000' : '/api';
+const state = { token: localStorage.getItem('portal_token') || '', user:null, features:[] };
+const $=(id)=>document.getElementById(id);
+const getAuthToken=()=>localStorage.getItem('portal_token')||'';
+function showError(m){$('errorBox').textContent=m;$('errorBox').style.display='block';$('successBox').style.display='none'}
+function showSuccess(m){$('successBox').textContent=m;$('successBox').style.display='block';$('errorBox').style.display='none'}
+function clearMessage(){$('errorBox').style.display='none';$('successBox').style.display='none'}
+async function api(path,opt={}){const h=Object.assign({'Content-Type':'application/json'},opt.headers||{});const tk=getAuthToken();if(tk) h.Authorization=`Bearer ${tk}`;const r=await fetch(`${API_BASE}${path}`,{...opt,headers:h});const t=await r.text();let d={};if(t){try{d=JSON.parse(t)}catch{d={raw:t}}}if(!r.ok){if(r.status===401){localStorage.removeItem('portal_token');state.token='';}throw new Error(d.detail||`HTTP ${r.status}`)}return d}
+async function requestCoupleAccess(){try{const d=await api('/couple/access');if(d&&d.allowed===true){return d.route||'/couple/';}}catch{} return null;}
+async function enterCoupleSilently(){const route=await requestCoupleAccess();if(route) window.location.assign(route)}
+function renderAuth(){const logged=Boolean(state.token&&state.user&&state.user.username!=='guest');$('loginArea').classList.toggle('hidden',logged);$('logoutArea').classList.toggle('hidden',!logged);$('topLoginBtn').classList.toggle('hidden',logged);$('topRegisterBtn').classList.toggle('hidden',logged);$('topLogoutBtn').classList.toggle('hidden',!logged);$('topHeart').style.cursor=logged?'pointer':'default';const u=state.user||{username:'guest',roles:[],permissions:[]};$('identityBox').innerHTML=`当前身份：<strong>${u.username||u.sub||'guest'}</strong><div class="small muted" style="margin-top:6px;">角色：${(u.roles||[]).join(', ')||'无'}　权限：${(u.permissions||[]).join(', ')||'无'}</div>`;}
+function renderFeatures(){const it=state.features||[];if(!it.length){$('featuresGrid').innerHTML='<div class="notice">当前没有可访问的功能入口。</div>';return;}$('featuresGrid').innerHTML=it.map(f=>`<article class="feature-card card"><div><h3>${f.title}</h3><p>${f.description||'暂无说明'}</p><div class="small muted">分类：${f.category||'未分类'}<br/>权限：${f.required_permission||'公开'}</div></div><div style="margin-top:14px;">${f.url&&f.status==='active'?`<a class="btn primary" href="${f.url}" target="_blank" rel="noreferrer">打开入口</a>`:'<span class="btn subtle">暂不可用</span>'}</div></article>`).join('')}
+async function loadFeatures(){clearMessage();const d=await api('/v1/features');state.user=d.user||{username:'guest',roles:[],permissions:[]};state.features=d.features||[];state.token=getAuthToken();renderAuth();renderFeatures();}
+async function login(){clearMessage();const username=$('usernameInput').value.trim();const password=$('passwordInput').value;if(!username||!password){showError('请输入用户名和密码。');return;}const d=await api('/v1/auth/login',{method:'POST',body:JSON.stringify({username,password})});state.token=d.token;localStorage.setItem('portal_token',state.token);showSuccess('登录成功。');await loadFeatures();}
+function logout(){localStorage.removeItem('portal_token');state.token='';state.user=null;showSuccess('已退出登录。');loadFeatures().catch((e)=>showError(e.message));}
+document.addEventListener('DOMContentLoaded',()=>{$('topHeart').addEventListener('click',()=>{enterCoupleSilently();});$('refreshBtn').addEventListener('click',()=>loadFeatures().catch((e)=>showError(`加载失败：${e.message}`)));$('topLoginBtn').addEventListener('click',()=>{$('usernameInput').focus();});$('topRegisterBtn').addEventListener('click',()=>{$('usernameInput').focus();});$('topLogoutBtn').addEventListener('click',logout);$('loginBtn').addEventListener('click',()=>login().catch((e)=>showError(e.message)));$('logoutBtn').addEventListener('click',logout);$('passwordInput').addEventListener('keydown',(e)=>{if(e.key==='Enter') login().catch((err)=>showError(err.message));});loadFeatures().catch((e)=>showError(`加载功能入口失败：${e.message}`));});
+</script>
+</body></html>
