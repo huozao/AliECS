@@ -1,180 +1,414 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>AliECS · 配方服务器业务入口</title>
   <style>
-    :root { --bg:#f6f4ee;--surface:#fbfaf6;--line:#e7e3d8;--text:#171715;--muted:#61605c;--brand:#c86a45;--ok:#1f7a47;--plan:#936724; }
-    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif}
-    .container{width:min(1080px,92vw);margin:0 auto}.topbar{position:sticky;top:0;background:#f6f4eefa;border-bottom:1px solid var(--line);backdrop-filter:blur(6px)}
-    .top{min-height:64px;display:flex;justify-content:space-between;align-items:center;gap:10px}.brand{font-family:Georgia,serif;font-size:1.2rem}
-    .btn{display:inline-flex;padding:8px 12px;border-radius:10px;border:1px solid transparent;text-decoration:none;color:inherit;background:#fff;cursor:pointer}
-    .btn.primary{background:var(--brand);color:#fff}.btn.ghost{border-color:var(--line)} .btn:disabled{opacity:.55;cursor:not-allowed}
-    main{padding:28px 0 56px}.hero,.section{border:1px solid var(--line);background:var(--surface);border-radius:16px;padding:18px;margin-bottom:14px}
-    h1,h2,h3{font-family:Georgia,serif;margin:0 0 10px} p{margin:0 0 10px;color:var(--muted)}
-    .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.card{border:1px solid var(--line);background:#fff;border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:8px}
-    .status{font-size:.78rem;border-radius:999px;padding:2px 8px;border:1px solid transparent;width:fit-content}
-    .ok{color:var(--ok);background:#eaf6ef;border-color:#b9e2c8}.plan{color:var(--plan);background:#f7f0df;border-color:#e8d6ac}.lock{color:#385f87;background:#e8f0fb;border-color:#bfd5f2}
-    .toolbar{display:flex;flex-wrap:wrap;gap:8px}.meta{font-size:.9rem;color:var(--muted)}
-    .auth-grid{display:grid;grid-template-columns:1fr 1fr auto auto;gap:8px}.auth-grid input{padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:#fff}
-    .hint{font-size:.85rem;color:var(--muted)}
-    .modal{position:fixed;inset:0;background:#00000066;display:none;align-items:center;justify-content:center;padding:16px}
-    .modal-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;max-width:420px;width:100%}
-    @media (max-width:900px){.grid{grid-template-columns:1fr 1fr}.auth-grid{grid-template-columns:1fr 1fr}}
-    @media (max-width:640px){.grid,.auth-grid{grid-template-columns:1fr}}
+    :root {
+      --bg: #f7f5f0;
+      --card: #fffdf8;
+      --text: #25211b;
+      --muted: #766f63;
+      --line: #e7dfd0;
+      --primary: #6f5e46;
+      --primary-dark: #4d412f;
+      --ok: #3f7a4c;
+      --warn: #a36b16;
+      --danger: #a6423a;
+      --shadow: 0 12px 30px rgba(69, 56, 38, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at top left, rgba(180, 157, 118, 0.18), transparent 35%),
+        var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        "Microsoft YaHei", sans-serif;
+    }
+
+    .wrap {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 30px 18px 56px;
+    }
+
+    .hero {
+      background: rgba(255, 253, 248, 0.9);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+      border-radius: 24px;
+      padding: 28px;
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      font-size: 34px;
+      margin: 0 0 10px;
+      letter-spacing: -0.04em;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 20px;
+    }
+
+    p {
+      color: var(--muted);
+      line-height: 1.8;
+    }
+
+    .nav {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 18px;
+    }
+
+    .btn, button {
+      border: 0;
+      border-radius: 999px;
+      padding: 10px 14px;
+      background: #e8dfcf;
+      color: var(--text);
+      cursor: pointer;
+      font-weight: 650;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    .btn.primary, button.primary {
+      background: var(--primary);
+      color: white;
+    }
+
+    .btn.disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+
+    .card {
+      background: rgba(255, 253, 248, 0.92);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: var(--shadow);
+    }
+
+    .feature-card {
+      min-height: 190px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .muted { color: var(--muted); }
+
+    input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 11px 12px;
+      background: white;
+      color: var(--text);
+      outline: none;
+      font-size: 14px;
+    }
+
+    label {
+      display: block;
+      color: var(--muted);
+      font-size: 13px;
+      margin: 8px 0 6px;
+    }
+
+    .row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .tag {
+      display: inline-flex;
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: 12px;
+      background: #eee6d8;
+      color: var(--muted);
+      margin: 2px 4px 2px 0;
+      white-space: nowrap;
+    }
+
+    .tag.ok { background: #dfeee3; color: var(--ok); }
+    .tag.warn { background: #f4e4c7; color: var(--warn); }
+    .tag.danger { background: #f1d4d1; color: var(--danger); }
+
+    .notice {
+      border-radius: 14px;
+      padding: 12px 14px;
+      background: #f2eadc;
+      color: var(--muted);
+      line-height: 1.7;
+      margin-bottom: 14px;
+    }
+
+    .error {
+      display: none;
+      border-radius: 14px;
+      padding: 12px 14px;
+      background: #f5d7d3;
+      color: var(--danger);
+      margin-bottom: 14px;
+      white-space: pre-wrap;
+    }
+
+    .success {
+      display: none;
+      border-radius: 14px;
+      padding: 12px 14px;
+      background: #dfeee3;
+      color: var(--ok);
+      margin-bottom: 14px;
+      white-space: pre-wrap;
+    }
+
+    .hidden { display: none !important; }
+    .small { font-size: 12px; }
   </style>
 </head>
 <body>
-<header class="topbar"><div class="container top">
-  <div class="brand">AliECS · 配方服务器</div>
-  <div class="toolbar">
-    <a class="btn ghost" href="#project-intro">项目简介</a>
-    <a class="btn primary" href="/admin/">Admin UI</a>
-    <a class="btn ghost" href="#auth">登录</a>
-    <a class="btn ghost" href="#auth">注册</a>
-    <a class="btn ghost" href="/api/healthz">Health</a>
+  <div class="wrap">
+    <section class="hero">
+      <h1>配方服务器业务入口</h1>
+      <p>
+        这里是工厂配方、需求、排产、库存相关入口的统一导航页。
+        已上线入口可以直接打开；预留入口会明确标记，不伪装成已完成模块。
+      </p>
+      <div class="nav">
+        <a class="btn primary" href="#features">业务入口</a>
+        <a class="btn" href="/admin/">Admin UI（仅管理员）</a>
+        <a class="btn" href="/api/healthz" target="_blank" rel="noreferrer">API Health</a>
+        <a class="btn" href="https://github.com/huozao/AliECS" target="_blank" rel="noreferrer">GitHub</a>
+      </div>
+    </section>
+
+    <div id="errorBox" class="error"></div>
+    <div id="successBox" class="success"></div>
+
+    <section class="card" style="margin-bottom:16px;">
+      <h2>登录与权限</h2>
+      <div id="identityBox" class="notice">当前身份：guest（未登录）。未登录只显示公开入口。</div>
+      <div id="loginArea">
+        <div class="grid" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+          <div>
+            <label for="usernameInput">用户名</label>
+            <input id="usernameInput" autocomplete="username" placeholder="请输入用户名" />
+          </div>
+          <div>
+            <label for="passwordInput">密码</label>
+            <input id="passwordInput" type="password" autocomplete="current-password" placeholder="请输入密码" />
+          </div>
+        </div>
+        <div class="row" style="margin-top:14px;">
+          <button id="loginBtn" class="primary" type="button">登录</button>
+          <span class="muted small">登录后显示你的可用功能。</span>
+        </div>
+      </div>
+      <div id="logoutArea" class="hidden">
+        <button id="logoutBtn" type="button">退出登录</button>
+      </div>
+    </section>
+
+    <section id="features" class="card">
+      <h2>业务功能入口</h2>
+      <p class="muted">功能入口由后端 `/v1/features` 按权限返回。没有权限的入口不会显示。</p>
+      <div id="featuresGrid" class="grid"></div>
+    </section>
   </div>
-</div></header>
 
-<main class="container">
-  <section class="hero">
-    <h1>业务入口首页</h1>
-    <p>该页面用于聚合配方业务入口。某些链接需要权限，未登录或无权限时会提示登录/注册。</p>
-    <div class="toolbar">
-      <a class="btn ghost" href="#new-model">新品型号录入表</a>
-      <a class="btn ghost" href="#schedule">排产登记表</a>
-      <a class="btn ghost" href="#pending">待处理+退货提醒</a>
-      <a class="btn ghost" href="#naming">产品命名登记</a>
-      <a class="btn ghost" href="#qc">检测数据登记表</a>
-      <a class="btn ghost" href="#density">配方密度计算器</a>
-    </div>
-  </section>
+  <script>
+    const API_BASE = location.port === "8080" ? "http://localhost:8000" : "/api";
+    const state = {
+      token: localStorage.getItem("portal_token") || "",
+      user: null,
+      features: []
+    };
 
-  <section class="section" id="project-intro">
-    <h2>项目简介</h2>
-    <p>项目定位为配方相关业务入口聚合平台。后续承载配方查询、需求管理、库存查询与管理后台，保持 public-web / admin-ui / backend-api / postgres 架构。</p>
-  </section>
+    const $ = (id) => document.getElementById(id);
 
-  <section class="section" id="auth">
-    <h2>登录与注册</h2>
-    <div class="auth-grid">
-      <input id="username" placeholder="登录名" />
-      <input id="password" type="password" placeholder="密码" />
-      <button class="btn primary" id="loginBtn">登录</button>
-      <button class="btn ghost" id="registerBtn">注册</button>
-    </div>
-    <p class="hint">注册后当前阶段为待审批状态，你的后台可分配不同账号权限（如 personal）。</p>
-    <p id="loginStatus" class="meta">当前身份：guest（未登录）</p>
-  </section>
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
 
-  <section class="section">
-    <h2>业务功能入口</h2>
-    <div class="grid">
-      <article class="card" id="new-model"><h3>新品型号录入表</h3><span class="status ok">已接入</span><p>用于新品型号登记。</p><a class="btn ghost" data-link="new_model_form" target="_blank">打开入口</a></article>
-      <article class="card" id="schedule"><h3>排产登记表</h3><span class="status ok">已接入</span><p>用于排产信息登记。</p><a class="btn ghost" data-link="schedule_form" target="_blank">打开入口</a></article>
-      <article class="card" id="pending"><h3>待处理+退货处理自动化提醒</h3><span class="status ok">已接入</span><p>用于待处理和退货提醒登记。</p><a class="btn ghost" data-link="pending_return_alert" target="_blank">打开入口</a></article>
-      <article class="card" id="naming"><h3>产品命名登记</h3><span class="status ok">已接入</span><p>用于产品命名录入。</p><a class="btn ghost" data-link="naming_form" target="_blank">打开入口</a></article>
-      <article class="card" id="qc"><h3>检测数据登记表</h3><span class="status ok">已接入</span><p>用于检测数据登记。</p><a class="btn ghost" data-link="qc_form" target="_blank">打开入口</a></article>
-      <article class="card" id="density"><h3>配方密度计算器</h3><span class="status ok">已接入</span><p>用于密度相关计算登记。</p><a class="btn ghost" data-link="density_calculator" target="_blank">打开入口</a></article>
-      <article class="card" id="personal"><h3>个人板块：人体周期</h3><span class="status lock" id="personalTag">权限受限</span><p>该入口需要个人权限（personal）。</p><a class="btn ghost protected" id="personalLink" data-link="personal" target="_blank" href="#">登录后可访问</a></article>
-      <article class="card"><h3>Admin UI</h3><span class="status plan">占位入口</span><p>管理后台为占位页面，后续接入细粒度权限管理。</p><a class="btn primary" href="/admin/">进入 Admin UI</a></article>
-    </div>
-  </section>
-</main>
+    function showError(message) {
+      $("errorBox").textContent = message;
+      $("errorBox").style.display = "block";
+      $("successBox").style.display = "none";
+    }
 
-<div class="modal" id="authModal">
-  <div class="modal-card">
-    <h3>需要登录或注册</h3>
-    <p>这个入口需要权限。请先登录，或先注册后由管理员在后台分配权限。</p>
-    <div class="toolbar">
-      <a class="btn primary" href="#auth" id="gotoLogin">去登录</a>
-      <a class="btn ghost" href="#auth" id="gotoRegister">去注册</a>
-      <button class="btn ghost" id="closeModal">关闭</button>
-    </div>
-  </div>
-</div>
+    function showSuccess(message) {
+      $("successBox").textContent = message;
+      $("successBox").style.display = "block";
+      $("errorBox").style.display = "none";
+    }
 
-<script>
-  const apiBase = '/api';
-  const state = { token: localStorage.getItem('aliecs_token') || '', features: null };
+    function clearMessage() {
+      $("errorBox").style.display = "none";
+      $("successBox").style.display = "none";
+    }
 
-  function showAuthModal() { document.getElementById('authModal').style.display = 'flex'; }
-  function hideAuthModal() { document.getElementById('authModal').style.display = 'none'; }
+    async function api(path, options = {}) {
+      const headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
+      if (state.token) headers.Authorization = `Bearer ${state.token}`;
 
-  async function fetchFeatures() {
-    const headers = {};
-    if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
-    const resp = await fetch(`${apiBase}/v1/features`, { headers });
-    if (!resp.ok) throw new Error('features load failed');
-    const data = await resp.json();
-    state.features = data;
-    bindLinks(data);
-    const user = data.user || { role: 'guest' };
-    document.getElementById('loginStatus').textContent = `当前身份：${user.username || 'guest'} (${user.role || 'guest'})`;
-  }
+      const resp = await fetch(`${API_BASE}${path}`, {
+        ...options,
+        headers
+      });
 
-  function bindLinks(data) {
-    const links = data.links || {};
-    document.querySelectorAll('[data-link]').forEach((node) => {
-      const key = node.getAttribute('data-link');
-      if (key === 'personal') {
-        const can = !!(data.personal && data.personal.enabled);
-        node.textContent = can ? '打开入口' : '登录后可访问';
-        node.href = can ? data.personal.url : '#';
-        node.dataset.enabled = can ? '1' : '0';
-        document.getElementById('personalTag').textContent = can ? '已授权' : '权限受限';
-        document.getElementById('personalTag').className = `status ${can ? 'ok' : 'lock'}`;
+      const text = await resp.text();
+      let data = {};
+      if (text) {
+        try { data = JSON.parse(text); } catch { data = { raw: text }; }
+      }
+
+      if (!resp.ok) {
+        if (resp.status === 401) {
+          localStorage.removeItem("portal_token");
+          state.token = "";
+        }
+        throw new Error(data.detail || `HTTP ${resp.status}`);
+      }
+
+      return data;
+    }
+
+    function renderAuth() {
+      const loggedIn = Boolean(state.token && state.user && state.user.username !== "guest");
+
+      $("loginArea").classList.toggle("hidden", loggedIn);
+      $("logoutArea").classList.toggle("hidden", !loggedIn);
+
+      const user = state.user || { username: "guest", roles: [], permissions: [] };
+      $("identityBox").innerHTML = `
+        当前身份：<strong>${escapeHtml(user.username || user.sub || "guest")}</strong>
+        <div class="small muted" style="margin-top:6px;">
+          角色：${escapeHtml((user.roles || []).join(", ") || "无")}　
+          权限：${escapeHtml((user.permissions || []).join(", ") || "无")}
+        </div>
+      `;
+    }
+
+    function featureStatusTag(status) {
+      if (status === "active") return `<span class="tag ok">已接入</span>`;
+      if (status === "reserved") return `<span class="tag warn">预留</span>`;
+      return `<span class="tag danger">${escapeHtml(status)}</span>`;
+    }
+
+    function renderFeatures() {
+      const items = state.features || [];
+      if (!items.length) {
+        $("featuresGrid").innerHTML = `<div class="notice">当前没有可访问的功能入口。请登录或联系管理员分配权限。</div>`;
         return;
       }
-      if (links[key]) node.href = links[key];
+
+      $("featuresGrid").innerHTML = items.map((f) => {
+        const hasUrl = Boolean(f.url);
+        const disabled = !hasUrl || f.status !== "active";
+        return `
+          <article class="feature-card card">
+            <div>
+              <div>${featureStatusTag(f.status)}</div>
+              <h2 style="margin-top:10px;">${escapeHtml(f.title)}</h2>
+              <p>${escapeHtml(f.description || "暂无说明")}</p>
+              <div class="small muted">
+                分类：${escapeHtml(f.category || "未分类")}<br />
+                权限：${escapeHtml(f.required_permission || "公开")}
+              </div>
+            </div>
+            <div style="margin-top:14px;">
+              ${
+                disabled
+                  ? `<span class="btn disabled">${f.status === "reserved" ? "预留中" : "暂无链接"}</span>`
+                  : `<a class="btn primary" href="${escapeHtml(f.url)}" target="_blank" rel="noreferrer">打开入口</a>`
+              }
+            </div>
+          </article>
+        `;
+      }).join("");
+    }
+
+    async function loadFeatures() {
+      clearMessage();
+      const data = await api("/v1/features");
+      state.user = data.user || { username: "guest", roles: [], permissions: [] };
+      state.features = data.features || [];
+      renderAuth();
+      renderFeatures();
+    }
+
+    async function login() {
+      clearMessage();
+      const username = $("usernameInput").value.trim();
+      const password = $("passwordInput").value;
+
+      if (!username || !password) {
+        showError("请输入用户名和密码。");
+        return;
+      }
+
+      const data = await api("/v1/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ username, password })
+      });
+
+      state.token = data.token;
+      localStorage.setItem("portal_token", state.token);
+      showSuccess("登录成功。");
+      await loadFeatures();
+    }
+
+    function logout() {
+      localStorage.removeItem("portal_token");
+      state.token = "";
+      state.user = null;
+      showSuccess("已退出登录。");
+      loadFeatures().catch((e) => showError(e.message));
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      $("loginBtn").addEventListener("click", () => login().catch((e) => showError(e.message)));
+      $("logoutBtn").addEventListener("click", logout);
+      $("passwordInput").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") login().catch((err) => showError(err.message));
+      });
+
+      loadFeatures().catch((e) => showError(`加载功能入口失败：${e.message}`));
     });
-  }
-
-  async function login() {
-    const username = document.getElementById('username').value.trim();
-    const password = document.getElementById('password').value;
-    const resp = await fetch(`${apiBase}/v1/auth/login`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
-    });
-    if (!resp.ok) { alert('登录失败：用户名或密码错误'); return; }
-    const data = await resp.json();
-    state.token = data.token;
-    localStorage.setItem('aliecs_token', data.token);
-    await fetchFeatures();
-    alert('登录成功');
-  }
-
-  async function register() {
-    const username = document.getElementById('username').value.trim();
-    const password = document.getElementById('password').value;
-    const resp = await fetch(`${apiBase}/v1/auth/register`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password, note: 'homepage register request' })
-    });
-    const data = await resp.json();
-    if (!resp.ok) { alert(`注册失败：${data.detail || '请稍后重试'}`); return; }
-    alert('注册请求已提交，请联系管理员分配权限');
-  }
-
-  document.getElementById('loginBtn').addEventListener('click', login);
-  document.getElementById('registerBtn').addEventListener('click', register);
-  document.getElementById('closeModal').addEventListener('click', hideAuthModal);
-  document.getElementById('gotoLogin').addEventListener('click', hideAuthModal);
-  document.getElementById('gotoRegister').addEventListener('click', hideAuthModal);
-
-  document.addEventListener('click', (e) => {
-    const target = e.target.closest('.protected');
-    if (!target) return;
-    if (target.dataset.enabled === '1') return;
-    e.preventDefault();
-    showAuthModal();
-  });
-
-  fetchFeatures().catch(() => {
-    document.getElementById('loginStatus').textContent = '当前身份：guest（未登录，或后端接口不可用）';
-  });
-</script>
+  </script>
 </body>
 </html>

@@ -1,29 +1,881 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AliECS Admin UI</title><style>body{font-family:Inter,system-ui;background:#f6f4ee;margin:0;color:#171715}.c{width:min(1180px,95vw);margin:0 auto;padding:18px}.card{background:#fff;border:1px solid #e7e3d8;border-radius:12px;padding:12px;margin-bottom:12px}h1,h2{font-family:Georgia,serif}.row{display:flex;gap:8px;flex-wrap:wrap}.row input,.row select,.row textarea{padding:8px;border:1px solid #ddd;border-radius:8px}.btn{padding:8px 10px;border:1px solid #ddd;border-radius:8px;background:#fff;cursor:pointer}.btn.p{background:#c86a45;color:#fff;border-color:#c86a45}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #eee;padding:6px;text-align:left;font-size:.9rem}.muted{color:#666}</style></head><body><div class="c"><h1>系统管理后台</h1>
-<div class="card"><h2>登录区</h2><div class="row"><input id="u" placeholder="用户名"><input id="p" type="password" placeholder="密码"><button class="btn p" id="login">登录</button><button class="btn" id="logout">退出登录</button></div><div id="me" class="muted">未登录</div></div>
-<div class="card"><h2>仪表盘</h2><div id="stats" class="row muted">请先登录加载数据</div></div>
-<div class="card"><h2>用户管理</h2><div class="row"><input id="nu" placeholder="新用户用户名"><input id="nd" placeholder="显示名"><input id="np" placeholder="密码"><button class="btn p" id="createUser">新增用户</button></div><table id="usersTbl"><thead><tr><th>ID</th><th>用户名</th><th>显示名</th><th>状态</th><th>角色</th><th>操作</th></tr></thead><tbody></tbody></table></div>
-<div class="card"><h2>角色与权限</h2><div class="row"><button class="btn" id="loadRoles">刷新角色</button><button class="btn" id="loadPerms">刷新权限</button></div><div id="roles" class="muted"></div><div id="perms" class="muted"></div></div>
-<div class="card"><h2>功能入口管理</h2><div class="row"><input id="fc" placeholder="code"><input id="ft" placeholder="title"><input id="fu" placeholder="url"><input id="fp" placeholder="required_permission"><select id="fs"><option value="active">active</option><option value="reserved">reserved</option></select><button class="btn p" id="createFeature">新增功能</button></div><table id="featuresTbl"><thead><tr><th>ID</th><th>Code</th><th>Title</th><th>Status</th><th>Permission</th></tr></thead><tbody></tbody></table></div>
-<div class="card"><h2>审计日志</h2><button class="btn" id="loadLogs">刷新日志</button><table id="logsTbl"><thead><tr><th>ID</th><th>操作者</th><th>动作</th><th>对象</th><th>时间</th></tr></thead><tbody></tbody></table></div>
-</div>
-<script>
-const api='/api';let token=localStorage.getItem('admin_token')||'';let roles=[],perms=[];
-const hdr=()=>token?{'Authorization':'Bearer '+token,'Content-Type':'application/json'}:{'Content-Type':'application/json'};
-function setMe(t){document.getElementById('me').textContent=t}
-async function req(path,opt={}){const r=await fetch(api+path,{...opt,headers:{...hdr(),...(opt.headers||{})}});if(r.status===401){setMe('登录过期，请重新登录');throw new Error('401')}if(r.status===403){alert('权限不足');throw new Error('403')}const j=await r.json();if(!r.ok)throw new Error(j.detail||'请求失败');return j;}
-async function login(){const username=u.value.trim(),password=p.value;const d=await req('/v1/auth/login',{method:'POST',body:JSON.stringify({username,password})});token=d.token;localStorage.setItem('admin_token',token);setMe(`已登录：${d.user.display_name}(${d.user.username}) 角色:${d.user.roles.join(',')} 权限:${d.user.permissions.join(',')}`);await loadAll();}
-function logout(){token='';localStorage.removeItem('admin_token');setMe('已退出');}
-async function loadUsers(){const d=await req('/v1/admin/users');const rs=await req('/v1/admin/roles');roles=rs.items;const tb=usersTbl.querySelector('tbody');tb.innerHTML='';for(const u of d.items){const tr=document.createElement('tr');tr.innerHTML=`<td>${u.id}</td><td>${u.username}</td><td>${u.display_name}</td><td>${u.status}</td><td><select id='r_${u.id}' multiple>${roles.map(r=>`<option value='${r.id}'>${r.code}</option>`).join('')}</select></td><td><button class='btn' onclick='toggleUser(${u.id},"${u.status}")'>${u.status==='active'?'禁用':'启用'}</button><button class='btn' onclick='resetPw(${u.id})'>重置密码</button><button class='btn' onclick='saveRoles(${u.id})'>保存角色</button></td>`;tb.appendChild(tr);}document.getElementById('stats').textContent=`用户数: ${d.items.length}`;}
-async function createUser(){await req('/v1/admin/users',{method:'POST',body:JSON.stringify({username:nu.value,display_name:nd.value,password:np.value})});await loadUsers();}
-async function toggleUser(id,s){await req(`/v1/admin/users/${id}/${s==='active'?'disable':'enable'}`,{method:'POST'});await loadUsers();}
-async function resetPw(id){const p=prompt('新密码');if(!p)return;await req(`/v1/admin/users/${id}/reset-password`,{method:'POST',body:JSON.stringify({new_password:p})});alert('已重置');}
-async function saveRoles(id){const sel=document.getElementById('r_'+id);const role_ids=[...sel.selectedOptions].map(x=>Number(x.value));await req(`/v1/admin/users/${id}/roles`,{method:'PUT',body:JSON.stringify({role_ids})});alert('角色已保存');}
-async function loadRoles(){const d=await req('/v1/admin/roles');roles=d.items;document.getElementById('roles').textContent='角色: '+d.items.map(x=>`${x.id}:${x.code}`).join(' | ')}
-async function loadPerms(){const d=await req('/v1/admin/permissions');perms=d.items;document.getElementById('perms').textContent='权限: '+d.items.map(x=>x.code).join(' | ')}
-async function loadFeatures(){const d=await req('/v1/admin/features');const tb=featuresTbl.querySelector('tbody');tb.innerHTML='';for(const f of d.items){const tr=document.createElement('tr');tr.innerHTML=`<td>${f.id}</td><td>${f.code}</td><td>${f.title}</td><td>${f.status}</td><td>${f.required_permission||''}</td>`;tb.appendChild(tr);}document.getElementById('stats').textContent += ` | 功能数: ${d.items.length}`;}
-async function createFeature(){await req('/v1/admin/features',{method:'POST',body:JSON.stringify({code:fc.value,title:ft.value,url:fu.value||null,required_permission:fp.value||null,status:fs.value})});await loadFeatures();}
-async function loadLogs(){const d=await req('/v1/admin/audit-logs');const tb=logsTbl.querySelector('tbody');tb.innerHTML='';for(const l of d.items){const tr=document.createElement('tr');tr.innerHTML=`<td>${l.id}</td><td>${l.actor_username||''}</td><td>${l.action}</td><td>${l.target_type||''}:${l.target_id||''}</td><td>${l.created_at}</td>`;tb.appendChild(tr);}document.getElementById('stats').textContent += ` | 日志: ${d.items.length}`;}
-async function loadAll(){await Promise.all([loadUsers(),loadRoles(),loadPerms(),loadFeatures(),loadLogs()]);}
-login.onclick=()=>login().catch(e=>alert(e.message));logout.onclick=logout;createUser.onclick=()=>createUser().catch(e=>alert(e.message));createFeature.onclick=()=>createFeature().catch(e=>alert(e.message));loadRoles.onclick=()=>loadRoles().catch(e=>alert(e.message));loadPerms.onclick=()=>loadPerms().catch(e=>alert(e.message));loadLogs.onclick=()=>loadLogs().catch(e=>alert(e.message));
-if(token){req('/v1/auth/me').then(me=>{setMe(`已登录：${me.display_name||me.sub}`);loadAll();}).catch(()=>{});} 
-</script></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AliECS · 系统管理后台</title>
+  <style>
+    :root {
+      --bg: #f7f5f0;
+      --card: #fffdf8;
+      --text: #25211b;
+      --muted: #766f63;
+      --line: #e7dfd0;
+      --primary: #6f5e46;
+      --primary-dark: #4d412f;
+      --danger: #a6423a;
+      --ok: #3f7a4c;
+      --warn: #a36b16;
+      --shadow: 0 12px 30px rgba(69, 56, 38, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at top left, rgba(180, 157, 118, 0.2), transparent 35%),
+        var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        "Microsoft YaHei", sans-serif;
+    }
+
+    a { color: var(--primary-dark); }
+
+    .wrap {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 28px 18px 56px;
+    }
+
+    .hero {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 20px;
+      margin-bottom: 22px;
+    }
+
+    .hero h1 {
+      margin: 0 0 8px;
+      font-size: 30px;
+      letter-spacing: -0.03em;
+    }
+
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+
+    .top-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+    }
+
+    .grid.two {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .grid.three {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    @media (max-width: 900px) {
+      .hero { flex-direction: column; }
+      .grid.two, .grid.three { grid-template-columns: 1fr; }
+    }
+
+    .card {
+      background: rgba(255, 253, 248, 0.92);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: var(--shadow);
+    }
+
+    .card h2 {
+      margin: 0 0 14px;
+      font-size: 18px;
+    }
+
+    .muted { color: var(--muted); }
+
+    .row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 11px 12px;
+      background: white;
+      color: var(--text);
+      outline: none;
+      font-size: 14px;
+    }
+
+    input:focus, select:focus, textarea:focus {
+      border-color: #b69b69;
+      box-shadow: 0 0 0 3px rgba(182, 155, 105, 0.18);
+    }
+
+    label {
+      display: block;
+      color: var(--muted);
+      font-size: 13px;
+      margin: 8px 0 6px;
+    }
+
+    button, .btn {
+      border: 0;
+      border-radius: 999px;
+      padding: 10px 14px;
+      background: #e8dfcf;
+      color: var(--text);
+      cursor: pointer;
+      font-weight: 650;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    button.primary, .btn.primary {
+      background: var(--primary);
+      color: white;
+    }
+
+    button.danger {
+      background: #f1d4d1;
+      color: var(--danger);
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+      overflow: hidden;
+    }
+
+    th, td {
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: 12px;
+      background: #eee6d8;
+      color: var(--muted);
+      margin: 2px 4px 2px 0;
+      white-space: nowrap;
+    }
+
+    .tag.ok { background: #dfeee3; color: var(--ok); }
+    .tag.warn { background: #f4e4c7; color: var(--warn); }
+    .tag.danger { background: #f1d4d1; color: var(--danger); }
+
+    .notice {
+      border-radius: 14px;
+      padding: 12px 14px;
+      background: #f2eadc;
+      color: var(--muted);
+      line-height: 1.7;
+      margin-bottom: 14px;
+    }
+
+    .error {
+      display: none;
+      border-radius: 14px;
+      padding: 12px 14px;
+      background: #f5d7d3;
+      color: var(--danger);
+      margin-bottom: 14px;
+      white-space: pre-wrap;
+    }
+
+    .success {
+      display: none;
+      border-radius: 14px;
+      padding: 12px 14px;
+      background: #dfeee3;
+      color: var(--ok);
+      margin-bottom: 14px;
+      white-space: pre-wrap;
+    }
+
+    .hidden { display: none !important; }
+    .small { font-size: 12px; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="hero">
+      <div>
+        <h1>系统管理后台</h1>
+        <p>用于管理账号、角色、权限和业务入口。普通员工请从业务入口首页登录。</p>
+      </div>
+      <div class="top-actions">
+        <a class="btn" href="/">业务入口</a>
+        <button id="refreshAllBtn">刷新数据</button>
+        <button id="logoutBtn" class="danger hidden">退出登录</button>
+      </div>
+    </header>
+
+    <div id="errorBox" class="error"></div>
+    <div id="successBox" class="success"></div>
+
+    <section id="loginCard" class="card">
+      <h2>登录</h2>
+      <div class="notice">
+        只有系统管理员或具备 <code>admin.access</code> 权限的用户可以进入后台。
+      </div>
+      <div class="grid two">
+        <div>
+          <label for="usernameInput">用户名</label>
+          <input id="usernameInput" autocomplete="username" placeholder="admin" />
+        </div>
+        <div>
+          <label for="passwordInput">密码</label>
+          <input id="passwordInput" type="password" autocomplete="current-password" placeholder="请输入密码" />
+        </div>
+      </div>
+      <div class="row" style="margin-top:14px;">
+        <button id="loginBtn" class="primary" type="button">登录</button>
+        <span id="loginHint" class="muted small">登录后加载后台数据。</span>
+      </div>
+    </section>
+
+    <section id="appArea" class="grid hidden">
+      <section class="card">
+        <h2>当前身份</h2>
+        <div id="identityBox" class="muted">未登录</div>
+      </section>
+
+      <section class="grid three">
+        <div class="card">
+          <h2>用户数量</h2>
+          <div id="userCount" style="font-size:32px;font-weight:800;">-</div>
+        </div>
+        <div class="card">
+          <h2>角色数量</h2>
+          <div id="roleCount" style="font-size:32px;font-weight:800;">-</div>
+        </div>
+        <div class="card">
+          <h2>功能入口</h2>
+          <div id="featureCount" style="font-size:32px;font-weight:800;">-</div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>用户管理</h2>
+        <div class="grid two">
+          <div>
+            <label>用户名</label>
+            <input id="newUsername" placeholder="例如 zhangsan" />
+          </div>
+          <div>
+            <label>显示名</label>
+            <input id="newDisplayName" placeholder="例如 张三" />
+          </div>
+          <div>
+            <label>初始密码</label>
+            <input id="newPassword" type="password" placeholder="建议使用强密码" />
+          </div>
+          <div>
+            <label>是否管理员</label>
+            <select id="newIsAdmin">
+              <option value="false">否</option>
+              <option value="true">是</option>
+            </select>
+          </div>
+        </div>
+        <div class="row" style="margin-top:14px;">
+          <button id="createUserBtn" class="primary" type="button">新增用户</button>
+        </div>
+        <div class="table-wrap" style="margin-top:16px;">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>用户名</th>
+                <th>显示名</th>
+                <th>状态</th>
+                <th>管理员</th>
+                <th>角色</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="usersBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="grid two">
+        <section class="card">
+          <h2>角色</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Code</th>
+                  <th>名称</th>
+                  <th>说明</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="rolesBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>权限</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Code</th>
+                  <th>名称</th>
+                </tr>
+              </thead>
+              <tbody id="permissionsBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="card">
+        <h2>功能入口管理</h2>
+        <div class="grid two">
+          <div>
+            <label>Code</label>
+            <input id="featureCode" placeholder="raw_inventory" />
+          </div>
+          <div>
+            <label>标题</label>
+            <input id="featureTitle" placeholder="原材料库存" />
+          </div>
+          <div>
+            <label>链接</label>
+            <input id="featureUrl" placeholder="没有链接可留空" />
+          </div>
+          <div>
+            <label>所需权限</label>
+            <input id="featurePermission" placeholder="inventory.raw.read，可留空表示公开" />
+          </div>
+          <div>
+            <label>分类</label>
+            <input id="featureCategory" placeholder="业务查询" />
+          </div>
+          <div>
+            <label>状态</label>
+            <select id="featureStatus">
+              <option value="active">active</option>
+              <option value="reserved">reserved</option>
+              <option value="disabled">disabled</option>
+            </select>
+          </div>
+          <div>
+            <label>排序</label>
+            <input id="featureSort" type="number" value="100" />
+          </div>
+          <div>
+            <label>说明</label>
+            <input id="featureDescription" placeholder="入口说明" />
+          </div>
+        </div>
+        <div class="row" style="margin-top:14px;">
+          <button id="createFeatureBtn" class="primary" type="button">新增功能</button>
+        </div>
+        <div class="table-wrap" style="margin-top:16px;">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Code</th>
+                <th>标题</th>
+                <th>状态</th>
+                <th>权限</th>
+                <th>链接</th>
+                <th>排序</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="featuresBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>审计日志</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>操作者</th>
+                <th>动作</th>
+                <th>对象</th>
+                <th>时间</th>
+              </tr>
+            </thead>
+            <tbody id="logsBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  </div>
+
+  <script>
+    const API_BASE = location.port === "8081" ? "http://localhost:8000" : "/api";
+
+    const state = {
+      token: localStorage.getItem("admin_token") || "",
+      me: null,
+      users: [],
+      roles: [],
+      permissions: [],
+      features: [],
+      logs: []
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    function showError(message) {
+      $("errorBox").textContent = message;
+      $("errorBox").style.display = "block";
+      $("successBox").style.display = "none";
+    }
+
+    function showSuccess(message) {
+      $("successBox").textContent = message;
+      $("successBox").style.display = "block";
+      $("errorBox").style.display = "none";
+    }
+
+    function clearMessage() {
+      $("errorBox").style.display = "none";
+      $("successBox").style.display = "none";
+    }
+
+    async function api(path, options = {}) {
+      const headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
+      if (state.token) headers.Authorization = `Bearer ${state.token}`;
+
+      const resp = await fetch(`${API_BASE}${path}`, {
+        ...options,
+        headers
+      });
+
+      let data = null;
+      const text = await resp.text();
+      if (text) {
+        try {
+          data = JSON.parse(text);
+        } catch {
+          data = { raw: text };
+        }
+      }
+
+      if (!resp.ok) {
+        const detail = data && data.detail ? data.detail : `HTTP ${resp.status}`;
+        if (resp.status === 401) {
+          localStorage.removeItem("admin_token");
+          state.token = "";
+          renderAuth();
+        }
+        throw new Error(String(detail));
+      }
+
+      return data || {};
+    }
+
+    function requireNumberList(input) {
+      return input
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .map((x) => Number(x))
+        .filter((x) => Number.isFinite(x));
+    }
+
+    function tag(text, kind = "") {
+      const cls = kind ? `tag ${kind}` : "tag";
+      return `<span class="${cls}">${escapeHtml(text)}</span>`;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function renderAuth() {
+      const loggedIn = Boolean(state.token);
+      $("loginCard").classList.toggle("hidden", loggedIn);
+      $("appArea").classList.toggle("hidden", !loggedIn);
+      $("logoutBtn").classList.toggle("hidden", !loggedIn);
+    }
+
+    function renderIdentity() {
+      if (!state.me) {
+        $("identityBox").textContent = "未登录";
+        return;
+      }
+
+      $("identityBox").innerHTML = `
+        <div><strong>${escapeHtml(state.me.sub || state.me.username || "-")}</strong></div>
+        <div class="muted small">显示名：${escapeHtml(state.me.display_name || "-")}</div>
+        <div style="margin-top:8px;">
+          ${(state.me.roles || []).map((x) => tag(x, x === "admin" ? "ok" : "")).join("")}
+        </div>
+        <div style="margin-top:8px;">
+          ${(state.me.permissions || []).map((x) => tag(x)).join("")}
+        </div>
+      `;
+    }
+
+    function renderUsers() {
+      $("userCount").textContent = state.users.length;
+      $("usersBody").innerHTML = state.users.map((u) => {
+        const userRoles = (u.roles || []).map((r) => tag(r.code || r)).join("");
+        const statusKind = u.status === "active" ? "ok" : "danger";
+        return `
+          <tr>
+            <td>${u.id}</td>
+            <td>${escapeHtml(u.username)}</td>
+            <td>${escapeHtml(u.display_name)}</td>
+            <td>${tag(u.status, statusKind)}</td>
+            <td>${u.is_admin ? tag("是", "ok") : tag("否")}</td>
+            <td>${userRoles || '<span class="muted">未分配</span>'}</td>
+            <td>
+              <div class="actions">
+                <button type="button" onclick="resetPassword(${u.id})">重置密码</button>
+                <button type="button" onclick="assignRoles(${u.id})">分配角色</button>
+                ${
+                  u.status === "active"
+                    ? `<button class="danger" type="button" onclick="disableUser(${u.id})">禁用</button>`
+                    : `<button type="button" onclick="enableUser(${u.id})">启用</button>`
+                }
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    function renderRoles() {
+      $("roleCount").textContent = state.roles.length;
+      $("rolesBody").innerHTML = state.roles.map((r) => `
+        <tr>
+          <td>${r.id}</td>
+          <td>${escapeHtml(r.code)}</td>
+          <td>${escapeHtml(r.name)}</td>
+          <td>${escapeHtml(r.description || "")}</td>
+          <td><button type="button" onclick="assignRolePermissions(${r.id})">分配权限</button></td>
+        </tr>
+      `).join("");
+    }
+
+    function renderPermissions() {
+      $("permissionsBody").innerHTML = state.permissions.map((p) => `
+        <tr>
+          <td>${p.id}</td>
+          <td>${escapeHtml(p.code)}</td>
+          <td>${escapeHtml(p.name)}</td>
+        </tr>
+      `).join("");
+    }
+
+    function renderFeatures() {
+      $("featureCount").textContent = state.features.length;
+      $("featuresBody").innerHTML = state.features.map((f) => `
+        <tr>
+          <td>${f.id}</td>
+          <td>${escapeHtml(f.code)}</td>
+          <td>${escapeHtml(f.title)}</td>
+          <td>${tag(f.status, f.status === "active" ? "ok" : "warn")}</td>
+          <td>${f.required_permission ? tag(f.required_permission) : tag("公开", "ok")}</td>
+          <td>${f.url ? `<a href="${escapeHtml(f.url)}" target="_blank" rel="noreferrer">打开</a>` : '<span class="muted">无</span>'}</td>
+          <td>${f.sort_order}</td>
+          <td><button type="button" onclick="editFeature(${f.id})">编辑</button></td>
+        </tr>
+      `).join("");
+    }
+
+    function renderLogs() {
+      $("logsBody").innerHTML = state.logs.map((l) => `
+        <tr>
+          <td>${l.id}</td>
+          <td>${escapeHtml(l.actor_username || "")}</td>
+          <td>${escapeHtml(l.action)}</td>
+          <td>${escapeHtml([l.target_type, l.target_id].filter(Boolean).join(":"))}</td>
+          <td>${escapeHtml(l.created_at)}</td>
+        </tr>
+      `).join("");
+    }
+
+    async function loadAll() {
+      clearMessage();
+      state.me = await api("/v1/auth/me");
+      const [users, roles, permissions, features, logs] = await Promise.all([
+        api("/v1/admin/users"),
+        api("/v1/admin/roles"),
+        api("/v1/admin/permissions"),
+        api("/v1/admin/features"),
+        api("/v1/admin/audit-logs")
+      ]);
+
+      state.users = users.items || [];
+      state.roles = roles.items || [];
+      state.permissions = permissions.items || [];
+      state.features = features.items || [];
+      state.logs = logs.items || [];
+
+      renderAuth();
+      renderIdentity();
+      renderUsers();
+      renderRoles();
+      renderPermissions();
+      renderFeatures();
+      renderLogs();
+    }
+
+    async function login() {
+      clearMessage();
+      const username = $("usernameInput").value.trim();
+      const password = $("passwordInput").value;
+
+      if (!username || !password) {
+        showError("请输入用户名和密码。");
+        return;
+      }
+
+      const data = await api("/v1/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ username, password })
+      });
+
+      state.token = data.token;
+      localStorage.setItem("admin_token", state.token);
+      showSuccess("登录成功。");
+      await loadAll();
+    }
+
+    function logout() {
+      localStorage.removeItem("admin_token");
+      state.token = "";
+      state.me = null;
+      renderAuth();
+      showSuccess("已退出登录。");
+    }
+
+    async function createUser() {
+      const username = $("newUsername").value.trim();
+      const displayName = $("newDisplayName").value.trim();
+      const password = $("newPassword").value;
+      const isAdmin = $("newIsAdmin").value === "true";
+
+      if (!username || !displayName || !password) {
+        showError("新增用户需要填写用户名、显示名和初始密码。");
+        return;
+      }
+
+      await api("/v1/admin/users", {
+        method: "POST",
+        body: JSON.stringify({
+          username,
+          display_name: displayName,
+          password,
+          is_admin: isAdmin
+        })
+      });
+
+      $("newUsername").value = "";
+      $("newDisplayName").value = "";
+      $("newPassword").value = "";
+      $("newIsAdmin").value = "false";
+      showSuccess("用户已创建。");
+      await loadAll();
+    }
+
+    async function resetPassword(userId) {
+      const newPassword = prompt("请输入新密码：");
+      if (!newPassword) return;
+
+      await api(`/v1/admin/users/${userId}/reset-password`, {
+        method: "POST",
+        body: JSON.stringify({ new_password: newPassword })
+      });
+
+      showSuccess("密码已重置。");
+    }
+
+    async function disableUser(userId) {
+      if (!confirm("确认禁用该用户？")) return;
+      await api(`/v1/admin/users/${userId}/disable`, { method: "POST" });
+      showSuccess("用户已禁用。");
+      await loadAll();
+    }
+
+    async function enableUser(userId) {
+      await api(`/v1/admin/users/${userId}/enable`, { method: "POST" });
+      showSuccess("用户已启用。");
+      await loadAll();
+    }
+
+    async function assignRoles(userId) {
+      const hint = state.roles.map((r) => `${r.id}:${r.code}`).join("，");
+      const input = prompt(`请输入角色 ID，多个用英文逗号分隔。\n可选：${hint}`);
+      if (input === null) return;
+
+      await api(`/v1/admin/users/${userId}/roles`, {
+        method: "PUT",
+        body: JSON.stringify({ role_ids: requireNumberList(input) })
+      });
+
+      showSuccess("用户角色已更新。");
+      await loadAll();
+    }
+
+    async function assignRolePermissions(roleId) {
+      const hint = state.permissions.map((p) => `${p.id}:${p.code}`).join("，");
+      const input = prompt(`请输入权限 ID，多个用英文逗号分隔。\n可选：${hint}`);
+      if (input === null) return;
+
+      await api(`/v1/admin/roles/${roleId}/permissions`, {
+        method: "PUT",
+        body: JSON.stringify({ permission_ids: requireNumberList(input) })
+      });
+
+      showSuccess("角色权限已更新。");
+      await loadAll();
+    }
+
+    async function createFeature() {
+      const code = $("featureCode").value.trim();
+      const title = $("featureTitle").value.trim();
+
+      if (!code || !title) {
+        showError("新增功能需要填写 Code 和标题。");
+        return;
+      }
+
+      await api("/v1/admin/features", {
+        method: "POST",
+        body: JSON.stringify({
+          code,
+          title,
+          description: $("featureDescription").value.trim() || null,
+          url: $("featureUrl").value.trim() || null,
+          category: $("featureCategory").value.trim() || null,
+          required_permission: $("featurePermission").value.trim() || null,
+          status: $("featureStatus").value,
+          sort_order: Number($("featureSort").value || 100)
+        })
+      });
+
+      ["featureCode", "featureTitle", "featureDescription", "featureUrl", "featureCategory", "featurePermission"].forEach((id) => $(id).value = "");
+      $("featureStatus").value = "active";
+      $("featureSort").value = "100";
+      showSuccess("功能入口已创建。");
+      await loadAll();
+    }
+
+    async function editFeature(featureId) {
+      const f = state.features.find((x) => x.id === featureId);
+      if (!f) return;
+
+      const title = prompt("标题：", f.title);
+      if (title === null) return;
+
+      const status = prompt("状态 active/reserved/disabled：", f.status);
+      if (status === null) return;
+
+      const requiredPermission = prompt("所需权限，留空表示公开：", f.required_permission || "");
+      if (requiredPermission === null) return;
+
+      const url = prompt("链接，留空表示无：", f.url || "");
+      if (url === null) return;
+
+      const sort = prompt("排序：", String(f.sort_order || 100));
+      if (sort === null) return;
+
+      await api(`/v1/admin/features/${featureId}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          title,
+          status,
+          required_permission: requiredPermission.trim() || null,
+          url: url.trim() || null,
+          sort_order: Number(sort || 100)
+        })
+      });
+
+      showSuccess("功能入口已更新。");
+      await loadAll();
+    }
+
+    window.resetPassword = resetPassword;
+    window.disableUser = disableUser;
+    window.enableUser = enableUser;
+    window.assignRoles = assignRoles;
+    window.assignRolePermissions = assignRolePermissions;
+    window.editFeature = editFeature;
+
+    document.addEventListener("DOMContentLoaded", async () => {
+      $("loginBtn").addEventListener("click", () => login().catch((e) => showError(e.message)));
+      $("logoutBtn").addEventListener("click", logout);
+      $("refreshAllBtn").addEventListener("click", () => loadAll().catch((e) => showError(e.message)));
+      $("createUserBtn").addEventListener("click", () => createUser().catch((e) => showError(e.message)));
+      $("createFeatureBtn").addEventListener("click", () => createFeature().catch((e) => showError(e.message)));
+      $("passwordInput").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") login().catch((err) => showError(err.message));
+      });
+
+      renderAuth();
+
+      if (state.token) {
+        try {
+          await loadAll();
+        } catch (e) {
+          showError(`自动加载失败：${e.message}`);
+        }
+      }
+    });
+  </script>
+</body>
+</html>

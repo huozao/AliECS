@@ -13,6 +13,9 @@ services:
     restart: always
     ports:
       - "127.0.0.1:8081:80"
+    depends_on:
+      backend-api:
+        condition: service_healthy
 
   backend-api:
     image: ${BACKEND_API_IMAGE}
@@ -24,6 +27,7 @@ services:
       ADMIN_BOOTSTRAP_USERNAME: ${ADMIN_BOOTSTRAP_USERNAME}
       ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD}
       ADMIN_BOOTSTRAP_DISPLAY_NAME: ${ADMIN_BOOTSTRAP_DISPLAY_NAME}
+      ENV: prod
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
