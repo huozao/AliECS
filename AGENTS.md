@@ -8,3 +8,5 @@
 6. 如果无法动态显示在 GitHub UI 输入框中，不要伪造动态 UI，应在 workflow 运行日志和 Step Summary 中显示。
 7. 任何修改都不能破坏：public-web、admin-ui、backend-api、Docker Compose、ECS 部署脚本。
 8. 修改发布流程后必须验证：workflow YAML 语法正确、workflow_dispatch 输入项文案正确、版本识别逻辑能运行、Step Summary 能输出版本信息。
+
+9. GitHub Pull Request 的标题、说明、变更摘要、验证说明等在不影响程序运行的前提下必须使用中文。

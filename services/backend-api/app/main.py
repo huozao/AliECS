@@ -229,7 +229,7 @@ def require_admin(user: dict[str, Any] = Depends(get_current_user)) -> dict[str,
 
 
 def _couple_feature_enabled() -> bool:
-    return os.getenv("COUPLE_FEATURE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+    return os.getenv("COUPLE_FEATURE_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 
 
 def _couple_route() -> str:
