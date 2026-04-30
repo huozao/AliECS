@@ -160,61 +160,6 @@ class RegisterRequest(BaseModel):
     note: str | None = None
 
 
-class CreateUserRequest(BaseModel):
-    username: str
-    display_name: str
-    password: str
-    is_admin: bool = False
-
-
-class PatchUserRequest(BaseModel):
-    display_name: str | None = None
-
-
-class ResetPasswordRequest(BaseModel):
-    new_password: str
-
-
-class PutRoleIdsRequest(BaseModel):
-    role_ids: list[int]
-
-
-class PatchRoleRequest(BaseModel):
-    name: str | None = None
-    description: str | None = None
-
-
-class CreateRoleRequest(BaseModel):
-    code: str
-    name: str
-    description: str | None = None
-
-
-class PutPermissionIdsRequest(BaseModel):
-    permission_ids: list[int]
-
-
-class CreateFeatureRequest(BaseModel):
-    code: str
-    title: str
-    description: str | None = None
-    url: str | None = None
-    category: str | None = None
-    required_permission: str | None = None
-    status: str = "active"
-    sort_order: int = 100
-
-
-class PatchFeatureRequest(BaseModel):
-    title: str | None = None
-    description: str | None = None
-    url: str | None = None
-    category: str | None = None
-    required_permission: str | None = None
-    status: str | None = None
-    sort_order: int | None = None
-
-
 @app.get("/healthz")
 def healthz() -> dict[str, object]:
     db_ok, db_message = _db_ping()
@@ -259,6 +204,20 @@ def auth_register(body: RegisterRequest) -> dict[str, Any]:
 @app.post("/v1/auth/logout")
 def auth_logout(_: dict[str, Any] = Depends(require_login)) -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/v1/auth/register")
+def auth_register(body: RegisterRequest) -> dict[str, Any]:
+    users = _users()
+    if body.username in users:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="username already exists")
+
+    # 当前阶段不直接写入数据库。注册请求返回待审批，后续由后台分配权限。
+    return {
+        "status": "pending_review",
+        "message": "注册请求已提交，请联系管理员在后台分配账号权限。",
+        "requested_user": body.username,
+    }
 
 
 @app.get("/v1/auth/me")

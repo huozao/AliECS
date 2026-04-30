@@ -64,7 +64,7 @@ docker compose -f local/docker-compose.local.yml up --build
 
 ## 登录与权限（新）
 - `backend-api` 提供 `POST /v1/auth/login`、`POST /v1/auth/register`、`GET /v1/auth/me`、`GET /v1/features`。
-- 管理员账号由数据库维护；当 users 为空时通过 `ADMIN_BOOTSTRAP_*` 自动初始化首个管理员。
+- 可通过环境变量 `AUTH_USERS_JSON` 配置用户、密码、角色、权限（如 `personal`）。
 - `public-web` 首页会根据登录状态控制“个人板块（人体周期）”入口是否可访问。
 
 
