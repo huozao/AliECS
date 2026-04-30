@@ -11,6 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: 版本记录检查
+        run: python scripts/validate_version.py
+
       - name: Python 语法检查
         run: python -m py_compile services/backend-api/app/main.py sync-pipeline/main_flow.py
 
