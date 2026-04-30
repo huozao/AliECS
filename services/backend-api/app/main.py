@@ -228,6 +228,41 @@ def require_admin(user: dict[str, Any] = Depends(get_current_user)) -> dict[str,
     raise HTTPException(status_code=403, detail="permission denied")
 
 
+def _couple_feature_enabled() -> bool:
+    return os.getenv("COUPLE_FEATURE_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+
+
+def _couple_route() -> str:
+    route = os.getenv("COUPLE_ROUTE", "/couple/").strip()
+    if not route.startswith("/"):
+        return "/couple"
+    return route
+
+
+def _has_couple_access(user: dict[str, Any]) -> bool:
+    if not _couple_feature_enabled():
+        return False
+
+    permissions = user.get("permissions", [])
+    if "couple_memory_access" in permissions:
+        return True
+
+    username = str(user.get("username") or user.get("sub") or "").strip().lower()
+    roles = [str(r).lower() for r in user.get("roles", [])]
+    if "admin" in roles:
+        return True
+
+    allowed_users = [i.strip().lower() for i in os.getenv("COUPLE_ALLOWED_USERS", "").split(",") if i.strip()]
+    if username and username in allowed_users:
+        return True
+
+    allowed_emails = [i.strip().lower() for i in os.getenv("COUPLE_ALLOWED_EMAILS", "").split(",") if i.strip()]
+    if username and username in allowed_emails:
+        return True
+
+    return False
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str
@@ -454,6 +489,23 @@ def features(authorization: str | None = Header(default=None)) -> dict[str, Any]
         "features": items,
     }
 
+
+
+
+@app.get("/couple/access")
+def couple_access(authorization: str | None = Header(default=None)) -> dict[str, Any] | None:
+    if not authorization:
+        raise HTTPException(status_code=404, detail="not found")
+
+    try:
+        user = get_current_user(authorization)
+    except HTTPException:
+        raise HTTPException(status_code=404, detail="not found")
+
+    if not _has_couple_access(user):
+        raise HTTPException(status_code=404, detail="not found")
+
+    return {"allowed": True, "route": _couple_route()}
 
 @app.get("/v1/admin/users")
 def admin_users(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
