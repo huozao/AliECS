@@ -4,42 +4,108 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "可选：紧急补部署版本号（例如 v2.1.4）"
+        required: false
+        type: string
+
+concurrency:
+  group: release-deploy
+  cancel-in-progress: false
 
 jobs:
   build-push-deploy:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: 设置镜像标签
+      - name: 计算并校验版本号
         id: vars
-        run: echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            INPUT_TAG="${{ inputs.image_tag }}"
+            if [[ -n "$INPUT_TAG" ]]; then
+              TAG="$INPUT_TAG"
+            else
+              TAG="$(tr -d '[:space:]' < VERSION)"
+            fi
+          fi
 
-      - name: 登录 GHCR
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-].+)?$ ]]; then
+            echo "版本号格式错误：$TAG（必须是 v主.次.修订，例如 v2.1.4）" >&2
+            exit 1
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: 手动触发时自动处理 tag
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          TAG: ${{ steps.vars.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            REMOTE_SHA="$(git ls-remote --tags origin "refs/tags/$TAG" | awk '{print $1}')"
+            CURRENT_SHA="$(git rev-parse HEAD)"
+            if [[ "$REMOTE_SHA" != "$CURRENT_SHA" ]]; then
+              echo "版本号已存在，但不是当前提交，请先递增 VERSION。" >&2
+              exit 1
+            fi
+            echo "远程已存在且指向当前提交：$TAG，继续部署。"
+          else
+            TITLE_LINE="$(grep -E "^## ${TAG}：" CHANGELOG.md | head -n 1 || true)"
+            if [[ -n "$TITLE_LINE" ]]; then
+              NOTE="${TITLE_LINE#\#\# }"
+            else
+              NOTE="${TAG}：手动发布"
+            fi
+            git tag -a "$TAG" -m "发布 ${NOTE}"
+            git push origin "$TAG"
+          fi
+
+      - name: 登录 GHCR（用于推送）
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: 构建并推送 public-web
         run: |
-          docker build -t ghcr.io/${{ github.repository_owner }}/public-web:${{ steps.vars.outputs.tag }} services/public-web
-          docker push ghcr.io/${{ github.repository_owner }}/public-web:${{ steps.vars.outputs.tag }}
+          TAG="${{ steps.vars.outputs.tag }}"
+          docker build -t ghcr.io/${{ github.repository_owner }}/public-web:${TAG} services/public-web
+          docker push ghcr.io/${{ github.repository_owner }}/public-web:${TAG}
 
       - name: 构建并推送 admin-ui
         run: |
-          docker build -t ghcr.io/${{ github.repository_owner }}/admin-ui:${{ steps.vars.outputs.tag }} services/admin-ui
-          docker push ghcr.io/${{ github.repository_owner }}/admin-ui:${{ steps.vars.outputs.tag }}
+          TAG="${{ steps.vars.outputs.tag }}"
+          docker build -t ghcr.io/${{ github.repository_owner }}/admin-ui:${TAG} services/admin-ui
+          docker push ghcr.io/${{ github.repository_owner }}/admin-ui:${TAG}
 
       - name: 构建并推送 backend-api
         run: |
-          docker build -t ghcr.io/${{ github.repository_owner }}/backend-api:${{ steps.vars.outputs.tag }} services/backend-api
-          docker push ghcr.io/${{ github.repository_owner }}/backend-api:${{ steps.vars.outputs.tag }}
+          TAG="${{ steps.vars.outputs.tag }}"
+          docker build -t ghcr.io/${{ github.repository_owner }}/backend-api:${TAG} services/backend-api
+          docker push ghcr.io/${{ github.repository_owner }}/backend-api:${TAG}
 
       - name: 通过 SSH 触发 ECS 部署脚本
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         with:
           host: ${{ secrets.ECS_HOST }}
           username: ${{ secrets.ECS_USER }}
           key: ${{ secrets.ECS_SSH_KEY }}
-          script: /opt/app/deploy/ecs/deploy.sh ${{ steps.vars.outputs.tag }}
+          envs: GHCR_USERNAME,GHCR_TOKEN
+          script: |
+            export GHCR_USERNAME="${GHCR_USERNAME:-}"
+            export GHCR_TOKEN="${GHCR_TOKEN:-}"
+            /opt/app/deploy/ecs/deploy.sh ${{ steps.vars.outputs.tag }}
