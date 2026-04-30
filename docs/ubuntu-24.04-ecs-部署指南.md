@@ -86,3 +86,75 @@ cd /opt/app
 ```bash
 ./deploy/ecs/rollback.sh
 ```
+
+## 五、减少手动操作：自动同步部署（可选）
+
+如果你当前阶段还没走镜像发布（tag + GHCR）流程，可以在 ECS 端做“拉代码并重建”自动化。
+
+### 1）单次执行（替代手敲多条命令）
+```bash
+cd /opt/app
+./deploy/ecs/auto-sync.sh main
+```
+
+> 说明：脚本内部会执行 `git fetch + git reset --hard origin/main + docker compose up --build -d + healthz`。
+
+### 2）用 systemd timer 每 5 分钟自动执行（示例）
+创建服务文件 `/etc/systemd/system/aliecs-auto-sync.service`：
+```ini
+[Unit]
+Description=AliECS auto sync and deploy
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/app
+ExecStart=/opt/app/deploy/ecs/auto-sync.sh main
+```
+
+创建定时器 `/etc/systemd/system/aliecs-auto-sync.timer`：
+```ini
+[Unit]
+Description=Run AliECS auto sync every 5 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+Unit=aliecs-auto-sync.service
+
+[Install]
+WantedBy=timers.target
+```
+
+加载并启动：
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now aliecs-auto-sync.timer
+sudo systemctl list-timers | grep aliecs
+```
+
+## 六、部署日志保存与查看
+
+### 1）自动同步脚本日志
+`deploy/ecs/auto-sync.sh` 会将日志写入：
+- `/opt/app/deploy/ecs/logs/auto-sync.log`
+
+查看方式：
+```bash
+tail -n 200 /opt/app/deploy/ecs/logs/auto-sync.log
+```
+
+### 2）systemd 任务日志
+```bash
+journalctl -u aliecs-auto-sync.service -n 200 --no-pager
+journalctl -u aliecs-auto-sync.timer -n 100 --no-pager
+```
+
+### 3）容器日志
+```bash
+docker compose -f local/docker-compose.local.yml logs --tail=200
+```
+
+### 4）GitHub Actions 发布日志
+如果走 tag 自动发布路径，日志在仓库 Actions 页面中查看（工作流：`发布并部署`）。
