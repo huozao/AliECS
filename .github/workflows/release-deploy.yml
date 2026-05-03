@@ -6,8 +6,8 @@ on:
       - "v*"
   workflow_dispatch:
     inputs:
-      image_tag:
-        description: "可选：紧急补部署版本号（例如 v2.1.4）"
+      release_version:
+        description: "计划发布版本号（v 开头的 tag）"
         required: false
         type: string
 
@@ -26,31 +26,47 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 计算并校验版本号
+      - name: 识别并校验版本信息
         id: vars
         run: |
-          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
-            TAG="${GITHUB_REF_NAME}"
-          else
-            INPUT_TAG="${{ inputs.image_tag }}"
-            if [[ -n "$INPUT_TAG" ]]; then
-              TAG="$INPUT_TAG"
-            else
-              TAG="$(tr -d '[:space:]' < VERSION)"
-            fi
-          fi
+          git fetch --tags --force
 
-          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-].+)?$ ]]; then
-            echo "版本号格式错误：$TAG（必须是 v主.次.修订，例如 v2.1.4）" >&2
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            RELEASE_VERSION="${GITHUB_REF_NAME}"
+          elif [[ -n "${{ inputs.release_version }}" ]]; then
+            RELEASE_VERSION="${{ inputs.release_version }}"
+          else
+            echo "手动发布必须填写计划发布版本。" >&2
             exit 1
           fi
 
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if [[ ! "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-].+)?$ ]]; then
+            echo "计划发布版本必须是 v 开头的 tag" >&2
+            exit 1
+          fi
+
+          PREVIOUS_VERSION="$(git tag --sort=-v:refname | sed -n '2p')"
+          echo "release_version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "previous_version=$PREVIOUS_VERSION" >> "$GITHUB_OUTPUT"
+
+          echo "上一个版本：${PREVIOUS_VERSION:-未找到}"
+          echo "计划发布版本：${RELEASE_VERSION}"
+          echo "当前部署版本：${RELEASE_VERSION}"
+
+          {
+            echo "## 发布并部署版本信息"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "|---|---|"
+            echo "| 上一个版本 | ${PREVIOUS_VERSION:-未找到} |"
+            echo "| 计划发布版本 | ${RELEASE_VERSION} |"
+            echo "| 当前部署版本 | ${RELEASE_VERSION} |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 手动触发时自动处理 tag
         if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
-          TAG: ${{ steps.vars.outputs.tag }}
+          TAG: ${{ steps.vars.outputs.release_version }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -59,7 +75,7 @@ jobs:
             REMOTE_SHA="$(git ls-remote --tags origin "refs/tags/$TAG" | awk '{print $1}')"
             CURRENT_SHA="$(git rev-parse HEAD)"
             if [[ "$REMOTE_SHA" != "$CURRENT_SHA" ]]; then
-              echo "版本号已存在，但不是当前提交，请先递增 VERSION。" >&2
+              echo "版本号已存在，但不是当前提交，请先递增版本。" >&2
               exit 1
             fi
             echo "远程已存在且指向当前提交：$TAG，继续部署。"
@@ -79,19 +95,19 @@ jobs:
 
       - name: 构建并推送 public-web
         run: |
-          TAG="${{ steps.vars.outputs.tag }}"
+          TAG="${{ steps.vars.outputs.release_version }}"
           docker build -t ghcr.io/${{ github.repository_owner }}/public-web:${TAG} services/public-web
           docker push ghcr.io/${{ github.repository_owner }}/public-web:${TAG}
 
       - name: 构建并推送 admin-ui
         run: |
-          TAG="${{ steps.vars.outputs.tag }}"
+          TAG="${{ steps.vars.outputs.release_version }}"
           docker build -t ghcr.io/${{ github.repository_owner }}/admin-ui:${TAG} services/admin-ui
           docker push ghcr.io/${{ github.repository_owner }}/admin-ui:${TAG}
 
       - name: 构建并推送 backend-api
         run: |
-          TAG="${{ steps.vars.outputs.tag }}"
+          TAG="${{ steps.vars.outputs.release_version }}"
           docker build -t ghcr.io/${{ github.repository_owner }}/backend-api:${TAG} services/backend-api
           docker push ghcr.io/${{ github.repository_owner }}/backend-api:${TAG}
 
@@ -108,4 +124,4 @@ jobs:
           script: |
             export GHCR_USERNAME="${GHCR_USERNAME:-}"
             export GHCR_TOKEN="${GHCR_TOKEN:-}"
-            /opt/app/deploy/ecs/deploy.sh ${{ steps.vars.outputs.tag }}
+            /opt/app/deploy/ecs/deploy.sh ${{ steps.vars.outputs.release_version }}
