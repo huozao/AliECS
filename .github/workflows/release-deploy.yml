@@ -2,14 +2,9 @@ name: 发布并部署
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
   workflow_dispatch:
-    inputs:
-      release_version:
-        description: "计划发布版本号（v 开头的 tag）"
-        required: false
-        type: string
 
 concurrency:
   group: release-deploy
@@ -31,21 +26,18 @@ jobs:
         run: |
           git fetch --tags --force
 
-          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            RELEASE_VERSION="${GITHUB_REF_NAME}"
-          elif [[ -n "${{ inputs.release_version }}" ]]; then
-            RELEASE_VERSION="${{ inputs.release_version }}"
-          else
-            echo "手动发布必须填写计划发布版本。" >&2
+          RELEASE_VERSION="$(tr -d '[:space:]' < VERSION)"
+          if [[ -z "$RELEASE_VERSION" ]]; then
+            echo "VERSION 文件为空，无法发布。" >&2
             exit 1
           fi
 
           if [[ ! "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-].+)?$ ]]; then
-            echo "计划发布版本必须是 v 开头的 tag" >&2
+            echo "VERSION 文件中的版本必须是 v 开头的 tag。" >&2
             exit 1
           fi
 
-          PREVIOUS_VERSION="$(git tag --sort=-v:refname | sed -n '2p')"
+          PREVIOUS_VERSION="$(git tag --sort=-v:refname | head -n 1)"
           echo "release_version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
           echo "previous_version=$PREVIOUS_VERSION" >> "$GITHUB_OUTPUT"
 
@@ -63,8 +55,7 @@ jobs:
             echo "| 当前部署版本 | ${RELEASE_VERSION} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 手动触发时自动处理 tag
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+      - name: 自动处理版本 tag
         env:
           TAG: ${{ steps.vars.outputs.release_version }}
         run: |
@@ -75,18 +66,12 @@ jobs:
             REMOTE_SHA="$(git ls-remote --tags origin "refs/tags/$TAG" | awk '{print $1}')"
             CURRENT_SHA="$(git rev-parse HEAD)"
             if [[ "$REMOTE_SHA" != "$CURRENT_SHA" ]]; then
-              echo "版本号已存在，但不是当前提交，请先递增版本。" >&2
+              echo "版本号 $TAG 已存在，但不是当前提交。请先更新 VERSION 再提交。" >&2
               exit 1
             fi
             echo "远程已存在且指向当前提交：$TAG，继续部署。"
           else
-            TITLE_LINE="$(grep -E "^## ${TAG}：" CHANGELOG.md | head -n 1 || true)"
-            if [[ -n "$TITLE_LINE" ]]; then
-              NOTE="${TITLE_LINE#\#\# }"
-            else
-              NOTE="${TAG}：手动发布"
-            fi
-            git tag -a "$TAG" -m "发布 ${NOTE}"
+            git tag -a "$TAG" -m "发布 ${TAG}"
             git push origin "$TAG"
           fi
 
