@@ -10,7 +10,7 @@ from contextlib import closing
 from typing import Any
 
 import psycopg
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
 from psycopg.types.json import Jsonb
@@ -428,7 +428,10 @@ def auth_me(user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
 
 
 @app.get("/v1/features")
-def features(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+def features(
+    authorization: str | None = Header(default=None),
+    include_all: bool = Query(default=False),
+) -> dict[str, Any]:
     guest = True
     user: dict[str, Any] = {"sub": "guest", "roles": ["guest"], "permissions": []}
 
@@ -465,7 +468,7 @@ def features(authorization: str | None = Header(default=None)) -> dict[str, Any]
         elif not guest and required_permission in user.get("permissions", []):
             allowed = True
 
-        if allowed:
+        if include_all or allowed:
             items.append(
                 {
                     "id": row[0],
@@ -477,6 +480,7 @@ def features(authorization: str | None = Header(default=None)) -> dict[str, Any]
                     "required_permission": required_permission,
                     "status": row[7],
                     "sort_order": row[8],
+                    "allowed": allowed,
                 }
             )
 
@@ -490,6 +494,42 @@ def features(authorization: str | None = Header(default=None)) -> dict[str, Any]
     }
 
 
+
+@app.get("/v1/admin/rbac-overview")
+def admin_rbac_overview(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, code, name, description FROM roles ORDER BY id")
+            roles = cur.fetchall()
+            cur.execute(
+                """
+                SELECT r.id, p.code
+                FROM roles r
+                LEFT JOIN role_permissions rp ON rp.role_id = r.id
+                LEFT JOIN permissions p ON p.id = rp.permission_id
+                ORDER BY r.id, p.code
+                """
+            )
+            rows = cur.fetchall()
+
+    mapping: dict[int, list[str]] = {}
+    for role_id, perm_code in rows:
+        mapping.setdefault(role_id, [])
+        if perm_code:
+            mapping[role_id].append(perm_code)
+
+    return {
+        "roles": [
+            {
+                "id": r[0],
+                "code": r[1],
+                "name": r[2],
+                "description": r[3],
+                "permissions": mapping.get(r[0], []),
+            }
+            for r in roles
+        ]
+    }
 
 
 @app.get("/couple/access")
