@@ -5,6 +5,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: "计划发布版本号（v 开头）"
+        required: false
+        type: string
 
 concurrency:
   group: release-deploy
@@ -21,55 +26,24 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 识别并校验版本信息
+      - name: 识别版本号
         id: vars
         run: |
           git fetch --tags --force
-
-          RELEASE_VERSION="$(tr -d '[:space:]' < VERSION)"
-          if [[ -z "$RELEASE_VERSION" ]]; then
-            echo "VERSION 文件为空，无法发布。" >&2
-            exit 1
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            RELEASE_VERSION="${GITHUB_REF_NAME}"
+          elif [[ -n "${{ inputs.release_version }}" ]]; then
+            RELEASE_VERSION="${{ inputs.release_version }}"
+          else
+            RELEASE_VERSION="$(tr -d '[:space:]' < VERSION)"
           fi
 
           if [[ ! "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-].+)?$ ]]; then
-            echo "VERSION 文件中的版本必须是 v 开头的 tag。" >&2
+            echo "计划发布版本必须是 v 开头的 tag" >&2
             exit 1
           fi
 
-          PREVIOUS_VERSION="$(git tag --sort=-v:refname | head -n 1)"
-          CURRENT_SHA="$(git rev-parse HEAD)"
-
-          bump_patch () {
-            local v="$1"
-            local major minor patch rest
-            major="${v#v}"; major="${major%%.*}"
-            rest="${v#v${major}.}"
-            minor="${rest%%.*}"
-            patch="${rest#${minor}.}"
-            patch="$((patch + 1))"
-            echo "v${major}.${minor}.${patch}"
-          }
-
-          if [[ -n "$PREVIOUS_VERSION" ]]; then
-            max_version="$(printf "%s
-%s
-" "$PREVIOUS_VERSION" "$RELEASE_VERSION" | sort -V | tail -n 1)"
-            if [[ "$max_version" == "$PREVIOUS_VERSION" ]]; then
-              RELEASE_VERSION="$(bump_patch "$PREVIOUS_VERSION")"
-              echo "检测到 VERSION 不高于已有最新 tag，自动提升为：$RELEASE_VERSION"
-            fi
-          fi
-
-          while git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_VERSION" >/dev/null 2>&1; do
-            REMOTE_SHA="$(git ls-remote --tags origin "refs/tags/$RELEASE_VERSION" | awk '{print $1}')"
-            if [[ "$REMOTE_SHA" == "$CURRENT_SHA" ]]; then
-              break
-            fi
-            RELEASE_VERSION="$(bump_patch "$RELEASE_VERSION")"
-            echo "版本号冲突，自动顺延为：$RELEASE_VERSION"
-          done
-
+          PREVIOUS_VERSION="$(git tag --sort=-v:refname | sed -n '2p')"
           echo "release_version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
           echo "previous_version=$PREVIOUS_VERSION" >> "$GITHUB_OUTPUT"
 
@@ -87,7 +61,8 @@ jobs:
             echo "| 当前部署版本 | ${RELEASE_VERSION} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 自动处理版本 tag
+      - name: 手动触发时创建并校验 tag
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
           TAG: ${{ steps.vars.outputs.release_version }}
         run: |
@@ -95,7 +70,13 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "远程已存在版本 tag：$TAG，继续部署。"
+            REMOTE_SHA="$(git ls-remote --tags origin "refs/tags/$TAG" | awk '{print $1}')"
+            CURRENT_SHA="$(git rev-parse HEAD)"
+            if [[ "$REMOTE_SHA" != "$CURRENT_SHA" ]]; then
+              echo "版本号已存在但不指向当前提交，请使用下一个版本号。" >&2
+              exit 1
+            fi
+            echo "远程 tag 已存在且匹配当前提交：$TAG"
           else
             git tag -a "$TAG" -m "发布 ${TAG}"
             git push origin "$TAG"
