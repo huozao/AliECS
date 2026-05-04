@@ -1,0 +1,28 @@
+name: PR 文案语言检查
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  check-pr-language:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - name: 检查 PR 描述语言
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = (context.payload.pull_request.body || '').trim();
+            if (!body) {
+              core.setFailed('PR 描述为空，请使用中文填写变更说明。');
+              return;
+            }
+            const forbidden = [/\bMotivation\b/i, /\bDescription\b/i, /\bTesting\b/i];
+            const hit = forbidden.find((r) => r.test(body));
+            if (hit) {
+              core.setFailed('检测到英文段落标题（Motivation/Description/Testing）。请改为中文后再合并。');
+              return;
+            }
+            core.info('PR 描述语言检查通过。');
