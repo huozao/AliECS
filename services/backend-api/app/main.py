@@ -6,11 +6,13 @@ import hmac
 import json
 import os
 import time
+import uuid
 from contextlib import closing
+from pathlib import Path
 from typing import Any
 
 import psycopg
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
 from psycopg.types.json import Jsonb
@@ -321,6 +323,32 @@ class MemoryUpsertRequest(BaseModel):
     cover_photo_url: str | None = None
     visibility: str = "private"
     tags: list[str] = []
+
+
+class LocalPhotoStorage:
+    def __init__(self) -> None:
+        self.base_dir = Path(os.getenv("LOCAL_UPLOAD_DIR", "/tmp/aliecs-uploads"))
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+
+    async def save(self, file: UploadFile) -> dict[str, str]:
+        ext = Path(file.filename or "").suffix.lower()
+        if ext not in {".jpg", ".jpeg", ".png", ".webp"}:
+            raise HTTPException(status_code=400, detail="unsupported file type")
+        filename = f"{uuid.uuid4().hex}{ext}"
+        full_path = self.base_dir / filename
+        content = await file.read()
+        max_mb = int(os.getenv("PHOTO_MAX_UPLOAD_MB", "10"))
+        if len(content) > max_mb * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="file too large")
+        full_path.write_bytes(content)
+        public_base = os.getenv("APP_BASE_URL", "").rstrip("/")
+        relative_url = f"/uploads/{filename}"
+        return {
+            "original_storage_url": str(full_path),
+            "display_url": f"{public_base}{relative_url}" if public_base else relative_url,
+            "thumbnail_url": f"{public_base}{relative_url}" if public_base else relative_url,
+            "storage_driver": "local",
+        }
 
 
 class CreateFeatureRequest(BaseModel):
@@ -824,6 +852,196 @@ def delete_memory(memory_id: int, user: dict[str, Any] = Depends(require_login))
             if cur.rowcount == 0:
                 raise HTTPException(status_code=404, detail="not found")
         conn.commit()
+    return {"status": "ok"}
+
+
+@app.get("/v1/map/memories")
+def map_memories(
+    couple_space_id: int | None = Query(default=None),
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, Any]:
+    user_id = _user_id_by_username(str(user.get("sub", "")))
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid user")
+    space_id = _resolve_couple_space_id(user_id, couple_space_id)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, title, memory_date, place_name, latitude, longitude, cover_photo_url
+                FROM memories
+                WHERE couple_space_id = %s AND latitude IS NOT NULL AND longitude IS NOT NULL
+                ORDER BY memory_date DESC NULLS LAST, id DESC
+                """,
+                (space_id,),
+            )
+            rows = cur.fetchall()
+    return {
+        "items": [
+            {
+                "id": row[0],
+                "title": row[1],
+                "memory_date": str(row[2]) if row[2] else None,
+                "place_name": row[3],
+                "latitude": row[4],
+                "longitude": row[5],
+                "cover_photo_url": row[6],
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.post("/v1/photos/upload")
+async def upload_photo(
+    file: UploadFile = File(...),
+    memory_id: int | None = Query(default=None),
+    couple_space_id: int | None = Query(default=None),
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, Any]:
+    user_id = _user_id_by_username(str(user.get("sub", "")))
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid user")
+    space_id = _resolve_couple_space_id(user_id, couple_space_id)
+    saved = await LocalPhotoStorage().save(file)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO photos(
+                    couple_space_id, memory_id, original_filename, original_storage_url,
+                    thumbnail_url, display_url, storage_driver
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING id, created_at
+                """,
+                (
+                    space_id,
+                    memory_id,
+                    file.filename,
+                    saved["original_storage_url"],
+                    saved["thumbnail_url"],
+                    saved["display_url"],
+                    saved["storage_driver"],
+                ),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    return {
+        "id": row[0],
+        "created_at": str(row[1]),
+        "memory_id": memory_id,
+        "display_url": saved["display_url"],
+        "thumbnail_url": saved["thumbnail_url"],
+        "storage_driver": saved["storage_driver"],
+    }
+
+
+@app.get("/v1/photos")
+def list_photos(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    couple_space_id: int | None = Query(default=None),
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, Any]:
+    user_id = _user_id_by_username(str(user.get("sub", "")))
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid user")
+    space_id = _resolve_couple_space_id(user_id, couple_space_id)
+    offset = (page - 1) * page_size
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM photos WHERE couple_space_id = %s", (space_id,))
+            total = cur.fetchone()[0]
+            cur.execute(
+                """
+                SELECT id, memory_id, original_filename, display_url, thumbnail_url, taken_at, created_at
+                FROM photos
+                WHERE couple_space_id = %s
+                ORDER BY COALESCE(taken_at, created_at) DESC, id DESC
+                LIMIT %s OFFSET %s
+                """,
+                (space_id, page_size, offset),
+            )
+            rows = cur.fetchall()
+    return {
+        "items": [
+            {
+                "id": row[0],
+                "memory_id": row[1],
+                "original_filename": row[2],
+                "display_url": row[3],
+                "thumbnail_url": row[4],
+                "taken_at": str(row[5]) if row[5] else None,
+                "created_at": str(row[6]),
+            }
+            for row in rows
+        ],
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "total_pages": (total + page_size - 1) // page_size,
+    }
+
+
+@app.get("/v1/photos/{photo_id}")
+def get_photo(photo_id: int, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
+    user_id = _user_id_by_username(str(user.get("sub", "")))
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid user")
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT p.id, p.memory_id, p.original_filename, p.original_storage_url, p.display_url, p.thumbnail_url,
+                       p.storage_driver, p.created_at
+                FROM photos p
+                JOIN couple_members cm ON cm.couple_space_id = p.couple_space_id
+                WHERE p.id = %s AND cm.user_id = %s
+                LIMIT 1
+                """,
+                (photo_id, user_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="not found")
+    return {
+        "id": row[0],
+        "memory_id": row[1],
+        "original_filename": row[2],
+        "original_storage_url": row[3],
+        "display_url": row[4],
+        "thumbnail_url": row[5],
+        "storage_driver": row[6],
+        "created_at": str(row[7]),
+    }
+
+
+@app.delete("/v1/photos/{photo_id}")
+def delete_photo(photo_id: int, user: dict[str, Any] = Depends(require_login)) -> dict[str, str]:
+    user_id = _user_id_by_username(str(user.get("sub", "")))
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid user")
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM photos p
+                USING couple_members cm
+                WHERE p.id = %s AND cm.user_id = %s AND cm.couple_space_id = p.couple_space_id
+                RETURNING p.original_storage_url
+                """,
+                (photo_id, user_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="not found")
+        conn.commit()
+    try:
+        if row[0]:
+            Path(row[0]).unlink(missing_ok=True)
+    except Exception:
+        pass
     return {"status": "ok"}
 
 @app.get("/v1/admin/users")
