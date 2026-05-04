@@ -2,8 +2,8 @@ name: 发布并部署
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       release_version:
