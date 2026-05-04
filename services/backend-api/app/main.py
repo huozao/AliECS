@@ -310,6 +310,19 @@ class PutPermissionIdsRequest(BaseModel):
     permission_ids: list[int]
 
 
+class MemoryUpsertRequest(BaseModel):
+    couple_space_id: int | None = None
+    title: str
+    content: str | None = None
+    memory_date: str | None = None
+    place_name: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    cover_photo_url: str | None = None
+    visibility: str = "private"
+    tags: list[str] = []
+
+
 class CreateFeatureRequest(BaseModel):
     code: str
     title: str
@@ -546,6 +559,272 @@ def couple_access(authorization: str | None = Header(default=None)) -> dict[str,
         raise HTTPException(status_code=404, detail="not found")
 
     return {"allowed": True, "route": _couple_route()}
+
+
+def _user_id_by_username(username: str) -> int | None:
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM users WHERE username = %s", (username,))
+            row = cur.fetchone()
+    return row[0] if row else None
+
+
+def _resolve_couple_space_id(user_id: int, requested_space_id: int | None) -> int:
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            if requested_space_id:
+                cur.execute(
+                    """
+                    SELECT couple_space_id
+                    FROM couple_members
+                    WHERE user_id = %s AND couple_space_id = %s
+                    """,
+                    (user_id, requested_space_id),
+                )
+                row = cur.fetchone()
+                if row:
+                    return row[0]
+                raise HTTPException(status_code=403, detail="permission denied")
+
+            cur.execute(
+                """
+                SELECT couple_space_id
+                FROM couple_members
+                WHERE user_id = %s
+                ORDER BY joined_at ASC
+                LIMIT 1
+                """,
+                (user_id,),
+            )
+            row = cur.fetchone()
+            if row:
+                return row[0]
+    raise HTTPException(status_code=404, detail="not found")
+
+
+@app.get("/v1/memories")
+def list_memories(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=50),
+    couple_space_id: int | None = Query(default=None),
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, Any]:
+    user_id = _user_id_by_username(str(user.get("sub", "")))
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid user")
+    space_id = _resolve_couple_space_id(user_id, couple_space_id)
+    offset = (page - 1) * page_size
+
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM memories WHERE couple_space_id = %s", (space_id,))
+            total = cur.fetchone()[0]
+            cur.execute(
+                """
+                SELECT id, couple_space_id, title, content, memory_date, place_name, latitude, longitude,
+                       cover_photo_url, visibility, created_by, created_at, updated_at
+                FROM memories
+                WHERE couple_space_id = %s
+                ORDER BY memory_date DESC NULLS LAST, id DESC
+                LIMIT %s OFFSET %s
+                """,
+                (space_id, page_size, offset),
+            )
+            rows = cur.fetchall()
+
+            memory_ids = [row[0] for row in rows]
+            tags_map: dict[int, list[str]] = {mid: [] for mid in memory_ids}
+            if memory_ids:
+                cur.execute(
+                    "SELECT memory_id, tag FROM memory_tags WHERE memory_id = ANY(%s::bigint[]) ORDER BY id",
+                    (memory_ids,),
+                )
+                for mid, tag in cur.fetchall():
+                    tags_map.setdefault(mid, []).append(tag)
+
+    return {
+        "items": [
+            {
+                "id": row[0],
+                "couple_space_id": row[1],
+                "title": row[2],
+                "content": row[3],
+                "memory_date": str(row[4]) if row[4] else None,
+                "place_name": row[5],
+                "latitude": row[6],
+                "longitude": row[7],
+                "cover_photo_url": row[8],
+                "visibility": row[9],
+                "created_by": row[10],
+                "created_at": str(row[11]),
+                "updated_at": str(row[12]),
+                "tags": tags_map.get(row[0], []),
+            }
+            for row in rows
+        ],
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "total_pages": (total + page_size - 1) // page_size,
+    }
+
+
+@app.post("/v1/memories")
+def create_memory(body: MemoryUpsertRequest, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
+    user_id = _user_id_by_username(str(user.get("sub", "")))
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid user")
+    space_id = _resolve_couple_space_id(user_id, body.couple_space_id)
+    if body.visibility not in {"private", "shareable"}:
+        raise HTTPException(status_code=400, detail="invalid visibility")
+
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO memories(
+                    couple_space_id, title, content, memory_date, place_name, latitude, longitude,
+                    cover_photo_url, visibility, created_by
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (
+                    space_id,
+                    body.title,
+                    body.content,
+                    body.memory_date,
+                    body.place_name,
+                    body.latitude,
+                    body.longitude,
+                    body.cover_photo_url,
+                    body.visibility,
+                    user_id,
+                ),
+            )
+            memory_id = cur.fetchone()[0]
+            for tag in body.tags:
+                tag_clean = tag.strip()
+                if tag_clean:
+                    cur.execute(
+                        "INSERT INTO memory_tags(memory_id, tag) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                        (memory_id, tag_clean),
+                    )
+        conn.commit()
+    return {"id": memory_id}
+
+
+@app.get("/v1/memories/{memory_id}")
+def get_memory(memory_id: int, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
+    user_id = _user_id_by_username(str(user.get("sub", "")))
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid user")
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT m.id, m.couple_space_id, m.title, m.content, m.memory_date, m.place_name, m.latitude, m.longitude,
+                       m.cover_photo_url, m.visibility, m.created_by, m.created_at, m.updated_at
+                FROM memories m
+                JOIN couple_members cm ON cm.couple_space_id = m.couple_space_id
+                WHERE m.id = %s AND cm.user_id = %s
+                LIMIT 1
+                """,
+                (memory_id, user_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="not found")
+            cur.execute("SELECT tag FROM memory_tags WHERE memory_id = %s ORDER BY id", (memory_id,))
+            tags = [r[0] for r in cur.fetchall()]
+    return {
+        "id": row[0],
+        "couple_space_id": row[1],
+        "title": row[2],
+        "content": row[3],
+        "memory_date": str(row[4]) if row[4] else None,
+        "place_name": row[5],
+        "latitude": row[6],
+        "longitude": row[7],
+        "cover_photo_url": row[8],
+        "visibility": row[9],
+        "created_by": row[10],
+        "created_at": str(row[11]),
+        "updated_at": str(row[12]),
+        "tags": tags,
+    }
+
+
+@app.put("/v1/memories/{memory_id}")
+def update_memory(memory_id: int, body: MemoryUpsertRequest, user: dict[str, Any] = Depends(require_login)) -> dict[str, str]:
+    user_id = _user_id_by_username(str(user.get("sub", "")))
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid user")
+    if body.visibility not in {"private", "shareable"}:
+        raise HTTPException(status_code=400, detail="invalid visibility")
+
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT m.couple_space_id
+                FROM memories m
+                JOIN couple_members cm ON cm.couple_space_id = m.couple_space_id
+                WHERE m.id = %s AND cm.user_id = %s
+                LIMIT 1
+                """,
+                (memory_id, user_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="not found")
+            cur.execute(
+                """
+                UPDATE memories
+                SET title=%s, content=%s, memory_date=%s, place_name=%s, latitude=%s, longitude=%s,
+                    cover_photo_url=%s, visibility=%s, updated_at=NOW()
+                WHERE id=%s
+                """,
+                (
+                    body.title,
+                    body.content,
+                    body.memory_date,
+                    body.place_name,
+                    body.latitude,
+                    body.longitude,
+                    body.cover_photo_url,
+                    body.visibility,
+                    memory_id,
+                ),
+            )
+            cur.execute("DELETE FROM memory_tags WHERE memory_id = %s", (memory_id,))
+            for tag in body.tags:
+                tag_clean = tag.strip()
+                if tag_clean:
+                    cur.execute("INSERT INTO memory_tags(memory_id, tag) VALUES (%s, %s)", (memory_id, tag_clean))
+        conn.commit()
+    return {"status": "ok"}
+
+
+@app.delete("/v1/memories/{memory_id}")
+def delete_memory(memory_id: int, user: dict[str, Any] = Depends(require_login)) -> dict[str, str]:
+    user_id = _user_id_by_username(str(user.get("sub", "")))
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid user")
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM memories m
+                USING couple_members cm
+                WHERE m.id = %s AND cm.user_id = %s AND cm.couple_space_id = m.couple_space_id
+                """,
+                (memory_id, user_id),
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="not found")
+        conn.commit()
+    return {"status": "ok"}
 
 @app.get("/v1/admin/users")
 def admin_users(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
