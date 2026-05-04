@@ -2,7 +2,7 @@ name: PR 文案语言检查
 
 on:
   pull_request_target:
-    types: [opened, edited, synchronize, reopened]
+    types: [opened, edited, reopened]
 
 jobs:
   check-pr-language:
