@@ -244,6 +244,7 @@
       </div>
       <div class="top-actions">
         <a class="btn" href="/">首页</a>
+        <button id="coupleEntryBtn" class="btn hidden" type="button" title="隐藏入口">💗</button>
         <a class="btn" href="/api/healthz" target="_blank" rel="noreferrer">API Health</a>
         <button id="refreshAllBtn">刷新数据</button>
         <button id="logoutBtn" class="danger hidden">退出登录</button>
@@ -461,7 +462,7 @@
     const API_BASE = location.port === "8081" ? "http://localhost:8000" : "/api";
 
     const state = {
-      token: localStorage.getItem("admin_token") || "",
+      token: "",
       me: null,
       users: [],
       roles: [],
@@ -471,6 +472,12 @@
     };
 
     const $ = (id) => document.getElementById(id);
+
+    const AUTH_KEYS = ["aliecs_auth_token", "portal_token", "admin_token"];
+    const getAuthToken = () => AUTH_KEYS.map((k) => localStorage.getItem(k) || "").find(Boolean) || "";
+    const setAuthToken = (token) => AUTH_KEYS.forEach((k) => localStorage.setItem(k, token));
+    const clearAuthToken = () => AUTH_KEYS.forEach((k) => localStorage.removeItem(k));
+    const syncTokenState = () => { state.token = getAuthToken(); };
 
     function showError(message) {
       $("errorBox").textContent = message;
@@ -511,8 +518,8 @@
       if (!resp.ok) {
         const detail = data && data.detail ? data.detail : `HTTP ${resp.status}`;
         if (resp.status === 401) {
-          localStorage.removeItem("admin_token");
-          state.token = "";
+          clearAuthToken();
+          syncTokenState();
           renderAuth();
         }
         throw new Error(String(detail));
@@ -544,11 +551,33 @@
         .replaceAll("'", "&#039;");
     }
 
+    async function requestCoupleAccess() {
+      try {
+        const data = await api("/couple/access");
+        if (data && data.allowed === true) return data.route || "/couple/";
+      } catch {
+        return null;
+      }
+      return null;
+    }
+
+    function renderCoupleEntry() {
+      const btn = $("coupleEntryBtn");
+      const canTry = Boolean(state.token);
+      btn.classList.toggle("hidden", !canTry);
+      btn.onclick = async () => {
+        const route = await requestCoupleAccess();
+        if (route) location.assign(route);
+      };
+    }
+
     function renderAuth() {
+      syncTokenState();
       const loggedIn = Boolean(state.token);
       $("loginCard").classList.toggle("hidden", loggedIn);
       $("appArea").classList.toggle("hidden", !loggedIn);
       $("logoutBtn").classList.toggle("hidden", !loggedIn);
+      renderCoupleEntry();
     }
 
     function renderIdentity() {
@@ -691,14 +720,14 @@
       });
 
       state.token = data.token;
-      localStorage.setItem("admin_token", state.token);
+      setAuthToken(state.token);
       showSuccess("登录成功。");
       await loadAll();
     }
 
     function logout() {
-      localStorage.removeItem("admin_token");
-      state.token = "";
+      clearAuthToken();
+      syncTokenState();
       state.me = null;
       renderAuth();
       showSuccess("已退出登录。");
@@ -867,6 +896,7 @@
         if (e.key === "Enter") login().catch((err) => showError(err.message));
       });
 
+      syncTokenState();
       renderAuth();
 
       if (state.token) {

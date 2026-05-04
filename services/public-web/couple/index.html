@@ -66,7 +66,8 @@
 
   <script>
     const API_BASE = location.port === '8080' ? 'http://localhost:8000' : '/api';
-    const token = () => localStorage.getItem('portal_token') || '';
+    const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
+    const token = () => AUTH_KEYS.map((k)=>localStorage.getItem(k)||'').find(Boolean) || '';
     async function checkAccess(){
       try {
         const headers = {'Content-Type':'application/json'};
