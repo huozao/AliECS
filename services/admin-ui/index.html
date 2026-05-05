@@ -244,6 +244,7 @@
       </div>
       <div class="top-actions">
         <a class="btn" href="/">首页</a>
+        <button id="coupleEntryBtn" class="btn hidden" type="button" title="隐藏入口">💗</button>
         <a class="btn" href="/api/healthz" target="_blank" rel="noreferrer">API Health</a>
         <button id="refreshAllBtn">刷新数据</button>
         <button id="logoutBtn" class="danger hidden">退出登录</button>
@@ -438,6 +439,29 @@
       </section>
 
       <section class="card">
+        <h2>Couple 空间与成员绑定（最小版）</h2>
+        <div class="notice">先创建空间，再把用户名加入成员。只有在成员表中的账号才能访问动态回忆数据。</div>
+        <div class="grid three">
+          <div><label>空间名称</label><input id="coupleSpaceName" placeholder="例如 我们的回忆空间" /></div>
+          <div><label>开始日期</label><input id="coupleStartDate" placeholder="YYYY-MM-DD，可留空" /></div>
+          <div><label>主题</label><input id="coupleTheme" placeholder="例如 春分与晚风" /></div>
+        </div>
+        <div class="row" style="margin-top:12px;"><button id="createCoupleSpaceBtn" class="primary" type="button">创建 Couple 空间</button></div>
+        <div class="grid three" style="margin-top:14px;">
+          <div><label>空间 ID</label><input id="bindSpaceId" placeholder="例如 1" /></div>
+          <div><label>用户名</label><input id="bindUsername" placeholder="例如 tx" /></div>
+          <div><label>角色</label><select id="bindRole"><option value="member">member</option><option value="owner">owner</option></select></div>
+        </div>
+        <div class="row" style="margin-top:12px;"><button id="addCoupleMemberBtn" type="button">绑定成员</button><button id="refreshCoupleBtn" type="button">刷新 Couple 数据</button></div>
+        <div class="table-wrap" style="margin-top:14px;">
+          <table>
+            <thead><tr><th>空间ID</th><th>名称</th><th>开始日期</th><th>主题</th><th>成员</th></tr></thead>
+            <tbody id="coupleSpacesBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card">
         <h2>审计日志</h2>
         <div class="table-wrap">
           <table>
@@ -461,16 +485,23 @@
     const API_BASE = location.port === "8081" ? "http://localhost:8000" : "/api";
 
     const state = {
-      token: localStorage.getItem("admin_token") || "",
+      token: "",
       me: null,
       users: [],
       roles: [],
       permissions: [],
       features: [],
-      logs: []
+      logs: [],
+      coupleSpaces: []
     };
 
     const $ = (id) => document.getElementById(id);
+
+    const AUTH_KEYS = ["aliecs_auth_token", "portal_token", "admin_token"];
+    const getAuthToken = () => AUTH_KEYS.map((k) => localStorage.getItem(k) || "").find(Boolean) || "";
+    const setAuthToken = (token) => AUTH_KEYS.forEach((k) => localStorage.setItem(k, token));
+    const clearAuthToken = () => AUTH_KEYS.forEach((k) => localStorage.removeItem(k));
+    const syncTokenState = () => { state.token = getAuthToken(); };
 
     function showError(message) {
       $("errorBox").textContent = message;
@@ -511,8 +542,8 @@
       if (!resp.ok) {
         const detail = data && data.detail ? data.detail : `HTTP ${resp.status}`;
         if (resp.status === 401) {
-          localStorage.removeItem("admin_token");
-          state.token = "";
+          clearAuthToken();
+          syncTokenState();
           renderAuth();
         }
         throw new Error(String(detail));
@@ -544,11 +575,33 @@
         .replaceAll("'", "&#039;");
     }
 
+    async function requestCoupleAccess() {
+      try {
+        const data = await api("/couple/access");
+        if (data && data.allowed === true) return data.route || "/couple/";
+      } catch {
+        return null;
+      }
+      return null;
+    }
+
+    function renderCoupleEntry() {
+      const btn = $("coupleEntryBtn");
+      const canTry = Boolean(state.token);
+      btn.classList.toggle("hidden", !canTry);
+      btn.onclick = async () => {
+        const route = await requestCoupleAccess();
+        if (route) location.assign(route);
+      };
+    }
+
     function renderAuth() {
+      syncTokenState();
       const loggedIn = Boolean(state.token);
       $("loginCard").classList.toggle("hidden", loggedIn);
       $("appArea").classList.toggle("hidden", !loggedIn);
       $("logoutBtn").classList.toggle("hidden", !loggedIn);
+      renderCoupleEntry();
     }
 
     function renderIdentity() {
@@ -649,15 +702,28 @@
       `).join("");
     }
 
+    function renderCoupleSpaces() {
+      $("coupleSpacesBody").innerHTML = (state.coupleSpaces || []).map((s) => `
+        <tr>
+          <td>${s.id}</td>
+          <td>${escapeHtml(s.name)}</td>
+          <td>${escapeHtml(s.start_date || "-")}</td>
+          <td>${escapeHtml(s.theme || "-")}</td>
+          <td>${(s.members || []).map((m) => tag(`${m.username}(${m.role})`, "ok")).join("") || '<span class="muted">暂无成员</span>'}</td>
+        </tr>
+      `).join("");
+    }
+
     async function loadAll() {
       clearMessage();
       state.me = await api("/v1/auth/me");
-      const [users, roles, permissions, features, logs] = await Promise.all([
+      const [users, roles, permissions, features, logs, coupleSpaces] = await Promise.all([
         api("/v1/admin/users"),
         api("/v1/admin/roles"),
         api("/v1/admin/permissions"),
         api("/v1/admin/features"),
-        api("/v1/admin/audit-logs")
+        api("/v1/admin/audit-logs"),
+        api("/v1/admin/couple-spaces")
       ]);
 
       state.users = users.items || [];
@@ -665,6 +731,7 @@
       state.permissions = permissions.items || [];
       state.features = features.items || [];
       state.logs = logs.items || [];
+      state.coupleSpaces = coupleSpaces.items || [];
 
       renderAuth();
       renderIdentity();
@@ -673,6 +740,40 @@
       renderPermissions();
       renderFeatures();
       renderLogs();
+      renderCoupleSpaces();
+    }
+
+    async function createCoupleSpace() {
+      const name = $("coupleSpaceName").value.trim();
+      if (!name) return showError("请填写 Couple 空间名称。");
+      await api("/v1/admin/couple-spaces", {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          start_date: $("coupleStartDate").value.trim() || null,
+          theme: $("coupleTheme").value.trim() || null
+        })
+      });
+      showSuccess("Couple 空间已创建。");
+      $("coupleSpaceName").value = "";
+      $("coupleStartDate").value = "";
+      $("coupleTheme").value = "";
+      await loadAll();
+    }
+
+    async function addCoupleMember() {
+      const spaceId = Number($("bindSpaceId").value.trim());
+      const username = $("bindUsername").value.trim();
+      const role = $("bindRole").value;
+      if (!Number.isFinite(spaceId) || spaceId <= 0) return showError("请填写有效的空间 ID。");
+      if (!username) return showError("请填写要绑定的用户名。");
+      await api(`/v1/admin/couple-spaces/${spaceId}/members`, {
+        method: "POST",
+        body: JSON.stringify({ username, role })
+      });
+      showSuccess("成员绑定成功。");
+      $("bindUsername").value = "";
+      await loadAll();
     }
 
     async function login() {
@@ -691,14 +792,14 @@
       });
 
       state.token = data.token;
-      localStorage.setItem("admin_token", state.token);
+      setAuthToken(state.token);
       showSuccess("登录成功。");
       await loadAll();
     }
 
     function logout() {
-      localStorage.removeItem("admin_token");
-      state.token = "";
+      clearAuthToken();
+      syncTokenState();
       state.me = null;
       renderAuth();
       showSuccess("已退出登录。");
@@ -863,10 +964,14 @@
       $("refreshAllBtn").addEventListener("click", () => loadAll().catch((e) => showError(e.message)));
       $("createUserBtn").addEventListener("click", () => createUser().catch((e) => showError(e.message)));
       $("createFeatureBtn").addEventListener("click", () => createFeature().catch((e) => showError(e.message)));
+      $("createCoupleSpaceBtn").addEventListener("click", () => createCoupleSpace().catch((e) => showError(e.message)));
+      $("addCoupleMemberBtn").addEventListener("click", () => addCoupleMember().catch((e) => showError(e.message)));
+      $("refreshCoupleBtn").addEventListener("click", () => loadAll().catch((e) => showError(e.message)));
       $("passwordInput").addEventListener("keydown", (e) => {
         if (e.key === "Enter") login().catch((err) => showError(err.message));
       });
 
+      syncTokenState();
       renderAuth();
 
       if (state.token) {

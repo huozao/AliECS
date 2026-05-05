@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>恬汐👑</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow: hidden; font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: radial-gradient(circle at 20% 20%, rgba(255,170,220,.35), transparent 30%), radial-gradient(circle at 80% 30%, rgba(180,120,255,.25), transparent 30%), radial-gradient(circle at 50% 80%, rgba(255,215,120,.20), transparent 35%), linear-gradient(135deg, #0f1024, #1d1238 40%, #2a0f4d 70%, #12091f); color: #fff; }
+    body { position: relative; display: flex; align-items: center; justify-content: center; }
+    .stars,.petals,.floating-words { position: absolute; inset: 0; pointer-events: none; }
+    .stars::before,.stars::after { content: ""; position: absolute; inset: 0; background-image: radial-gradient(2px 2px at 20px 30px, rgba(255,255,255,.8), transparent 60%), radial-gradient(2px 2px at 200px 120px, rgba(255,255,255,.7), transparent 60%), radial-gradient(1.5px 1.5px at 340px 60px, rgba(255,215,150,.8), transparent 60%), radial-gradient(2px 2px at 480px 200px, rgba(255,255,255,.8), transparent 60%), radial-gradient(1.5px 1.5px at 620px 80px, rgba(255,180,220,.8), transparent 60%), radial-gradient(2px 2px at 760px 160px, rgba(255,255,255,.7), transparent 60%); background-size: 800px 300px; animation: driftStars 24s linear infinite; opacity: .8; }
+    .stars::after { animation-duration: 36s; transform: scale(1.2); opacity: .45; }
+    .card { position: relative; z-index: 2; width: min(90vw, 880px); padding: 48px 36px; border: 1px solid rgba(255,255,255,.18); border-radius: 28px; background: rgba(255,255,255,.08); box-shadow: 0 0 30px rgba(255,120,210,.18),0 0 80px rgba(145,90,255,.12),inset 0 0 30px rgba(255,255,255,.05); backdrop-filter: blur(14px); text-align: center; overflow: hidden; }
+    .glow-ring { position: absolute; width: 420px; height: 420px; left: 50%; top: 50%; transform: translate(-50%, -50%); border-radius: 50%; background: radial-gradient(circle, rgba(255,200,240,.18), transparent 65%); filter: blur(18px); animation: pulse 5s ease-in-out infinite; z-index: 0; }
+    .title { position: relative; z-index: 2; font-size: clamp(42px, 7vw, 88px); font-weight: 800; letter-spacing: 2px; line-height: 1.15; background: linear-gradient(90deg, #fff6d5, #ffd2f0, #d4bbff, #fff1b8); background-size: 200% auto; -webkit-background-clip: text; -webkit-text-fill-color: transparent; animation: shine 5s linear infinite; }
+    .subtitle { position: relative; z-index: 2; margin-top: 14px; font-size: clamp(18px, 2.4vw, 28px); color: rgba(255,255,255,.9); letter-spacing: 1px; }
+    .blessing-box { position: relative; z-index: 2; margin-top: 28px; height: 170px; overflow: hidden; }
+    .blessing-track { display: flex; flex-direction: column; gap: 18px; animation: scrollBlessing 15s linear infinite; }
+    .blessing { font-size: clamp(18px, 2.2vw, 30px); font-weight: 600; color: #fffafc; opacity: .95; }
+    .footer-line { position: relative; z-index: 2; margin-top: 26px; font-size: clamp(14px, 1.6vw, 18px); color: rgba(255,255,255,.78); letter-spacing: 1px; }
+    .floating-word { position: absolute; color: rgba(255,255,255,.16); font-weight: 700; white-space: nowrap; animation: floatUp linear infinite; }
+    .petal { position: absolute; top: -10%; width: 14px; height: 14px; border-radius: 50% 60% 40% 60%; background: radial-gradient(circle at 30% 30%, #ffd7ef, #ff87c8 70%, rgba(255,135,200,.2)); opacity: .75; animation: fall linear infinite; }
+    @keyframes shine { 0% { background-position: 0% center; } 100% { background-position: 200% center; } }
+    @keyframes pulse { 0%,100% { transform: translate(-50%, -50%) scale(1); opacity: .75; } 50% { transform: translate(-50%, -50%) scale(1.08); opacity: 1; } }
+    @keyframes scrollBlessing { 0% { transform: translateY(0); } 100% { transform: translateY(-50%); } }
+    @keyframes floatUp { 0% { transform: translateY(110vh) translateX(0) scale(.9); opacity: 0; } 15% { opacity: .18; } 85% { opacity: .18; } 100% { transform: translateY(-20vh) translateX(30px) scale(1.08); opacity: 0; } }
+    @keyframes fall { 0% { transform: translateY(-10vh) translateX(0) rotate(0deg); opacity: 0; } 10% { opacity: .8; } 100% { transform: translateY(115vh) translateX(80px) rotate(540deg); opacity: 0; } }
+    @keyframes driftStars { 0% { transform: translateX(0); } 100% { transform: translateX(-120px); } }
+  </style>
+</head>
+<body>
+  <div class="stars"></div><div class="petals" id="petals"></div><div class="floating-words" id="floatingWords"></div>
+  <div class="card"><div class="glow-ring"></div><div class="title">恬汐👑</div><div class="subtitle">名字自带温柔贵气，运势一路发亮，浪漫与好运都会向你奔来。</div>
+    <div class="blessing-box"><div class="blessing-track"><div class="blessing">恬汐一出场，连风都像撒了金粉，温柔又高级。</div><div class="blessing">愿你眼里有星河，手里有玫瑰，账户里有越来越多的惊喜。</div><div class="blessing">愿你一路顺风顺水，偏爱与好运都明目张胆地向你靠近。</div><div class="blessing">愿恬汐👑福气满格，财气满格，气质满格，出门就遇贵人。</div></div></div>
+    <div class="footer-line">愿今天的你，被浪漫点亮，被财富偏爱，被世界温柔收藏。</div>
+  </div>
+<script>
+const words=["恬汐👑","暴富","好运","富足","被偏爱","玫瑰","星河","浪漫","小富婆","发光"];
+const fw=document.getElementById('floatingWords');for(let i=0;i<18;i++){const s=document.createElement('span');s.className='floating-word';s.innerText=words[Math.floor(Math.random()*words.length)];s.style.left=Math.random()*100+'vw';s.style.fontSize=(16+Math.random()*24)+'px';s.style.animationDuration=(10+Math.random()*10)+'s';s.style.animationDelay=(Math.random()*10)+'s';fw.appendChild(s);}const petals=document.getElementById('petals');for(let i=0;i<24;i++){const p=document.createElement('span');p.className='petal';p.style.left=Math.random()*100+'vw';p.style.animationDuration=(8+Math.random()*8)+'s';p.style.animationDelay=(Math.random()*8)+'s';p.style.transform=`scale(${0.7+Math.random()*1.2})`;petals.appendChild(p);} 
+</script>
+</body>
+</html>

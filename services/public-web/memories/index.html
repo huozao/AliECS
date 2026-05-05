@@ -21,24 +21,47 @@
 </div>
 <script>
 const API_BASE = location.port==='8080'?'http://localhost:8000':'/api';
+const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
+const getAuthToken=()=>AUTH_KEYS.map((k)=>localStorage.getItem(k)||'').find(Boolean)||'';
+const pinnedMemory={title:'春分礼物：我做的第一个网站',date:'2026-03-20 20:18（星期五）',place:'线上',url:'/memories/spring-equinox-20260320.html',excerpt:'宝宝，今日春分，风软云轻，万物向暖，所有美好都恰逢其时～ 我把满心的温柔和心意，揉进了为你做的一个小网站里👉http://hydwang.xyz/，这也是我人生中第一个亲手做的网站，每一个字、每一份祝福，都是为你量身而写。愿春分的温柔护着你，愿往后的岁岁年年，浪漫与好运都独独偏爱你，就像我始终偏爱你一样。希望我的小女孩会喜欢这份专属心意，往后的日子，我也会把更多美好都攒给你❤️'};
 let page=1,totalPages=1;
+function authHeaders(){
+  const tk=getAuthToken();
+  const h={'Content-Type':'application/json'};
+  if(tk) h.Authorization=`Bearer ${tk}`;
+  return h;
+}
+async function checkCoupleAccess(){
+  const r=await fetch(`${API_BASE}/couple/access`,{headers:authHeaders()});
+  if(!r.ok) throw new Error(`ACCESS_${r.status}`);
+  const d=await r.json();
+  if(!d || d.allowed!==true) throw new Error('ACCESS_DENIED');
+}
 async function load(){
-  const tk=localStorage.getItem('portal_token')||'';
-  const h={'Content-Type':'application/json'}; if(tk) h.Authorization=`Bearer ${tk}`;
-  const r=await fetch(`${API_BASE}/v1/memories?page=${page}&page_size=6`,{headers:h});
-  if(!r.ok){ throw new Error(`HTTP ${r.status}`); }
+  const r=await fetch(`${API_BASE}/v1/memories?page=${page}&page_size=6`,{headers:authHeaders()});
+  if(!r.ok){ throw new Error(`MEMORY_${r.status}`); }
   render(await r.json());
 }
 function render(d){
   totalPages=d.total_pages||1;
   pageInfo.textContent=`第 ${d.page} / ${totalPages} 页，共 ${d.total} 条`;
-  list.innerHTML=(d.items||[]).map(x=>`<article class='card'><div class='row'><h3 style='margin:0'>${x.title}</h3><a class='btn' href='/memories/detail.html?id=${x.id}'>详情</a></div><div>${x.memory_date||'未知日期'} · ${x.place_name||'未知地点'}</div><p>${(x.content||'').slice(0,80)}</p></article>`).join('') || '<div class="card">暂无回忆数据</div>';
+  const pinned=`<article class='card' style='border-color:#d9b6cc;background:#fff8fc;'><div class='row'><h3 style='margin:0'>${pinnedMemory.title}</h3><a class='btn' href='${pinnedMemory.url}'>进入回忆</a></div><div>${pinnedMemory.date} · ${pinnedMemory.place}</div><p>${pinnedMemory.excerpt}</p></article>`;
+  const dynamic=(d.items||[]).map(x=>`<article class='card'><div class='row'><h3 style='margin:0'>${x.title}</h3><a class='btn' href='/memories/detail.html?id=${x.id}'>详情</a></div><div>${x.memory_date||'未知日期'} · ${x.place_name||'未知地点'}</div><p>${(x.content||'').slice(0,80)}</p></article>`).join('');
+  list.innerHTML=pinned + (dynamic || '<div class="card">暂无回忆数据</div>');
 }
 prev.onclick=()=>{ if(page>1){page--; boot();} };
 next.onclick=()=>{ if(page<totalPages){page++; boot();} };
 async function boot(){
-  try{ hint.textContent=''; await load(); }
-  catch(e){ hint.textContent='加载失败，请先登录且确认有 Couple 权限。'; list.innerHTML=''; }
+  try{ hint.textContent=''; await checkCoupleAccess(); await load(); }
+  catch(e){
+    const pinned=`<article class='card' style='border-color:#d9b6cc;background:#fff8fc;'><div class='row'><h3 style='margin:0'>${pinnedMemory.title}</h3><a class='btn' href='${pinnedMemory.url}'>进入回忆</a></div><div>${pinnedMemory.date} · ${pinnedMemory.place}</div><p>${pinnedMemory.excerpt}</p></article>`;
+    list.innerHTML=pinned;
+    if(String(e.message).startsWith('ACCESS_')){
+      hint.textContent='当前登录态无法访问 Couple 空间，请重新从首页点击 💗 入口登录。';
+      return;
+    }
+    hint.textContent='你已进入 Couple 页面，但动态回忆暂不可用（通常是未绑定 couple_members 数据），可先查看预设回忆。';
+  }
 }
 boot();
 </script>
