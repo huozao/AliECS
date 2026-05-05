@@ -478,16 +478,6 @@
           </table>
         </div>
       </section>
-
-      <section class="card">
-        <h2>部署诊断信息（复制/下载后可直接发给我排查）</h2>
-        <div class="row">
-          <button id="buildDiagBtn" type="button">生成诊断报告</button>
-          <button id="copyDiagBtn" type="button">复制报告</button>
-          <button id="downloadDiagBtn" type="button">下载报告</button>
-        </div>
-        <textarea id="diagOutput" rows="12" style="margin-top:10px;"></textarea>
-      </section>
     </section>
   </div>
 
@@ -786,41 +776,6 @@
       await loadAll();
     }
 
-    async function buildDiagnostics() {
-      const [health, diag] = await Promise.all([
-        fetch(`${API_BASE}/healthz`).then((r) => r.json()),
-        api("/v1/admin/diagnostics")
-      ]);
-      const payload = {
-        generated_at: new Date().toISOString(),
-        ui_user: state.me || null,
-        healthz: health,
-        diagnostics: diag
-      };
-      $("diagOutput").value = JSON.stringify(payload, null, 2);
-      showSuccess("诊断报告已生成。");
-    }
-
-    async function copyDiagnostics() {
-      const text = $("diagOutput").value.trim();
-      if (!text) return showError("请先生成诊断报告。");
-      await navigator.clipboard.writeText(text);
-      showSuccess("诊断报告已复制。");
-    }
-
-    function downloadDiagnostics() {
-      const text = $("diagOutput").value.trim();
-      if (!text) return showError("请先生成诊断报告。");
-      const blob = new Blob([text], { type: "application/json;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `aliecs-diagnostics-${Date.now()}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      showSuccess("诊断报告已下载。");
-    }
-
     async function login() {
       clearMessage();
       const username = $("usernameInput").value.trim();
@@ -1009,9 +964,9 @@
       $("refreshAllBtn").addEventListener("click", () => loadAll().catch((e) => showError(e.message)));
       $("createUserBtn").addEventListener("click", () => createUser().catch((e) => showError(e.message)));
       $("createFeatureBtn").addEventListener("click", () => createFeature().catch((e) => showError(e.message)));
-      $("buildDiagBtn").addEventListener("click", () => buildDiagnostics().catch((e) => showError(e.message)));
-      $("copyDiagBtn").addEventListener("click", () => copyDiagnostics().catch((e) => showError(e.message)));
-      $("downloadDiagBtn").addEventListener("click", downloadDiagnostics);
+      $("createCoupleSpaceBtn").addEventListener("click", () => createCoupleSpace().catch((e) => showError(e.message)));
+      $("addCoupleMemberBtn").addEventListener("click", () => addCoupleMember().catch((e) => showError(e.message)));
+      $("refreshCoupleBtn").addEventListener("click", () => loadAll().catch((e) => showError(e.message)));
       $("passwordInput").addEventListener("keydown", (e) => {
         if (e.key === "Enter") login().catch((err) => showError(err.message));
       });

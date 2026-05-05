@@ -1522,32 +1522,3 @@ def admin_add_couple_member(
 
     _audit(actor.get("sub"), "admin.couple_spaces.add_member", "couple_spaces", str(space_id), {"username": username, "role": role})
     return {"status": "ok"}
-
-
-@app.get("/v1/admin/diagnostics")
-def admin_diagnostics(actor: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    report: dict[str, Any] = {
-        "actor": actor.get("sub"),
-        "env": os.getenv("ENV", "dev"),
-        "couple_feature_enabled": os.getenv("COUPLE_FEATURE_ENABLED", ""),
-        "couple_route": os.getenv("COUPLE_ROUTE", ""),
-    }
-    with closing(_conn()) as conn:
-        with conn.cursor() as cur:
-            table_exists: dict[str, bool] = {}
-            for tb in ["users", "roles", "couple_spaces", "couple_members", "memories", "photos"]:
-                cur.execute("SELECT to_regclass(%s)", (f"public.{tb}",))
-                table_exists[tb] = bool(cur.fetchone()[0])
-            report["tables"] = table_exists
-
-            if table_exists.get("users"):
-                cur.execute("SELECT COUNT(*) FROM users")
-                report["users_count"] = cur.fetchone()[0]
-            if table_exists.get("couple_spaces"):
-                cur.execute("SELECT COUNT(*) FROM couple_spaces")
-                report["couple_spaces_count"] = cur.fetchone()[0]
-            if table_exists.get("couple_members"):
-                cur.execute("SELECT COUNT(*) FROM couple_members")
-                report["couple_members_count"] = cur.fetchone()[0]
-
-    return report
