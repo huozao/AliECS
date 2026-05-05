@@ -77,3 +77,13 @@ docker compose -f local/docker-compose.local.yml up --build
 - 生产必须修改：`AUTH_TOKEN_SECRET`、`ADMIN_BOOTSTRAP_PASSWORD`。
 - 企业微信智能表格链接在企微侧仍需配置访问控制，否则复制直链可能绕过网站入口权限。
 - 详见：`docs/auth-rbac-guide.md`。
+
+
+## Couple 隐藏入口配置
+- 开关：`COUPLE_FEATURE_ENABLED=true` 时才启用 💗 入口判定。
+- 路由：`COUPLE_ROUTE=/couple/`（建议保留 `/couple/`）。
+- 白名单：
+  - `COUPLE_ALLOWED_USERS=admin,wh,tx`（按 username/sub 匹配，逗号分隔）
+  - `COUPLE_ALLOWED_EMAILS=user1@example.com,user2@example.com`（逗号分隔，可留空）
+- 生产应修改：`/opt/app/deploy/ecs/release-meta.env`，不要长期直接改 `runtime.env`。
+- `deploy/ecs/deploy.sh` 每次发布会把 `release-meta.env` 中的 `COUPLE_*` 写入 `runtime.env` 并注入 `backend-api` 容器。
