@@ -5,54 +5,108 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Couple Memory</title>
   <style>
-    :root{--bg:#f8f4ec;--card:#fffdfa;--text:#2f2721;--muted:#7c6b5d;--line:#ecdfd2;--shadow:0 10px 28px rgba(93,71,52,.08)}
+    :root{--bg:#f8f4ec;--card:#fffdfa;--text:#2f2721;--muted:#7c6b5d;--line:#ecdfd2;--primary:#8c5f6a;--shadow:0 10px 28px rgba(93,71,52,.08)}
     *{box-sizing:border-box} body{margin:0;background:linear-gradient(145deg,#f9f4ea,#f7f1f7 55%,#fffdfa);color:var(--text);font-family:ui-sans-serif,system-ui}
-    .wrap{max-width:1140px;margin:0 auto;padding:24px 18px 52px}.topbar{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;background:rgba(255,253,248,.92);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:20px;padding:16px 20px;margin-bottom:18px}
-    .top-actions{display:flex;gap:8px;flex-wrap:wrap}.btn{border:0;border-radius:999px;padding:9px 13px;background:#e9dfd0;color:var(--text);text-decoration:none;font-weight:650;cursor:pointer}
-    .hero,.card{background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px}.hero{padding:22px;margin-bottom:14px}.grid{display:grid;gap:12px}.entry{grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin:0 0 14px}
-    .card{padding:16px}.small{font-size:13px;color:var(--muted)} input,select{width:100%;padding:10px;border:1px solid var(--line);border-radius:12px}
-    .modal{position:fixed;inset:0;background:rgba(17,12,8,.36);display:none;align-items:center;justify-content:center;padding:16px;z-index:30}.modal.show{display:flex}
-    .panel{width:min(920px,100%);max-height:88vh;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:16px;padding:18px}
-    .panel-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media (max-width:860px){.panel-grid{grid-template-columns:1fr}}
-    .table{width:100%;border-collapse:collapse}.table th,.table td{padding:8px;border-bottom:1px solid var(--line);text-align:left}.hint{margin:8px 0;color:#855d53}
-    .photos{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}.photo img{width:100%;height:130px;object-fit:cover;border-radius:10px;border:1px solid var(--line)}
+    .wrap{max-width:1140px;margin:0 auto;padding:24px 18px 52px}
+    .topbar{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;background:rgba(255,253,248,.92);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:20px;padding:16px 20px;margin-bottom:18px}
+    .top-actions{display:flex;gap:8px;flex-wrap:wrap}.btn{border:0;border-radius:999px;padding:9px 13px;background:#e9dfd0;color:var(--text);text-decoration:none;font-weight:650}
+    .heart{background:transparent;color:rgba(164,98,127,.72)}
+    .hero,.card{background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px}
+    .hero{padding:22px;margin-bottom:14px}.hero h1{margin:0 0 10px;font-size:34px}.hero p{margin:0;color:var(--muted);line-height:1.8}
+    .grid{display:grid;gap:12px}.kpi{grid-template-columns:repeat(auto-fit,minmax(250px,1fr));margin:0 0 14px}
+    .entry{grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin:0 0 14px}
+    .memory{grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin:0 0 14px}
+    .card{padding:16px}.label{font-size:13px;color:#876e5f}.value{font-size:28px;font-weight:750;margin-top:7px}
+    .entry .card{min-height:90px;display:flex;align-items:center;color:#6f5d50}
+    .memory .card h3{margin:0 0 4px}.small{font-size:13px;color:var(--muted)}
+    .modal{position:fixed;inset:0;background:rgba(17,12,8,.32);display:none;align-items:center;justify-content:center;padding:16px;z-index:30}
+    .modal.show{display:flex}.panel{width:min(980px,100%);max-height:86vh;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px}
+    .table{width:100%;border-collapse:collapse}.table th,.table td{border-bottom:1px solid var(--line);padding:8px;text-align:left}
   </style>
 </head>
 <body>
-<div class="wrap">
-<header class="topbar"><div><h2 style="margin:0;font-size:30px">两个人的记忆地图</h2><p style="margin:8px 0 0;color:var(--muted)">把照片、文字、地点和时间，整理成只属于我们的故事。</p></div><nav class="top-actions"><a class="btn" href="/">首页</a><a class="btn" href="/admin/">Admin UI</a><button id="topHeart" class="btn" type="button">💗 设置</button></nav></header>
-<section class="hero"><h1 style="margin:0 0 10px">Our Memory Dashboard</h1><p class="small">在日常里收集记忆，在地图上留下足迹，在时间线里看见我们一起长大的样子。</p></section>
-<section class="grid entry"><article class="card"><div><strong><a href="/memories/" style="color:inherit;text-decoration:none;">回忆列表</a></strong><div class="small">查看和管理回忆。</div></div></article><article class="card"><div><strong><a href="/map/" style="color:inherit;text-decoration:none;">地图足迹</a></strong><div class="small">回忆地点预览。</div></div></article></section>
-<section class="card"><h3 style="margin-top:0">照片管理（上传 / 下载 / 删除）</h3><div class="small">先上传，再可下载或删除。</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0"><input id="photoFile" type="file" accept="image/*" style="max-width:320px"><button id="uploadPhotoBtn" class="btn" type="button">上传</button><button id="refreshPhotoBtn" class="btn" type="button">刷新照片</button></div><div id="photoHint" class="hint"></div><div id="photoGrid" class="photos"></div></section>
-</div>
+  <div class="wrap">
+    <header class="topbar">
+      <div>
+        <h2 style="margin:0;font-size:30px">两个人的记忆地图</h2>
+        <p style="margin:8px 0 0;color:var(--muted)">把照片、文字、地点和时间，整理成只属于我们的故事。</p>
+      </div>
+      <nav class="top-actions">
+        <a class="btn" href="/">首页</a><a class="btn" href="/admin/">Admin UI</a><a class="btn" href="/api/healthz" target="_blank">API Health</a><a class="btn" href="https://github.com/huozao/AliECS" target="_blank">GitHub</a><button id="topHeart" class="btn heart" type="button">💗</button>
+      </nav>
+    </header>
 
-<div id="coupleModal" class="modal"><div class="panel">
-<div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">💗 Couple 设置</h3><button id="closeModalBtn" class="btn" type="button">关闭</button></div>
-<p class="small">优化说明：弹窗改为双列布局，避免文字和输入框挤压；若提示 500，一般是生产库未完成 Couple 表迁移。</p>
-<div class="panel-grid">
-  <div class="card"><h4 style="margin-top:0">创建空间</h4><label>空间名称</label><input id="spaceName" placeholder="例如 我们的回忆空间" /><label>开始日期</label><input id="spaceDate" placeholder="YYYY-MM-DD，可留空"/><label>主题</label><input id="spaceTheme" placeholder="例如 春分与晚风"/><div style="margin-top:10px"><button id="createSpaceBtn" class="btn" type="button">创建空间</button></div></div>
-  <div class="card"><h4 style="margin-top:0">绑定成员</h4><label>空间ID</label><input id="memberSpaceId" placeholder="例如 1"/><label>用户名</label><input id="memberUsername" placeholder="例如 tx"/><label>角色</label><select id="memberRole"><option value="member">member</option><option value="owner">owner</option></select><div style="margin-top:10px"><button id="bindMemberBtn" class="btn" type="button">绑定成员</button><button id="reloadSpacesBtn" class="btn" type="button">刷新</button></div></div>
-</div>
-<div id="modalHint" class="hint"></div>
-<table class="table"><thead><tr><th>空间ID</th><th>名称</th><th>开始日期</th><th>主题</th><th>成员</th></tr></thead><tbody id="spacesBody"></tbody></table>
-</div></div>
+    <section class="hero">
+      <h1>Our Memory Dashboard</h1>
+      <p>在日常里收集记忆，在地图上留下足迹，在时间线里看见我们一起长大的样子。</p>
+    </section>
 
-<script>
-const API_BASE = location.port === '8080' ? 'http://localhost:8000' : '/api';
-const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
-const token = () => AUTH_KEYS.map((k)=>localStorage.getItem(k)||'').find(Boolean) || '';
-const headers=()=>{const h={};const t=token();if(t)h.Authorization=`Bearer ${t}`;return h;};
-async function api(path,opt={}){const resp=await fetch(`${API_BASE}${path}`,{...opt,headers:Object.assign(headers(),opt.headers||{})});const text=await resp.text();let data={};if(text){try{data=JSON.parse(text)}catch{data={raw:text}}}if(!resp.ok)throw new Error(data.detail||`HTTP ${resp.status}`);return data;}
-async function checkAccess(){try{const d=await api('/couple/access');return d&&d.allowed?d.route:null;}catch{return null;}}
-function renderSpaces(items){spacesBody.innerHTML=(items||[]).map(s=>`<tr><td>${s.id}</td><td>${s.name}</td><td>${s.start_date||'-'}</td><td>${s.theme||'-'}</td><td>${(s.members||[]).map(m=>`${m.username}(${m.role})`).join('，')||'暂无'}</td></tr>`).join('');}
-async function loadSpaces(){const d=await api('/v1/admin/couple-spaces');renderSpaces(d.items||[]);} 
-async function createSpace(){if(!spaceName.value.trim()) throw new Error('空间名称不能为空');await api('/v1/admin/couple-spaces',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:spaceName.value.trim(),start_date:spaceDate.value.trim()||null,theme:spaceTheme.value.trim()||null})});modalHint.textContent='空间创建成功';await loadSpaces();}
-async function bindMember(){const sid=Number(memberSpaceId.value);if(!sid) throw new Error('空间ID无效');if(!memberUsername.value.trim()) throw new Error('用户名不能为空');await api(`/v1/admin/couple-spaces/${sid}/members`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:memberUsername.value.trim(),role:memberRole.value})});modalHint.textContent='成员绑定成功';await loadSpaces();}
-async function loadPhotos(){const d=await api('/v1/photos?page=1&page_size=24');photoGrid.innerHTML=(d.items||[]).map(p=>`<div class='photo'><img src='${p.thumbnail_url||p.display_url}' alt='photo'><div class='small'>#${p.id} ${p.original_filename||''}</div><div style='display:flex;gap:6px;margin-top:6px'><a class='btn' href='${p.display_url}' download>下载</a><button class='btn' onclick='removePhoto(${p.id})'>删除</button></div></div>`).join('');}
-async function uploadPhoto(){if(!photoFile.files[0]) throw new Error('请选择图片');const fd=new FormData();fd.append('file',photoFile.files[0]);await api('/v1/photos/upload',{method:'POST',body:fd});photoHint.textContent='上传成功';await loadPhotos();}
-async function removePhoto(id){await api(`/v1/photos/${id}`,{method:'DELETE'});photoHint.textContent='删除成功';await loadPhotos();}
-window.removePhoto=(id)=>removePhoto(id).catch(e=>photoHint.textContent=`删除失败：${e.message}`);
-document.addEventListener('DOMContentLoaded', async ()=>{const route=await checkAccess();if(!route){location.replace('/');return;} topHeart.onclick=async()=>{coupleModal.classList.add('show');modalHint.textContent='';try{await loadSpaces();}catch(e){modalHint.textContent=e.message.includes('500')?'刷新失败：HTTP 500（请先执行数据库迁移，确保 couple_spaces/couple_members 已创建）':`刷新失败：${e.message}`;}};closeModalBtn.onclick=()=>coupleModal.classList.remove('show');createSpaceBtn.onclick=()=>createSpace().catch(e=>modalHint.textContent=`创建失败：${e.message}`);bindMemberBtn.onclick=()=>bindMember().catch(e=>modalHint.textContent=`绑定失败：${e.message}`);reloadSpacesBtn.onclick=()=>loadSpaces().catch(e=>modalHint.textContent=`刷新失败：${e.message}`);uploadPhotoBtn.onclick=()=>uploadPhoto().catch(e=>photoHint.textContent=`上传失败：${e.message}`);refreshPhotoBtn.onclick=()=>loadPhotos().catch(e=>photoHint.textContent=`加载失败：${e.message}`);loadPhotos().catch(e=>photoHint.textContent=`加载失败：${e.message}`);});
-</script>
+    <section class="grid kpi">
+      <article class="card"><div class="label">恋爱天数</div><div class="value">520 天</div></article>
+      <article class="card"><div class="label">下一个纪念日</div><div class="value">还有 18 天</div></article>
+    </section>
+
+    <section class="grid entry">
+      <article class="card"><div><strong><a href="/memories/" style="color:inherit;text-decoration:none;">回忆列表</a></strong><div class="small">案例：写下「第一次看海」并关联 3 张照片。</div></div></article>
+      <article class="card"><div><strong><a href="/map/" style="color:inherit;text-decoration:none;">地图足迹</a></strong><div class="small">案例：杭州西湖 + 宁波象山两个 marker。</div></div></article>
+      <article class="card"><div><strong>时间线</strong><div class="small">案例：按月份回看相识、旅行、跨年。</div></div></article>
+      <article class="card"><div><strong>相册</strong><div class="small">案例：展示图网格 + 拍摄日期 + 归属回忆。</div></div></article>
+      <article class="card"><div><strong>纪念日</strong><div class="small">案例：恋爱纪念日倒计时 18 天。</div></div></article>
+      <article class="card"><div><strong>愿望清单</strong><div class="small">案例：一起看极光（计划中）。</div></div></article>
+    </section>
+
+    <section class="grid memory">
+      <article class="card"><h3>初秋散步</h3><div class="small">2025-09-12 · 杭州西湖</div><p>晚风很轻，我们沿着湖边走了很久。</p></article>
+      <article class="card"><h3>第一次旅行</h3><div class="small">2025-11-22 · 宁波象山</div><p>看日落时你说，想把今天记一辈子。</p></article>
+      <article class="card"><h3>跨年夜</h3><div class="small">2025-12-31 · 上海外滩</div><p>人群很吵，但拥抱的时候很安静。</p></article>
+    </section>
+
+    <section class="grid entry">
+      <article class="card">地图预览（下一阶段接 Leaflet）</article>
+      <article class="card">时间线预览（下一阶段接真实 API）</article>
+    </section>
+  </div>
+  <div id="coupleModal" class="modal"><div class="panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h3 style="margin:0">💗 Couple 设置</h3><button id="closeModalBtn" class="btn" type="button">关闭</button></div>
+    <p class="small">先建空间，再把用户名加入成员。仅 owner/member 可访问动态回忆。</p>
+    <div class="grid entry">
+      <article class="card"><label>空间名称</label><input id="spaceName" placeholder="例如 我们的回忆空间" /><label>开始日期</label><input id="spaceDate" placeholder="YYYY-MM-DD，可留空"/><label>主题</label><input id="spaceTheme" placeholder="例如 春分与晚风"/><div style="margin-top:10px"><button id="createSpaceBtn" class="btn" type="button">创建空间</button></div></article>
+      <article class="card"><label>空间ID</label><input id="memberSpaceId" placeholder="例如 1"/><label>用户名</label><input id="memberUsername" placeholder="例如 tx"/><label>角色</label><select id="memberRole"><option value="member">member</option><option value="owner">owner</option></select><div style="margin-top:10px"><button id="bindMemberBtn" class="btn" type="button">绑定成员</button><button id="reloadSpacesBtn" class="btn" type="button">刷新</button></div></article>
+    </div>
+    <div id="modalHint" class="small"></div>
+    <table class="table"><thead><tr><th>空间ID</th><th>名称</th><th>开始日期</th><th>主题</th><th>成员</th></tr></thead><tbody id="spacesBody"></tbody></table>
+  </div></div>
+
+  <script>
+    const API_BASE = location.port === '8080' ? 'http://localhost:8000' : '/api';
+    const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
+    const token = () => AUTH_KEYS.map((k)=>localStorage.getItem(k)||'').find(Boolean) || '';
+    async function checkAccess(){
+      try {
+        const headers = {'Content-Type':'application/json'};
+        const t = token();
+        if (t) headers.Authorization = `Bearer ${t}`;
+        const resp = await fetch(`${API_BASE}/couple/access`, {headers});
+        if (!resp.ok) return null;
+        const data = await resp.json();
+        return data && data.allowed ? (data.route || '/couple/') : null;
+      } catch { return null; }
+    }
+    function authHeaders(){ const h={'Content-Type':'application/json'}; const t=token(); if(t) h.Authorization=`Bearer ${t}`; return h; }
+    async function api(path,opt={}){ const r=await fetch(`${API_BASE}${path}`,{...opt,headers:Object.assign(authHeaders(),opt.headers||{})}); const t=await r.text(); let d={}; if(t){ try{d=JSON.parse(t)}catch{d={raw:t}}} if(!r.ok) throw new Error(d.detail||`HTTP ${r.status}`); return d; }
+    function renderSpaces(items){ spacesBody.innerHTML=(items||[]).map(s=>`<tr><td>${s.id}</td><td>${s.name}</td><td>${s.start_date||'-'}</td><td>${s.theme||'-'}</td><td>${(s.members||[]).map(m=>`${m.username}(${m.role})`).join('，')||'暂无'}</td></tr>`).join(''); }
+    async function loadSpaces(){ const d=await api('/v1/admin/couple-spaces'); renderSpaces(d.items||[]); }
+    async function createSpace(){ await api('/v1/admin/couple-spaces',{method:'POST',body:JSON.stringify({name:spaceName.value.trim(),start_date:spaceDate.value.trim()||null,theme:spaceTheme.value.trim()||null})}); modalHint.textContent='空间创建成功'; await loadSpaces(); }
+    async function bindMember(){ await api(`/v1/admin/couple-spaces/${Number(memberSpaceId.value)}/members`,{method:'POST',body:JSON.stringify({username:memberUsername.value.trim(),role:memberRole.value})}); modalHint.textContent='成员绑定成功'; await loadSpaces(); }
+    document.addEventListener('DOMContentLoaded', async () => {
+      const route = await checkAccess();
+      if (!route) { location.replace('/'); return; }
+      document.getElementById('topHeart').addEventListener('click', async () => { coupleModal.classList.add('show'); modalHint.textContent=''; try{ await loadSpaces(); }catch(e){ modalHint.textContent=`加载失败：${e.message}`; }});
+      closeModalBtn.addEventListener('click',()=>coupleModal.classList.remove('show'));
+      createSpaceBtn.addEventListener('click',()=>createSpace().catch((e)=>modalHint.textContent=`创建失败：${e.message}`));
+      bindMemberBtn.addEventListener('click',()=>bindMember().catch((e)=>modalHint.textContent=`绑定失败：${e.message}`));
+      reloadSpacesBtn.addEventListener('click',()=>loadSpaces().catch((e)=>modalHint.textContent=`刷新失败：${e.message}`));
+    });
+  </script>
 </body>
 </html>
