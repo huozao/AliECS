@@ -244,6 +244,7 @@
       </div>
       <div class="top-actions">
         <a class="btn" href="/">首页</a>
+        <button id="coupleEntryBtn" class="btn hidden" type="button" title="隐藏入口">💗</button>
         <a class="btn" href="/api/healthz" target="_blank" rel="noreferrer">API Health</a>
         <button id="refreshAllBtn">刷新数据</button>
         <button id="logoutBtn" class="danger hidden">退出登录</button>
@@ -454,6 +455,16 @@
           </table>
         </div>
       </section>
+
+      <section class="card">
+        <h2>部署诊断信息（复制/下载后可直接发给我排查）</h2>
+        <div class="row">
+          <button id="buildDiagBtn" type="button">生成诊断报告</button>
+          <button id="copyDiagBtn" type="button">复制报告</button>
+          <button id="downloadDiagBtn" type="button">下载报告</button>
+        </div>
+        <textarea id="diagOutput" rows="12" style="margin-top:10px;"></textarea>
+      </section>
     </section>
   </div>
 
@@ -461,7 +472,7 @@
     const API_BASE = location.port === "8081" ? "http://localhost:8000" : "/api";
 
     const state = {
-      token: localStorage.getItem("admin_token") || "",
+      token: "",
       me: null,
       users: [],
       roles: [],
@@ -471,6 +482,12 @@
     };
 
     const $ = (id) => document.getElementById(id);
+
+    const AUTH_KEYS = ["aliecs_auth_token", "portal_token", "admin_token"];
+    const getAuthToken = () => AUTH_KEYS.map((k) => localStorage.getItem(k) || "").find(Boolean) || "";
+    const setAuthToken = (token) => AUTH_KEYS.forEach((k) => localStorage.setItem(k, token));
+    const clearAuthToken = () => AUTH_KEYS.forEach((k) => localStorage.removeItem(k));
+    const syncTokenState = () => { state.token = getAuthToken(); };
 
     function showError(message) {
       $("errorBox").textContent = message;
@@ -511,8 +528,8 @@
       if (!resp.ok) {
         const detail = data && data.detail ? data.detail : `HTTP ${resp.status}`;
         if (resp.status === 401) {
-          localStorage.removeItem("admin_token");
-          state.token = "";
+          clearAuthToken();
+          syncTokenState();
           renderAuth();
         }
         throw new Error(String(detail));
@@ -544,11 +561,33 @@
         .replaceAll("'", "&#039;");
     }
 
+    async function requestCoupleAccess() {
+      try {
+        const data = await api("/couple/access");
+        if (data && data.allowed === true) return data.route || "/couple/";
+      } catch {
+        return null;
+      }
+      return null;
+    }
+
+    function renderCoupleEntry() {
+      const btn = $("coupleEntryBtn");
+      const canTry = Boolean(state.token);
+      btn.classList.toggle("hidden", !canTry);
+      btn.onclick = async () => {
+        const route = await requestCoupleAccess();
+        if (route) location.assign(route);
+      };
+    }
+
     function renderAuth() {
+      syncTokenState();
       const loggedIn = Boolean(state.token);
       $("loginCard").classList.toggle("hidden", loggedIn);
       $("appArea").classList.toggle("hidden", !loggedIn);
       $("logoutBtn").classList.toggle("hidden", !loggedIn);
+      renderCoupleEntry();
     }
 
     function renderIdentity() {
@@ -675,6 +714,41 @@
       renderLogs();
     }
 
+    async function buildDiagnostics() {
+      const [health, diag] = await Promise.all([
+        fetch(`${API_BASE}/healthz`).then((r) => r.json()),
+        api("/v1/admin/diagnostics")
+      ]);
+      const payload = {
+        generated_at: new Date().toISOString(),
+        ui_user: state.me || null,
+        healthz: health,
+        diagnostics: diag
+      };
+      $("diagOutput").value = JSON.stringify(payload, null, 2);
+      showSuccess("诊断报告已生成。");
+    }
+
+    async function copyDiagnostics() {
+      const text = $("diagOutput").value.trim();
+      if (!text) return showError("请先生成诊断报告。");
+      await navigator.clipboard.writeText(text);
+      showSuccess("诊断报告已复制。");
+    }
+
+    function downloadDiagnostics() {
+      const text = $("diagOutput").value.trim();
+      if (!text) return showError("请先生成诊断报告。");
+      const blob = new Blob([text], { type: "application/json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `aliecs-diagnostics-${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showSuccess("诊断报告已下载。");
+    }
+
     async function login() {
       clearMessage();
       const username = $("usernameInput").value.trim();
@@ -691,14 +765,14 @@
       });
 
       state.token = data.token;
-      localStorage.setItem("admin_token", state.token);
+      setAuthToken(state.token);
       showSuccess("登录成功。");
       await loadAll();
     }
 
     function logout() {
-      localStorage.removeItem("admin_token");
-      state.token = "";
+      clearAuthToken();
+      syncTokenState();
       state.me = null;
       renderAuth();
       showSuccess("已退出登录。");
@@ -863,10 +937,14 @@
       $("refreshAllBtn").addEventListener("click", () => loadAll().catch((e) => showError(e.message)));
       $("createUserBtn").addEventListener("click", () => createUser().catch((e) => showError(e.message)));
       $("createFeatureBtn").addEventListener("click", () => createFeature().catch((e) => showError(e.message)));
+      $("buildDiagBtn").addEventListener("click", () => buildDiagnostics().catch((e) => showError(e.message)));
+      $("copyDiagBtn").addEventListener("click", () => copyDiagnostics().catch((e) => showError(e.message)));
+      $("downloadDiagBtn").addEventListener("click", downloadDiagnostics);
       $("passwordInput").addEventListener("keydown", (e) => {
         if (e.key === "Enter") login().catch((err) => showError(err.message));
       });
 
+      syncTokenState();
       renderAuth();
 
       if (state.token) {

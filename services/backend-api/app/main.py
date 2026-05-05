@@ -372,6 +372,17 @@ class PatchFeatureRequest(BaseModel):
     sort_order: int | None = None
 
 
+class CreateCoupleSpaceRequest(BaseModel):
+    name: str
+    start_date: str | None = None
+    theme: str | None = None
+
+
+class AddCoupleMemberRequest(BaseModel):
+    username: str
+    role: str = "member"
+
+
 @app.get("/healthz")
 def healthz() -> dict[str, object]:
     db_ok, db_message = _db_ping()
@@ -1409,3 +1420,134 @@ def admin_audit_logs(_: dict[str, Any] = Depends(require_admin)) -> dict[str, An
             for row in rows
         ]
     }
+
+
+@app.get("/v1/admin/couple-spaces")
+def admin_couple_spaces(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, name, start_date, theme, created_at FROM couple_spaces ORDER BY id DESC")
+            spaces = cur.fetchall()
+            cur.execute(
+                """
+                SELECT cm.couple_space_id, u.id, u.username, u.display_name, cm.role, cm.joined_at
+                FROM couple_members cm
+                JOIN users u ON u.id = cm.user_id
+                ORDER BY cm.couple_space_id DESC, cm.id ASC
+                """
+            )
+            member_rows = cur.fetchall()
+
+    members_map: dict[int, list[dict[str, Any]]] = {}
+    for row in member_rows:
+        members_map.setdefault(row[0], []).append(
+            {
+                "user_id": row[1],
+                "username": row[2],
+                "display_name": row[3],
+                "role": row[4],
+                "joined_at": str(row[5]),
+            }
+        )
+
+    return {
+        "items": [
+            {
+                "id": row[0],
+                "name": row[1],
+                "start_date": str(row[2]) if row[2] else None,
+                "theme": row[3],
+                "created_at": str(row[4]),
+                "members": members_map.get(row[0], []),
+            }
+            for row in spaces
+        ]
+    }
+
+
+@app.post("/v1/admin/couple-spaces")
+def admin_create_couple_space(
+    body: CreateCoupleSpaceRequest,
+    actor: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO couple_spaces(name, start_date, theme) VALUES (%s, %s, %s) RETURNING id",
+                (name, body.start_date, body.theme),
+            )
+            new_id = cur.fetchone()[0]
+        conn.commit()
+
+    _audit(actor.get("sub"), "admin.couple_spaces.create", "couple_spaces", str(new_id), {"name": name})
+    return {"id": new_id}
+
+
+@app.post("/v1/admin/couple-spaces/{space_id}/members")
+def admin_add_couple_member(
+    space_id: int,
+    body: AddCoupleMemberRequest,
+    actor: dict[str, Any] = Depends(require_admin),
+) -> dict[str, str]:
+    username = body.username.strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="username is required")
+    role = body.role.strip() or "member"
+    if role not in {"member", "owner"}:
+        raise HTTPException(status_code=400, detail="invalid role")
+
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM couple_spaces WHERE id = %s", (space_id,))
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="couple space not found")
+            cur.execute("SELECT id FROM users WHERE username = %s", (username,))
+            user_row = cur.fetchone()
+            if not user_row:
+                raise HTTPException(status_code=404, detail="user not found")
+            cur.execute(
+                """
+                INSERT INTO couple_members(couple_space_id, user_id, role)
+                VALUES (%s, %s, %s)
+                ON CONFLICT(couple_space_id, user_id)
+                DO UPDATE SET role = EXCLUDED.role
+                """,
+                (space_id, user_row[0], role),
+            )
+        conn.commit()
+
+    _audit(actor.get("sub"), "admin.couple_spaces.add_member", "couple_spaces", str(space_id), {"username": username, "role": role})
+    return {"status": "ok"}
+
+
+@app.get("/v1/admin/diagnostics")
+def admin_diagnostics(actor: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "actor": actor.get("sub"),
+        "env": os.getenv("ENV", "dev"),
+        "couple_feature_enabled": os.getenv("COUPLE_FEATURE_ENABLED", ""),
+        "couple_route": os.getenv("COUPLE_ROUTE", ""),
+    }
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            table_exists: dict[str, bool] = {}
+            for tb in ["users", "roles", "couple_spaces", "couple_members", "memories", "photos"]:
+                cur.execute("SELECT to_regclass(%s)", (f"public.{tb}",))
+                table_exists[tb] = bool(cur.fetchone()[0])
+            report["tables"] = table_exists
+
+            if table_exists.get("users"):
+                cur.execute("SELECT COUNT(*) FROM users")
+                report["users_count"] = cur.fetchone()[0]
+            if table_exists.get("couple_spaces"):
+                cur.execute("SELECT COUNT(*) FROM couple_spaces")
+                report["couple_spaces_count"] = cur.fetchone()[0]
+            if table_exists.get("couple_members"):
+                cur.execute("SELECT COUNT(*) FROM couple_members")
+                report["couple_members_count"] = cur.fetchone()[0]
+
+    return report
