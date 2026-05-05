@@ -19,9 +19,6 @@
     .card{padding:16px}.label{font-size:13px;color:#876e5f}.value{font-size:28px;font-weight:750;margin-top:7px}
     .entry .card{min-height:90px;display:flex;align-items:center;color:#6f5d50}
     .memory .card h3{margin:0 0 4px}.small{font-size:13px;color:var(--muted)}
-    .modal{position:fixed;inset:0;background:rgba(17,12,8,.32);display:none;align-items:center;justify-content:center;padding:16px;z-index:30}
-    .modal.show{display:flex}.panel{width:min(980px,100%);max-height:86vh;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px}
-    .table{width:100%;border-collapse:collapse}.table th,.table td{border-bottom:1px solid var(--line);padding:8px;text-align:left}
   </style>
 </head>
 <body>
@@ -66,16 +63,6 @@
       <article class="card">时间线预览（下一阶段接真实 API）</article>
     </section>
   </div>
-  <div id="coupleModal" class="modal"><div class="panel">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h3 style="margin:0">💗 Couple 设置</h3><button id="closeModalBtn" class="btn" type="button">关闭</button></div>
-    <p class="small">先建空间，再把用户名加入成员。仅 owner/member 可访问动态回忆。</p>
-    <div class="grid entry">
-      <article class="card"><label>空间名称</label><input id="spaceName" placeholder="例如 我们的回忆空间" /><label>开始日期</label><input id="spaceDate" placeholder="YYYY-MM-DD，可留空"/><label>主题</label><input id="spaceTheme" placeholder="例如 春分与晚风"/><div style="margin-top:10px"><button id="createSpaceBtn" class="btn" type="button">创建空间</button></div></article>
-      <article class="card"><label>空间ID</label><input id="memberSpaceId" placeholder="例如 1"/><label>用户名</label><input id="memberUsername" placeholder="例如 tx"/><label>角色</label><select id="memberRole"><option value="member">member</option><option value="owner">owner</option></select><div style="margin-top:10px"><button id="bindMemberBtn" class="btn" type="button">绑定成员</button><button id="reloadSpacesBtn" class="btn" type="button">刷新</button></div></article>
-    </div>
-    <div id="modalHint" class="small"></div>
-    <table class="table"><thead><tr><th>空间ID</th><th>名称</th><th>开始日期</th><th>主题</th><th>成员</th></tr></thead><tbody id="spacesBody"></tbody></table>
-  </div></div>
 
   <script>
     const API_BASE = location.port === '8080' ? 'http://localhost:8000' : '/api';
@@ -92,20 +79,10 @@
         return data && data.allowed ? (data.route || '/couple/') : null;
       } catch { return null; }
     }
-    function authHeaders(){ const h={'Content-Type':'application/json'}; const t=token(); if(t) h.Authorization=`Bearer ${t}`; return h; }
-    async function api(path,opt={}){ const r=await fetch(`${API_BASE}${path}`,{...opt,headers:Object.assign(authHeaders(),opt.headers||{})}); const t=await r.text(); let d={}; if(t){ try{d=JSON.parse(t)}catch{d={raw:t}}} if(!r.ok) throw new Error(d.detail||`HTTP ${r.status}`); return d; }
-    function renderSpaces(items){ spacesBody.innerHTML=(items||[]).map(s=>`<tr><td>${s.id}</td><td>${s.name}</td><td>${s.start_date||'-'}</td><td>${s.theme||'-'}</td><td>${(s.members||[]).map(m=>`${m.username}(${m.role})`).join('，')||'暂无'}</td></tr>`).join(''); }
-    async function loadSpaces(){ const d=await api('/v1/admin/couple-spaces'); renderSpaces(d.items||[]); }
-    async function createSpace(){ await api('/v1/admin/couple-spaces',{method:'POST',body:JSON.stringify({name:spaceName.value.trim(),start_date:spaceDate.value.trim()||null,theme:spaceTheme.value.trim()||null})}); modalHint.textContent='空间创建成功'; await loadSpaces(); }
-    async function bindMember(){ await api(`/v1/admin/couple-spaces/${Number(memberSpaceId.value)}/members`,{method:'POST',body:JSON.stringify({username:memberUsername.value.trim(),role:memberRole.value})}); modalHint.textContent='成员绑定成功'; await loadSpaces(); }
     document.addEventListener('DOMContentLoaded', async () => {
       const route = await checkAccess();
       if (!route) { location.replace('/'); return; }
-      document.getElementById('topHeart').addEventListener('click', async () => { coupleModal.classList.add('show'); modalHint.textContent=''; try{ await loadSpaces(); }catch(e){ modalHint.textContent=`加载失败：${e.message}`; }});
-      closeModalBtn.addEventListener('click',()=>coupleModal.classList.remove('show'));
-      createSpaceBtn.addEventListener('click',()=>createSpace().catch((e)=>modalHint.textContent=`创建失败：${e.message}`));
-      bindMemberBtn.addEventListener('click',()=>bindMember().catch((e)=>modalHint.textContent=`绑定失败：${e.message}`));
-      reloadSpacesBtn.addEventListener('click',()=>loadSpaces().catch((e)=>modalHint.textContent=`刷新失败：${e.message}`));
+      document.getElementById('topHeart').addEventListener('click', () => location.assign(route));
     });
   </script>
 </body>
