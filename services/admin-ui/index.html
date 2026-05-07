@@ -492,7 +492,9 @@
       permissions: [],
       features: [],
       logs: [],
-      coupleSpaces: []
+      coupleSpaces: [],
+      coupleRoute: null,
+      coupleSpacesLoadError: ""
     };
 
     const $ = (id) => document.getElementById(id);
@@ -587,10 +589,9 @@
 
     function renderCoupleEntry() {
       const btn = $("coupleEntryBtn");
-      const canTry = Boolean(state.token);
-      btn.classList.toggle("hidden", !canTry);
-      btn.onclick = async () => {
-        const route = await requestCoupleAccess();
+      const route = state.coupleRoute;
+      btn.classList.toggle("hidden", !route);
+      btn.onclick = () => {
         if (route) location.assign(route);
       };
     }
@@ -703,6 +704,14 @@
     }
 
     function renderCoupleSpaces() {
+      if (state.coupleSpacesLoadError) {
+        $("coupleSpacesBody").innerHTML = `
+          <tr>
+            <td colspan="5"><span class="tag danger">Couple 数据加载失败：${escapeHtml(state.coupleSpacesLoadError)}</span></td>
+          </tr>
+        `;
+        return;
+      }
       $("coupleSpacesBody").innerHTML = (state.coupleSpaces || []).map((s) => `
         <tr>
           <td>${s.id}</td>
@@ -717,13 +726,20 @@
     async function loadAll() {
       clearMessage();
       state.me = await api("/v1/auth/me");
-      const [users, roles, permissions, features, logs, coupleSpaces] = await Promise.all([
+      const roles = state.me.roles || [];
+      const permissions = state.me.permissions || [];
+      const isAdmin = roles.includes("admin") || permissions.includes("admin.access");
+      if (!isAdmin) {
+        throw new Error("当前账号没有 admin.access 权限，无法进入管理后台。");
+      }
+      const [users, roles, permissions, features, logs, coupleSpacesResult, coupleRoute] = await Promise.all([
         api("/v1/admin/users"),
         api("/v1/admin/roles"),
         api("/v1/admin/permissions"),
         api("/v1/admin/features"),
         api("/v1/admin/audit-logs"),
-        api("/v1/admin/couple-spaces")
+        api("/v1/admin/couple-spaces").then((data) => ({ ok: true, data })).catch((error) => ({ ok: false, error })),
+        requestCoupleAccess()
       ]);
 
       state.users = users.items || [];
@@ -731,7 +747,14 @@
       state.permissions = permissions.items || [];
       state.features = features.items || [];
       state.logs = logs.items || [];
-      state.coupleSpaces = coupleSpaces.items || [];
+      state.coupleRoute = coupleRoute || null;
+      if (coupleSpacesResult.ok) {
+        state.coupleSpaces = coupleSpacesResult.data.items || [];
+        state.coupleSpacesLoadError = "";
+      } else {
+        state.coupleSpaces = [];
+        state.coupleSpacesLoadError = coupleSpacesResult.error?.message || "未知错误";
+      }
 
       renderAuth();
       renderIdentity();

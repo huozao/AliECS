@@ -2,7 +2,19 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$ROOT_DIR/release-meta.env"
+META_FILE="$ROOT_DIR/release-meta.env"
+if [[ ! -f "$META_FILE" ]]; then
+  echo "[迁移] 找不到配置文件：$META_FILE" >&2
+  exit 1
+fi
+
+# shellcheck disable=SC1090
+source "$META_FILE"
+
+: "${COMPOSE_FILE:?请在 release-meta.env 设置 COMPOSE_FILE}"
+: "${RUNTIME_ENV_FILE:?请在 release-meta.env 设置 RUNTIME_ENV_FILE}"
+: "${POSTGRES_USER:?请在 release-meta.env 设置 POSTGRES_USER}"
+: "${POSTGRES_DB:?请在 release-meta.env 设置 POSTGRES_DB}"
 
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-/opt/app/db/migrations}"
 

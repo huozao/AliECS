@@ -250,6 +250,7 @@ def _has_couple_access(user: dict[str, Any]) -> bool:
         return True
 
     username = str(user.get("username") or user.get("sub") or "").strip().lower()
+    email = str(user.get("email") or "").strip().lower()
     roles = [str(r).lower() for r in user.get("roles", [])]
     if "admin" in roles:
         return True
@@ -259,7 +260,7 @@ def _has_couple_access(user: dict[str, Any]) -> bool:
         return True
 
     allowed_emails = [i.strip().lower() for i in os.getenv("COUPLE_ALLOWED_EMAILS", "").split(",") if i.strip()]
-    if username and username in allowed_emails:
+    if email and email in allowed_emails:
         return True
 
     return False
@@ -322,7 +323,7 @@ class MemoryUpsertRequest(BaseModel):
     longitude: float | None = None
     cover_photo_url: str | None = None
     visibility: str = "private"
-    tags: list[str] = []
+    tags: list[str] = Field(default_factory=list)
 
 
 class LocalPhotoStorage:
@@ -914,6 +915,20 @@ async def upload_photo(
     if not user_id:
         raise HTTPException(status_code=401, detail="invalid user")
     space_id = _resolve_couple_space_id(user_id, couple_space_id)
+    if memory_id is not None:
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT 1
+                    FROM memories
+                    WHERE id = %s AND couple_space_id = %s
+                    LIMIT 1
+                    """,
+                    (memory_id, space_id),
+                )
+                if not cur.fetchone():
+                    raise HTTPException(status_code=400, detail="memory_id not in current couple space")
     saved = await LocalPhotoStorage().save(file)
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
