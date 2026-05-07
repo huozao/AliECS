@@ -493,7 +493,8 @@
       features: [],
       logs: [],
       coupleSpaces: [],
-      coupleRoute: null
+      coupleRoute: null,
+      coupleSpacesLoadError: ""
     };
 
     const $ = (id) => document.getElementById(id);
@@ -703,6 +704,14 @@
     }
 
     function renderCoupleSpaces() {
+      if (state.coupleSpacesLoadError) {
+        $("coupleSpacesBody").innerHTML = `
+          <tr>
+            <td colspan="5"><span class="tag danger">Couple 数据加载失败：${escapeHtml(state.coupleSpacesLoadError)}</span></td>
+          </tr>
+        `;
+        return;
+      }
       $("coupleSpacesBody").innerHTML = (state.coupleSpaces || []).map((s) => `
         <tr>
           <td>${s.id}</td>
@@ -723,13 +732,13 @@
       if (!isAdmin) {
         throw new Error("当前账号没有 admin.access 权限，无法进入管理后台。");
       }
-      const [users, roles, permissions, features, logs, coupleSpaces, coupleRoute] = await Promise.all([
+      const [users, roles, permissions, features, logs, coupleSpacesResult, coupleRoute] = await Promise.all([
         api("/v1/admin/users"),
         api("/v1/admin/roles"),
         api("/v1/admin/permissions"),
         api("/v1/admin/features"),
         api("/v1/admin/audit-logs"),
-        api("/v1/admin/couple-spaces"),
+        api("/v1/admin/couple-spaces").then((data) => ({ ok: true, data })).catch((error) => ({ ok: false, error })),
         requestCoupleAccess()
       ]);
 
@@ -738,8 +747,14 @@
       state.permissions = permissions.items || [];
       state.features = features.items || [];
       state.logs = logs.items || [];
-      state.coupleSpaces = coupleSpaces.items || [];
       state.coupleRoute = coupleRoute || null;
+      if (coupleSpacesResult.ok) {
+        state.coupleSpaces = coupleSpacesResult.data.items || [];
+        state.coupleSpacesLoadError = "";
+      } else {
+        state.coupleSpaces = [];
+        state.coupleSpacesLoadError = coupleSpacesResult.error?.message || "未知错误";
+      }
 
       renderAuth();
       renderIdentity();
