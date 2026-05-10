@@ -526,10 +526,17 @@
       const headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
       if (state.token) headers.Authorization = `Bearer ${state.token}`;
 
-      const resp = await fetch(`${API_BASE}${path}`, {
-        ...options,
-        headers
-      });
+      let resp;
+      try {
+        resp = await fetch(`${API_BASE}${path}`, {
+          ...options,
+          headers
+        });
+      } catch (error) {
+        const isHttps = location.protocol === "https:";
+        const hint = isHttps ? "HTTPS 链路异常，请先改用 http:// 访问，或先修复 443 反向代理。" : "网络请求失败，请检查 API 与反向代理。";
+        throw new Error(`${hint} (${error instanceof Error ? error.message : "network error"})`);
+      }
 
       let data = null;
       const text = await resp.text();
