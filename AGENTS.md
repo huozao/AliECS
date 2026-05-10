@@ -152,3 +152,13 @@ Codex 完成任务后，应说明：
 - 出问题时如何回退
 
 说明应基于实际修改内容，不写空泛总结。
+
+
+## ECS 默认部署路径约定（重要）
+
+为避免自动部署与手工部署路径不一致，默认约定 ECS 项目目录为：`/root/AliECS`。
+
+- `deploy/ecs/release-meta.env` 中 `APP_ROOT`、`COMPOSE_FILE`、`RUNTIME_ENV_FILE`、`METADATA_DIR`、`MIGRATIONS_DIR` 应与 `/root/AliECS` 保持一致。
+- 如果实际部署目录不是 `/root/AliECS`（例如 `/opt/app`），必须在变更说明中明确写出，并同步更新部署文档/脚本引用路径。
+- 任何 CI/CD 或脚本改动，优先保证 `/root/AliECS` 路径开箱可用。
+
