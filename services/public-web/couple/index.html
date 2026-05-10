@@ -19,10 +19,12 @@
     .card{padding:16px}.label{font-size:13px;color:#876e5f}.value{font-size:28px;font-weight:750;margin-top:7px}
     .entry .card{min-height:90px;display:flex;align-items:center;color:#6f5d50}
     .memory .card h3{margin:0 0 4px}.small{font-size:13px;color:var(--muted)}
+    .hidden{display:none!important}
   </style>
 </head>
 <body>
-  <div class="wrap">
+  <div id="booting" style="padding:28px 18px;color:#7c6b5d;">正在验证访问权限...</div>
+  <div id="protectedApp" class="wrap hidden">
     <header class="topbar">
       <div>
         <h2 style="margin:0;font-size:30px">两个人的记忆地图</h2>
@@ -82,6 +84,8 @@
     document.addEventListener('DOMContentLoaded', async () => {
       const route = await checkAccess();
       if (!route) { location.replace('/'); return; }
+      document.getElementById('booting').classList.add('hidden');
+      document.getElementById('protectedApp').classList.remove('hidden');
       document.getElementById('topHeart').addEventListener('click', () => location.assign(route));
     });
   </script>
