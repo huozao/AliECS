@@ -33,7 +33,8 @@ docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" up -d postgres
 
 echo "[迁移] 等待 postgres 就绪"
 for ((i=1; i<=30; i++)); do
-  if docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" exec -T postgres     pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
+  if docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" exec -T postgres \
+    pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
     echo "[迁移] postgres 已就绪"
     break
   fi
@@ -46,6 +47,23 @@ for ((i=1; i<=30; i++)); do
   sleep 2
 done
 
+run_psql_file() {
+  local sql_file="$1"
+  local retries=5
+  local delay=2
+  for ((attempt=1; attempt<=retries; attempt++)); do
+    if docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" exec -T postgres \
+      psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 < "$sql_file"; then
+      return 0
+    fi
+    if (( attempt == retries )); then
+      return 1
+    fi
+    echo "[迁移] psql 连接失败，${delay}s 后重试（${attempt}/${retries}）"
+    sleep "$delay"
+  done
+}
+
 echo "[迁移] 执行 $MIGRATIONS_DIR 下的 SQL"
 shopt -s nullglob
 sql_files=("$MIGRATIONS_DIR"/*.sql)
@@ -56,8 +74,7 @@ fi
 
 for sql in "${sql_files[@]}"; do
   echo "[迁移] 应用 $sql"
-  docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" exec -T postgres \
-    psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 < "$sql"
+  run_psql_file "$sql"
 done
 
 echo "[迁移] 完成"
