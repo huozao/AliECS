@@ -739,7 +739,7 @@
       if (!isAdmin) {
         throw new Error("当前账号没有 admin.access 权限，无法进入管理后台。");
       }
-      const [users, roles, permissions, features, logs, coupleSpacesResult, coupleRoute] = await Promise.all([
+      const [usersResp, rolesResp, permissionsResp, featuresResp, logsResp, coupleSpacesResult, coupleRoute] = await Promise.all([
         api("/v1/admin/users"),
         api("/v1/admin/roles"),
         api("/v1/admin/permissions"),
@@ -749,11 +749,11 @@
         requestCoupleAccess()
       ]);
 
-      state.users = users.items || [];
-      state.roles = roles.items || [];
-      state.permissions = permissions.items || [];
-      state.features = features.items || [];
-      state.logs = logs.items || [];
+      state.users = usersResp.items || [];
+      state.roles = rolesResp.items || [];
+      state.permissions = permissionsResp.items || [];
+      state.features = featuresResp.items || [];
+      state.logs = logsResp.items || [];
       state.coupleRoute = coupleRoute || null;
       if (coupleSpacesResult.ok) {
         state.coupleSpaces = coupleSpacesResult.data.items || [];
