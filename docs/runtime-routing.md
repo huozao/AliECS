@@ -27,6 +27,7 @@
 1. 直接请求 `https://hydwang.xyz/v1/auth/login`（缺少 `/api`）会导致 404/503/网关错误。
 2. 仅验证页面能打开，不验证 `/api/*` 接口可用。
 3. 把本地直连路径（如 `http://localhost:8000/v1/*`）当成公网路径。
+4. 公网环境继续使用 `http://hydwang.xyz` 导致跳转或证书策略不一致；对外入口应统一使用 `https://hydwang.xyz`。
 
 ## 4. 发布后最小验证（建议复制执行）
 
@@ -37,4 +38,3 @@ curl -fsS https://hydwang.xyz/api/v1/ping
 ```
 
 如需验证登录，请仅使用测试账号，不要在日志或提交中打印密码。
-
