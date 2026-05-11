@@ -136,6 +136,12 @@ docker compose -f local/docker-compose.local.yml config
 
 涉及前端、后端或镜像构建时，优先使用项目已有 CI、构建或测试命令。
 
+前端页面（尤其是 `services/admin-ui/index.html` 这类内联脚本）修改后，必须额外做“前端可执行性验证”：
+
+- 至少检查是否存在明显 JS 语法/作用域错误（例如重复 `const` 声明、未定义变量、脚本解析报错）。
+- 至少执行一次登录或核心入口的 smoke 流程，确认点击事件能够触发网络请求（不是只看到页面能打开）。
+- 若当前环境无法跑浏览器自动化，必须在结果中明确说明“未完成浏览器侧验证”的影响和补救动作。
+
 如果无法执行验证，必须在结果说明中明确写出未验证原因。
 
 ## 输出要求
@@ -152,3 +158,13 @@ Codex 完成任务后，应说明：
 - 出问题时如何回退
 
 说明应基于实际修改内容，不写空泛总结。
+
+
+## ECS 默认部署路径约定（重要）
+
+为避免自动部署与手工部署路径不一致，默认约定 ECS 项目目录为：`/root/AliECS`。
+
+- `deploy/ecs/release-meta.env` 中 `APP_ROOT`、`COMPOSE_FILE`、`RUNTIME_ENV_FILE`、`METADATA_DIR`、`MIGRATIONS_DIR` 应与 `/root/AliECS` 保持一致。
+- 如果实际部署目录不是 `/root/AliECS`（例如 `/opt/app`），必须在变更说明中明确写出，并同步更新部署文档/脚本引用路径。
+- 任何 CI/CD 或脚本改动，优先保证 `/root/AliECS` 路径开箱可用。
+

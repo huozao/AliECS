@@ -116,4 +116,15 @@ jobs:
           script: |
             export GHCR_USERNAME="${GHCR_USERNAME:-}"
             export GHCR_TOKEN="${GHCR_TOKEN:-}"
-            /opt/app/deploy/ecs/deploy.sh ${{ steps.vars.outputs.release_version }}
+
+            if [[ -x "/opt/app/deploy/ecs/deploy.sh" ]]; then
+              DEPLOY_SCRIPT="/opt/app/deploy/ecs/deploy.sh"
+            elif [[ -x "/root/AliECS/deploy/ecs/deploy.sh" ]]; then
+              DEPLOY_SCRIPT="/root/AliECS/deploy/ecs/deploy.sh"
+            else
+              echo "[部署] 未找到 deploy.sh。请确认 ECS 代码目录（例如 /opt/app 或 /root/AliECS）。" >&2
+              exit 1
+            fi
+
+            echo "[部署] 使用脚本: ${DEPLOY_SCRIPT}"
+            "${DEPLOY_SCRIPT}" ${{ steps.vars.outputs.release_version }}
