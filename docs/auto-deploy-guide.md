@@ -5,8 +5,8 @@
 ## 1. 当前现状（基于仓库）
 
 ### 1.1 已有 GitHub Actions
-- `ci.yml`：在 PR/`main` push 时做 Python 语法、Shell 语法、compose 配置检查、以及本地镜像构建检查。
-- `release-deploy.yml`：在 `v*` tag（或手工 workflow_dispatch）触发时，构建并推送 3 个业务镜像到 GHCR，然后 SSH 到 ECS 执行 `/opt/app/deploy/ecs/deploy.sh <tag>`。
+- `ci.yml`：仅在 PR 事件触发检查（opened/synchronize/reopened/ready_for_review），并启用并发互斥取消旧任务，减少反复提交导致的重复运行。
+- `release-deploy.yml`：在 `V*` tag（或手工 workflow_dispatch）触发时，构建并推送 3 个业务镜像到 GHCR，然后 SSH 到 ECS 执行 `/opt/app/deploy/ecs/deploy.sh <tag>`。
 
 ### 1.2 已有部署脚本链
 - `deploy.sh`：拉镜像 -> 迁移 -> 切换 -> 健康检查 -> 失败回滚。
@@ -31,7 +31,7 @@
 ```mermaid
 flowchart LR
     A[本地开发与验证\nlocal docker compose] --> B[push 到 GitHub main]
-    B --> C[创建版本 tag: vX.Y.Z]
+    B --> C[创建版本 tag: VYYYYMMDDNNN]
     C --> D[GitHub Actions release-deploy]
     D --> E[构建镜像并推送 GHCR\npublic-web/admin-ui/backend-api]
     E --> F[SSH 到 ECS 执行 deploy.sh <tag>]
@@ -98,7 +98,7 @@ flowchart LR
 2. 准备 `/opt/app` 并拉取仓库。
 3. 复制 `release-meta.env.example -> release-meta.env`，改强密码。
 4. 在 GitHub 配置 `ECS_HOST/ECS_USER/ECS_SSH_KEY`。
-5. 本机或 ECS 手工跑一次：`./deploy/ecs/deploy.sh vX.Y.Z`。
+5. 本机或 ECS 手工跑一次：`./deploy/ecs/deploy.sh VYYYYMMDDNNN`。
 6. 验证：`./deploy/ecs/healthcheck.sh`。
 
 详细命令见：`docs/ecs-first-deploy-checklist.md`。
@@ -107,8 +107,8 @@ flowchart LR
 
 ## 8. 日常更新部署（推荐）
 1. 本地开发并合入 `main`。
-2. **触发方式 A（推荐）**：打 tag `vX.Y.Z` 并 push，自动部署该 tag。
-3. **触发方式 B（手工）**：在 Actions 页面 `workflow_dispatch` 输入 `image_tag`（必须 `v*`）。
+2. **触发方式 A（推荐）**：打 tag `VYYYYMMDDNNN` 并 push，自动部署该 tag。
+3. **触发方式 B（手工）**：在 Actions 页面 `workflow_dispatch` 输入 `release_version`（必须 `VYYYYMMDDNNN`）。
 4. 等待 Actions 执行发布。
 5. 查看 ECS 健康检查与日志。
 
@@ -155,7 +155,7 @@ cd /opt/app
 ---
 
 ## 13. 过渡方案说明（还不适合全自动的场景）
-- 若暂时不想用 tag，可先用 `workflow_dispatch` 手工触发 `release-deploy.yml` 并填写 `image_tag`。
+- 若暂时不想用 tag，可先用 `workflow_dispatch` 手工触发 `release-deploy.yml` 并填写 `release_version`（`VYYYYMMDDNNN`）。
 - 若网络/权限限制导致 GHCR 无法拉取，可临时使用 `auto-sync.sh`（ECS 拉源码 build），但应视为过渡，不是长期生产主路径。
 
 ---

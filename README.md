@@ -26,7 +26,7 @@ docker compose -f local/docker-compose.local.yml up --build
 
 
 ## 自动化部署与日志
-- **主路径（推荐）**：`v*` tag 触发 `.github/workflows/release-deploy.yml`，Actions 构建并推送 GHCR 镜像后，SSH 到 ECS 执行 `deploy/ecs/deploy.sh <tag>`。
+- **主路径（推荐）**：`V*` tag 触发 `.github/workflows/release-deploy.yml`，Actions 构建并推送 GHCR 镜像后，SSH 到 ECS 执行 `deploy/ecs/deploy.sh <tag>`。
 - **过渡路径（可选）**：ECS 侧 `deploy/ecs/auto-sync.sh` 可做“拉代码 + 重建 + 健康检查”的一次性自动化。
 - **镜像命名规范**：
   - `ghcr.io/<owner>/public-web:<tag>`
@@ -40,13 +40,16 @@ docker compose -f local/docker-compose.local.yml up --build
   - `ECS_HOST` / `ECS_USER` / `ECS_SSH_KEY`
   - 私有 GHCR 推荐再配：`GHCR_USERNAME` / `GHCR_TOKEN`（`read:packages`）
 - **触发方式差异**：
-  - `git tag vX.Y.Z && git push origin vX.Y.Z`：正式发布（推荐）
-  - `workflow_dispatch`：手工重试/补部署（必须输入 `image_tag` 且格式为 `v*`）
+  - `git tag VYYYYMMDDNNN && git push origin VYYYYMMDDNNN`：正式发布（推荐）
+  - `workflow_dispatch`：手工重试/补部署（必须输入版本号，仅支持 `VYYYYMMDDNNN`）
 - **主页设计依据**：`DESIGN.md`（参考 VoltAgent/awesome-design-md 的 Claude 设计语言，非像素级复制）。
 - **详细文档**：
-  - 自动部署总说明：`docs/auto-deploy-guide.md`
-  - ECS 首次部署清单：`docs/ecs-first-deploy-checklist.md`
-  - ECS 运维记录模板：`docs/ecs-operation-record-template.md`
+- 自动部署总说明：`docs/auto-deploy-guide.md`
+- ECS 首次部署清单：`docs/ecs-first-deploy-checklist.md`
+- ECS 运维记录模板：`docs/ecs-operation-record-template.md`
+- 线上路由映射：`docs/runtime-routing.md`
+- 环境变量矩阵：`docs/env-matrix.md`
+- 安全基线：`docs/security-baseline.md`
 
 ## 入口导航
 - 架构边界：`docs/architecture-boundaries.md`

@@ -21,14 +21,33 @@ from pydantic import BaseModel, Field
 
 app = FastAPI(title="AliECS Backend API", version="0.4.0")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
+def _cors_origins() -> list[str]:
+    defaults = [
         "http://localhost:8080",
         "http://localhost:8081",
         "http://127.0.0.1:8080",
         "http://127.0.0.1:8081",
-    ],
+        "https://localhost:8080",
+        "https://localhost:8081",
+        "https://127.0.0.1:8080",
+        "https://127.0.0.1:8081",
+    ]
+    origins = {x.strip() for x in defaults if x.strip()}
+
+    app_base = os.getenv("APP_BASE_URL", "").strip()
+    if app_base:
+        origins.add(app_base.rstrip("/"))
+
+    extra = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()
+    if extra:
+        origins.update({x.strip().rstrip("/") for x in extra.split(",") if x.strip()})
+
+    return sorted(origins)
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins(),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
