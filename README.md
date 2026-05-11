@@ -26,7 +26,7 @@ docker compose -f local/docker-compose.local.yml up --build
 
 
 ## 自动化部署与日志
-- **主路径（推荐）**：`v*` tag 触发 `.github/workflows/release-deploy.yml`，Actions 构建并推送 GHCR 镜像后，SSH 到 ECS 执行 `deploy/ecs/deploy.sh <tag>`。
+- **主路径（推荐）**：`V*` tag 触发 `.github/workflows/release-deploy.yml`，Actions 构建并推送 GHCR 镜像后，SSH 到 ECS 执行 `deploy/ecs/deploy.sh <tag>`。
 - **过渡路径（可选）**：ECS 侧 `deploy/ecs/auto-sync.sh` 可做“拉代码 + 重建 + 健康检查”的一次性自动化。
 - **镜像命名规范**：
   - `ghcr.io/<owner>/public-web:<tag>`
@@ -34,14 +34,14 @@ docker compose -f local/docker-compose.local.yml up --build
   - `ghcr.io/<owner>/backend-api:<tag>`
 - **日志查看**：
   - Actions 发布日志：GitHub Actions 页面（工作流：`发布并部署`）
-  - ECS 发布日志：`/opt/app/deploy/ecs/logs/deploy-YYYYMMDD.log`
-  - 容器运行日志：`docker compose --env-file /opt/app/deploy/ecs/runtime.env -f /opt/app/deploy/ecs/compose.prod.yml logs --tail=200`
+  - ECS 发布日志：`/root/AliECS/deploy/ecs/logs/deploy-YYYYMMDD.log`
+  - 容器运行日志：`docker compose --env-file /root/AliECS/deploy/ecs/runtime.env -f /root/AliECS/deploy/ecs/compose.prod.yml logs --tail=200`
 - **GitHub Secrets（自动部署必需）**：
   - `ECS_HOST` / `ECS_USER` / `ECS_SSH_KEY`
   - 私有 GHCR 推荐再配：`GHCR_USERNAME` / `GHCR_TOKEN`（`read:packages`）
 - **触发方式差异**：
-  - `git tag vX.Y.Z && git push origin vX.Y.Z`：正式发布（推荐）
-  - `workflow_dispatch`：手工重试/补部署（必须输入 `image_tag` 且格式为 `v*`）
+  - `git tag VYYYYMMDDNNN && git push origin VYYYYMMDDNNN`：正式发布（推荐）
+  - `workflow_dispatch`：手工重试/补部署（必须输入版本号，仅支持 `VYYYYMMDDNNN`）
 - **主页设计依据**：`DESIGN.md`（参考 VoltAgent/awesome-design-md 的 Claude 设计语言，非像素级复制）。
 - **详细文档**：
 - 自动部署总说明：`docs/auto-deploy-guide.md`
@@ -88,5 +88,5 @@ docker compose -f local/docker-compose.local.yml up --build
 - 白名单：
   - `COUPLE_ALLOWED_USERS=admin,wh,tx`（按 username/sub 匹配，逗号分隔）
   - `COUPLE_ALLOWED_EMAILS=user1@example.com,user2@example.com`（逗号分隔，可留空）
-- 生产应修改：`/opt/app/deploy/ecs/release-meta.env`，不要长期直接改 `runtime.env`。
+- 生产应修改：`/root/AliECS/deploy/ecs/release-meta.env`，不要长期直接改 `runtime.env`。
 - `deploy/ecs/deploy.sh` 每次发布会把 `release-meta.env` 中的 `COUPLE_*` 写入 `runtime.env` 并注入 `backend-api` 容器。

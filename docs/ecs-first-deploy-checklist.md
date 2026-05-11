@@ -201,17 +201,17 @@ git push origin v0.1.0
 
 ## 13) 触发方式说明（tag vs workflow_dispatch）
 - **tag 触发（推荐）**：
-  - 命令：`git tag vX.Y.Z && git push origin vX.Y.Z`
+  - 命令：`git tag VYYYYMMDDNNN && git push origin VYYYYMMDDNNN`
   - 特点：版本语义清晰，适合正式发布。
 - **workflow_dispatch（手工）**：
   - 在 Actions 页面手工启动 `发布并部署`。
-  - 必须输入 `image_tag`，且格式必须为 `v*`（例如 `v0.1.0`）。
+  - 必须输入 `release_version`，且格式必须为 `VYYYYMMDDNNN`（例如 `V20260512049`）。
   - 适合补部署、重试、回放同一版本。
 
 ## 14) 日常更新部署（以后）
 1. 本地改代码 -> 合并到 `main`。
-2. 打新 tag：`vX.Y.Z`。
-3. `git push origin vX.Y.Z`。
+2. 打新 tag：`VYYYYMMDDNNN`。
+3. `git push origin VYYYYMMDDNNN`。
 4. 观察 Actions + ECS 健康检查。
 
 ---
