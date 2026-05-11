@@ -16,7 +16,7 @@ source "$META_FILE"
 : "${POSTGRES_USER:?请在 release-meta.env 设置 POSTGRES_USER}"
 : "${POSTGRES_DB:?请在 release-meta.env 设置 POSTGRES_DB}"
 
-MIGRATIONS_DIR="${MIGRATIONS_DIR:-/opt/app/db/migrations}"
+MIGRATIONS_DIR="${MIGRATIONS_DIR:-/root/AliECS/db/migrations}"
 
 if [[ ! -f "$RUNTIME_ENV_FILE" ]]; then
   echo "[迁移] 找不到运行时环境文件：$RUNTIME_ENV_FILE" >&2
