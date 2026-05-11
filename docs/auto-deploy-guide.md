@@ -5,7 +5,7 @@
 ## 1. 当前现状（基于仓库）
 
 ### 1.1 已有 GitHub Actions
-- `ci.yml`：在 PR/`main` push 时做 Python 语法、Shell 语法、compose 配置检查、以及本地镜像构建检查。
+- `ci.yml`：仅在 PR 事件触发检查（opened/synchronize/reopened/ready_for_review），并启用并发互斥取消旧任务，减少反复提交导致的重复运行。
 - `release-deploy.yml`：在 `v*` tag（或手工 workflow_dispatch）触发时，构建并推送 3 个业务镜像到 GHCR，然后 SSH 到 ECS 执行 `/opt/app/deploy/ecs/deploy.sh <tag>`。
 
 ### 1.2 已有部署脚本链

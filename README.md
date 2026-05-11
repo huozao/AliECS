@@ -44,9 +44,12 @@ docker compose -f local/docker-compose.local.yml up --build
   - `workflow_dispatch`：手工重试/补部署（必须输入 `image_tag` 且格式为 `v*`）
 - **主页设计依据**：`DESIGN.md`（参考 VoltAgent/awesome-design-md 的 Claude 设计语言，非像素级复制）。
 - **详细文档**：
-  - 自动部署总说明：`docs/auto-deploy-guide.md`
-  - ECS 首次部署清单：`docs/ecs-first-deploy-checklist.md`
-  - ECS 运维记录模板：`docs/ecs-operation-record-template.md`
+- 自动部署总说明：`docs/auto-deploy-guide.md`
+- ECS 首次部署清单：`docs/ecs-first-deploy-checklist.md`
+- ECS 运维记录模板：`docs/ecs-operation-record-template.md`
+- 线上路由映射：`docs/runtime-routing.md`
+- 环境变量矩阵：`docs/env-matrix.md`
+- 安全基线：`docs/security-baseline.md`
 
 ## 入口导航
 - 架构边界：`docs/architecture-boundaries.md`
