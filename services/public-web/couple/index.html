@@ -4,15 +4,19 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Couple Memory</title>
+  <meta name="description" content="Couple Memory 私密双人记忆空间：时间线、地图足迹、相册与纪念日。" />
+  <link rel="canonical" href="https://www.hydwang.xyz/couple/" />
   <style>
     :root{--bg:#f8f4ec;--card:#fffdfa;--text:#2f2721;--muted:#7c6b5d;--line:#ecdfd2;--primary:#8c5f6a;--shadow:0 10px 28px rgba(93,71,52,.08)}
     *{box-sizing:border-box} body{margin:0;background:linear-gradient(145deg,#f9f4ea,#f7f1f7 55%,#fffdfa);color:var(--text);font-family:ui-sans-serif,system-ui}
     .wrap{max-width:1140px;margin:0 auto;padding:24px 18px 52px}
     .topbar{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;background:rgba(255,253,248,.92);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:20px;padding:16px 20px;margin-bottom:18px}
     .top-actions{display:flex;gap:8px;flex-wrap:wrap}.btn{border:0;border-radius:999px;padding:9px 13px;background:#e9dfd0;color:var(--text);text-decoration:none;font-weight:650}
+    .user-chip{border-radius:999px;padding:8px 12px;background:#f5ebe1;color:#674b39;font-size:13px;font-weight:700}
     .heart{background:transparent;color:rgba(164,98,127,.72)}
     .hero,.card{background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px}
     .hero{padding:22px;margin-bottom:14px}.hero h1{margin:0 0 10px;font-size:34px}.hero p{margin:0;color:var(--muted);line-height:1.8}
+    .host-note{margin-top:12px;padding:10px 12px;background:#fff7f0;border:1px dashed #e5cdb8;border-radius:12px;color:#7a5f48;font-size:13px}
     .grid{display:grid;gap:12px}.kpi{grid-template-columns:repeat(auto-fit,minmax(250px,1fr));margin:0 0 14px}
     .entry{grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin:0 0 14px}
     .memory{grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin:0 0 14px}
@@ -29,9 +33,10 @@
       <div>
         <h2 style="margin:0;font-size:30px">两个人的记忆地图</h2>
         <p style="margin:8px 0 0;color:var(--muted)">把照片、文字、地点和时间，整理成只属于我们的故事。</p>
+        <div class="host-note">推荐入口：<strong>https://www.hydwang.xyz/couple/</strong>（HTTPS + 登录鉴权）</div>
       </div>
       <nav class="top-actions">
-        <a class="btn" href="/">首页</a><a class="btn" href="/admin/">Admin UI</a><a class="btn" href="/api/healthz" target="_blank">API Health</a><a class="btn" href="https://github.com/huozao/AliECS" target="_blank">GitHub</a><button id="topHeart" class="btn heart" type="button">💗</button>
+        <span id="userChip" class="user-chip hidden">用户：-</span><a class="btn" href="/">首页</a><a class="btn" href="/admin/">Admin UI</a><a class="btn" href="/api/healthz" target="_blank">API Health</a><a class="btn" href="https://github.com/huozao/AliECS" target="_blank">GitHub</a><button id="topHeart" class="btn heart" type="button">💗</button>
       </nav>
     </header>
 
@@ -55,6 +60,20 @@
     </section>
 
     <section class="grid memory">
+      <article class="card">
+        <h3>快速发布回忆</h3>
+        <div class="small">填写标题、内容、日期与地点，可附带上传图片；保存后会展示在下方案例中。</div>
+        <form id="memoryForm" style="margin-top:12px;display:grid;gap:8px;">
+          <input id="mTitle" required placeholder="标题（例如：第一次看海）" />
+          <textarea id="mContent" rows="4" placeholder="写下这段回忆内容..."></textarea>
+          <input id="mDate" type="date" />
+          <input id="mPlace" placeholder="地点（例如：杭州西湖）" />
+          <input id="mTags" placeholder="标签，逗号分隔（例如：旅行,日落）" />
+          <input id="mPhoto" type="file" accept="image/*" />
+          <button class="btn" type="submit">发布回忆</button>
+        </form>
+        <div id="publishHint" class="small" style="margin-top:8px;"></div>
+      </article>
       <article class="card"><h3>初秋散步</h3><div class="small">2025-09-12 · 杭州西湖</div><p>晚风很轻，我们沿着湖边走了很久。</p></article>
       <article class="card"><h3>第一次旅行</h3><div class="small">2025-11-22 · 宁波象山</div><p>看日落时你说，想把今天记一辈子。</p></article>
       <article class="card"><h3>跨年夜</h3><div class="small">2025-12-31 · 上海外滩</div><p>人群很吵，但拥抱的时候很安静。</p></article>
@@ -64,12 +83,54 @@
       <article class="card">地图预览（下一阶段接 Leaflet）</article>
       <article class="card">时间线预览（下一阶段接真实 API）</article>
     </section>
+    <section class="grid memory" id="recentMemories"></section>
   </div>
 
+  <script src="/common/user-badge.js"></script>
   <script>
-    const API_BASE = location.port === '8080' ? 'http://localhost:8000' : '/api';
-    const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
-    const token = () => AUTH_KEYS.map((k)=>localStorage.getItem(k)||'').find(Boolean) || '';
+    const API_BASE = window.AliECSAuth.API_BASE;
+    const EXPECTED_HOSTS = new Set(['www.hydwang.xyz', 'hydwang.xyz', 'localhost']);
+    const token = () => window.AliECSAuth.getToken();
+    async function loadRecentMemories(){
+      const t = token();
+      const r = await fetch(`${API_BASE}/v1/memories?page=1&page_size=6`, {headers:{Authorization:`Bearer ${t}`}});
+      if (!r.ok) return [];
+      const d = await r.json();
+      return d.items || [];
+    }
+    function renderRecent(items){
+      const box = document.getElementById('recentMemories');
+      if (!items.length) {
+        box.innerHTML = `<article class="card"><h3>暂无真实回忆</h3><div class="small">请先通过上方表单发布第一条 couple 回忆。</div></article>`;
+        return;
+      }
+      box.innerHTML = items.map((x)=>`<article class="card"><h3>${x.title||'未命名回忆'}</h3><div class="small">${x.memory_date||'未设置日期'} · ${x.place_name||'未设置地点'}</div><p>${x.content||''}</p></article>`).join('');
+    }
+    async function submitMemory(ev){
+      ev.preventDefault();
+      const hint = document.getElementById('publishHint');
+      hint.textContent = '正在发布...';
+      const body = {
+        title: document.getElementById('mTitle').value.trim(),
+        content: document.getElementById('mContent').value.trim() || null,
+        memory_date: document.getElementById('mDate').value || null,
+        place_name: document.getElementById('mPlace').value.trim() || null,
+        visibility: 'private',
+        tags: (document.getElementById('mTags').value || '').split(',').map(x=>x.trim()).filter(Boolean),
+      };
+      const t = token();
+      const cr = await fetch(`${API_BASE}/v1/memories`, {method:'POST', headers:{'Content-Type':'application/json', Authorization:`Bearer ${t}`}, body:JSON.stringify(body)});
+      if (!cr.ok) { hint.textContent = '发布失败，请检查登录状态与输入。'; return; }
+      const created = await cr.json();
+      const f = document.getElementById('mPhoto').files[0];
+      if (f && created.id) {
+        const fd = new FormData(); fd.append('file', f);
+        await fetch(`${API_BASE}/v1/photos/upload?memory_id=${created.id}`, {method:'POST', headers:{Authorization:`Bearer ${t}`}, body:fd});
+      }
+      hint.textContent = '发布成功，已刷新案例列表。';
+      ev.target.reset();
+      renderRecent(await loadRecentMemories());
+    }
     async function checkAccess(){
       try {
         const headers = {'Content-Type':'application/json'};
@@ -82,11 +143,21 @@
       } catch { return null; }
     }
     document.addEventListener('DOMContentLoaded', async () => {
+      if (!EXPECTED_HOSTS.has(location.hostname) && location.protocol.startsWith('http')) {
+        console.warn('当前域名不在推荐入口列表，建议使用 https://www.hydwang.xyz/couple/ 访问。');
+      }
       const route = await checkAccess();
       if (!route) { location.replace('/'); return; }
+      const me = await window.AliECSAuth.renderUserBadge('userChip', '用户：');
+      if (me && me.sub) {
+        const chip = document.getElementById('userChip');
+        chip.classList.remove('hidden');
+      }
       document.getElementById('booting').classList.add('hidden');
       document.getElementById('protectedApp').classList.remove('hidden');
       document.getElementById('topHeart').addEventListener('click', () => location.assign(route));
+      document.getElementById('memoryForm').addEventListener('submit', submitMemory);
+      renderRecent(await loadRecentMemories());
     });
   </script>
 </body>

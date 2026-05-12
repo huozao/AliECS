@@ -4,10 +4,12 @@ on:
   push:
     branches:
       - main
+    tags:
+      - "V*"
   workflow_dispatch:
     inputs:
       release_version:
-        description: "计划发布版本号（v 开头）"
+        description: "计划发布版本号（VYYYYMMDDNNN）"
         required: false
         type: string
 
@@ -35,11 +37,16 @@ jobs:
           elif [[ -n "${{ inputs.release_version }}" ]]; then
             RELEASE_VERSION="${{ inputs.release_version }}"
           else
-            RELEASE_VERSION="$(tr -d '[:space:]' < VERSION)"
+            YEAR="$(date -u +%Y)"
+            MONTH="$(date -u +%m)"
+            DAY="$(date -u +%d)"
+            SERIAL="$(printf '%03d' "$((GITHUB_RUN_NUMBER % 1000))")"
+            RELEASE_VERSION="V${YEAR}${MONTH}${DAY}${SERIAL}"
+            echo "未提供 release_version，已自动生成：${RELEASE_VERSION}"
           fi
 
-          if [[ ! "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-].+)?$ ]]; then
-            echo "计划发布版本必须是 v 开头的 tag" >&2
+          if [[ ! "$RELEASE_VERSION" =~ ^V[0-9]{11}$ ]]; then
+            echo "计划发布版本格式非法：仅允许 VYYYYMMDDNNN" >&2
             exit 1
           fi
 
@@ -117,12 +124,10 @@ jobs:
             export GHCR_USERNAME="${GHCR_USERNAME:-}"
             export GHCR_TOKEN="${GHCR_TOKEN:-}"
 
-            if [[ -x "/opt/app/deploy/ecs/deploy.sh" ]]; then
-              DEPLOY_SCRIPT="/opt/app/deploy/ecs/deploy.sh"
-            elif [[ -x "/root/AliECS/deploy/ecs/deploy.sh" ]]; then
+            if [[ -x "/root/AliECS/deploy/ecs/deploy.sh" ]]; then
               DEPLOY_SCRIPT="/root/AliECS/deploy/ecs/deploy.sh"
             else
-              echo "[部署] 未找到 deploy.sh。请确认 ECS 代码目录（例如 /opt/app 或 /root/AliECS）。" >&2
+              echo "[部署] 未找到 deploy.sh。请确认 ECS 代码目录为 /root/AliECS。" >&2
               exit 1
             fi
 
