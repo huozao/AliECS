@@ -158,32 +158,38 @@ def _audit(
 
 
 def _user_roles_permissions(user_id: int, is_admin: bool = False) -> tuple[list[str], list[str]]:
-    with closing(_conn()) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT r.code
-                FROM roles r
-                JOIN user_roles ur ON ur.role_id = r.id
-                WHERE ur.user_id = %s
-                ORDER BY r.id
-                """,
-                (user_id,),
-            )
-            roles = [row[0] for row in cur.fetchall()]
+    try:
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT r.code
+                    FROM roles r
+                    JOIN user_roles ur ON ur.role_id = r.id
+                    WHERE ur.user_id = %s
+                    ORDER BY r.id
+                    """,
+                    (user_id,),
+                )
+                roles = [row[0] for row in cur.fetchall()]
 
-            cur.execute(
-                """
-                SELECT DISTINCT p.code
-                FROM permissions p
-                JOIN role_permissions rp ON rp.permission_id = p.id
-                JOIN user_roles ur ON ur.role_id = rp.role_id
-                WHERE ur.user_id = %s
-                ORDER BY p.code
-                """,
-                (user_id,),
-            )
-            permissions = [row[0] for row in cur.fetchall()]
+                cur.execute(
+                    """
+                    SELECT DISTINCT p.code
+                    FROM permissions p
+                    JOIN role_permissions rp ON rp.permission_id = p.id
+                    JOIN user_roles ur ON ur.role_id = rp.role_id
+                    WHERE ur.user_id = %s
+                    ORDER BY p.code
+                    """,
+                    (user_id,),
+                )
+                permissions = [row[0] for row in cur.fetchall()]
+    except Exception:
+        # 兼容旧环境（RBAC 关联表缺失或尚未初始化）：
+        # 允许登录继续，按 is_admin 做最小权限回退。
+        roles = []
+        permissions = []
 
     if is_admin and "admin" not in roles:
         roles.append("admin")
@@ -442,7 +448,11 @@ def auth_login(body: LoginRequest) -> dict[str, Any]:
             )
             row = cur.fetchone()
 
-            if not row or row[4] != "active" or not pwd_ctx.verify(body.password, row[3]):
+            try:
+                verified = bool(row) and row[4] == "active" and pwd_ctx.verify(body.password, row[3])
+            except Exception:
+                verified = False
+            if not verified:
                 raise HTTPException(status_code=401, detail="invalid credentials")
 
             user_id = row[0]
