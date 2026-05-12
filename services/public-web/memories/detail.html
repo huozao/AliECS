@@ -1,14 +1,15 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>回忆详情</title>
 <style>body{font-family:system-ui;background:#f8f4ec;margin:0}.wrap{max-width:980px;margin:0 auto;padding:20px}.card{background:#fff;border:1px solid #eadfcf;border-radius:16px;padding:16px}.btn{display:inline-block;background:#e8dfcf;border-radius:999px;padding:8px 12px;text-decoration:none;color:#222}.muted{color:#7b6d5f}</style></head>
-<body><div class="wrap"><a class="btn" href="/memories/">返回回忆列表</a><p id="hint" class="muted"></p><article class="card"><h1 id="title">回忆详情</h1><div id="meta"></div><p id="content"></p><div id="tags"></div></article></div>
-<script>
+<body><div class="wrap"><div id="userBadge" style="margin:0 0 8px;color:#7b6d5f;font-size:13px"></div><a class="btn" href="/memories/">返回回忆列表</a><p id="hint" class="muted"></p><article class="card"><h1 id="title">回忆详情</h1><div id="meta"></div><p id="content"></p><div id="tags"></div></article></div>
+<script src="/common/user-badge.js"></script><script>
 const API_BASE=location.port==='8080'?'http://localhost:8000':'/api';
 const id=new URLSearchParams(location.search).get('id');
+
 async function load(){
   const tk=localStorage.getItem('portal_token')||''; const h={'Content-Type':'application/json'}; if(tk) h.Authorization=`Bearer ${tk}`;
   const r=await fetch(`${API_BASE}/v1/memories/${id}`,{headers:h}); if(!r.ok) throw new Error();
   const x=await r.json(); title.textContent=x.title; meta.textContent=`${x.memory_date||''} · ${x.place_name||''}`; content.textContent=x.content||''; tags.textContent='标签：'+((x.tags||[]).join('，')||'无');
 }
-(async()=>{try{if(!id) throw new Error(); await load();}catch{hint.textContent='加载失败，请从回忆列表重新进入。';}})();
+(async()=>{try{if(!id) throw new Error(); await window.AliECSAuth.renderUserBadge();load();}catch{hint.textContent='加载失败，请从回忆列表重新进入。';}})();
 </script></body></html>
