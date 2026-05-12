@@ -2,6 +2,8 @@ name: 发布并部署
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "V*"
   workflow_dispatch:
@@ -35,8 +37,12 @@ jobs:
           elif [[ -n "${{ inputs.release_version }}" ]]; then
             RELEASE_VERSION="${{ inputs.release_version }}"
           else
-            echo "未提供 release_version，且当前不是 tag push。" >&2
-            exit 1
+            YEAR="$(date -u +%Y)"
+            MONTH="$(date -u +%m)"
+            DAY="$(date -u +%d)"
+            SERIAL="$(printf '%03d' "$((GITHUB_RUN_NUMBER % 1000))")"
+            RELEASE_VERSION="V${YEAR}${MONTH}${DAY}${SERIAL}"
+            echo "未提供 release_version，已自动生成：${RELEASE_VERSION}"
           fi
 
           if [[ ! "$RELEASE_VERSION" =~ ^V[0-9]{11}$ ]]; then
