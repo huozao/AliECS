@@ -534,7 +534,7 @@
         });
       } catch (error) {
         const isHttps = location.protocol === "https:";
-        const hint = isHttps ? "HTTPS 链路异常，请先改用 http:// 访问，或先修复 443 反向代理。" : "网络请求失败，请检查 API 与反向代理。";
+        const hint = isHttps ? "HTTPS 链路异常，请检查 443 证书、反向代理和 /api 转发配置。" : "网络请求失败，请检查 API 与反向代理。";
         throw new Error(`${hint} (${error instanceof Error ? error.message : "network error"})`);
       }
 
