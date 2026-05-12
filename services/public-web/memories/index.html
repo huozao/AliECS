@@ -19,7 +19,7 @@
   <div id="list"></div>
   <div class="row"><button id="prev" class="btn">上一页</button><span id="pageInfo"></span><button id="next" class="btn">下一页</button></div>
 </div>
-<script>
+<script src="/common/user-badge.js"></script><script>
 const API_BASE = location.port==='8080'?'http://localhost:8000':'/api';
 const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
 const getAuthToken=()=>AUTH_KEYS.map((k)=>localStorage.getItem(k)||'').find(Boolean)||'';
@@ -38,7 +38,6 @@ async function checkCoupleAccess(){
   if(!d || d.allowed!==true) throw new Error('ACCESS_DENIED');
 }
 
-async function loadUserBadge(){const tk=localStorage.getItem('portal_token')||localStorage.getItem('aliecs_auth_token')||localStorage.getItem('admin_token')||'';if(!tk)return;try{const r=await fetch(`${API_BASE}/v1/auth/me`,{headers:{Authorization:`Bearer ${tk}`}});if(!r.ok)return;const u=await r.json();const b=document.getElementById('userBadge');if(b)b.textContent=`当前登录：${u.display_name?`${u.display_name}（${u.sub}）`:u.sub}`;}catch{}}
 async function load(){
   const r=await fetch(`${API_BASE}/v1/memories?page=${page}&page_size=6`,{headers:authHeaders()});
   if(!r.ok){ throw new Error(`MEMORY_${r.status}`); }
@@ -54,7 +53,7 @@ function render(d){
 prev.onclick=()=>{ if(page>1){page--; boot();} };
 next.onclick=()=>{ if(page<totalPages){page++; boot();} };
 async function boot(){
-  try{ hint.textContent=''; await checkCoupleAccess(); await loadUserBadge();load(); }
+  try{ hint.textContent=''; await checkCoupleAccess(); await window.AliECSAuth.renderUserBadge();load(); }
   catch(e){
     const pinned=`<article class='card' style='border-color:#d9b6cc;background:#fff8fc;'><div class='row'><h3 style='margin:0'>${pinnedMemory.title}</h3><a class='btn' href='${pinnedMemory.url}'>进入回忆</a></div><div>${pinnedMemory.date} · ${pinnedMemory.place}</div><p>${pinnedMemory.excerpt}</p></article>`;
     list.innerHTML=pinned;

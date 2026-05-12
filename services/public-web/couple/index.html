@@ -86,18 +86,11 @@
     <section class="grid memory" id="recentMemories"></section>
   </div>
 
+  <script src="/common/user-badge.js"></script>
   <script>
-    const API_BASE = location.port === '8080' ? 'http://localhost:8000' : '/api';
+    const API_BASE = window.AliECSAuth.API_BASE;
     const EXPECTED_HOSTS = new Set(['www.hydwang.xyz', 'hydwang.xyz', 'localhost']);
-    const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
-    const token = () => AUTH_KEYS.map((k)=>localStorage.getItem(k)||'').find(Boolean) || '';
-    async function authMe(){
-      const t = token();
-      if (!t) return null;
-      const r = await fetch(`${API_BASE}/v1/auth/me`, {headers:{Authorization:`Bearer ${t}`}});
-      if (!r.ok) return null;
-      return r.json();
-    }
+    const token = () => window.AliECSAuth.getToken();
     async function loadRecentMemories(){
       const t = token();
       const r = await fetch(`${API_BASE}/v1/memories?page=1&page_size=6`, {headers:{Authorization:`Bearer ${t}`}});
@@ -155,10 +148,9 @@
       }
       const route = await checkAccess();
       if (!route) { location.replace('/'); return; }
-      const me = await authMe();
+      const me = await window.AliECSAuth.renderUserBadge('userChip', '用户：');
       if (me && me.sub) {
         const chip = document.getElementById('userChip');
-        chip.textContent = `用户：${me.display_name ? `${me.display_name}（${me.sub}）` : me.sub}`;
         chip.classList.remove('hidden');
       }
       document.getElementById('booting').classList.add('hidden');
