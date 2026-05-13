@@ -221,17 +221,22 @@ def _bootstrap_admin_if_needed() -> None:
             )
             user_id = cur.fetchone()[0]
 
-            cur.execute("SELECT id FROM roles WHERE code = 'admin'")
-            role_row = cur.fetchone()
-            if role_row:
-                cur.execute(
-                    """
-                    INSERT INTO user_roles(user_id, role_id)
-                    VALUES (%s, %s)
-                    ON CONFLICT DO NOTHING
-                    """,
-                    (user_id, role_row[0]),
-                )
+            try:
+                cur.execute("SELECT id FROM roles WHERE code = 'admin'")
+                role_row = cur.fetchone()
+                if role_row:
+                    cur.execute(
+                        """
+                        INSERT INTO user_roles(user_id, role_id)
+                        VALUES (%s, %s)
+                        ON CONFLICT DO NOTHING
+                        """,
+                        (user_id, role_row[0]),
+                    )
+            except Exception:
+                # 兼容旧环境（roles / user_roles 尚未迁移完成）：
+                # 不阻断管理员账户初始化，登录后由 is_admin 回退授予最小后台权限。
+                pass
 
         conn.commit()
 
