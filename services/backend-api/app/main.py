@@ -55,6 +55,21 @@ app.add_middleware(
 
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+DEFAULT_FEATURES: list[dict[str, Any]] = [
+    {"id": 1, "code": "new_model_form", "title": "新品型号录入表", "description": "新品型号登记", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_4b7094", "category": "业务录入", "required_permission": "production.schedule.write", "status": "active", "sort_order": 10},
+    {"id": 2, "code": "schedule_form", "title": "排产登记表", "description": "排产信息登记", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_e3792e", "category": "业务录入", "required_permission": "production.schedule.write", "status": "active", "sort_order": 20},
+    {"id": 3, "code": "pending_return_alert", "title": "待处理+退货提醒", "description": "待处理与退货提醒", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_4501d0", "category": "业务录入", "required_permission": "production.schedule.read", "status": "active", "sort_order": 30},
+    {"id": 4, "code": "naming_form", "title": "产品命名登记", "description": "产品命名录入", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_a577fc", "category": "业务录入", "required_permission": "formula.write", "status": "active", "sort_order": 40},
+    {"id": 5, "code": "qc_form", "title": "检测数据登记表", "description": "检测数据登记", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_b669cf", "category": "质检", "required_permission": "formula.read", "status": "active", "sort_order": 50},
+    {"id": 6, "code": "density_calculator", "title": "配方密度计算器", "description": "配方密度工具", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_bac993", "category": "质检", "required_permission": "formula.read", "status": "active", "sort_order": 60},
+    {"id": 7, "code": "formula_query", "title": "配方查询", "description": "配方检索入口", "url": None, "category": "业务查询", "required_permission": "formula.read", "status": "reserved", "sort_order": 70},
+    {"id": 8, "code": "midea_requirement", "title": "美的需求", "description": "需求查询入口", "url": None, "category": "业务查询", "required_permission": "midea.requirement.read", "status": "reserved", "sort_order": 80},
+    {"id": 9, "code": "raw_inventory", "title": "原材料库存", "description": "原材料库存入口", "url": None, "category": "业务查询", "required_permission": "inventory.raw.read", "status": "reserved", "sort_order": 90},
+    {"id": 10, "code": "finished_inventory", "title": "成品库存", "description": "成品库存入口", "url": None, "category": "业务查询", "required_permission": "inventory.finished.read", "status": "reserved", "sort_order": 100},
+    {"id": 11, "code": "personal_section", "title": "个人板块", "description": "个人工具入口", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_0c521a", "category": "个人", "required_permission": "personal.access", "status": "active", "sort_order": 110},
+    {"id": 12, "code": "admin_ui", "title": "Admin UI", "description": "管理后台入口", "url": "/admin/", "category": "系统", "required_permission": "admin.access", "status": "active", "sort_order": 120},
+]
+
 
 def _database_url() -> str:
     return os.getenv("DATABASE_URL", "")
@@ -531,17 +546,35 @@ def features(
 
     is_admin = "admin" in user.get("roles", []) or "admin.access" in user.get("permissions", [])
 
-    with closing(_conn()) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, code, title, description, url, category, required_permission, status, sort_order
-                FROM features
-                WHERE status != 'disabled'
-                ORDER BY sort_order ASC, id ASC
-                """
+    try:
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, code, title, description, url, category, required_permission, status, sort_order
+                    FROM features
+                    WHERE status != 'disabled'
+                    ORDER BY sort_order ASC, id ASC
+                    """
+                )
+                rows = cur.fetchall()
+    except Exception:
+        # 兼容迁移尚未完成场景（features 表缺失）：
+        # 首页仍返回 200 与用户态，并回退到默认功能列表，避免首页空白。
+        rows = [
+            (
+                feature["id"],
+                feature["code"],
+                feature["title"],
+                feature["description"],
+                feature["url"],
+                feature["category"],
+                feature["required_permission"],
+                feature["status"],
+                feature["sort_order"],
             )
-            rows = cur.fetchall()
+            for feature in DEFAULT_FEATURES
+        ]
 
     items = []
     for row in rows:
