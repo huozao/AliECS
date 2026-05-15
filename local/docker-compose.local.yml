@@ -18,16 +18,18 @@ services:
   backend-api:
     build: ../services/backend-api
     environment:
-      DATABASE_URL: postgresql://app:app@postgres:5432/app
-      AUTH_TOKEN_SECRET: local-dev-secret-change-in-prod
-      AUTH_TOKEN_TTL_SECONDS: "28800"
-      ADMIN_BOOTSTRAP_USERNAME: admin
-      ADMIN_BOOTSTRAP_PASSWORD: admin123
-      ADMIN_BOOTSTRAP_DISPLAY_NAME: 系统管理员
-      COUPLE_FEATURE_ENABLED: "true"
-      COUPLE_ROUTE: /couple/
-      COUPLE_ALLOWED_USERS: "admin"
-      COUPLE_ALLOWED_EMAILS: ""
+      APP_ENV: ${APP_ENV:-local}
+      ENV: ${APP_ENV:-local}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://app:app@postgres:5432/app}
+      AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET:-local-dev-secret-change-in-prod}
+      AUTH_TOKEN_TTL_SECONDS: ${AUTH_TOKEN_TTL_SECONDS:-28800}
+      ADMIN_BOOTSTRAP_USERNAME: ${ADMIN_BOOTSTRAP_USERNAME:-admin}
+      ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD:-admin123}
+      ADMIN_BOOTSTRAP_DISPLAY_NAME: ${ADMIN_BOOTSTRAP_DISPLAY_NAME:-系统管理员}
+      COUPLE_FEATURE_ENABLED: ${COUPLE_FEATURE_ENABLED:-true}
+      COUPLE_ROUTE: ${COUPLE_ROUTE:-/couple/}
+      COUPLE_ALLOWED_USERS: ${COUPLE_ALLOWED_USERS:-admin}
+      COUPLE_ALLOWED_EMAILS: ${COUPLE_ALLOWED_EMAILS:-}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -42,14 +44,14 @@ services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_USER: app
-      POSTGRES_PASSWORD: app
-      POSTGRES_DB: app
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
+      POSTGRES_DB: ${POSTGRES_DB:-app}
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ../db/migrations:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-app}"]
       interval: 10s
       timeout: 5s
       retries: 10
