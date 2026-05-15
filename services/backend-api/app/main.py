@@ -1504,6 +1504,240 @@ def admin_audit_logs(_: dict[str, Any] = Depends(require_admin)) -> dict[str, An
     }
 
 
+@app.get("/v1/admin/doc-sync/sources")
+def admin_doc_sync_sources(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id, provider, env_profile, source_name, source_type,
+                    external_doc_id, external_sheet_id, source_url, status,
+                    last_sync_at, created_at, updated_at,
+                    (
+                        SELECT COUNT(*)
+                        FROM external_records er
+                        WHERE er.source_id = external_sources.id
+                    ) AS record_count
+                FROM external_sources
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 500
+                """
+            )
+            rows = cur.fetchall()
+
+    return {
+        "items": [
+            {
+                "id": row[0],
+                "provider": row[1],
+                "env_profile": row[2],
+                "source_name": row[3],
+                "source_type": row[4],
+                "external_doc_id": row[5],
+                "external_sheet_id": row[6],
+                "source_url": row[7],
+                "status": row[8],
+                "last_sync_at": str(row[9]) if row[9] else None,
+                "created_at": str(row[10]),
+                "updated_at": str(row[11]),
+                "record_count": row[12],
+                "open_url": row[7] or (
+                    f"https://doc.weixin.qq.com/smartsheet/{row[5]}?sheet_id={row[6]}"
+                    if row[5] and row[6]
+                    else (f"https://doc.weixin.qq.com/smartsheet/{row[5]}" if row[5] else "")
+                ),
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.get("/v1/admin/doc-sync/runs")
+def admin_doc_sync_runs(
+    limit: int = Query(default=100, ge=1, le=500),
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id, provider, env_profile, mode, status, started_at, finished_at,
+                    source_count, sheet_count, record_count, created_count, updated_count,
+                    error_count, error_json
+                FROM sync_runs
+                ORDER BY started_at DESC, id DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            rows = cur.fetchall()
+
+    return {
+        "items": [
+            {
+                "id": row[0],
+                "provider": row[1],
+                "env_profile": row[2],
+                "mode": row[3],
+                "status": row[4],
+                "started_at": str(row[5]),
+                "finished_at": str(row[6]) if row[6] else None,
+                "source_count": row[7],
+                "sheet_count": row[8],
+                "record_count": row[9],
+                "created_count": row[10],
+                "updated_count": row[11],
+                "error_count": row[12],
+                "error_json": row[13],
+            }
+            for row in rows
+        ]
+    }
+
+
+def _doc_sync_records(source_id: int | None, limit: int, offset: int) -> dict[str, Any]:
+    where = "WHERE er.source_id = %s" if source_id is not None else ""
+    params: list[Any] = []
+    if source_id is not None:
+        params.append(source_id)
+    params.extend([limit, offset])
+
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT
+                    er.id, er.source_id, es.source_name, es.env_profile,
+                    er.external_record_id, er.record_hash, er.normalized_json,
+                    er.external_created_at, er.external_updated_at, er.synced_at
+                FROM external_records er
+                JOIN external_sources es ON es.id = er.source_id
+                {where}
+                ORDER BY er.synced_at DESC, er.id DESC
+                LIMIT %s OFFSET %s
+                """,
+                params,
+            )
+            rows = cur.fetchall()
+
+    return {
+        "items": [
+            {
+                "id": row[0],
+                "source_id": row[1],
+                "source_name": row[2],
+                "env_profile": row[3],
+                "external_record_id": row[4],
+                "record_hash": row[5],
+                "normalized_json": row[6],
+                "external_created_at": row[7],
+                "external_updated_at": row[8],
+                "synced_at": str(row[9]),
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.get("/v1/admin/doc-sync/records")
+def admin_doc_sync_records(
+    source_id: int | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    return _doc_sync_records(source_id=source_id, limit=limit, offset=offset)
+
+
+@app.get("/v1/admin/doc-sync/sources/{source_id}/records")
+def admin_doc_sync_source_records(
+    source_id: int,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    return _doc_sync_records(source_id=source_id, limit=limit, offset=offset)
+
+
+@app.get("/v1/admin/doc-sync/requests")
+def admin_doc_sync_requests(
+    limit: int = Query(default=100, ge=1, le=500),
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    sr.id, sr.source_id, es.source_name, sr.provider, sr.env_profile,
+                    sr.mode, sr.status, sr.requested_by, sr.requested_at,
+                    sr.started_at, sr.finished_at, sr.sync_run_id, sr.error_json
+                FROM sync_requests sr
+                JOIN external_sources es ON es.id = sr.source_id
+                ORDER BY sr.requested_at DESC, sr.id DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            rows = cur.fetchall()
+
+    return {
+        "items": [
+            {
+                "id": row[0],
+                "source_id": row[1],
+                "source_name": row[2],
+                "provider": row[3],
+                "env_profile": row[4],
+                "mode": row[5],
+                "status": row[6],
+                "requested_by": row[7],
+                "requested_at": str(row[8]),
+                "started_at": str(row[9]) if row[9] else None,
+                "finished_at": str(row[10]) if row[10] else None,
+                "sync_run_id": row[11],
+                "error_json": row[12],
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.post("/v1/admin/doc-sync/sources/{source_id}/sync-requests")
+def admin_create_doc_sync_request(
+    source_id: int,
+    actor: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT provider, env_profile
+                FROM external_sources
+                WHERE id = %s AND status = 'active'
+                """,
+                (source_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="doc sync source not found")
+            cur.execute(
+                """
+                INSERT INTO sync_requests(source_id, provider, env_profile, mode, status, requested_by)
+                VALUES (%s, %s, %s, 'manual', 'pending', %s)
+                RETURNING id
+                """,
+                (source_id, row[0], row[1], actor.get("sub")),
+            )
+            request_id = cur.fetchone()[0]
+        conn.commit()
+
+    _audit(actor.get("sub"), "admin.doc_sync.request", "external_sources", str(source_id), {"request_id": request_id})
+    return {"id": request_id, "status": "pending"}
+
+
 @app.get("/v1/admin/couple-spaces")
 def admin_couple_spaces(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     with closing(_conn()) as conn:

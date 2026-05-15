@@ -1,0 +1,248 @@
+from __future__ import annotations
+
+from typing import Any
+
+from app.providers.wecom import (
+    WeComDocSource,
+    WeComSmartsheetClient,
+    credentials_for_profile,
+    discover_profile_sources,
+    env_profiles,
+    summarize_wecom_error,
+)
+from app.storage.postgres import build_record_snapshot, open_store
+
+
+def _sheet_id(sheet: dict[str, Any]) -> str:
+    return str(sheet.get("sheet_id") or sheet.get("id") or sheet.get("sheetId") or "")
+
+
+def _sheet_name(sheet: dict[str, Any]) -> str:
+    return str(sheet.get("title") or sheet.get("name") or sheet.get("sheet_name") or _sheet_id(sheet) or "未命名 sheet")
+
+
+def _fields_from_response(response: dict[str, Any]) -> list[dict[str, Any]]:
+    fields = response.get("fields") or response.get("field_list") or response.get("data") or []
+    if isinstance(fields, dict):
+        fields = fields.get("fields") or fields.get("field_list") or []
+    return fields if isinstance(fields, list) else []
+
+
+def _sync_sheet_records(
+    store: Any,
+    client: WeComSmartsheetClient,
+    source_id: int,
+    docid: str,
+    sheet_id: str,
+    counts: dict[str, int],
+) -> None:
+    fields_response = client.get_fields(docid, sheet_id)
+    field_titles = store.replace_fields(source_id, _fields_from_response(fields_response))
+    records_response = client.get_records(docid, sheet_id)
+    records = records_response.get("records") or []
+    counts["sheet_count"] += 1
+    counts["record_count"] += len(records)
+    print(
+        f"[企业微信同步] docid={docid} sheet_id={sheet_id} "
+        f"完整拉取 {len(records)} 条，分页 {records_response.get('page_count', 1)} 页。"
+    )
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        decision = store.upsert_record(source_id, build_record_snapshot(record, field_titles))
+        if decision.action == "create":
+            counts["created_count"] += 1
+        elif decision.action == "update":
+            counts["updated_count"] += 1
+    store.mark_source_synced(source_id)
+
+
+def run_sync_wecom_full(profiles_arg: str = "") -> int:
+    profiles = env_profiles(profiles_arg)
+    if not profiles:
+        print("未配置 WECOM_ENV_PROFILES，也未传入 --profiles。示例：COMPANY_A,COMPANY_B")
+        return 1
+
+    store = open_store()
+    exit_code = 0
+    try:
+        for profile in profiles:
+            print(f"[企业微信同步] 开始处理公司配置：{profile}")
+            run_id = store.start_run(provider="wecom", env_profile=profile, mode="full")
+            counts = {
+                "source_count": 0,
+                "sheet_count": 0,
+                "record_count": 0,
+                "created_count": 0,
+                "updated_count": 0,
+                "error_count": 0,
+            }
+            errors: list[dict[str, Any]] = []
+            try:
+                credentials = credentials_for_profile(profile)
+                registry_sources = [
+                    WeComDocSource(
+                        env_profile=profile,
+                        docid=str(row["external_doc_id"]),
+                        source_name=str(row["source_name"] or f"{profile} 登记表 docid"),
+                        source_url=str(row.get("source_url") or ""),
+                    )
+                    for row in store.list_registry_doc_sources(provider="wecom", env_profile=profile)
+                ]
+                sources = list({item.docid: item for item in [*discover_profile_sources(profile), *registry_sources]}.values())
+                counts["source_count"] = len(sources)
+                if not credentials:
+                    raise RuntimeError(f"{profile} 缺少 WECOM_{profile}_CORP_ID 或 WECOM_{profile}_APP_SECRET。")
+                if not sources:
+                    raise RuntimeError(f"{profile} 未配置 WEDOC_{profile}_DOCID 或 SMARTSHEET_{profile}_ID。")
+
+                for source in sources:
+                    doc_synced = False
+                    last_error: Exception | None = None
+                    for credential in credentials:
+                        client = WeComSmartsheetClient(credential.corpid, credential.secret)
+                        try:
+                            sheets = client.get_sheets(source.docid)
+                            if not sheets:
+                                print(f"[企业微信同步] {profile} docid={source.docid} 未返回 sheet。")
+                            for sheet in sheets:
+                                sheet_id = _sheet_id(sheet)
+                                if not sheet_id:
+                                    continue
+                                sheet_name = _sheet_name(sheet)
+                                source_id = store.ensure_source(
+                                    provider="wecom",
+                                    env_profile=profile,
+                                    source_name=f"{source.source_name} / {sheet_name}",
+                                    source_type="smartsheet_sheet",
+                                    external_doc_id=source.docid,
+                                    external_sheet_id=sheet_id,
+                                    source_url=source.source_url,
+                                )
+                                _sync_sheet_records(store, client, source_id, source.docid, sheet_id, counts)
+                            doc_synced = True
+                            break
+                        except Exception as exc:  # noqa: BLE001 - sync should keep collecting useful diagnostics.
+                            last_error = exc
+                            print(f"[企业微信同步] {profile} 凭证 {credential.label} 同步失败：{exc}")
+                    if not doc_synced and last_error is not None:
+                        counts["error_count"] += 1
+                        error_text = str(last_error)
+                        errors.append(
+                            {
+                                "env_profile": profile,
+                                "docid": source.docid,
+                                "error": error_text,
+                                "summary": summarize_wecom_error(error_text),
+                            }
+                        )
+                status = "success" if counts["error_count"] == 0 else "partial_failed"
+            except Exception as exc:  # noqa: BLE001
+                exit_code = 1
+                counts["error_count"] += 1
+                error_text = str(exc)
+                errors.append({"env_profile": profile, "error": error_text, "summary": summarize_wecom_error(error_text)})
+                status = "failed"
+                print(f"[企业微信同步] {profile} 同步失败：{exc}")
+
+            store.finish_run(run_id, status=status, counts=counts, error_json=errors)
+            print(
+                f"[企业微信同步] {profile} 完成：status={status} "
+                f"sheets={counts['sheet_count']} records={counts['record_count']} "
+                f"created={counts['created_count']} updated={counts['updated_count']} errors={counts['error_count']}"
+            )
+            if counts["error_count"]:
+                exit_code = 1
+    finally:
+        store.close()
+
+    return exit_code
+
+
+def sync_wecom_source(store: Any, source_id: int, mode: str = "manual") -> tuple[str, int | None, dict[str, Any]]:
+    source = store.get_source(source_id)
+    if not source:
+        return "failed", None, {"error": f"找不到同步源：{source_id}"}
+    if source["provider"] != "wecom":
+        return "failed", None, {"error": f"暂不支持该 provider：{source['provider']}"}
+    if not source["external_doc_id"] or not source["external_sheet_id"]:
+        return "failed", None, {"error": "指定同步源缺少 docid 或 sheet_id"}
+
+    profile = str(source["env_profile"])
+    run_id = store.start_run(provider="wecom", env_profile=profile, mode=mode)
+    counts = {
+        "source_count": 1,
+        "sheet_count": 0,
+        "record_count": 0,
+        "created_count": 0,
+        "updated_count": 0,
+        "error_count": 0,
+    }
+    errors: list[dict[str, Any]] = []
+    status = "failed"
+    try:
+        credentials = credentials_for_profile(profile)
+        if not credentials:
+            raise RuntimeError(f"{profile} 缺少 WECOM_{profile}_CORP_ID 或 WECOM_{profile}_APP_SECRET。")
+
+        last_error: Exception | None = None
+        for credential in credentials:
+            client = WeComSmartsheetClient(credential.corpid, credential.secret)
+            try:
+                _sync_sheet_records(
+                    store,
+                    client,
+                    int(source["id"]),
+                    str(source["external_doc_id"]),
+                    str(source["external_sheet_id"]),
+                    counts,
+                )
+                status = "success"
+                last_error = None
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                print(f"[企业微信同步] source_id={source_id} 凭证 {credential.label} 同步失败：{exc}")
+        if last_error is not None:
+            raise last_error
+    except Exception as exc:  # noqa: BLE001
+        counts["error_count"] += 1
+        error_text = str(exc)
+        errors.append({"source_id": source_id, "error": error_text, "summary": summarize_wecom_error(error_text)})
+        status = "failed"
+
+    store.finish_run(run_id, status=status, counts=counts, error_json=errors)
+    return status, run_id, {"errors": errors, "counts": counts}
+
+
+def run_sync_wecom_source(source_id: int) -> int:
+    store = open_store()
+    try:
+        status, _, detail = sync_wecom_source(store, source_id=source_id, mode="manual")
+        print(f"[企业微信同步] source_id={source_id} 手动同步完成：{status} {detail}")
+        return 0 if status == "success" else 1
+    finally:
+        store.close()
+
+
+def run_pending_sync_requests(limit: int = 10) -> int:
+    store = open_store()
+    exit_code = 0
+    try:
+        requests = store.pending_sync_requests(limit=limit)
+        if not requests:
+            print("[企业微信同步] 当前没有待处理的手动同步请求。")
+            return 0
+        for request in requests:
+            request_id = int(request["id"])
+            source_id = int(request["source_id"])
+            print(f"[企业微信同步] 开始处理手动请求 request_id={request_id} source_id={source_id}")
+            store.mark_sync_request_running(request_id)
+            status, run_id, detail = sync_wecom_source(store, source_id=source_id, mode="manual")
+            request_status = "success" if status == "success" else "failed"
+            store.finish_sync_request(request_id, request_status, run_id, detail)
+            if request_status != "success":
+                exit_code = 1
+    finally:
+        store.close()
+    return exit_code

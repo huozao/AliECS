@@ -73,6 +73,14 @@ docker compose -f local/docker-compose.local.yml up --build -d
 docker compose -f local/docker-compose.local.yml ps
 ```
 
+如果 `local/.env` 或 `local/.env.local` 里已经填了真实测试凭证，手工运行 `config` 时建议重定向输出：
+
+```bash
+docker compose -f local/docker-compose.local.yml config >/dev/null
+```
+
+原因是 Docker Compose 会展开环境变量，直接打印完整配置可能把凭证显示在终端日志里。项目自带 smoke test 脚本已经使用静默配置校验。
+
 并检查：
 
 - public-web: http://localhost:8080
@@ -126,3 +134,38 @@ docker compose -f local/docker-compose.local.yml down
 ```bash
 docker compose -f local/docker-compose.local.yml down -v
 ```
+
+## Doc Sync 本地验证补充
+
+如果你的本地测试变量不在 `local/.env.local`，Windows 可以显式传入 env 文件：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/local-smoke-test.ps1 -EnvFilePath C:\path\to\.env
+```
+
+Linux/macOS 可以传入：
+
+```bash
+bash scripts/local-smoke-test.sh --env-file /path/to/.env
+```
+
+如果要真实调用企业微信同步，env 文件需要至少包含这些变量名：
+
+- `WECOM_ENV_PROFILES`
+- `WECOM_<PROFILE>_CORP_ID`
+- `WECOM_<PROFILE>_APP_SECRET`
+- `WEDOC_<PROFILE>_DOCID` 或 `SMARTSHEET_<PROFILE>_ID`
+
+Windows 运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/local-smoke-test.ps1 -RunDocSync
+```
+
+Linux/macOS 运行：
+
+```bash
+bash scripts/local-smoke-test.sh --run-doc-sync
+```
+
+脚本不会打印密钥值；如果缺少企微变量，会跳过真实同步，只验证容器、接口、登录和 worker 命令。
