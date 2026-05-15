@@ -17,7 +17,9 @@ if [[ ! -f "$META_FILE" ]]; then
 fi
 
 # shellcheck disable=SC1090
+set -a
 source "$META_FILE"
+set +a
 
 : "${GHCR_BASE:?请在 release-meta.env 设置 GHCR_BASE}"
 : "${POSTGRES_USER:?请在 release-meta.env 设置 POSTGRES_USER}"
