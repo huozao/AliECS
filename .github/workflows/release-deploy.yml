@@ -1,4 +1,4 @@
-name: 发布并部署
+name: release-deploy
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       release_version:
-        description: "计划发布版本号（VYYYYMMDDNNN）"
+        description: "Planned release version, format VYYYYMMDDNNN"
         required: false
         type: string
 
@@ -28,7 +28,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 识别版本号
+      - name: Resolve release version
         id: vars
         run: |
           git fetch --tags --force
@@ -42,11 +42,11 @@ jobs:
             DAY="$(date -u +%d)"
             SERIAL="$(printf '%03d' "$((GITHUB_RUN_NUMBER % 1000))")"
             RELEASE_VERSION="V${YEAR}${MONTH}${DAY}${SERIAL}"
-            echo "未提供 release_version，已自动生成：${RELEASE_VERSION}"
+            echo "No release_version was provided; generated ${RELEASE_VERSION}"
           fi
 
           if [[ ! "$RELEASE_VERSION" =~ ^V[0-9]{11}$ ]]; then
-            echo "计划发布版本格式非法：仅允许 VYYYYMMDDNNN" >&2
+            echo "Invalid release version. Expected VYYYYMMDDNNN, got: ${RELEASE_VERSION}" >&2
             exit 1
           fi
 
@@ -54,21 +54,17 @@ jobs:
           echo "release_version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
           echo "previous_version=$PREVIOUS_VERSION" >> "$GITHUB_OUTPUT"
 
-          echo "上一个版本：${PREVIOUS_VERSION:-未找到}"
-          echo "计划发布版本：${RELEASE_VERSION}"
-          echo "当前部署版本：${RELEASE_VERSION}"
-
           {
-            echo "## 发布并部署版本信息"
+            echo "## Release and deployment"
             echo ""
-            echo "| 项目 | 值 |"
+            echo "| Item | Value |"
             echo "|---|---|"
-            echo "| 上一个版本 | ${PREVIOUS_VERSION:-未找到} |"
-            echo "| 计划发布版本 | ${RELEASE_VERSION} |"
-            echo "| 当前部署版本 | ${RELEASE_VERSION} |"
+            echo "| Previous version | ${PREVIOUS_VERSION:-not found} |"
+            echo "| Release version | ${RELEASE_VERSION} |"
+            echo "| Deploy version | ${RELEASE_VERSION} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 手动触发时创建并校验 tag
+      - name: Create and validate tag for manual dispatch
         if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
           TAG: ${{ steps.vars.outputs.release_version }}
@@ -80,43 +76,43 @@ jobs:
             REMOTE_SHA="$(git ls-remote --tags origin "refs/tags/$TAG" | awk '{print $1}')"
             CURRENT_SHA="$(git rev-parse HEAD)"
             if [[ "$REMOTE_SHA" != "$CURRENT_SHA" ]]; then
-              echo "版本号已存在但不指向当前提交，请使用下一个版本号。" >&2
+              echo "Tag already exists but does not point at this commit. Use a new release version." >&2
               exit 1
             fi
-            echo "远程 tag 已存在且匹配当前提交：$TAG"
+            echo "Remote tag already exists and matches this commit: $TAG"
           else
-            git tag -a "$TAG" -m "发布 ${TAG}"
+            git tag -a "$TAG" -m "Release ${TAG}"
             git push origin "$TAG"
           fi
 
-      - name: 登录 GHCR（用于推送）
+      - name: Login to GHCR for push
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      - name: 构建并推送 public-web
+      - name: Build and push public-web
         run: |
           TAG="${{ steps.vars.outputs.release_version }}"
           docker build -t ghcr.io/${{ github.repository_owner }}/public-web:${TAG} services/public-web
           docker push ghcr.io/${{ github.repository_owner }}/public-web:${TAG}
 
-      - name: 构建并推送 admin-ui
+      - name: Build and push admin-ui
         run: |
           TAG="${{ steps.vars.outputs.release_version }}"
           docker build -t ghcr.io/${{ github.repository_owner }}/admin-ui:${TAG} services/admin-ui
           docker push ghcr.io/${{ github.repository_owner }}/admin-ui:${TAG}
 
-      - name: 构建并推送 backend-api
+      - name: Build and push backend-api
         run: |
           TAG="${{ steps.vars.outputs.release_version }}"
           docker build -t ghcr.io/${{ github.repository_owner }}/backend-api:${TAG} services/backend-api
           docker push ghcr.io/${{ github.repository_owner }}/backend-api:${TAG}
 
-      - name: 构建并推送 doc-sync-worker
+      - name: Build and push doc-sync-worker
         run: |
           TAG="${{ steps.vars.outputs.release_version }}"
           docker build -t ghcr.io/${{ github.repository_owner }}/doc-sync-worker:${TAG} services/doc-sync-worker
           docker push ghcr.io/${{ github.repository_owner }}/doc-sync-worker:${TAG}
 
-      - name: 通过 SSH 触发 ECS 部署脚本
+      - name: Deploy on ECS
         uses: appleboy/ssh-action@v1.2.0
         env:
           GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
@@ -127,15 +123,58 @@ jobs:
           key: ${{ secrets.ECS_SSH_KEY }}
           envs: GHCR_USERNAME,GHCR_TOKEN
           script: |
+            set -euo pipefail
+
             export GHCR_USERNAME="${GHCR_USERNAME:-}"
             export GHCR_TOKEN="${GHCR_TOKEN:-}"
 
-            if [[ -x "/root/AliECS/deploy/ecs/deploy.sh" ]]; then
-              DEPLOY_SCRIPT="/root/AliECS/deploy/ecs/deploy.sh"
-            else
-              echo "[部署] 未找到 deploy.sh。请确认 ECS 代码目录为 /root/AliECS。" >&2
+            APP_ROOT="/root/AliECS"
+            BACKUP_DIR="/root/AliECS-private-backup/github-actions"
+            RELEASE_VERSION="${{ steps.vars.outputs.release_version }}"
+            TS="$(date +%Y%m%d-%H%M%S)"
+
+            if [[ ! -d "${APP_ROOT}/.git" ]]; then
+              echo "[deploy] Git repository not found at ${APP_ROOT}. Confirm ECS project path is /root/AliECS." >&2
               exit 1
             fi
 
-            echo "[部署] 使用脚本: ${DEPLOY_SCRIPT}"
-            "${DEPLOY_SCRIPT}" ${{ steps.vars.outputs.release_version }}
+            mkdir -p "${BACKUP_DIR}"
+            cd "${APP_ROOT}"
+
+            echo "[deploy] Backing up ECS private env files"
+            if [[ -f "deploy/ecs/release-meta.env" ]]; then
+              cp -a "deploy/ecs/release-meta.env" "${BACKUP_DIR}/release-meta.env.${TS}"
+            fi
+            if [[ -f "deploy/ecs/runtime.env" ]]; then
+              cp -a "deploy/ecs/runtime.env" "${BACKUP_DIR}/runtime.env.${TS}"
+            fi
+
+            echo "[deploy] Syncing ECS checkout to origin/main"
+            git fetch origin main --tags
+            git checkout main
+
+            # release-meta.env used to be tracked in older checkouts. It is now
+            # an ECS-private file, so restore tracked copies before fast-forward
+            # pull to keep local secret edits from blocking code sync.
+            git restore --source=HEAD -- deploy/ecs/release-meta.env deploy/ecs/runtime.env 2>/dev/null || true
+
+            git pull --ff-only origin main
+
+            echo "[deploy] Restoring ECS private env files"
+            if [[ -f "${BACKUP_DIR}/release-meta.env.${TS}" ]]; then
+              cp -a "${BACKUP_DIR}/release-meta.env.${TS}" "deploy/ecs/release-meta.env"
+              chmod 600 "deploy/ecs/release-meta.env"
+            fi
+            if [[ -f "${BACKUP_DIR}/runtime.env.${TS}" ]]; then
+              cp -a "${BACKUP_DIR}/runtime.env.${TS}" "deploy/ecs/runtime.env"
+              chmod 600 "deploy/ecs/runtime.env"
+            fi
+
+            DEPLOY_SCRIPT="${APP_ROOT}/deploy/ecs/deploy.sh"
+            if [[ ! -x "${DEPLOY_SCRIPT}" ]]; then
+              echo "[deploy] Deploy script is missing or not executable: ${DEPLOY_SCRIPT}" >&2
+              exit 1
+            fi
+
+            echo "[deploy] Running latest deploy script: ${DEPLOY_SCRIPT}"
+            "${DEPLOY_SCRIPT}" "${RELEASE_VERSION}"
