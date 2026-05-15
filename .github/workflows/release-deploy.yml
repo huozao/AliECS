@@ -182,3 +182,12 @@ jobs:
 
             echo "[deploy] Running latest deploy script: ${DEPLOY_SCRIPT}"
             "${DEPLOY_SCRIPT}" "${RELEASE_VERSION}"
+
+            POST_DEPLOY_SMOKE="${APP_ROOT}/deploy/ecs/post-deploy-smoke.sh"
+            if [[ ! -x "${POST_DEPLOY_SMOKE}" ]]; then
+              echo "[deploy] Post-deploy smoke script is missing or not executable: ${POST_DEPLOY_SMOKE}" >&2
+              exit 1
+            fi
+
+            echo "[deploy] Running post-deploy smoke checks: ${POST_DEPLOY_SMOKE}"
+            "${POST_DEPLOY_SMOKE}"
