@@ -191,3 +191,31 @@ jobs:
 
             echo "[deploy] Running post-deploy smoke checks: ${POST_DEPLOY_SMOKE}"
             "${POST_DEPLOY_SMOKE}"
+
+      - name: Collect ECS diagnostics on failure
+        if: ${{ failure() }}
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ECS_HOST }}
+          username: ${{ secrets.ECS_USER }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          script: |
+            set -uo pipefail
+            APP_ROOT="/root/AliECS"
+            DIAG_SCRIPT="${APP_ROOT}/deploy/ecs/collect-diagnostics.sh"
+
+            if [[ -x "${DIAG_SCRIPT}" ]]; then
+              "${DIAG_SCRIPT}"
+              exit 0
+            fi
+
+            echo "[diagnostics] collect-diagnostics.sh is not available yet; running fallback checks"
+            cd "${APP_ROOT}" 2>/dev/null || {
+              echo "[diagnostics] missing app root: ${APP_ROOT}"
+              exit 0
+            }
+            git status -sb 2>&1 || true
+            git log -1 --oneline 2>&1 || true
+            docker compose --env-file /root/AliECS/deploy/ecs/runtime.env -f /root/AliECS/deploy/ecs/compose.prod.yml ps 2>&1 || true
+            docker compose --env-file /root/AliECS/deploy/ecs/runtime.env -f /root/AliECS/deploy/ecs/compose.prod.yml logs --tail=80 backend-api doc-sync-worker postgres 2>&1 \
+              | sed -E 's#(postgres(ql)?://)[^:@/]+:[^@/]+@#\1***:***@#g; s#([Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|ACCESS_KEY|APP_SECRET|CORP_ID)=([^[:space:]]+)#\1=***#g' || true
