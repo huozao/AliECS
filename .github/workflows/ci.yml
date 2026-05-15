@@ -28,7 +28,7 @@ jobs:
           python -m unittest discover -s tests
 
       - name: Shell 语法检查
-        run: bash -n deploy/ecs/auto-sync.sh deploy/ecs/deploy.sh deploy/ecs/migrate.sh deploy/ecs/healthcheck.sh deploy/ecs/rollback.sh deploy/ecs/post-deploy-smoke.sh
+        run: bash -n deploy/ecs/auto-sync.sh deploy/ecs/deploy.sh deploy/ecs/migrate.sh deploy/ecs/healthcheck.sh deploy/ecs/rollback.sh deploy/ecs/post-deploy-smoke.sh deploy/ecs/collect-diagnostics.sh
 
       - name: Compose 配置检查（local）
         run: docker compose -f local/docker-compose.local.yml config >/dev/null

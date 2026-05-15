@@ -12,6 +12,7 @@ Daily releases should follow one simple path:
 6. ECS backs up and restores private env files.
 7. ECS runs the latest `deploy/ecs/deploy.sh`.
 8. ECS runs `deploy/ecs/post-deploy-smoke.sh`.
+9. If deployment or smoke checks fail, GitHub Actions runs `deploy/ecs/collect-diagnostics.sh` and prints a redacted diagnostic summary in the workflow logs.
 
 In the normal flow, no one needs to SSH into ECS just to run `git pull`.
 
@@ -58,6 +59,20 @@ POST_DEPLOY_DOC_SYNC_PROFILES=COMPANY_B
 ```
 
 Only enable this for stable profiles. External WeCom permissions, trusted IP rules, or data-field changes should not block ordinary releases unless you explicitly choose that behavior.
+
+## Failure diagnostics
+
+When the deployment job fails after SSH is available, GitHub Actions runs `collect-diagnostics.sh` automatically. The script prints:
+
+- Git status and latest commit on ECS.
+- Whether important env variables are present, using `SET` or `MISSING` plus value length.
+- Parsed `DATABASE_URL` scheme, host, database, and password length without printing the password.
+- Production compose services and container status.
+- Backend, public-web, and admin-ui local HTTP checks.
+- Doc-sync table counts and recent sync run summaries.
+- Recent backend, doc-sync-worker, and postgres logs with common secret patterns redacted.
+
+This should make most failures diagnosable from the GitHub Actions log. You should not paste full `release-meta.env`, `runtime.env`, database URLs, tokens, app secrets, or SSH keys into chats or issues.
 
 ## Recovery
 
