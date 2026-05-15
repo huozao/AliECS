@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+!local/.env.local.example
+
+local/.env.local
+
+deploy/ecs/runtime.env
+deploy/ecs/release-meta.env
+
+*.pem
+*.key
+id_rsa
+id_ed25519
+token.json

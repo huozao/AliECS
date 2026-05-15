@@ -122,6 +122,17 @@ Codex 修改项目时必须遵循以下顺序：
 
 修改完成后，应根据影响范围执行验证。
 
+## 本地模拟验证
+
+涉及前后端、登录、数据库、环境变量或 Docker 变更时，Codex 应优先使用本地模拟验证流程。
+
+- 本地验证只使用 `local/docker-compose.local.yml`。
+- 本地验证只使用 `local/.env.local`，该文件只能包含本地测试值。
+- 不读取、不复制、不依赖 `deploy/ecs/runtime.env` 或 `deploy/ecs/release-meta.env` 中的生产值。
+- 不连接 ECS 生产数据库，不使用生产账号密码、SSH 私钥、GitHub PAT、阿里云 AccessKey 或其他真实生产密钥。
+- 优先运行 `scripts/local-smoke-test.ps1` 或 `scripts/local-smoke-test.sh` 验证页面、接口、登录入口和健康检查。
+- 如果当前环境无法运行 Docker，必须说明未验证原因，并给出人工补救命令。
+
 涉及 shell 脚本时，至少检查语法：
 
 ```bash
