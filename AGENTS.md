@@ -77,6 +77,25 @@ Codex 修改项目时必须遵循以下顺序：
 - ECS 不长期保存原图，原图应规划到 NAS / OSS / R2 / S3，数据库仅存元数据与链接。
 - 所有 Couple 页面默认需要登录权限控制，未授权不得暴露数据。
 
+## Doc Sync 开发约束
+
+- 企业微信智能表格同步必须由 `services/doc-sync-worker` 独立执行，不要放进 `backend-api` 启动流程。
+- 第一版同步模式默认为 full，必须同步 docid 下所有 sheet，并对每个 sheet 按企业微信分页拉取全部 records。
+- 不允许只取最近记录，不允许只同步一个 sheet，不允许只同步字段后跳过 records。
+- AliECS 的同步主数据源是 Postgres，不要把 PeiFang 的 `output/latest` 或 `data/wecom` 复制成主数据源。
+- backend-api 只能查询同步结果、同步状态和同步日志，不直接调用企业微信 API。
+- Admin UI 可以提供“企微或飞书同步”后台核验模块；同步表格的具体数据属于后台数据，不要放到 public-web 首页作为公网入口。
+- 手动同步应通过 `sync_requests` 或 worker 命令执行，不要让 backend-api 直接调用企业微信或飞书 API。
+- 环境变量示例只写占位值或本地测试值，不提交企业微信真实 corp id、secret、token 或业务数据。
+- 修改 doc-sync-worker、同步表结构、backend 查询接口、Docker Compose 或部署配置后，优先运行：
+
+```bash
+python -m unittest discover -s tests
+docker compose -f local/docker-compose.local.yml config
+```
+
+- 如果 Docker 无法运行，必须说明未验证原因，并给出本地补救命令。
+
 ## 配置与环境变量
 
 新增或修改环境变量时，必须说明用途，并同步更新示例配置或文档。
@@ -145,8 +164,10 @@ bash -n deploy/ecs/rollback.sh
 涉及 Docker Compose 时，至少检查配置：
 
 ```bash
-docker compose -f local/docker-compose.local.yml config
+docker compose -f local/docker-compose.local.yml config > /dev/null
 ```
+
+如果本机 `local/.env` 或 `local/.env.local` 中含有真实测试凭证，不要把 `docker compose config` 的完整输出粘贴到聊天、日志或 issue 中；该命令会展开环境变量。
 
 涉及 GitHub Actions 时，检查 YAML 结构、触发条件、变量引用和脚本调用是否合理。
 

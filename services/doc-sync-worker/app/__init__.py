@@ -1,0 +1,1 @@
+"""AliECS document sync worker."""

@@ -233,6 +233,10 @@
     .hidden { display: none !important; }
     .small { font-size: 12px; }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .company-board { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .source-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: white; margin-bottom: 10px; }
+    .record-preview { max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: 12px; background: white; padding: 10px; }
+    @media (max-width: 900px) { .company-board { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -293,6 +297,24 @@
         <div class="card">
           <h2>功能入口</h2>
           <div id="featureCount" style="font-size:32px;font-weight:800;">-</div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="row" style="justify-content:space-between;align-items:center;">
+          <div>
+            <h2>企微或飞书同步</h2>
+            <p class="muted" style="margin-top:-6px;">按公司分组核验已同步的外部表格。这里是后台数据，不在公网首页展示。</p>
+          </div>
+          <button id="refreshDocSyncBtn" type="button">刷新同步数据</button>
+        </div>
+        <div id="docSyncBoard" class="company-board"></div>
+        <div id="docSyncRecords" class="record-preview hidden" style="margin-top:14px;"></div>
+        <div class="table-wrap" style="margin-top:14px;">
+          <table>
+            <thead><tr><th>请求ID</th><th>公司</th><th>表格</th><th>状态</th><th>请求人</th><th>请求时间</th><th>运行</th></tr></thead>
+            <tbody id="docSyncRequestsBody"></tbody>
+          </table>
         </div>
       </section>
 
@@ -493,6 +515,8 @@
       features: [],
       logs: [],
       coupleSpaces: [],
+      docSyncSources: [],
+      docSyncRequests: [],
       coupleRoute: null,
       coupleSpacesLoadError: ""
     };
@@ -730,6 +754,58 @@
       `).join("");
     }
 
+    function providerLabel(provider) {
+      if (provider === "wecom") return "企业微信";
+      if (provider === "feishu") return "飞书";
+      return provider || "-";
+    }
+
+    function renderDocSync() {
+      const groups = {};
+      (state.docSyncSources || []).forEach((source) => {
+        const key = source.env_profile || "未分组";
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(source);
+      });
+
+      const companyNames = Object.keys(groups).sort();
+      $("docSyncBoard").innerHTML = companyNames.length ? companyNames.map((company) => `
+        <section class="source-card">
+          <h3 style="margin:0 0 10px;">${escapeHtml(company)}</h3>
+          ${groups[company].map((source) => `
+            <article class="source-card">
+              <div class="row" style="justify-content:space-between;">
+                <strong>${escapeHtml(source.source_name || `source ${source.id}`)}</strong>
+                ${tag(providerLabel(source.provider), source.provider === "wecom" ? "ok" : "warn")}
+              </div>
+              <div class="small muted" style="line-height:1.8;margin-top:8px;">
+                docid: ${escapeHtml(source.external_doc_id || "-")}<br/>
+                sheet_id: ${escapeHtml(source.external_sheet_id || "-")}<br/>
+                records: ${source.record_count || 0} · last_sync: ${escapeHtml(source.last_sync_at || "-")}
+              </div>
+              <div class="actions" style="margin-top:10px;">
+                <button type="button" onclick="viewDocSyncRecords(${source.id})">查看数据</button>
+                ${source.open_url ? `<a class="btn" href="${escapeHtml(source.open_url)}" target="_blank" rel="noreferrer">打开原表格</a>` : ""}
+                <button type="button" class="primary" onclick="requestDocSync(${source.id})">手动同步</button>
+              </div>
+            </article>
+          `).join("")}
+        </section>
+      `).join("") : '<div class="notice">还没有同步源。先运行 doc-sync-worker 完整同步，或在 external_sources 中登记 smartsheet_doc / registry_doc。</div>';
+
+      $("docSyncRequestsBody").innerHTML = (state.docSyncRequests || []).map((request) => `
+        <tr>
+          <td>${request.id}</td>
+          <td>${escapeHtml(request.env_profile || "-")}</td>
+          <td>${escapeHtml(request.source_name || "-")}</td>
+          <td>${tag(request.status, request.status === "success" ? "ok" : (request.status === "failed" ? "danger" : "warn"))}</td>
+          <td>${escapeHtml(request.requested_by || "-")}</td>
+          <td>${escapeHtml(request.requested_at || "-")}</td>
+          <td>${request.sync_run_id || "-"}</td>
+        </tr>
+      `).join("");
+    }
+
     async function loadAll() {
       clearMessage();
       state.me = await api("/v1/auth/me");
@@ -739,14 +815,16 @@
       if (!isAdmin) {
         throw new Error("当前账号没有 admin.access 权限，无法进入管理后台。");
       }
-      const [usersResp, rolesResp, permissionsResp, featuresResp, logsResp, coupleSpacesResult, coupleRoute] = await Promise.all([
+      const [usersResp, rolesResp, permissionsResp, featuresResp, logsResp, coupleSpacesResult, coupleRoute, docSyncSourcesResult, docSyncRequestsResult] = await Promise.all([
         api("/v1/admin/users"),
         api("/v1/admin/roles"),
         api("/v1/admin/permissions"),
         api("/v1/admin/features"),
         api("/v1/admin/audit-logs"),
         api("/v1/admin/couple-spaces").then((data) => ({ ok: true, data })).catch((error) => ({ ok: false, error })),
-        requestCoupleAccess()
+        requestCoupleAccess(),
+        api("/v1/admin/doc-sync/sources").then((data) => ({ ok: true, data })).catch((error) => ({ ok: false, error })),
+        api("/v1/admin/doc-sync/requests").then((data) => ({ ok: true, data })).catch((error) => ({ ok: false, error }))
       ]);
 
       state.users = usersResp.items || [];
@@ -755,6 +833,8 @@
       state.features = featuresResp.items || [];
       state.logs = logsResp.items || [];
       state.coupleRoute = coupleRoute || null;
+      state.docSyncSources = docSyncSourcesResult.ok ? (docSyncSourcesResult.data.items || []) : [];
+      state.docSyncRequests = docSyncRequestsResult.ok ? (docSyncRequestsResult.data.items || []) : [];
       if (coupleSpacesResult.ok) {
         state.coupleSpaces = coupleSpacesResult.data.items || [];
         state.coupleSpacesLoadError = "";
@@ -771,6 +851,32 @@
       renderFeatures();
       renderLogs();
       renderCoupleSpaces();
+      renderDocSync();
+    }
+
+    async function viewDocSyncRecords(sourceId) {
+      const data = await api(`/v1/admin/doc-sync/sources/${sourceId}/records?limit=50`);
+      const source = state.docSyncSources.find((item) => item.id === sourceId);
+      $("docSyncRecords").classList.remove("hidden");
+      $("docSyncRecords").innerHTML = `
+        <div class="row" style="justify-content:space-between;">
+          <strong>${escapeHtml(source?.source_name || `source ${sourceId}`)} · 最近 50 条</strong>
+          <button type="button" onclick="closeDocSyncRecords()">关闭</button>
+        </div>
+        <pre style="white-space:pre-wrap;font-size:12px;">${escapeHtml(JSON.stringify(data.items || [], null, 2))}</pre>
+      `;
+    }
+
+    function closeDocSyncRecords() {
+      $("docSyncRecords").classList.add("hidden");
+      $("docSyncRecords").innerHTML = "";
+    }
+
+    async function requestDocSync(sourceId) {
+      if (!confirm("确认创建手动同步请求？worker 消费请求后会同步该表格。")) return;
+      const data = await api(`/v1/admin/doc-sync/sources/${sourceId}/sync-requests`, { method: "POST" });
+      showSuccess(`已创建手动同步请求：${data.id}`);
+      await loadAll();
     }
 
     async function createCoupleSpace() {
@@ -987,6 +1093,9 @@
     window.assignRoles = assignRoles;
     window.assignRolePermissions = assignRolePermissions;
     window.editFeature = editFeature;
+    window.viewDocSyncRecords = viewDocSyncRecords;
+    window.closeDocSyncRecords = closeDocSyncRecords;
+    window.requestDocSync = requestDocSync;
 
     document.addEventListener("DOMContentLoaded", async () => {
       $("loginBtn").addEventListener("click", () => login().catch((e) => showError(e.message)));
@@ -997,6 +1106,7 @@
       $("createCoupleSpaceBtn").addEventListener("click", () => createCoupleSpace().catch((e) => showError(e.message)));
       $("addCoupleMemberBtn").addEventListener("click", () => addCoupleMember().catch((e) => showError(e.message)));
       $("refreshCoupleBtn").addEventListener("click", () => loadAll().catch((e) => showError(e.message)));
+      $("refreshDocSyncBtn").addEventListener("click", () => loadAll().catch((e) => showError(e.message)));
       $("passwordInput").addEventListener("keydown", (e) => {
         if (e.key === "Enter") login().catch((err) => showError(err.message));
       });

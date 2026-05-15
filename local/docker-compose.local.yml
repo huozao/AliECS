@@ -17,6 +17,9 @@ services:
 
   backend-api:
     build: ../services/backend-api
+    env_file:
+      - path: ./.env.local
+        required: false
     environment:
       APP_ENV: ${APP_ENV:-local}
       ENV: ${APP_ENV:-local}
@@ -40,6 +43,37 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+
+  doc-sync-worker:
+    build: ../services/doc-sync-worker
+    env_file:
+      - path: ./.env.local
+        required: false
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://app:app@postgres:5432/app}
+      WECOM_ENV_PROFILES: ${WECOM_ENV_PROFILES:-}
+      WECOM_COMPANY_A_CORP_ID: ${WECOM_COMPANY_A_CORP_ID:-}
+      WECOM_COMPANY_A_APP_SECRET: ${WECOM_COMPANY_A_APP_SECRET:-}
+      WECOM_COMPANY_A_APP_SECRET_2: ${WECOM_COMPANY_A_APP_SECRET_2:-}
+      WECOM_COMPANY_A_APP_SECRETS: ${WECOM_COMPANY_A_APP_SECRETS:-}
+      WEDOC_COMPANY_A_DOCID: ${WEDOC_COMPANY_A_DOCID:-}
+      WEDOC_COMPANY_A_SHEET_ID: ${WEDOC_COMPANY_A_SHEET_ID:-}
+      WEDRIVE_COMPANY_A_SPACEIDS: ${WEDRIVE_COMPANY_A_SPACEIDS:-}
+      SMARTSHEET_COMPANY_A_ID: ${SMARTSHEET_COMPANY_A_ID:-}
+      SMARTSHEET_COMPANY_A_SHEET_ID: ${SMARTSHEET_COMPANY_A_SHEET_ID:-}
+      WECOM_COMPANY_B_CORP_ID: ${WECOM_COMPANY_B_CORP_ID:-}
+      WECOM_COMPANY_B_APP_SECRET: ${WECOM_COMPANY_B_APP_SECRET:-}
+      WECOM_COMPANY_B_APP_SECRET_2: ${WECOM_COMPANY_B_APP_SECRET_2:-}
+      WECOM_COMPANY_B_APP_SECRETS: ${WECOM_COMPANY_B_APP_SECRETS:-}
+      WEDOC_COMPANY_B_DOCID: ${WEDOC_COMPANY_B_DOCID:-}
+      WEDOC_COMPANY_B_SHEET_ID: ${WEDOC_COMPANY_B_SHEET_ID:-}
+      WEDRIVE_COMPANY_B_SPACEIDS: ${WEDRIVE_COMPANY_B_SPACEIDS:-}
+      SMARTSHEET_COMPANY_B_ID: ${SMARTSHEET_COMPANY_B_ID:-}
+      SMARTSHEET_COMPANY_B_SHEET_ID: ${SMARTSHEET_COMPANY_B_SHEET_ID:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   postgres:
     image: postgres:16
