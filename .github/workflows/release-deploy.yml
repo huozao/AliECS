@@ -156,7 +156,11 @@ jobs:
             # release-meta.env used to be tracked in older checkouts. It is now
             # an ECS-private file, so restore tracked copies before fast-forward
             # pull to keep local secret edits from blocking code sync.
-            git restore --source=HEAD -- deploy/ecs/release-meta.env deploy/ecs/runtime.env 2>/dev/null || true
+            for env_file in deploy/ecs/release-meta.env deploy/ecs/runtime.env; do
+              if git ls-files --error-unmatch "${env_file}" >/dev/null 2>&1; then
+                git restore --source=HEAD -- "${env_file}"
+              fi
+            done
 
             git pull --ff-only origin main
 
