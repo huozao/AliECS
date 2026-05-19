@@ -159,6 +159,12 @@ def discover_profile_sources(profile: str) -> list[WeComDocSource]:
     docids.extend(profiled_env_values("DOCID", "WEDOC", normalized))
     docids.extend(profiled_env_values("ID", "SMARTSHEET", normalized))
     docids = list(dict.fromkeys(item.strip() for item in docids if _looks_like_docid(item)))
+    configured_name = (
+        get_profiled_env("NAME", "SMARTSHEET", normalized)
+        or get_profiled_env("NAME", "WEDOC", normalized)
+        or get_profiled_env("TITLE", "SMARTSHEET", normalized)
+        or get_profiled_env("TITLE", "WEDOC", normalized)
+    )
 
     sources: list[WeComDocSource] = []
     for index, docid in enumerate(docids, start=1):
@@ -166,7 +172,7 @@ def discover_profile_sources(profile: str) -> list[WeComDocSource]:
             WeComDocSource(
                 env_profile=normalized,
                 docid=docid,
-                source_name=f"{normalized} 智能表格 {index}",
+                source_name=configured_name or f"{normalized} 智能表格 {index}",
             )
         )
     return sources

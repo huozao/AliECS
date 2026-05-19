@@ -1513,12 +1513,18 @@ def admin_doc_sync_sources(_: dict[str, Any] = Depends(require_admin)) -> dict[s
                 SELECT
                     id, provider, env_profile, source_name, source_type,
                     external_doc_id, external_sheet_id, source_url, status,
+                    document_name, sheet_name,
                     last_sync_at, created_at, updated_at,
                     (
                         SELECT COUNT(*)
                         FROM external_records er
                         WHERE er.source_id = external_sources.id
-                    ) AS record_count
+                    ) AS record_count,
+                    (
+                        SELECT COALESCE(array_agg(ef.field_title ORDER BY ef.id), ARRAY[]::TEXT[])
+                        FROM external_fields ef
+                        WHERE ef.source_id = external_sources.id
+                    ) AS field_titles
                 FROM external_sources
                 ORDER BY updated_at DESC, id DESC
                 LIMIT 500
@@ -1538,10 +1544,13 @@ def admin_doc_sync_sources(_: dict[str, Any] = Depends(require_admin)) -> dict[s
                 "external_sheet_id": row[6],
                 "source_url": row[7],
                 "status": row[8],
-                "last_sync_at": str(row[9]) if row[9] else None,
-                "created_at": str(row[10]),
-                "updated_at": str(row[11]),
-                "record_count": row[12],
+                "document_name": row[9] or row[3],
+                "sheet_name": row[10] or "",
+                "last_sync_at": str(row[11]) if row[11] else None,
+                "created_at": str(row[12]),
+                "updated_at": str(row[13]),
+                "record_count": row[14],
+                "field_titles": row[15] or [],
                 "open_url": row[7] or (
                     f"https://doc.weixin.qq.com/smartsheet/{row[5]}?sheet_id={row[6]}"
                     if row[5] and row[6]

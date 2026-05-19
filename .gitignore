@@ -13,3 +13,6 @@ deploy/ecs/release-meta.env
 id_rsa
 id_ed25519
 token.json
+
+__pycache__/
+*.pyc

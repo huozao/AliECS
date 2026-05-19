@@ -95,6 +95,22 @@ def normalize_record(record: dict[str, Any], field_titles: dict[str, str]) -> di
     return normalized
 
 
+def compose_source_name(document_name: str, sheet_name: str) -> str:
+    document = str(document_name or "").strip()
+    sheet = str(sheet_name or "").strip()
+    if document and sheet:
+        return f"{document} / {sheet}"
+    return document or sheet or "未命名表格"
+
+
+def split_source_name(source_name: str) -> dict[str, str]:
+    text = str(source_name or "").strip()
+    if " / " in text:
+        document_name, sheet_name = text.split(" / ", 1)
+        return {"document_name": document_name.strip(), "sheet_name": sheet_name.strip()}
+    return {"document_name": text, "sheet_name": ""}
+
+
 def build_smartsheet_open_url(external_doc_id: str, external_sheet_id: str, source_url: str = "") -> str:
     if source_url:
         return source_url
@@ -196,25 +212,43 @@ class PostgresDocSyncStore:
         external_doc_id: str,
         external_sheet_id: str,
         source_url: str = "",
+        document_name: str = "",
+        sheet_name: str = "",
     ) -> int:
+        names = split_source_name(source_name)
+        document_name = str(document_name or names["document_name"]).strip()
+        sheet_name = str(sheet_name or names["sheet_name"]).strip()
         with self.conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO external_sources(
                     provider, env_profile, source_name, source_type,
-                    external_doc_id, external_sheet_id, source_url, status, updated_at
+                    external_doc_id, external_sheet_id, source_url,
+                    document_name, sheet_name, status, updated_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, 'active', NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', NOW())
                 ON CONFLICT(provider, env_profile, external_doc_id, external_sheet_id)
                 DO UPDATE SET
                     source_name = EXCLUDED.source_name,
                     source_type = EXCLUDED.source_type,
                     source_url = EXCLUDED.source_url,
+                    document_name = EXCLUDED.document_name,
+                    sheet_name = EXCLUDED.sheet_name,
                     status = 'active',
                     updated_at = NOW()
                 RETURNING id
                 """,
-                (provider, env_profile, source_name, source_type, external_doc_id, external_sheet_id, source_url),
+                (
+                    provider,
+                    env_profile,
+                    source_name,
+                    source_type,
+                    external_doc_id,
+                    external_sheet_id,
+                    source_url,
+                    document_name,
+                    sheet_name,
+                ),
             )
             row = cur.fetchone()
         self.conn.commit()
