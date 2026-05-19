@@ -236,6 +236,19 @@
     .company-board { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
     .source-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: white; margin-bottom: 10px; }
     .record-preview { max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: 12px; background: white; padding: 10px; }
+    .doc-sync-table { min-width: 1120px; }
+    .doc-sync-table .fields { max-width: 420px; max-height: 76px; overflow: hidden; }
+    .doc-sync-table .doc-name { font-weight: 800; margin-bottom: 4px; }
+    .doc-sync-table .source-id { max-width: 260px; overflow-wrap: anywhere; }
+    .record-table { min-width: 960px; }
+    .record-table th:first-child, .record-table td:first-child {
+      position: sticky;
+      left: 0;
+      background: white;
+      text-align: right;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
     @media (max-width: 900px) { .company-board { grid-template-columns: 1fr; } }
   </style>
 </head>
@@ -308,7 +321,7 @@
           </div>
           <button id="refreshDocSyncBtn" type="button">刷新同步数据</button>
         </div>
-        <div id="docSyncBoard" class="company-board"></div>
+        <div id="docSyncBoard"></div>
         <div id="docSyncRecords" class="record-preview hidden" style="margin-top:14px;"></div>
         <div class="table-wrap" style="margin-top:14px;">
           <table>
@@ -760,38 +773,82 @@
       return provider || "-";
     }
 
-    function renderDocSync() {
-      const groups = {};
-      (state.docSyncSources || []).forEach((source) => {
-        const key = source.env_profile || "未分组";
-        if (!groups[key]) groups[key] = [];
-        groups[key].push(source);
-      });
+    function sourceNames(source) {
+      const fallback = source.source_name || "";
+      const parts = fallback.includes(" / ") ? fallback.split(" / ") : [fallback, ""];
+      return {
+        documentName: source.document_name || parts[0] || `source ${source.id}`,
+        sheetName: source.sheet_name || parts.slice(1).join(" / ") || source.external_sheet_id || "-"
+      };
+    }
 
-      const companyNames = Object.keys(groups).sort();
-      $("docSyncBoard").innerHTML = companyNames.length ? companyNames.map((company) => `
-        <section class="source-card">
-          <h3 style="margin:0 0 10px;">${escapeHtml(company)}</h3>
-          ${groups[company].map((source) => `
-            <article class="source-card">
-              <div class="row" style="justify-content:space-between;">
-                <strong>${escapeHtml(source.source_name || `source ${source.id}`)}</strong>
-                ${tag(providerLabel(source.provider), source.provider === "wecom" ? "ok" : "warn")}
-              </div>
-              <div class="small muted" style="line-height:1.8;margin-top:8px;">
-                docid: ${escapeHtml(source.external_doc_id || "-")}<br/>
-                sheet_id: ${escapeHtml(source.external_sheet_id || "-")}<br/>
-                records: ${source.record_count || 0} · last_sync: ${escapeHtml(source.last_sync_at || "-")}
-              </div>
-              <div class="actions" style="margin-top:10px;">
-                <button type="button" onclick="viewDocSyncRecords(${source.id})">查看数据</button>
-                ${source.open_url ? `<a class="btn" href="${escapeHtml(source.open_url)}" target="_blank" rel="noreferrer">打开原表格</a>` : ""}
-                <button type="button" class="primary" onclick="requestDocSync(${source.id})">手动同步</button>
-              </div>
-            </article>
-          `).join("")}
-        </section>
-      `).join("") : '<div class="notice">还没有同步源。先运行 doc-sync-worker 完整同步，或在 external_sources 中登记 smartsheet_doc / registry_doc。</div>';
+    function shortDocId(docid) {
+      const text = String(docid || "");
+      return text.length > 34 ? `${text.slice(0, 30)}...` : (text || "-");
+    }
+
+    function renderFieldTags(fields) {
+      const items = Array.isArray(fields) ? fields.filter(Boolean) : [];
+      if (!items.length) return '<span class="muted small">未同步表头</span>';
+      const visible = items.slice(0, 10).map((field) => tag(field)).join("");
+      const more = items.length > 10 ? tag(`+ ${items.length - 10} 个字段`, "warn") : "";
+      return `<div class="fields">${visible}${more}</div>`;
+    }
+
+    function recordCellValue(value) {
+      if (value === null || value === undefined || value === "") return '<span class="muted">-</span>';
+      if (typeof value === "object") return escapeHtml(JSON.stringify(value));
+      return escapeHtml(String(value));
+    }
+
+    function renderDocSync() {
+      const sources = state.docSyncSources || [];
+      $("docSyncBoard").innerHTML = sources.length ? `
+        <div class="table-wrap" style="margin-top:14px;">
+          <table class="doc-sync-table">
+            <thead>
+              <tr>
+                <th>公司</th>
+                <th>智能表格名</th>
+                <th>工作表名</th>
+                <th>表头字段</th>
+                <th>记录数</th>
+                <th>最近同步</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${sources.map((source) => {
+                const names = sourceNames(source);
+                return `
+                  <tr>
+                    <td>${escapeHtml(source.env_profile || "-")}<br/>${tag(providerLabel(source.provider), source.provider === "wecom" ? "ok" : "warn")}</td>
+                    <td>
+                      <div class="doc-name">${escapeHtml(names.documentName)}</div>
+                      <div class="small muted source-id">docid: ${escapeHtml(shortDocId(source.external_doc_id))}</div>
+                    </td>
+                    <td>
+                      <div class="doc-name">${escapeHtml(names.sheetName)}</div>
+                      <div class="small muted">sheet_id: ${escapeHtml(source.external_sheet_id || "-")}</div>
+                    </td>
+                    <td>${renderFieldTags(source.field_titles)}</td>
+                    <td>${source.record_count || 0}</td>
+                    <td>${escapeHtml(source.last_sync_at || "-")}</td>
+                    <td>
+                      <div class="actions">
+                        <button type="button" class="primary" onclick="viewDocSyncRecords(${source.id})">查看数据</button>
+                        <button type="button" onclick="previewDocSyncSource(${source.id})">预览</button>
+                        ${source.open_url ? `<a class="btn" href="${escapeHtml(source.open_url)}" target="_blank" rel="noreferrer">打开原表格</a>` : ""}
+                        <button type="button" onclick="requestDocSync(${source.id})">手动同步</button>
+                      </div>
+                    </td>
+                  </tr>
+                `;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
+      ` : '<div class="notice">还没有同步源。先运行 doc-sync-worker 完整同步，或在 external_sources 中登记 smartsheet_doc / registry_doc。</div>';
 
       $("docSyncRequestsBody").innerHTML = (state.docSyncRequests || []).map((request) => `
         <tr>
@@ -857,13 +914,57 @@
     async function viewDocSyncRecords(sourceId) {
       const data = await api(`/v1/admin/doc-sync/sources/${sourceId}/records?limit=50`);
       const source = state.docSyncSources.find((item) => item.id === sourceId);
+      const records = data.items || [];
+      const fieldNames = Array.from(new Set(records.flatMap((item) => Object.keys(item.normalized_json || {}))));
+      const visibleFields = fieldNames.length ? fieldNames : (source?.field_titles || []);
+      const names = sourceNames(source || {});
       $("docSyncRecords").classList.remove("hidden");
       $("docSyncRecords").innerHTML = `
         <div class="row" style="justify-content:space-between;">
-          <strong>${escapeHtml(source?.source_name || `source ${sourceId}`)} · 最近 50 条</strong>
+          <strong>${escapeHtml(names.documentName)} / ${escapeHtml(names.sheetName)} · 最近 50 条</strong>
           <button type="button" onclick="closeDocSyncRecords()">关闭</button>
         </div>
-        <pre style="white-space:pre-wrap;font-size:12px;">${escapeHtml(JSON.stringify(data.items || [], null, 2))}</pre>
+        <div class="table-wrap" style="margin-top:10px;">
+          <table class="record-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                ${visibleFields.map((field) => `<th>${escapeHtml(field)}</th>`).join("")}
+                <th>记录ID</th>
+                <th>同步时间</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${records.length ? records.map((record, index) => `
+                <tr>
+                  <td>${index + 1}</td>
+                  ${visibleFields.map((field) => `<td>${recordCellValue((record.normalized_json || {})[field])}</td>`).join("")}
+                  <td>${escapeHtml(record.external_record_id || "-")}</td>
+                  <td>${escapeHtml(record.synced_at || "-")}</td>
+                </tr>
+              `).join("") : `<tr><td colspan="${visibleFields.length + 3}" class="muted">暂无记录</td></tr>`}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function previewDocSyncSource(sourceId) {
+      const source = state.docSyncSources.find((item) => item.id === sourceId);
+      if (!source) return;
+      const names = sourceNames(source);
+      $("docSyncRecords").classList.remove("hidden");
+      $("docSyncRecords").innerHTML = `
+        <div class="row" style="justify-content:space-between;">
+          <strong>${escapeHtml(names.documentName)} / ${escapeHtml(names.sheetName)} · 表头预览</strong>
+          <button type="button" onclick="closeDocSyncRecords()">关闭</button>
+        </div>
+        <div class="small muted" style="line-height:1.8;margin-top:8px;">
+          docid: ${escapeHtml(source.external_doc_id || "-")}<br/>
+          sheet_id: ${escapeHtml(source.external_sheet_id || "-")}<br/>
+          records: ${source.record_count || 0} · last_sync: ${escapeHtml(source.last_sync_at || "-")}
+        </div>
+        <div style="margin-top:10px;">${renderFieldTags(source.field_titles)}</div>
       `;
     }
 

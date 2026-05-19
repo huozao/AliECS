@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>同步表格总览预览</title>
+  <style>
+    :root {
+      --bg: #f7f3ec;
+      --panel: #fffdfa;
+      --line: #dfd3c1;
+      --line-strong: #c9b89f;
+      --text: #15110b;
+      --muted: #6e6254;
+      --accent: #7b6344;
+      --accent-soft: #efe5d6;
+      --ok-bg: #e8f4ec;
+      --ok: #1f7a48;
+      --warn-bg: #fff1d7;
+      --warn: #8a5b10;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Arial, "Microsoft YaHei", sans-serif;
+      font-size: 14px;
+    }
+
+    main {
+      width: min(1240px, calc(100vw - 32px));
+      margin: 22px auto 40px;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
+      margin-bottom: 16px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 24px;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+
+    button, .btn {
+      border: 0;
+      border-radius: 999px;
+      padding: 8px 13px;
+      font-weight: 700;
+      background: var(--accent-soft);
+      color: var(--text);
+      cursor: pointer;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+
+    button.primary, .btn.primary {
+      background: var(--accent);
+      color: white;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      box-shadow: 0 12px 32px rgba(92, 73, 48, 0.08);
+    }
+
+    .table-wrap {
+      overflow: auto;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: white;
+    }
+
+    table {
+      width: max-content;
+      min-width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 13px;
+    }
+
+    th, td {
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+      line-height: 1.45;
+    }
+
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: #f1e7d8;
+      color: #2a2118;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    tbody tr:hover td {
+      background: #fff6e8;
+    }
+
+    .col-company { min-width: 110px; }
+    .col-doc { min-width: 260px; max-width: 320px; }
+    .col-sheet { min-width: 180px; max-width: 220px; }
+    .col-fields { min-width: 390px; max-width: 520px; }
+    .col-count { min-width: 92px; }
+    .col-sync { min-width: 150px; }
+    .col-actions { min-width: 330px; }
+
+    .main-name {
+      font-weight: 800;
+      font-size: 15px;
+      margin-bottom: 4px;
+    }
+
+    .sub {
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 4px 9px;
+      margin: 0 6px 6px 0;
+      background: var(--accent-soft);
+      color: #3b3024;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .tag.ok {
+      background: var(--ok-bg);
+      color: var(--ok);
+    }
+
+    .tag.warn {
+      background: var(--warn-bg);
+      color: var(--warn);
+    }
+
+    .field-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0;
+      max-height: 72px;
+      overflow: hidden;
+    }
+
+    .field-more {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .records-panel {
+      margin-top: 14px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+    }
+
+    .records-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .records-table-wrap {
+      overflow: auto;
+      max-height: 320px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .records-table th,
+    .records-table td {
+      min-width: 120px;
+      max-width: 260px;
+      overflow-wrap: anywhere;
+      padding: 8px 10px;
+    }
+
+    .records-table th:first-child,
+    .records-table td:first-child {
+      position: sticky;
+      left: 0;
+      z-index: 1;
+      min-width: 64px;
+      max-width: 64px;
+      background: #fffaf2;
+      text-align: right;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .records-table th:first-child {
+      z-index: 3;
+      background: #eadcc8;
+      color: var(--text);
+    }
+
+    .empty {
+      color: #9b8d7d;
+    }
+
+    @media (max-width: 920px) {
+      header { display: block; }
+      .panel { padding: 10px; }
+      .records-head { display: block; }
+      .records-head .actions { margin-top: 10px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>企业微信同步表格总览</h1>
+        <p>确认用静态预览：一行一个智能表格/工作表，字段表头和操作入口都集中在同一行，方便横向对比。</p>
+      </div>
+    </header>
+
+    <section class="panel" aria-label="同步表格总览">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="col-company">公司</th>
+              <th class="col-doc">智能表格名</th>
+              <th class="col-sheet">工作表名</th>
+              <th class="col-fields">表头字段</th>
+              <th class="col-count">记录数</th>
+              <th class="col-sync">最近同步</th>
+              <th class="col-actions">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="tag ok">COMPANY_A</span></td>
+              <td class="col-doc">
+                <div class="main-name">COMPANY_A 智能表格 1</div>
+                <div class="sub">docid: dcIaiO310zScyhZO3WmOwMC8sG_mACVtS8t8mcw1lQ...</div>
+              </td>
+              <td class="col-sheet">
+                <div class="main-name">公开的生产记录表</div>
+                <div class="sub">sheet_id: tlPN4</div>
+              </td>
+              <td class="col-fields">
+                <div class="field-list">
+                  <span class="tag">日期</span>
+                  <span class="tag">生产线</span>
+                  <span class="tag">产品名称</span>
+                  <span class="tag">批次号</span>
+                  <span class="tag">计划数量</span>
+                  <span class="tag">实际数量</span>
+                  <span class="tag">负责人</span>
+                  <span class="tag">备注</span>
+                </div>
+              </td>
+              <td><strong>0</strong></td>
+              <td><span class="empty">-</span></td>
+              <td>
+                <div class="actions">
+                  <button type="button" class="primary">查看数据</button>
+                  <button type="button">预览</button>
+                  <a class="btn" href="#">打开原表格</a>
+                  <button type="button">手动同步</button>
+                </div>
+              </td>
+            </tr>
+
+            <tr>
+              <td><span class="tag ok">COMPANY_A</span></td>
+              <td class="col-doc">
+                <div class="main-name">COMPANY_A 智能表格 1</div>
+                <div class="sub">docid: dcIaiO310zScyhZO3WmOwMC8sG_mACVtS8t8mcw1lQ...</div>
+              </td>
+              <td class="col-sheet">
+                <div class="main-name">选单录单</div>
+                <div class="sub">sheet_id: tmj7dB</div>
+              </td>
+              <td class="col-fields">
+                <div class="field-list">
+                  <span class="tag">客户</span>
+                  <span class="tag">订单号</span>
+                  <span class="tag">款号</span>
+                  <span class="tag">颜色</span>
+                  <span class="tag">尺码</span>
+                  <span class="tag">交期</span>
+                  <span class="tag">状态</span>
+                  <span class="tag warn">+ 6 个字段</span>
+                </div>
+              </td>
+              <td><strong>5</strong></td>
+              <td>2026-05-15 17:27</td>
+              <td>
+                <div class="actions">
+                  <button type="button" class="primary">查看数据</button>
+                  <button type="button">预览</button>
+                  <a class="btn" href="#">打开原表格</a>
+                  <button type="button">手动同步</button>
+                </div>
+              </td>
+            </tr>
+
+            <tr>
+              <td><span class="tag ok">COMPANY_B</span></td>
+              <td class="col-doc">
+                <div class="main-name">COMPANY_B 智能表格 1</div>
+                <div class="sub">docid: dcMYrhbrvi4LUs-cLSFmA5-AOPF9g7XX3Z567tLQi7I6aK...</div>
+              </td>
+              <td class="col-sheet">
+                <div class="main-name">点检计划</div>
+                <div class="sub">sheet_id: g979lj</div>
+              </td>
+              <td class="col-fields">
+                <div class="field-list">
+                  <span class="tag">关联</span>
+                  <span class="tag">类型</span>
+                  <span class="tag">频率</span>
+                  <span class="tag">负责人</span>
+                  <span class="tag">状态</span>
+                  <span class="tag">备注</span>
+                </div>
+              </td>
+              <td><strong>3</strong></td>
+              <td>2026-05-15 17:27</td>
+              <td>
+                <div class="actions">
+                  <button type="button" class="primary">查看数据</button>
+                  <button type="button">预览</button>
+                  <a class="btn" href="#">打开原表格</a>
+                  <button type="button">手动同步</button>
+                </div>
+              </td>
+            </tr>
+
+            <tr>
+              <td><span class="tag ok">COMPANY_B</span></td>
+              <td class="col-doc">
+                <div class="main-name">COMPANY_B 智能表格 1</div>
+                <div class="sub">docid: dcMYrhbrvi4LUs-cLSFmA5-AOPF9g7XX3Z567tLQi7I6aK...</div>
+              </td>
+              <td class="col-sheet">
+                <div class="main-name">点检明细</div>
+                <div class="sub">sheet_id: HhuoZ9</div>
+              </td>
+              <td class="col-fields">
+                <div class="field-list">
+                  <span class="tag">设备</span>
+                  <span class="tag">点检项</span>
+                  <span class="tag">标准</span>
+                  <span class="tag">结果</span>
+                  <span class="tag">异常说明</span>
+                  <span class="tag">检查人</span>
+                  <span class="tag">检查时间</span>
+                </div>
+              </td>
+              <td><strong>4</strong></td>
+              <td>2026-05-15 17:27</td>
+              <td>
+                <div class="actions">
+                  <button type="button" class="primary">查看数据</button>
+                  <button type="button">预览</button>
+                  <a class="btn" href="#">打开原表格</a>
+                  <button type="button">手动同步</button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="records-panel">
+        <div class="records-head">
+          <div>
+            <div class="main-name">查看数据展开示例：COMPANY_B 智能表格 1 / 点检计划</div>
+            <p>点击某一行的“查看数据”后，在总览表下方展开最近记录，仍然按表头列展示。</p>
+          </div>
+          <div class="actions">
+            <button type="button">关闭</button>
+          </div>
+        </div>
+        <div class="records-table-wrap">
+          <table class="records-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>关联</th>
+                <th>类型</th>
+                <th>频率</th>
+                <th>负责人</th>
+                <th>状态</th>
+                <th>备注</th>
+                <th>记录ID</th>
+                <th>同步时间</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>1</td>
+                <td>[]</td>
+                <td>润滑油</td>
+                <td>1次/月</td>
+                <td>张三</td>
+                <td>启用</td>
+                <td>检查油位和异常响动</td>
+                <td>rBeutk</td>
+                <td>2026-05-15 17:27</td>
+              </tr>
+              <tr>
+                <td>2</td>
+                <td>点检明细 A-01</td>
+                <td>安全</td>
+                <td>1次/周</td>
+                <td>李四</td>
+                <td>启用</td>
+                <td>防护罩、急停按钮、警示标识</td>
+                <td>rHk29p</td>
+                <td>2026-05-15 17:27</td>
+              </tr>
+              <tr>
+                <td>3</td>
+                <td>点检明细 B-02</td>
+                <td>清洁</td>
+                <td>1次/日</td>
+                <td class="empty">-</td>
+                <td>待确认</td>
+                <td>{"区域":"上料口","要求":"无明显积尘"}</td>
+                <td>rX9m2a</td>
+                <td>2026-05-15 17:27</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

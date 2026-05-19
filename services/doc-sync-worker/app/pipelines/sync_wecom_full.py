@@ -10,7 +10,7 @@ from app.providers.wecom import (
     env_profiles,
     summarize_wecom_error,
 )
-from app.storage.postgres import build_record_snapshot, open_store
+from app.storage.postgres import build_record_snapshot, compose_source_name, open_store
 
 
 def _sheet_id(sheet: dict[str, Any]) -> str:
@@ -113,11 +113,13 @@ def run_sync_wecom_full(profiles_arg: str = "") -> int:
                                 source_id = store.ensure_source(
                                     provider="wecom",
                                     env_profile=profile,
-                                    source_name=f"{source.source_name} / {sheet_name}",
+                                    source_name=compose_source_name(source.source_name, sheet_name),
                                     source_type="smartsheet_sheet",
                                     external_doc_id=source.docid,
                                     external_sheet_id=sheet_id,
                                     source_url=source.source_url,
+                                    document_name=source.source_name,
+                                    sheet_name=sheet_name,
                                 )
                                 _sync_sheet_records(store, client, source_id, source.docid, sheet_id, counts)
                             doc_synced = True

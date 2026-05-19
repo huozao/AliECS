@@ -107,6 +107,22 @@ class SourceUrlTests(unittest.TestCase):
         self.assertEqual("https://doc.weixin.qq.com/smartsheet/dcabc?sheet_id=sheet1", url)
 
 
+class SourceNameTests(unittest.TestCase):
+    def test_compose_source_name_keeps_document_and_sheet_names_separate(self) -> None:
+        from app.storage.postgres import compose_source_name
+
+        source_name = compose_source_name("点检表", "点检计划")
+
+        self.assertEqual("点检表 / 点检计划", source_name)
+
+    def test_split_source_name_recovers_legacy_document_and_sheet_names(self) -> None:
+        from app.storage.postgres import split_source_name
+
+        names = split_source_name("点检表 / 点检明细")
+
+        self.assertEqual({"document_name": "点检表", "sheet_name": "点检明细"}, names)
+
+
 class EnvProfileTests(unittest.TestCase):
     def test_env_profiles_can_be_inferred_from_company_variables(self) -> None:
         from app.providers.wecom import env_profiles
@@ -138,6 +154,21 @@ class EnvProfileTests(unittest.TestCase):
             sources = discover_profile_sources("COMPANY_A")
             self.assertEqual(1, len(sources))
             self.assertTrue(sources[0].docid.startswith("dcFAKE_LOCAL_TEST"))
+
+    def test_discover_profile_sources_uses_configured_smartsheet_name(self) -> None:
+        from app.providers.wecom import discover_profile_sources
+
+        with patch.dict(
+            "os.environ",
+            {
+                "SMARTSHEET_COMPANY_B_ID": "dcFAKE_COMPANY_B_DOC_ID_000000000000000000000001",
+                "SMARTSHEET_COMPANY_B_NAME": "点检表",
+            },
+            clear=True,
+        ):
+            sources = discover_profile_sources("COMPANY_B")
+            self.assertEqual(1, len(sources))
+            self.assertEqual("点检表", sources[0].source_name)
 
 
 if __name__ == "__main__":
