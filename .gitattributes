@@ -1,0 +1,2 @@
+*.sh text eol=lf
+deploy/ecs/*.sh text eol=lf

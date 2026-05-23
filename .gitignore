@@ -16,3 +16,5 @@ token.json
 
 __pycache__/
 *.pyc
+
+.codex-temp/

@@ -1,0 +1,8 @@
+.git
+__pycache__/
+*.pyc
+logs/
+browser_data/
+_references/
+.env
+.env.*

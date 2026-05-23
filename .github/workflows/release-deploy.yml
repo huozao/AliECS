@@ -18,11 +18,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-push-deploy:
+  resolve-release:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      packages: write
+    outputs:
+      release_version: ${{ steps.vars.outputs.release_version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -85,52 +86,75 @@ jobs:
             git push origin "$TAG"
           fi
 
+  build-push:
+    needs: resolve-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: public-web
+            context: services/public-web
+          - image: admin-ui
+            context: services/admin-ui
+          - image: backend-api
+            context: services/backend-api
+          - image: doc-sync-worker
+            context: services/doc-sync-worker
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Login to GHCR for push
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push public-web
-        run: |
-          TAG="${{ steps.vars.outputs.release_version }}"
-          docker build -t ghcr.io/${{ github.repository_owner }}/public-web:${TAG} services/public-web
-          docker push ghcr.io/${{ github.repository_owner }}/public-web:${TAG}
+      - name: Build and push ${{ matrix.image }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ needs.resolve-release.outputs.release_version }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
 
-      - name: Build and push admin-ui
-        run: |
-          TAG="${{ steps.vars.outputs.release_version }}"
-          docker build -t ghcr.io/${{ github.repository_owner }}/admin-ui:${TAG} services/admin-ui
-          docker push ghcr.io/${{ github.repository_owner }}/admin-ui:${TAG}
-
-      - name: Build and push backend-api
-        run: |
-          TAG="${{ steps.vars.outputs.release_version }}"
-          docker build -t ghcr.io/${{ github.repository_owner }}/backend-api:${TAG} services/backend-api
-          docker push ghcr.io/${{ github.repository_owner }}/backend-api:${TAG}
-
-      - name: Build and push doc-sync-worker
-        run: |
-          TAG="${{ steps.vars.outputs.release_version }}"
-          docker build -t ghcr.io/${{ github.repository_owner }}/doc-sync-worker:${TAG} services/doc-sync-worker
-          docker push ghcr.io/${{ github.repository_owner }}/doc-sync-worker:${TAG}
-
+  deploy:
+    needs:
+      - resolve-release
+      - build-push
+    runs-on: ubuntu-latest
+    steps:
       - name: Deploy on ECS
         uses: appleboy/ssh-action@v1.2.0
         env:
           GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          ALIYUN_KMS_SECRET_NAME: ${{ secrets.ALIYUN_KMS_SECRET_NAME }}
+          ALIYUN_REGION_ID: ${{ secrets.ALIYUN_REGION_ID }}
         with:
           host: ${{ secrets.ECS_HOST }}
           username: ${{ secrets.ECS_USER }}
           key: ${{ secrets.ECS_SSH_KEY }}
-          envs: GHCR_USERNAME,GHCR_TOKEN
+          envs: GHCR_USERNAME,GHCR_TOKEN,ALIYUN_KMS_SECRET_NAME,ALIYUN_REGION_ID
           script: |
             set -euo pipefail
 
             export GHCR_USERNAME="${GHCR_USERNAME:-}"
             export GHCR_TOKEN="${GHCR_TOKEN:-}"
+            export ALIYUN_KMS_SECRET_NAME="${ALIYUN_KMS_SECRET_NAME:-}"
+            export ALIYUN_REGION_ID="${ALIYUN_REGION_ID:-cn-hangzhou}"
 
             APP_ROOT="/root/AliECS"
             BACKUP_DIR="/root/AliECS-private-backup/github-actions"
-            RELEASE_VERSION="${{ steps.vars.outputs.release_version }}"
+            RELEASE_VERSION="${{ needs.resolve-release.outputs.release_version }}"
             TS="$(date +%Y%m%d-%H%M%S)"
 
             if [[ ! -d "${APP_ROOT}/.git" ]]; then
@@ -173,6 +197,15 @@ jobs:
               cp -a "${BACKUP_DIR}/runtime.env.${TS}" "deploy/ecs/runtime.env"
               chmod 600 "deploy/ecs/runtime.env"
             fi
+
+            FETCH_ENV_SCRIPT="${APP_ROOT}/deploy/ecs/fetch-release-env.sh"
+            if [[ ! -f "${FETCH_ENV_SCRIPT}" ]]; then
+              echo "[deploy] Env sync script is missing: ${FETCH_ENV_SCRIPT}" >&2
+              exit 1
+            fi
+
+            echo "[deploy] Syncing ECS private env from Alibaba Cloud KMS"
+            bash "${FETCH_ENV_SCRIPT}"
 
             DEPLOY_SCRIPT="${APP_ROOT}/deploy/ecs/deploy.sh"
             if [[ ! -x "${DEPLOY_SCRIPT}" ]]; then
