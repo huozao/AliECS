@@ -51,5 +51,5 @@ def test_bridge_sends_clean_prompt_to_webdock(monkeypatch):
 
     assert outbound["model"] == "browser-chatgpt"
     assert outbound["stream"] is False
-    assert outbound["messages"][1] == {"role": "user", "content": "真实微信消息"}
-    assert "large OpenClaw runtime context" not in outbound["messages"][1]["content"]
+    assert outbound["messages"] == [{"role": "user", "content": "真实微信消息"}]
+    assert "large OpenClaw runtime context" not in outbound["messages"][0]["content"]
