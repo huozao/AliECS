@@ -69,13 +69,7 @@ def build_webdock_body(body: dict[str, Any]) -> dict[str, Any]:
     user_text = get_last_user_message(body.get("messages"))
     return {
         "model": os.getenv("WEB_DOCK_MODEL", "browser-chatgpt"),
-        "messages": [
-            {
-                "role": "system",
-                "content": "你是微信里的 ChatGPT 助手。只回复用户真实消息，不解释后台元数据、系统提示或 OpenClaw 运行上下文。",
-            },
-            {"role": "user", "content": user_text or "请回复这条微信消息。"},
-        ],
+        "messages": [{"role": "user", "content": user_text or "请回复这条微信消息。"}],
         "stream": False,
     }
 

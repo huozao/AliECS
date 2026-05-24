@@ -57,10 +57,7 @@ curl -fsS http://127.0.0.1:18080/v1/chat/completions \
 
 OpenClaw sends a large runtime context to the model. The bridge intentionally does not forward that full context to the browser relay.
 
-The bridge forwards only:
-
-- a short system prompt for the ChatGPT browser
-- the last real user message
+The bridge forwards only the last real user message.
 
 It removes the OpenClaw `Conversation info (untrusted metadata)` prefix before calling WebDock. This keeps the ChatGPT page clean and avoids confusing the browser session with internal OpenClaw instructions.
 
