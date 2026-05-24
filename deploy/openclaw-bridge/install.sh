@@ -17,4 +17,5 @@ fi
 
 python3 -m py_compile /opt/openclaw-bridge/openclaw_bridge.py
 systemctl daemon-reload
-systemctl enable --now openclaw-bridge.service
+systemctl enable openclaw-bridge.service
+systemctl restart openclaw-bridge.service
