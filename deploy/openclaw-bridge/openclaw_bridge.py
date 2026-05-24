@@ -7,7 +7,7 @@ import re
 import time
 import urllib.error
 import urllib.request
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 
@@ -199,6 +199,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    server = HTTPServer(("0.0.0.0", int(os.getenv("OPENCLAW_BRIDGE_PORT", "18080"))), Handler)
+    server = ThreadingHTTPServer(("0.0.0.0", int(os.getenv("OPENCLAW_BRIDGE_PORT", "18080"))), Handler)
     print("OpenClaw bridge listening on http://127.0.0.1:18080/v1")
     server.serve_forever()
