@@ -8,6 +8,7 @@ import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 from typing import Any
 
 
@@ -15,6 +16,16 @@ FALLBACK_MESSAGE = os.getenv("WEB_DOCK_FALLBACK_MESSAGE", "ChatGPT 浏览器暂�
 OPENCLAW_METADATA_RE = re.compile(
     r"^Conversation info \(untrusted metadata\):\s*```json\s*.*?```\s*",
     flags=re.DOTALL,
+)
+ENGLISH_ERROR_PATTERNS = (
+    "llm request timed out",
+    "model idle timeout",
+    "the model did not produce a response",
+    "request timed out",
+    "fetch failed",
+    "chatgpt response did not finish before timeout",
+    "cannot find chatgpt input box",
+    "chatgpt is not logged in",
 )
 
 
@@ -86,6 +97,38 @@ def extract_assistant_reply(payload: dict[str, Any]) -> str:
         return ""
 
 
+def normalize_reply(text: str) -> str:
+    lowered = text.strip().lower()
+    if not lowered:
+        return ""
+    for pattern in ENGLISH_ERROR_PATTERNS:
+        if pattern in lowered:
+            return diagnostic_message(
+                "bridge -> WebDock -> ChatGPT connected, but ChatGPT/WebDock returned a timeout or browser error.",
+                "ChatGPT browser response extraction",
+            )
+    return text.strip()
+
+
+def diagnostic_message(reason: str, stop_at: str) -> str:
+    return (
+        f"{FALLBACK_MESSAGE}\n"
+        f"诊断：OpenClaw -> openclaw-bridge 已联通；{reason}\n"
+        f"停止点：{stop_at}。"
+    )
+
+
+def parse_http_error_message(exc: urllib.error.HTTPError) -> str:
+    try:
+        payload = json.loads(exc.read().decode("utf-8", errors="replace"))
+    except Exception:
+        return str(exc)
+    detail = payload.get("detail") if isinstance(payload, dict) else None
+    if isinstance(detail, dict):
+        return str(detail.get("message") or detail.get("error_code") or exc)
+    return str(detail or payload or exc)
+
+
 def call_webdock(body: dict[str, Any]) -> str:
     outbound = build_webdock_body(body)
     data = json.dumps(outbound, ensure_ascii=False).encode("utf-8")
@@ -100,7 +143,7 @@ def call_webdock(body: dict[str, Any]) -> str:
     )
     with urllib.request.urlopen(request, timeout=webdock_timeout()) as response:
         payload = json.loads(response.read().decode("utf-8"))
-    return extract_assistant_reply(payload) or FALLBACK_MESSAGE
+    return normalize_reply(extract_assistant_reply(payload)) or FALLBACK_MESSAGE
 
 
 def build_reply(body: dict[str, Any]) -> str:
@@ -109,9 +152,37 @@ def build_reply(body: dict[str, Any]) -> str:
         return f"已收到你的微信消息：{user_text}" if user_text else "已收到你的微信消息。"
     try:
         return call_webdock(body)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 429:
+            return diagnostic_message(
+                "bridge -> WebDock 已联通；WebDock 返回 429 BUSY，浏览器正在处理另一条请求。",
+                "WebDock browser lock",
+            )
+        if exc.code in {401, 403}:
+            return diagnostic_message(
+                f"bridge -> WebDock 已联通；WebDock 拒绝鉴权（HTTP {exc.code}）。",
+                "WebDock API token",
+            )
+        return diagnostic_message(
+            f"bridge -> WebDock 已联通；WebDock 返回 HTTP {exc.code}: {parse_http_error_message(exc)}",
+            "WebDock API",
+        )
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
         print(f"webdock unavailable: {exc}")
-        return FALLBACK_MESSAGE
+        if isinstance(exc, TimeoutError):
+            return diagnostic_message(
+                "bridge -> WebDock 请求超时，ChatGPT 可能仍在生成或页面未完成响应。",
+                "WebDock/ChatGPT timeout",
+            )
+        if isinstance(exc, json.JSONDecodeError):
+            return diagnostic_message(
+                "bridge -> WebDock 已联通，但返回内容不是有效 JSON。",
+                "WebDock API response",
+            )
+        return diagnostic_message(
+            f"bridge -> WebDock 未联通或连接失败：{exc}",
+            "ECS tunnel or WebDock API",
+        )
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -192,7 +263,16 @@ class Handler(BaseHTTPRequestHandler):
         print("[%s] %s" % (self.log_date_time_string(), fmt % args))
 
 
+def get_bridge_hosts() -> list[str]:
+    hosts = os.getenv("OPENCLAW_BRIDGE_HOSTS") or os.getenv("OPENCLAW_BRIDGE_HOST", "127.0.0.1")
+    return [host.strip() for host in hosts.split(",") if host.strip()]
+
+
 if __name__ == "__main__":
-    server = ThreadingHTTPServer(("0.0.0.0", int(os.getenv("OPENCLAW_BRIDGE_PORT", "18080"))), Handler)
-    print("OpenClaw bridge listening on http://127.0.0.1:18080/v1")
-    server.serve_forever()
+    bridge_hosts = get_bridge_hosts()
+    bridge_port = int(os.getenv("OPENCLAW_BRIDGE_PORT", "18080"))
+    servers = [ThreadingHTTPServer((host, bridge_port), Handler) for host in bridge_hosts]
+    for server in servers[1:]:
+        Thread(target=server.serve_forever, daemon=True).start()
+    print("OpenClaw bridge listening on " + ", ".join(f"http://{host}:{bridge_port}/v1" for host in bridge_hosts))
+    servers[0].serve_forever()

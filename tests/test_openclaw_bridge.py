@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import io
+import urllib.error
 from pathlib import Path
 
 
@@ -53,3 +55,53 @@ def test_bridge_sends_clean_prompt_to_webdock(monkeypatch):
     assert outbound["stream"] is False
     assert outbound["messages"] == [{"role": "user", "content": "真实微信消息"}]
     assert "large OpenClaw runtime context" not in outbound["messages"][0]["content"]
+
+
+def test_bridge_normalizes_english_timeout_errors_to_fallback():
+    bridge = load_bridge()
+
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "content": "LLM request timed out. The model did not produce a response before the model idle timeout."
+                }
+            }
+        ]
+    }
+
+    reply = bridge.normalize_reply(bridge.extract_assistant_reply(payload))
+
+    assert bridge.FALLBACK_MESSAGE in reply
+    assert "ChatGPT browser response extraction" in reply
+
+
+def test_bridge_reports_webdock_busy_with_diagnostic(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
+
+    def raise_busy(*args, **kwargs):
+        body = b'{"detail":{"error_code":"BUSY","message":"Browser is processing another request."}}'
+        raise urllib.error.HTTPError(
+            "http://127.0.0.1:11800/v1/chat/completions",
+            429,
+            "Too Many Requests",
+            {},
+            io.BytesIO(body),
+        )
+
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", raise_busy)
+
+    reply = bridge.build_reply({"messages": [{"role": "user", "content": "hello"}]})
+
+    assert bridge.FALLBACK_MESSAGE in reply
+    assert "WebDock 返回 429 BUSY" in reply
+    assert "WebDock browser lock" in reply
+
+
+def test_bridge_hosts_accepts_comma_separated_list(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("OPENCLAW_BRIDGE_HOSTS", "127.0.0.1, 172.20.0.1")
+
+    assert bridge.get_bridge_hosts() == ["127.0.0.1", "172.20.0.1"]
