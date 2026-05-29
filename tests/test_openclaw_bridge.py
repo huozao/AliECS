@@ -57,6 +57,37 @@ def test_bridge_sends_clean_prompt_to_webdock(monkeypatch):
     assert "large OpenClaw runtime context" not in outbound["messages"][0]["content"]
 
 
+def test_bridge_forwards_openclaw_metadata_to_webdock_lane(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_MODEL", "browser-chatgpt")
+
+    outbound = bridge.build_webdock_body(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Conversation info (untrusted metadata):\n"
+                        "```json\n"
+                        '{"wechat_account":"A","chat_type":"private","peer_id":"user-1","message_id":"msg-1"}\n'
+                        "```\n\n"
+                        "真实微信消息"
+                    ),
+                },
+            ],
+        }
+    )
+
+    assert outbound["messages"] == [{"role": "user", "content": "真实微信消息"}]
+    assert outbound["metadata"] == {
+        "wechat_account": "A",
+        "chat_type": "private",
+        "peer_id": "user-1",
+        "message_id": "msg-1",
+        "chatgpt_project": "WeChat-A",
+    }
+
+
 def test_bridge_normalizes_english_timeout_errors_to_fallback():
     bridge = load_bridge()
 

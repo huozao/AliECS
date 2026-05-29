@@ -17,6 +17,10 @@ OPENCLAW_METADATA_RE = re.compile(
     r"^Conversation info \(untrusted metadata\):\s*```json\s*.*?```\s*",
     flags=re.DOTALL,
 )
+OPENCLAW_METADATA_CAPTURE_RE = re.compile(
+    r"^Conversation info \(untrusted metadata\):\s*```json\s*(.*?)```\s*",
+    flags=re.DOTALL,
+)
 ENGLISH_ERROR_PATTERNS = (
     "llm request timed out",
     "model idle timeout",
@@ -33,6 +37,19 @@ def clean_user_text(text: Any) -> str:
     if not isinstance(text, str):
         return ""
     return OPENCLAW_METADATA_RE.sub("", text).strip()
+
+
+def extract_openclaw_metadata(text: Any) -> dict[str, Any]:
+    if not isinstance(text, str):
+        return {}
+    match = OPENCLAW_METADATA_CAPTURE_RE.match(text)
+    if not match:
+        return {}
+    try:
+        payload = json.loads(match.group(1))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def extract_text(content: Any) -> str:
@@ -53,12 +70,21 @@ def extract_text(content: Any) -> str:
 
 
 def get_last_user_message(messages: Any) -> str:
+    raw = get_last_user_raw_text(messages)
+    return clean_user_text(raw)
+
+
+def get_last_user_raw_text(messages: Any) -> str:
     if not isinstance(messages, list):
         return ""
     for msg in reversed(messages):
         if isinstance(msg, dict) and msg.get("role") == "user":
-            return clean_user_text(extract_text(msg.get("content")))
+            return extract_text(msg.get("content"))
     return ""
+
+
+def get_last_user_metadata(messages: Any) -> dict[str, Any]:
+    return extract_openclaw_metadata(get_last_user_raw_text(messages))
 
 
 def webdock_configured() -> bool:
@@ -78,11 +104,56 @@ def webdock_timeout() -> int:
 
 def build_webdock_body(body: dict[str, Any]) -> dict[str, Any]:
     user_text = get_last_user_message(body.get("messages"))
-    return {
+    outbound = {
         "model": os.getenv("WEB_DOCK_MODEL", "browser-chatgpt"),
         "messages": [{"role": "user", "content": user_text or "请回复这条微信消息。"}],
         "stream": False,
     }
+    metadata = build_webdock_metadata(body)
+    if metadata:
+        outbound["metadata"] = metadata
+    return outbound
+
+
+def build_webdock_metadata(body: dict[str, Any]) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    if isinstance(body.get("metadata"), dict):
+        metadata.update(body["metadata"])
+    metadata.update(get_last_user_metadata(body.get("messages")))
+
+    normalized: dict[str, Any] = {}
+    wechat_account = _first_metadata_value(metadata, "wechat_account", "account", "channel_id", "channel_name")
+    chat_type = _first_metadata_value(metadata, "chat_type", "conversation_type", "room_type") or "private"
+    peer_id = _first_metadata_value(
+        metadata,
+        "peer_id",
+        "chat_id",
+        "conversation_id",
+        "from_user_id",
+        "user_id",
+        "sender_id",
+    )
+
+    if wechat_account:
+        normalized["wechat_account"] = str(wechat_account)
+        normalized["chatgpt_project"] = str(
+            _first_metadata_value(metadata, "chatgpt_project", "project") or f"WeChat-{wechat_account}"
+        )
+    if chat_type:
+        normalized["chat_type"] = str(chat_type)
+    if peer_id:
+        normalized["peer_id"] = str(peer_id)
+    if metadata.get("message_id"):
+        normalized["message_id"] = str(metadata["message_id"])
+    return normalized
+
+
+def _first_metadata_value(metadata: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = metadata.get(key)
+        if value not in (None, ""):
+            return value
+    return None
 
 
 def extract_assistant_reply(payload: dict[str, Any]) -> str:

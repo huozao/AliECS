@@ -61,6 +61,19 @@ The bridge forwards only the last real user message.
 
 It removes the OpenClaw `Conversation info (untrusted metadata)` prefix before calling WebDock. This keeps the ChatGPT page clean and avoids confusing the browser session with internal OpenClaw instructions.
 
+The bridge forwards safe lane metadata from the OpenClaw prefix to WebDock when available:
+
+```json
+{
+  "wechat_account": "A",
+  "chat_type": "private",
+  "peer_id": "user-1",
+  "chatgpt_project": "WeChat-A"
+}
+```
+
+WebDock uses that metadata to keep A/B/C test WeChat accounts and their contacts in separate browser lanes while sharing one ChatGPT login.
+
 ## OpenClaw Provider
 
 OpenClaw should call the bridge from inside its gateway container:
