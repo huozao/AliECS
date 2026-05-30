@@ -1,5 +1,15 @@
 # AGENTS.md
 
+## ⛔ 最高优先级红线：ChatGPT「人工登录 → 自动化接管」流程（不得擅自更改）
+
+旧电脑 WebDock 的 ChatGPT 会话遵循固定设计，任何 AI 必须严格遵守，不得擅改：
+
+1. **ChatGPT 登录与 Cloudflare 人机验证，必须由人工在 noVNC 手动完成**；完成前，自动化（Playwright/CDP）**必须处于 detach 状态**（不连接 Chrome）。
+2. 原因（2026-05-30 实测确认）：原版 Playwright 连着 CDP 会持续泄漏 `Runtime.enable`，Cloudflare Turnstile 判定为自动化 → 即便人工点击验证也无限循环、无法通过；一旦 detach，人工即可通过。
+3. 正确顺序（原始设计）：**人工登录/过验证 → 会话养熟（cf_clearance）→ 自动化再 attach 接管驱动**。
+4. AI 未经用户明确同意，**不得**：更改此顺序；让自动化在登录/验证阶段自动 attach 或驱动浏览器；重建/重启 WebDock 容器或改其浏览器启动/attach 逻辑而打断已养熟的人工会话；把"纯人工登录"改成自动登录。
+5. 涉及 WebDock 浏览器、ChatGPT 登录态、Cloudflare、自动化 attach/detach 的任何改动：**先读本条、先与用户确认、再动手**。
+
 ## 项目定位
 
 AliECS 是一个以 Codex 为主要开发方式的 Docker 化 Web/API 项目。
@@ -209,3 +219,24 @@ Codex 完成任务后，应说明：
 - `deploy/ecs/release-meta.env` 中 `APP_ROOT`、`COMPOSE_FILE`、`RUNTIME_ENV_FILE`、`METADATA_DIR`、`MIGRATIONS_DIR` 应与 `/root/AliECS` 保持一致。
 - 如果实际部署目录不是 `/root/AliECS`（例如 `/opt/app`），必须在变更说明中明确写出，并同步更新部署文档/脚本引用路径。
 - 任何 CI/CD 或脚本改动，优先保证 `/root/AliECS` 路径开箱可用。
+
+## 三主机命名与仓库来源（重要）
+
+涉及跨主机、部署、OpenClaw、WebDock、微信账号、ECS 运维或旧电脑排障时，必须先阅读：
+
+- `docs/ops/three-host-architecture.md`
+- `docs/ops/ai-handoff-rules.md`
+
+统一使用以下三个关键名词：
+
+- `开发机`：当前 Windows 开发电脑。AliECS 本地目录为 `C:\Users\ishel\Desktop\编程总库\AliECS-WebDock\AliECS`；WebDock 本地目录为 `C:\Users\ishel\Desktop\编程总库\AliECS-WebDock\webdock`。
+- `服务器`：阿里云 ECS。AliECS 运行目录为 `/root/AliECS`；OpenClaw 运行目录为 `/root/openclaw`；`openclaw-bridge` 安装目录为 `/opt/openclaw-bridge`。
+- `旧电脑`：旧 Ubuntu 笔记本。WebDock 运行目录为 `/opt/webdock`，负责 Chrome / ChatGPT 登录态、noVNC、Playwright 和重任务。
+
+仓库来源：
+
+- AliECS：`git@github.com:huozao/AliECS.git`
+- WebDock：`https://github.com/huozao/webdock.git`
+- OpenClaw runtime：`https://github.com/openclaw/openclaw.git`
+
+不要把 `服务器`、`旧电脑`、`开发机` 混称为“机器”或“节点”。说明问题或修改代码时，必须写清楚影响哪个主机、哪个仓库、哪个运行目录。
