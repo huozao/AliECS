@@ -18,8 +18,11 @@ from passlib.context import CryptContext
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 
+from app.routers.webhooks import router as webhooks_router
+
 
 app = FastAPI(title="AliECS Backend API", version="0.4.0")
+app.include_router(webhooks_router)
 
 def _cors_origins() -> list[str]:
     defaults = [

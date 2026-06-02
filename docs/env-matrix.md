@@ -42,3 +42,15 @@
 1. 新增变量时必须同步更新本文档与示例配置文件。
 2. 不得提交真实生产密钥、密码、token、私钥。
 3. 变量缺失时，代码应给出明确报错或降级行为，避免静默失败。
+
+## 5. Chanjet webhook gateway
+
+| Variable | Scope | Purpose | Required |
+|---|---|---|---|
+| `CHANJET_APP_KEY` | backend-api / tplus-sync-worker | Chanjet app identifier | Required for token exchange |
+| `CHANJET_APP_SECRET` | backend-api / tplus-sync-worker | Chanjet app secret | Required for token exchange |
+| `CHANJET_WEBHOOK_AES_KEY` | backend-api | 16-byte Chanjet message decrypt key | Required for encrypted webhook decoding |
+| `CHANJET_EVENT_SPOOL_DIR` | backend-api | Runtime-only decoded event spool directory | Recommended for first integration pass |
+| `CHANJET_AUTO_EXCHANGE_OAUTH_CODE` | backend-api | Whether OAuth callback exchanges `code` immediately | Optional, default false |
+
+Do not commit real AppKey, AppSecret, AES key, appTicket, certificate, auth code, refresh token, or openToken.

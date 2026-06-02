@@ -1,0 +1,1 @@
+"""Cost module placeholder."""
