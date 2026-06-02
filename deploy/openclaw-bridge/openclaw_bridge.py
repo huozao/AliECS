@@ -95,6 +95,14 @@ def webdock_url() -> str:
     return os.getenv("WEB_DOCK_BASE_URL", "").rstrip("/") + "/chat/completions"
 
 
+def webdock_media_root() -> str:
+    """WebDock root (without the /v1 suffix) for proxying /media/<token>."""
+    base = os.getenv("WEB_DOCK_BASE_URL", "").rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3].rstrip("/")
+    return base
+
+
 def webdock_timeout() -> int:
     try:
         return max(5, int(os.getenv("WEB_DOCK_TIMEOUT_SECONDS", "180")))
@@ -265,7 +273,32 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _proxy_media(self) -> None:
+        # Proxy /media/<token> to WebDock so OpenClaw (which can reach this bridge
+        # at host.docker.internal but NOT the 127.0.0.1-bound reverse tunnel) can
+        # download widget screenshots. /media on WebDock is unauthenticated.
+        target = webdock_media_root() + self.path
+        try:
+            with urllib.request.urlopen(target, timeout=20) as response:
+                data = response.read()
+                content_type = response.headers.get("Content-Type", "application/octet-stream")
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except Exception as exc:
+            self.send_response(502)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            try:
+                self.wfile.write(f"media proxy error: {exc}".encode("utf-8"))
+            except Exception:
+                pass
+
     def do_GET(self) -> None:
+        if self.path.startswith("/media/"):
+            return self._proxy_media()
         if self.path.rstrip("/") == "/v1/models":
             model = os.getenv("WEB_DOCK_MODEL", "browser-chatgpt" if webdock_configured() else "echo")
             owner = "webdock" if webdock_configured() else "local"
