@@ -1,14 +1,16 @@
 BOM_QUERY_PAGE = "/tplus/api/v2/bom/QueryPage"
+INVENTORY_QUERY_PAGE = "/tplus/api/v2/inventory/QueryPage"
+PARTNER_QUERY_PAGE = "/tplus/api/v2/partner/QueryPage"
 
 PENDING_ENDPOINTS = {
-    "material": "待确认",
-    "product": "待确认",
-    "purchase_price": "待确认",
-    "sales_price": "待确认",
-    "cost": "待确认",
-    "inventory": "待确认",
-    "supplier": "待确认",
-    "customer": "待确认",
-    "sales": "待确认",
-    "purchase": "待确认",
+    "material": "pending",
+    "product": "pending",
+    "purchase_price": "pending",
+    "sales_price": "pending",
+    "cost": "pending",
+    "warehouse": "pending",
+    "supplier": "covered_by_partner_pending_split",
+    "customer": "covered_by_partner_pending_split",
+    "sales": "pending",
+    "purchase": "pending",
 }

@@ -98,6 +98,8 @@ python -m unittest discover -s tests -v
 - Production Compose runs `tplus-sync-worker` with `restart: always`.
 - The container command is `python -m tplus_datahub.jobs.worker_loop`.
 - The first sync starts immediately; later cycles wait `TPLUS_SYNC_INTERVAL_SECONDS` seconds, default `3600`.
-- Current `job_sync_all` runs the verified BOM read-only `QueryPage` sync. Other T+ modules remain pending until their official read-only endpoints are confirmed and tested.
+- Current `job_sync_all` runs verified read-only `QueryPage` sync for BOM, inventory, and partner records.
+- `inventory` is the T+ 存货 archive. `partner` is the T+ 往来单位 archive and covers customer/supplier style counterparties at this stage.
+- Sales, purchase, warehouse, price, and cost modules remain pending until their official read-only endpoints are confirmed against the current account and covered by tests.
 - Production output is written inside the container to `/app/data` and `/app/output`, backed by Docker volumes `tplus_sync_data` and `tplus_sync_output`.
 - Real `CHANJET_APP_KEY`, `CHANJET_APP_SECRET`, and `CHANJET_OPEN_TOKEN` must stay in ECS/KMS runtime config, never in Git.

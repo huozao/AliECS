@@ -66,4 +66,4 @@ Do not commit real AppKey, AppSecret, AES key, appTicket, certificate, auth code
 | `TPLUS_SYNC_INTERVAL_SECONDS` | tplus-sync-worker | Seconds between long-running sync cycles; first run starts immediately | Optional, default 3600 |
 
 Production stores worker output in Docker volumes mounted at `/app/data` and `/app/output`.
-The first long-running worker scope is the verified BOM read-only `QueryPage` sync; other T+ modules must be added only after confirming their official read-only endpoints.
+The current long-running worker scope is verified read-only `QueryPage` sync for BOM, inventory, and partner records. Other T+ modules must be added only after confirming their official read-only endpoints.

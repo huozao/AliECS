@@ -14,9 +14,5 @@ def _flatten_mapping(row: Mapping[str, Any], prefix: str = "") -> dict[str, Any]
     return flattened
 
 
-def transform_inventory_rows(rows: list[Any]) -> list[dict[str, Any]]:
+def transform_partner_rows(rows: list[Any]) -> list[dict[str, Any]]:
     return [_flatten_mapping(row) if isinstance(row, Mapping) else {"value": row} for row in rows]
-
-
-def transform_stock_rows(rows: list[Any]) -> list[dict[str, Any]]:
-    return transform_inventory_rows(rows)

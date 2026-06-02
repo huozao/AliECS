@@ -95,4 +95,6 @@ AliECS 作为公网 webhook 入口，负责接收畅捷通、企业微信、飞�
 - Production Compose now includes `tplus-sync-worker` as a long-running service.
 - The first sync starts immediately after container start, then repeats by `TPLUS_SYNC_INTERVAL_SECONDS`.
 - Output is persisted through Docker volumes at `/app/data` and `/app/output`.
-- The first safe production scope is the verified BOM read-only `QueryPage` sync. Additional Chanjet/T+ modules should be added only after their official read-only Query/QueryPage endpoints are confirmed and covered by tests.
+- The current safe production scope is verified read-only `QueryPage` sync for BOM, inventory, and partner records.
+- `inventory` maps to T+ 存货. `partner` maps to T+ 往来单位 and covers customer/supplier-style counterparties for the first pass.
+- Sales, purchase, warehouse, price, and cost modules should be added only after their official read-only endpoints are confirmed against the current account and covered by tests.
