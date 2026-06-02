@@ -54,3 +54,16 @@
 | `CHANJET_AUTO_EXCHANGE_OAUTH_CODE` | backend-api | Whether OAuth callback exchanges `code` immediately | Optional, default false |
 
 Do not commit real AppKey, AppSecret, AES key, appTicket, certificate, auth code, refresh token, or openToken.
+
+## 6. T+ sync worker
+
+| Variable | Scope | Purpose | Required |
+|---|---|---|---|
+| `CHANJET_BASE_URL` | tplus-sync-worker | Chanjet OpenAPI base URL | Optional, default `https://openapi.chanjet.com` |
+| `CHANJET_OPEN_TOKEN` | tplus-sync-worker | T+ OpenAPI read-only sync token | Required for the worker |
+| `DEFAULT_PAGE_SIZE` | tplus-sync-worker | T+ QueryPage page size | Optional, default 500 |
+| `REQUEST_TIMEOUT_CONNECT` / `REQUEST_TIMEOUT_READ` | tplus-sync-worker | T+ OpenAPI request timeouts | Optional |
+| `TPLUS_SYNC_INTERVAL_SECONDS` | tplus-sync-worker | Seconds between long-running sync cycles; first run starts immediately | Optional, default 3600 |
+
+Production stores worker output in Docker volumes mounted at `/app/data` and `/app/output`.
+The first long-running worker scope is the verified BOM read-only `QueryPage` sync; other T+ modules must be added only after confirming their official read-only endpoints.

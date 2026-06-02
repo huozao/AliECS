@@ -61,6 +61,7 @@ require_service "admin-ui"
 require_service "backend-api"
 require_service "postgres"
 require_service "doc-sync-worker"
+require_service "tplus-sync-worker"
 
 echo "[post-deploy] Checking container status"
 "${compose[@]}" ps

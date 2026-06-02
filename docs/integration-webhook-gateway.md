@@ -89,3 +89,10 @@ AliECS 作为公网 webhook 入口，负责接收畅捷通、企业微信、飞�
   - app-settled path: `appTicket -> appAccessToken -> tempAuthCode -> permanentAuthCode -> orgAccessToken -> user authorization token`.
   - self-built path: `appTicket + certificate -> accessToken`.
 - `tplus-sync-worker` still reads `CHANJET_OPEN_TOKEN` from its ignored `.env` until token storage is moved behind `backend-api`.
+
+## 2026-06 T+ long-running worker
+
+- Production Compose now includes `tplus-sync-worker` as a long-running service.
+- The first sync starts immediately after container start, then repeats by `TPLUS_SYNC_INTERVAL_SECONDS`.
+- Output is persisted through Docker volumes at `/app/data` and `/app/output`.
+- The first safe production scope is the verified BOM read-only `QueryPage` sync. Additional Chanjet/T+ modules should be added only after their official read-only Query/QueryPage endpoints are confirmed and covered by tests.

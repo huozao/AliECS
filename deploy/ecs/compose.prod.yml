@@ -80,6 +80,24 @@ services:
       postgres:
         condition: service_healthy
 
+  tplus-sync-worker:
+    image: ${TPLUS_SYNC_WORKER_IMAGE}
+    restart: always
+    environment:
+      CHANJET_BASE_URL: ${CHANJET_BASE_URL:-https://openapi.chanjet.com}
+      CHANJET_APP_KEY: ${CHANJET_APP_KEY:-}
+      CHANJET_APP_SECRET: ${CHANJET_APP_SECRET:-}
+      CHANJET_OPEN_TOKEN: ${CHANJET_OPEN_TOKEN:-}
+      DEFAULT_PAGE_SIZE: ${DEFAULT_PAGE_SIZE:-500}
+      REQUEST_TIMEOUT_CONNECT: ${REQUEST_TIMEOUT_CONNECT:-5}
+      REQUEST_TIMEOUT_READ: ${REQUEST_TIMEOUT_READ:-30}
+      OUTPUT_DIR: /app/output
+      DATA_DIR: /app/data
+      TPLUS_SYNC_INTERVAL_SECONDS: ${TPLUS_SYNC_INTERVAL_SECONDS:-3600}
+    volumes:
+      - tplus_sync_data:/app/data
+      - tplus_sync_output:/app/output
+
   postgres:
     image: postgres:16
     restart: always
@@ -97,3 +115,5 @@ services:
 
 volumes:
   pgdata:
+  tplus_sync_data:
+  tplus_sync_output:

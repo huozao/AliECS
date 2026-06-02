@@ -104,6 +104,8 @@ jobs:
             context: services/backend-api
           - image: doc-sync-worker
             context: services/doc-sync-worker
+          - image: tplus-sync-worker
+            context: services/tplus-sync-worker
     steps:
       - uses: actions/checkout@v4
 

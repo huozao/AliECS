@@ -14,4 +14,4 @@ COPY config ./config
 COPY src ./src
 COPY scripts ./scripts
 
-CMD ["python", "-m", "tplus_datahub.jobs.job_sync_bom"]
+CMD ["python", "-m", "tplus_datahub.jobs.worker_loop"]
