@@ -63,3 +63,62 @@ Observed counts on 2026-06-03:
 - disabled BOM: 31 rows
 
 The worker merges both result sets by `ID`/`Code`/`Version`/`Disabled` before exporting BOM.
+
+## 2026-06-04 master data disabled coverage
+
+Live read-only probes against the current Chanjet/T+ account confirmed these `QueryPage`
+status splits:
+
+| Module | Endpoint | Default | `Disabled="0"` | `Disabled="1"` | Worker behavior |
+|---|---|---:|---:|---:|---|
+| `bom` | `/tplus/api/v2/bom/QueryPage` | not used for full sync | 190 | 31 | query both states and merge |
+| `inventory` | `/tplus/api/v2/inventory/QueryPage` | 505 | 502 | 3 | query both states and merge |
+| `partner` | `/tplus/api/v2/partner/QueryPage` | 188 | 188 | 0 | query both states and merge |
+
+For inventory and partner the API returned top-level `Disabled=None` in rows from both split
+queries. The worker keeps raw JSON unchanged, then fills the exported/synced row `Disabled`
+field from the query split only when the source value is missing. This makes disabled inventory
+records auditable in Excel without changing stored raw responses.
+
+## 2026-06-04 base archive Query coverage
+
+Official AI-friendly markdown docs expose base archive `Query` endpoints under
+`https://open.chanjet.com/md/docs/file/apiFile/tcloud`. These endpoints use
+`{"param":{}}`, not `PageIndex`/`PageSize`.
+
+Connected to the long-running worker after live read-only probes:
+
+| Module | Endpoint | Observed rows |
+|---|---|---:|
+| `warehouse` | `/tplus/api/v2/warehouse/Query` | 7 |
+| `unit_group` | `/tplus/api/v2/UnitGroup/Query` | 0 |
+| `unit` | `/tplus/api/v2/Unit/Query` | 19 |
+| `project` | `/tplus/api/v2/Project/Query2` | 0 |
+| `project_class` | `/tplus/api/v2/ProjectClass/Query` | 1 |
+| `brand` | `/tplus/api/v2/brand/Query` | 0 |
+| `district` | `/tplus/api/v2/district/Query` | 0 |
+
+Probed but not connected because the current account returned HTTP/status `999` for
+`{"param":{}}`: department, person, marketing organ, settle style, bank account, currency,
+expense, income.
+
+## 2026-06-04 voucher list coverage
+
+Official voucher list endpoints use lowercase `pageSize` and `pageIndex` starting from `0`.
+They return `data.Columns` plus `data.Rows`; the worker maps each row array to a flat dict
+before exporting.
+
+Connected list-level sync after live read-only `pageSize=1` probes:
+
+| Module | Endpoint | Observed total |
+|---|---|---:|
+| `sale_order_list` | `/tplus/api/v2/SaleOrderOpenApi/FindVoucherList` | 516 |
+| `sale_delivery_list` | `/tplus/api/v2/SaleDeliveryOpenApi/FindVoucherList` | 162 |
+| `purchase_order_list` | `/tplus/api/v2/PurchaseOrderOpenApi/FindVoucherList` | 362 |
+| `purchase_arrival_list` | `/tplus/api/v2/PurchaseArrivalOpenApi/FindVoucherList` | 332 |
+| `purchase_receive_list` | `/tplus/api/v2/PurchaseReceiveOpenApi/FindVoucherList` | 446 |
+| `material_dispatch_list` | `/tplus/api/v2/MaterialDispatchOpenApi/FindVoucherList` | 625 |
+
+Current voucher sync is list-level with ID/date/code fields only. Full voucher DTO/detail sync
+must be added after confirming safe read-only `GetVoucherDTO` fan-out behavior and acceptable
+API volume.
