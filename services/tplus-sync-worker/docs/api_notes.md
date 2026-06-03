@@ -48,3 +48,18 @@ The following read-only-looking endpoints were probed with empty/page-size-one p
 - `/tplus/api/v2/MaterialDispatchOpenApi/FindVoucherList`
 
 Do not add these modules to `job_sync_all` until their required filter payloads and account permissions are confirmed.
+
+## 2026-06-03 BOM disabled coverage
+
+In the current Chanjet/T+ account, default BOM paging returns enabled records only.
+Use two read-only `QueryPage` requests for full BOM coverage:
+
+- enabled BOM: `{"param":{"PageIndex":1,"PageSize":500,"Disabled":"0"}}`
+- disabled BOM: `{"param":{"PageIndex":1,"PageSize":500,"Disabled":"1"}}`
+
+Observed counts on 2026-06-03:
+
+- enabled BOM: 187 rows
+- disabled BOM: 31 rows
+
+The worker merges both result sets by `ID`/`Code`/`Version`/`Disabled` before exporting BOM.
