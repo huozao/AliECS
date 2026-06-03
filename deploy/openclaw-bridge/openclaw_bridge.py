@@ -104,10 +104,14 @@ def webdock_media_root() -> str:
 
 
 def webdock_timeout() -> int:
+    # Must be >= WebDock's chat_timeout_seconds (prod runtime override ~300s for
+    # long reasoning + image work), otherwise the bridge gives up before WebDock
+    # returns the real reply. The SSE keepalive (stream_sse) covers OpenClaw's
+    # ~120s idle limit during this wait.
     try:
-        return max(5, int(os.getenv("WEB_DOCK_TIMEOUT_SECONDS", "180")))
+        return max(5, int(os.getenv("WEB_DOCK_TIMEOUT_SECONDS", "320")))
     except ValueError:
-        return 180
+        return 320
 
 
 def build_webdock_body(body: dict[str, Any]) -> dict[str, Any]:
@@ -264,6 +268,73 @@ def build_reply(body: dict[str, Any]) -> str:
         )
 
 
+def keepalive_interval() -> float:
+    """Seconds between SSE keepalive chunks while WebDock is still working.
+
+    Must stay well under OpenClaw's ~120s idle timeout so the connection is not
+    killed while ChatGPT is still thinking/generating behind WebDock."""
+    try:
+        return max(1.0, float(os.getenv("OPENCLAW_BRIDGE_KEEPALIVE_SECONDS", "15")))
+    except ValueError:
+        return 15.0
+
+
+def _stream_chunk(model: str, *, delta: dict[str, Any], finish_reason: str | None) -> bytes:
+    chunk = {
+        "id": "chatcmpl-openclaw-bridge",
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+    }
+    return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8")
+
+
+def stream_sse(
+    write: Any,
+    body: dict[str, Any],
+    model: str,
+    *,
+    reply_fn: Any = None,
+    keepalive: float | None = None,
+) -> None:
+    """Emit an OpenAI-style SSE stream while build_reply runs in the background.
+
+    build_reply blocks for as long as WebDock/ChatGPT take to answer (can be
+    minutes for long reasoning + image work). During that wait we periodically
+    push an empty-delta keepalive chunk so OpenClaw's idle timer keeps resetting
+    instead of cutting us off at ~120s. ``write(bytes) -> bool`` must return
+    False once the client has disconnected, which stops the stream early."""
+    if reply_fn is None:
+        reply_fn = build_reply
+    if keepalive is None:
+        keepalive = keepalive_interval()
+
+    result: dict[str, str] = {}
+
+    def _run() -> None:
+        try:
+            result["reply"] = reply_fn(body)
+        except Exception as exc:  # keep the stream alive even if the worker fails
+            print(f"bridge stream worker error: {exc}")
+            result["reply"] = FALLBACK_MESSAGE
+
+    worker = Thread(target=_run, daemon=True)
+    worker.start()
+
+    while True:
+        worker.join(timeout=keepalive)
+        if not worker.is_alive():
+            break
+        if not write(_stream_chunk(model, delta={"content": ""}, finish_reason=None)):
+            return  # OpenClaw disconnected; drop the (still-running) worker result
+
+    reply = result.get("reply") or FALLBACK_MESSAGE
+    write(_stream_chunk(model, delta={"content": reply}, finish_reason=None))
+    write(_stream_chunk(model, delta={}, finish_reason="stop"))
+    write(b"data: [DONE]\n\n")
+
+
 class Handler(BaseHTTPRequestHandler):
     def _json(self, status: int, obj: dict[str, Any]) -> None:
         data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -324,33 +395,12 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             body = {}
 
-        reply = build_reply(body)
         model = os.getenv("WEB_DOCK_MODEL", body.get("model", "echo")) if webdock_configured() else body.get("model", "echo")
 
         if body.get("stream"):
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-            self.send_header("Cache-Control", "no-cache")
-            self.end_headers()
-            chunk = {
-                "id": "chatcmpl-openclaw-bridge",
-                "object": "chat.completion.chunk",
-                "created": int(time.time()),
-                "model": model,
-                "choices": [{"index": 0, "delta": {"content": reply}, "finish_reason": None}],
-            }
-            self.wfile.write(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8"))
-            done = {
-                "id": "chatcmpl-openclaw-bridge",
-                "object": "chat.completion.chunk",
-                "created": int(time.time()),
-                "model": model,
-                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-            }
-            self.wfile.write(f"data: {json.dumps(done, ensure_ascii=False)}\n\n".encode("utf-8"))
-            self.wfile.write(b"data: [DONE]\n\n")
-            return
+            return self._stream_reply(body, model)
 
+        reply = build_reply(body)
         return self._json(
             200,
             {
@@ -362,6 +412,22 @@ class Handler(BaseHTTPRequestHandler):
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             },
         )
+
+    def _stream_reply(self, body: dict[str, Any], model: str) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        def write(data: bytes) -> bool:
+            try:
+                self.wfile.write(data)
+                self.wfile.flush()
+                return True
+            except (BrokenPipeError, ConnectionError, OSError):
+                return False
+
+        stream_sse(write, body, model)
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print("[%s] %s" % (self.log_date_time_string(), fmt % args))

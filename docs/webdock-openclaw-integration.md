@@ -31,9 +31,15 @@ Recommended production values:
 WEB_DOCK_BASE_URL=http://127.0.0.1:11800/v1
 WEB_DOCK_API_TOKEN=replace_with_long_random_api_token
 WEB_DOCK_MODEL=browser-chatgpt
-WEB_DOCK_TIMEOUT_SECONDS=180
+WEB_DOCK_TIMEOUT_SECONDS=320
+OPENCLAW_BRIDGE_KEEPALIVE_SECONDS=15
 WEB_DOCK_FALLBACK_MESSAGE=ChatGPT 浏览器暂不可用，请稍后再试。
 ```
+
+`WEB_DOCK_TIMEOUT_SECONDS` must outlast WebDock's `chat_timeout_seconds` (prod
+runtime override ~300s for long reasoning + image work). While the bridge waits,
+it streams SSE keepalive chunks every `OPENCLAW_BRIDGE_KEEPALIVE_SECONDS` so
+OpenClaw's ~120s idle timeout does not cut the connection.
 
 `127.0.0.1:11800` is the ECS side of the reverse SSH tunnel created by the laptop. ECS does not need to join Tailscale for this path.
 

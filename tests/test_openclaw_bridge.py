@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
+import time
 import urllib.error
 from pathlib import Path
 
@@ -136,3 +138,99 @@ def test_bridge_hosts_accepts_comma_separated_list(monkeypatch):
     monkeypatch.setenv("OPENCLAW_BRIDGE_HOSTS", "127.0.0.1, 172.20.0.1")
 
     assert bridge.get_bridge_hosts() == ["127.0.0.1", "172.20.0.1"]
+
+
+def _parse_sse(events: list[bytes]):
+    """Decode collected SSE byte chunks into (parsed JSON payloads, saw_done)."""
+    payloads = []
+    saw_done = False
+    for raw in events:
+        for line in raw.decode("utf-8").splitlines():
+            if not line.startswith("data: "):
+                continue
+            data = line[len("data: "):]
+            if data.strip() == "[DONE]":
+                saw_done = True
+                continue
+            payloads.append(json.loads(data))
+    return payloads, saw_done
+
+
+def test_stream_sse_emits_keepalives_then_final_reply():
+    bridge = load_bridge()
+    events: list[bytes] = []
+
+    def write(data: bytes) -> bool:
+        events.append(data)
+        return True
+
+    def slow_reply(body):
+        time.sleep(0.25)
+        return "最终回复"
+
+    bridge.stream_sse(write, {"messages": []}, "browser-chatgpt", reply_fn=slow_reply, keepalive=0.05)
+
+    payloads, saw_done = _parse_sse(events)
+    assert saw_done
+    # keepalive chunks: empty content, not finished
+    heartbeats = [
+        p for p in payloads
+        if p["choices"][0]["delta"] == {"content": ""} and p["choices"][0]["finish_reason"] is None
+    ]
+    assert len(heartbeats) >= 1
+    # the real reply is delivered after the wait
+    contents = [p["choices"][0]["delta"].get("content") for p in payloads]
+    assert "最终回复" in [c for c in contents if c]
+    # stream is closed with a stop chunk
+    assert any(p["choices"][0]["finish_reason"] == "stop" for p in payloads)
+
+
+def test_stream_sse_stops_when_client_disconnects():
+    bridge = load_bridge()
+    calls = {"n": 0}
+
+    def write(data: bytes) -> bool:
+        calls["n"] += 1
+        return False  # OpenClaw already gone on the first keepalive
+
+    def slow_reply(body):
+        time.sleep(0.3)
+        return "should never be sent"
+
+    bridge.stream_sse(write, {}, "m", reply_fn=slow_reply, keepalive=0.05)
+
+    # one keepalive write returned False -> bail out, no content/done writes
+    assert calls["n"] == 1
+
+
+def test_stream_sse_uses_fallback_when_reply_fn_raises():
+    bridge = load_bridge()
+    events: list[bytes] = []
+
+    def write(data: bytes) -> bool:
+        events.append(data)
+        return True
+
+    def boom(body):
+        raise RuntimeError("webdock down")
+
+    bridge.stream_sse(write, {}, "m", reply_fn=boom, keepalive=5)
+
+    payloads, saw_done = _parse_sse(events)
+    assert saw_done
+    contents = [c for c in (p["choices"][0]["delta"].get("content") for p in payloads) if c]
+    assert bridge.FALLBACK_MESSAGE in contents
+
+
+def test_webdock_timeout_default_covers_long_chatgpt(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.delenv("WEB_DOCK_TIMEOUT_SECONDS", raising=False)
+    # must outlast WebDock's prod chat_timeout (~300s) so the bridge waits for
+    # the real reply instead of timing out first
+    assert bridge.webdock_timeout() >= 300
+
+
+def test_keepalive_interval_well_under_openclaw_idle(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.delenv("OPENCLAW_BRIDGE_KEEPALIVE_SECONDS", raising=False)
+    assert 0 < bridge.keepalive_interval() <= 30
