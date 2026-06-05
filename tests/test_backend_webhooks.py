@@ -71,6 +71,25 @@ class BackendWebhookGatewayTests(unittest.TestCase):
 
         self.assertEqual({"result": "success"}, result)
 
+    def test_chanjet_webhook_passes_decoded_event_to_optional_sink(self) -> None:
+        from app.integrations.chanjet.handlers import handle_chanjet_webhook
+
+        received = []
+
+        result = handle_chanjet_webhook(
+            {
+                "id": "evt-bom",
+                "msgType": "Bom_Update",
+                "bizContent": {"Code": "HYD-4197PC", "Version": "2026-06-03F"},
+            },
+            event_sink=lambda event, record: received.append((event, record)),
+        )
+
+        self.assertEqual({"result": "success"}, result)
+        self.assertEqual(1, len(received))
+        self.assertEqual("Bom_Update", received[0][0].msg_type)
+        self.assertEqual("HYD-4197PC", received[0][0].biz_content["Code"])
+
     def test_chanjet_webhook_decrypts_aes_payload_and_spools_event(self) -> None:
         key = "1234567890123456"
         os.environ["CHANJET_WEBHOOK_AES_KEY"] = key

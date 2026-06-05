@@ -1,0 +1,103 @@
+from __future__ import annotations
+
+import os
+from contextlib import closing
+from typing import Any
+
+try:
+    import psycopg
+except ImportError:  # pragma: no cover - dependency guard for local partial installs
+    psycopg = None
+
+try:
+    from psycopg.types.json import Jsonb
+except Exception:  # pragma: no cover
+    Jsonb = lambda value: value  # type: ignore
+
+
+def connect_if_configured() -> Any | None:
+    if psycopg is None:
+        return None
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if not database_url:
+        return None
+    return psycopg.connect(database_url, connect_timeout=3)
+
+
+def fetch_next_bom_request(conn: Any | None = None, limit: int = 5) -> dict[str, Any] | None:
+    if conn is None:
+        owned_conn = connect_if_configured()
+        if owned_conn is None:
+            return None
+        with closing(owned_conn):
+            return fetch_next_bom_request(owned_conn, limit=limit)
+
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, mode, target_json, reason_event_id
+                FROM integration_sync_requests
+                WHERE provider = 'chanjet'
+                  AND module = 'bom'
+                  AND status = 'pending'
+                ORDER BY priority ASC, requested_at ASC, id ASC
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+                """,
+                (),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            request = {
+                "id": int(row[0]),
+                "mode": row[1],
+                "target_json": row[2] or {},
+                "reason_event_id": row[3],
+            }
+            cur.execute(
+                """
+                UPDATE integration_sync_requests
+                SET status = 'running', started_at = NOW(), updated_at = NOW()
+                WHERE id = %s
+                """,
+                (request["id"],),
+            )
+            return request
+
+
+def finish_bom_request(request_id: int, status: str, exit_code: int, detail: dict[str, Any]) -> None:
+    conn = connect_if_configured()
+    if conn is None:
+        return
+    with closing(conn):
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO integration_sync_runs(provider, module, mode, status, finished_at, exit_code, detail_json, error_json)
+                VALUES ('chanjet', 'bom', %s, %s, NOW(), %s, %s, %s)
+                RETURNING id
+                """,
+                (
+                    str(detail.get("mode") or "incremental"),
+                    status,
+                    exit_code,
+                    Jsonb(detail),
+                    Jsonb({} if status == "success" else detail),
+                ),
+            )
+            run_id = int(cur.fetchone()[0])
+            cur.execute(
+                """
+                UPDATE integration_sync_requests
+                SET status = %s,
+                    finished_at = NOW(),
+                    sync_run_id = %s,
+                    error_json = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                """,
+                (status, run_id, Jsonb({} if status == "success" else detail), request_id),
+            )
+        conn.commit()

@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import Callable
 from typing import Any
 
 from app.integrations.chanjet.crypto import decrypt_encrypt_msg
@@ -15,10 +16,16 @@ LOGGER = logging.getLogger(__name__)
 CHANJET_SUCCESS_RESPONSE = {"result": "success"}
 
 
-def handle_chanjet_webhook(payload: dict[str, Any]) -> dict[str, str]:
+def handle_chanjet_webhook(
+    payload: dict[str, Any],
+    event_sink: Callable[[ChanjetEvent, dict[str, Any]], None] | None = None,
+) -> dict[str, str]:
     try:
         event = decode_chanjet_payload(payload)
-        spool_chanjet_record("event", _event_to_record(event))
+        record = _event_to_record(event)
+        spool_chanjet_record("event", record)
+        if event_sink is not None:
+            event_sink(event, record)
         LOGGER.info(
             "chanjet webhook received msg_type=%s event_id=%s",
             event.msg_type,

@@ -5,6 +5,7 @@ from config.settings import ConfigError, load_settings
 from tplus_datahub.core.exceptions import ChanjetAPIError, TPlusDataHubError
 from tplus_datahub.core.logger import get_logger
 from tplus_datahub.core.utils import now_timestamp, text_preview
+from tplus_datahub.jobs.sync_state import record_bom_snapshot_if_configured
 from tplus_datahub.modules.base_archive.export_base_archive import export_base_archive
 from tplus_datahub.modules.base_archive.sync_base_archive import sync_base_archive
 from tplus_datahub.modules.bom.export_bom import export_bom
@@ -45,6 +46,7 @@ def main() -> int:
 
         bom_rows = sync_bom(settings=settings, timestamp=timestamp)
         bom_path = export_bom(bom_rows, settings=settings, timestamp=timestamp)
+        record_bom_snapshot_if_configured(bom_rows, mode="scheduled_full", source_json={"job": "job_sync_all"})
         logger.info("BOM Excel exported: %s", bom_path)
 
         inventory_rows = sync_inventory(settings=settings, timestamp=timestamp)

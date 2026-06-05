@@ -5,7 +5,9 @@ import hashlib
 import hmac
 import json
 import os
+import shutil
 import time
+import urllib.request
 import uuid
 from contextlib import closing
 from pathlib import Path
@@ -19,6 +21,7 @@ from passlib.context import CryptContext
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 
+from app.integrations.events import build_ops_attention_items
 from app.recipes.bom_query import (
     export_path_for_id,
     locate_recipe_source,
@@ -483,6 +486,227 @@ def healthz() -> dict[str, object]:
         "service": "backend-api",
         "database": {"ok": db_ok, "message": db_message},
     }
+
+
+@app.get("/v1/ops/status")
+def ops_status() -> dict[str, Any]:
+    db_ok, db_message = _db_ping()
+    status: dict[str, Any] = {
+        "status": "ok" if db_ok else "degraded",
+        "service": "backend-api",
+        "database": {"ok": db_ok, "message": db_message},
+        "system": _system_status(),
+        "tplus": _tplus_status_from_db() if db_ok else _empty_tplus_status(),
+        "reconciliation": _reconciliation_status_from_db() if db_ok else {"needs_review": 0, "recent": []},
+        "hosts": _configured_host_statuses(),
+    }
+    status["attention_items"] = build_ops_attention_items(status)
+    if status["attention_items"]:
+        status["status"] = "degraded"
+    return status
+
+
+def _empty_tplus_status() -> dict[str, Any]:
+    return {
+        "pending_requests": 0,
+        "running_requests": 0,
+        "failed_requests": 0,
+        "last_success_at": None,
+        "last_run": None,
+        "recent_requests": [],
+    }
+
+
+def _system_status() -> dict[str, Any]:
+    disk = shutil.disk_usage("/")
+    memory = _memory_status()
+    result: dict[str, Any] = {
+        "disk_total": disk.total,
+        "disk_used": disk.used,
+        "disk_free": disk.free,
+        "disk_percent": round(disk.used / disk.total * 100, 1) if disk.total else 0.0,
+        **memory,
+    }
+    try:
+        load1, load5, load15 = os.getloadavg()
+        result["loadavg"] = [round(load1, 2), round(load5, 2), round(load15, 2)]
+    except (AttributeError, OSError):
+        result["loadavg"] = []
+    return result
+
+
+def _memory_status() -> dict[str, Any]:
+    meminfo = Path("/proc/meminfo")
+    if not meminfo.is_file():
+        return {"memory_total": 0, "memory_available": 0, "memory_percent": 0.0}
+    values: dict[str, int] = {}
+    for line in meminfo.read_text(encoding="utf-8", errors="ignore").splitlines():
+        if ":" not in line:
+            continue
+        key, raw = line.split(":", 1)
+        parts = raw.strip().split()
+        if parts and parts[0].isdigit():
+            values[key] = int(parts[0]) * 1024
+    total = values.get("MemTotal", 0)
+    available = values.get("MemAvailable", 0)
+    used = max(total - available, 0)
+    return {
+        "memory_total": total,
+        "memory_available": available,
+        "memory_percent": round(used / total * 100, 1) if total else 0.0,
+    }
+
+
+def _tplus_status_from_db() -> dict[str, Any]:
+    status = _empty_tplus_status()
+    try:
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT status, COUNT(*)
+                    FROM integration_sync_requests
+                    WHERE provider = 'chanjet' AND module = 'bom'
+                    GROUP BY status
+                    """
+                )
+                for row_status, count in cur.fetchall():
+                    if row_status == "pending":
+                        status["pending_requests"] = int(count)
+                    elif row_status == "running":
+                        status["running_requests"] = int(count)
+                    elif row_status == "failed":
+                        status["failed_requests"] = int(count)
+                cur.execute(
+                    """
+                    SELECT id, module, mode, status, started_at, finished_at, row_count, exit_code, detail_json
+                    FROM integration_sync_runs
+                    WHERE provider = 'chanjet'
+                    ORDER BY started_at DESC, id DESC
+                    LIMIT 1
+                    """
+                )
+                last_run = cur.fetchone()
+                if last_run:
+                    status["last_run"] = _sync_run_to_dict(last_run)
+                cur.execute(
+                    """
+                    SELECT finished_at
+                    FROM integration_sync_runs
+                    WHERE provider = 'chanjet' AND status = 'success'
+                    ORDER BY finished_at DESC NULLS LAST, id DESC
+                    LIMIT 1
+                    """
+                )
+                last_success = cur.fetchone()
+                if last_success and last_success[0]:
+                    status["last_success_at"] = str(last_success[0])
+                cur.execute(
+                    """
+                    SELECT id, module, mode, status, requested_at, started_at, finished_at, reason_event_id
+                    FROM integration_sync_requests
+                    WHERE provider = 'chanjet'
+                    ORDER BY requested_at DESC, id DESC
+                    LIMIT 10
+                    """
+                )
+                status["recent_requests"] = [
+                    {
+                        "id": row[0],
+                        "module": row[1],
+                        "mode": row[2],
+                        "status": row[3],
+                        "requested_at": str(row[4]) if row[4] else None,
+                        "started_at": str(row[5]) if row[5] else None,
+                        "finished_at": str(row[6]) if row[6] else None,
+                        "reason_event_id": row[7],
+                    }
+                    for row in cur.fetchall()
+                ]
+    except Exception as exc:
+        status["error"] = str(exc)
+    return status
+
+
+def _reconciliation_status_from_db() -> dict[str, Any]:
+    try:
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM integration_reconciliation_diffs
+                    WHERE status = 'needs_review'
+                    """
+                )
+                needs_review = int(cur.fetchone()[0])
+                cur.execute(
+                    """
+                    SELECT id, provider, module, severity, summary, created_at
+                    FROM integration_reconciliation_diffs
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 10
+                    """
+                )
+                recent = [
+                    {
+                        "id": row[0],
+                        "provider": row[1],
+                        "module": row[2],
+                        "severity": row[3],
+                        "summary": row[4],
+                        "created_at": str(row[5]) if row[5] else None,
+                    }
+                    for row in cur.fetchall()
+                ]
+        return {"needs_review": needs_review, "recent": recent}
+    except Exception as exc:
+        return {"needs_review": 0, "recent": [], "error": str(exc)}
+
+
+def _sync_run_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
+    return {
+        "id": row[0],
+        "module": row[1],
+        "mode": row[2],
+        "status": row[3],
+        "started_at": str(row[4]) if row[4] else None,
+        "finished_at": str(row[5]) if row[5] else None,
+        "row_count": row[6],
+        "exit_code": row[7],
+        "detail_json": row[8],
+    }
+
+
+def _configured_host_statuses() -> list[dict[str, Any]]:
+    raw = os.getenv("OPS_HEALTH_HTTP_TARGETS_JSON", "").strip()
+    if not raw:
+        return []
+    try:
+        targets = json.loads(raw)
+    except Exception as exc:
+        return [{"name": "OPS_HEALTH_HTTP_TARGETS_JSON", "ok": False, "message": f"invalid json: {exc}"}]
+    if not isinstance(targets, list):
+        return [{"name": "OPS_HEALTH_HTTP_TARGETS_JSON", "ok": False, "message": "must be a list"}]
+    return [_probe_http_target(item) for item in targets if isinstance(item, dict)]
+
+
+def _probe_http_target(item: dict[str, Any]) -> dict[str, Any]:
+    name = str(item.get("name") or item.get("url") or "target")
+    url = str(item.get("url") or "")
+    timeout = float(item.get("timeout") or 2)
+    if not url:
+        return {"name": name, "ok": False, "message": "url is empty"}
+    started = time.perf_counter()
+    try:
+        request = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status_code = int(getattr(response, "status", 0) or 0)
+        elapsed_ms = round((time.perf_counter() - started) * 1000)
+        return {"name": name, "url": url, "ok": 200 <= status_code < 500, "status_code": status_code, "latency_ms": elapsed_ms}
+    except Exception as exc:
+        elapsed_ms = round((time.perf_counter() - started) * 1000)
+        return {"name": name, "url": url, "ok": False, "message": str(exc), "latency_ms": elapsed_ms}
 
 
 @app.get("/readyz")

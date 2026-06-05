@@ -110,6 +110,7 @@ services:
     image: ${TPLUS_SYNC_WORKER_IMAGE}
     restart: always
     environment:
+      DATABASE_URL: ${DATABASE_URL}
       CHANJET_BASE_URL: ${CHANJET_BASE_URL:-https://openapi.chanjet.com}
       CHANJET_APP_KEY: ${CHANJET_APP_KEY:-}
       CHANJET_APP_SECRET: ${CHANJET_APP_SECRET:-}
@@ -121,6 +122,7 @@ services:
       DATA_DIR: /app/data
       TPLUS_SYNC_INTERVAL_SECONDS: ${TPLUS_SYNC_INTERVAL_SECONDS:-3600}
       TPLUS_SYNC_POLL_SECONDS: ${TPLUS_SYNC_POLL_SECONDS:-30}
+      TPLUS_DB_SYNC_REQUESTS_ENABLED: ${TPLUS_DB_SYNC_REQUESTS_ENABLED:-true}
       TPLUS_BOM_SYNC_REQUEST_DIR: ${TPLUS_BOM_SYNC_REQUEST_DIR:-/app/sync-requests}
     volumes:
       - tplus_sync_data:/app/data

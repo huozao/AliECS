@@ -98,3 +98,13 @@ AliECS 作为公网 webhook 入口，负责接收畅捷通、企业微信、飞�
 - The current safe production scope is verified read-only `QueryPage` sync for BOM, inventory, and partner records.
 - `inventory` maps to T+ 存货. `partner` maps to T+ 往来单位 and covers customer/supplier-style counterparties for the first pass.
 - Sales, purchase, warehouse, price, and cost modules should be added only after their official read-only endpoints are confirmed against the current account and covered by tests.
+
+## 2026-06 Event-driven BOM sync and health
+
+- Chanjet BOM subscription messages `Bom_Create`, `Bom_Update`, `Bom_Delete`, `Bom_Audit`, `Bom_UnAudit`, `Bom_Open`, and `Bom_Close` are classified as BOM sync events.
+- The webhook stores decoded events in `integration_events` and creates durable `integration_sync_requests` rows.
+- `tplus-sync-worker` consumes pending BOM requests from Postgres between scheduled full sync runs.
+- If the event payload contains a parent code and/or version, the worker runs an incremental BOM query for that target and still includes disabled BOM rows.
+- If the payload cannot identify the BOM target, the request falls back to BOM-only full sync. It does not trigger inventory, partner, Feishu, WeCom, or full-system sync.
+- Full BOM snapshots are hashed and compared with the previous full snapshot. Hash changes create `integration_reconciliation_diffs` rows with `needs_review` status for manual confirmation.
+- `/v1/ops/status` returns machine-readable service, T+ queue, reconciliation, system, and configured host status. `/health/` renders the same data for humans.

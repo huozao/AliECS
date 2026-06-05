@@ -65,13 +65,20 @@ Do not commit real AppKey, AppSecret, AES key, appTicket, certificate, auth code
 | `REQUEST_TIMEOUT_CONNECT` / `REQUEST_TIMEOUT_READ` | tplus-sync-worker | T+ OpenAPI request timeouts | Optional |
 | `TPLUS_SYNC_INTERVAL_SECONDS` | tplus-sync-worker | Seconds between long-running sync cycles; first run starts immediately | Optional, default 3600 |
 | `TPLUS_SYNC_POLL_SECONDS` | tplus-sync-worker | Poll interval for manual BOM sync request files during long sleeps | Optional, default 30 |
+| `TPLUS_DB_SYNC_REQUESTS_ENABLED` | tplus-sync-worker | Whether the worker polls Postgres `integration_sync_requests` for event-driven BOM sync | Optional, default true |
 | `TPLUS_BOM_SYNC_REQUEST_DIR` | backend-api / tplus-sync-worker | Shared runtime directory for homepage "manual sync recipe" requests | Optional |
 
 Production stores worker output in Docker volumes mounted at `/app/data` and `/app/output`.
 The current long-running worker scope is verified read-only `QueryPage` sync for BOM, inventory, and partner records. Other T+ modules must be added only after confirming their official read-only endpoints.
 Homepage manual recipe sync only writes a request file for the BOM worker path. The worker consumes it by running `job_sync_bom`, whose default BOM sync queries both enabled and disabled BOM rows.
 
-## 7. Recipe query API
+## 7. Ops Health
+
+| Variable | Scope | Purpose | Required |
+|---|---|---|---|
+| `OPS_HEALTH_HTTP_TARGETS_JSON` | backend-api | Optional JSON list of HTTP targets to show on `/health/`, for example old laptop or WebDock endpoints | Optional, default empty list |
+
+## 8. Recipe query API
 
 | Variable | Scope | Purpose | Required |
 |---|---|---|---|
@@ -81,7 +88,7 @@ Homepage manual recipe sync only writes a request file for the BOM worker path. 
 
 `backend-api` mounts the T+ worker output volume read-only. Query outputs are generated per request and should be treated as temporary files, not source data.
 
-## 8. Feishu full sync worker
+## 9. Feishu full sync worker
 
 | Variable | Scope | Purpose | Required |
 |---|---|---|---|

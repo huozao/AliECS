@@ -74,6 +74,49 @@ class WorkerLoopTests(unittest.TestCase):
             self.assertFalse((request_dir / "manual-bom.json").exists())
             self.assertTrue((request_dir / "manual-bom.json.done").exists())
 
+    def test_run_forever_consumes_db_bom_request_between_full_runs(self):
+        old_interval = os.environ.get("TPLUS_SYNC_INTERVAL_SECONDS")
+        old_poll = os.environ.get("TPLUS_SYNC_POLL_SECONDS")
+        old_db_enabled = os.environ.get("TPLUS_DB_SYNC_REQUESTS_ENABLED")
+        calls = []
+        sleeps = []
+        requests = [{"id": 7, "mode": "incremental", "target_json": {"parent_code": "HYD-4197PC"}}]
+
+        def fake_fetch(limit=5):
+            return requests.pop(0) if requests else None
+
+        def fake_finish(request_id, status, exit_code, detail):
+            calls.append(("finish", request_id, status, exit_code, detail["mode"]))
+
+        os.environ["TPLUS_SYNC_INTERVAL_SECONDS"] = "2"
+        os.environ["TPLUS_SYNC_POLL_SECONDS"] = "1"
+        os.environ["TPLUS_DB_SYNC_REQUESTS_ENABLED"] = "true"
+        try:
+            result = run_forever(
+                sync_once=lambda: calls.append(("full",)) or 0,
+                sync_bom_request_once=lambda request: calls.append(("bom", request["id"], request["mode"])) or 0,
+                fetch_db_bom_request=fake_fetch,
+                finish_db_bom_request=fake_finish,
+                sleep=sleeps.append,
+                max_runs=2,
+            )
+        finally:
+            for key, value in {
+                "TPLUS_SYNC_INTERVAL_SECONDS": old_interval,
+                "TPLUS_SYNC_POLL_SECONDS": old_poll,
+                "TPLUS_DB_SYNC_REQUESTS_ENABLED": old_db_enabled,
+            }.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        self.assertEqual(result, 0)
+        self.assertEqual(calls[0], ("full",))
+        self.assertEqual(calls[1], ("bom", 7, "incremental"))
+        self.assertEqual(calls[2], ("finish", 7, "success", 0, "incremental"))
+        self.assertEqual(calls[3], ("full",))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -111,3 +111,12 @@ python -m unittest discover -s tests -v
 - A request triggers only `job_sync_bom`, not inventory, partner, Feishu, WeCom, or other sync jobs.
 - BOM sync defaults include both enabled and disabled rows, so manual recipe sync is intended to refresh all formulas including `停用` BOMs.
 - Finished request files are renamed with `.done`; failed ones are renamed with `.failed`.
+
+## Event-driven BOM sync requests
+
+- Chanjet BOM webhook events are stored by `backend-api` in `integration_events`.
+- BOM events create `integration_sync_requests` rows with `module='bom'`.
+- `worker_loop` polls Postgres when `TPLUS_DB_SYNC_REQUESTS_ENABLED=true`.
+- Requests with `mode='incremental'` pass `parent_code` and `version` into `job_sync_bom`; if the event payload lacks a target, the worker falls back to BOM-only full sync.
+- Targeted BOM sync still includes both enabled and disabled rows by adding the existing `Disabled=0/1` scope around the target query.
+- BOM sync results create stable snapshots. Full BOM snapshots are compared with the previous full snapshot and differences are surfaced through `/v1/ops/status` and `/health/`.

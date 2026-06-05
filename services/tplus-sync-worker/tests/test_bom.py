@@ -73,6 +73,34 @@ class BomSyncTests(unittest.TestCase):
 
         self.assertEqual(result, [{"id": 1, "material.code": "M001", "material.name": "Steel"}])
 
+    def test_sync_bom_target_query_keeps_enabled_and_disabled_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Settings(
+                base_url="https://openapi.example.com",
+                app_key="app-key",
+                app_secret="app-secret",
+                open_token="open-token",
+                default_page_size=1,
+                timeout_connect=5,
+                timeout_read=30,
+                output_dir=str(Path(tmp) / "output"),
+                data_dir=str(Path(tmp) / "data"),
+            )
+            client = FakeClient()
+
+            sync_bom(
+                settings=settings,
+                client=client,
+                timestamp="20260605_120000",
+                query_params={"Code": "HYD-4197PC", "Version": "2026-06-03F"},
+                include_disabled=True,
+            )
+
+            self.assertEqual(client.payloads[0][1]["param"]["Code"], "HYD-4197PC")
+            self.assertEqual(client.payloads[0][1]["param"]["Version"], "2026-06-03F")
+            self.assertEqual(client.payloads[0][1]["param"]["Disabled"], "0")
+            self.assertEqual(client.payloads[2][1]["param"]["Disabled"], "1")
+
     def test_transform_bom_workbook_rows_splits_parent_and_child_details(self):
         rows = [
             {

@@ -20,12 +20,33 @@ def sync_bom(
     client: Any | None = None,
     timestamp: str | None = None,
     query_params: dict[str, Any] | None = None,
+    include_disabled: bool = False,
 ) -> list[Any]:
     runtime_settings = settings or load_settings()
     runtime_client = client or ChanjetClient(runtime_settings)
     logger = get_logger("tplus_datahub.bom")
 
     logger.info("Start syncing BOM data")
+
+    if query_params is not None and include_disabled:
+        run_timestamp = timestamp or now_timestamp()
+        rows_all: list[Any] = []
+        for disabled_value, suffix in DEFAULT_DISABLED_FILTERS:
+            payload = dict(query_params)
+            payload["Disabled"] = disabled_value
+            rows_all.extend(
+                paginate_query(
+                    client=runtime_client,
+                    endpoint=BOM_QUERY_PAGE,
+                    module_name="bom",
+                    settings=runtime_settings,
+                    base_payload=payload,
+                    timestamp=f"{run_timestamp}_{suffix}",
+                )
+            )
+        rows = _dedupe_bom_rows(rows_all)
+        logger.info("BOM sync finished: rows=%s", len(rows))
+        return rows
 
     if query_params is not None:
         rows = paginate_query(

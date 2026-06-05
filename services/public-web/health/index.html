@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>AliECS · API Health</title>
+  <style>
+    :root{--bg:#f7f5f0;--panel:#fffdf8;--text:#25211b;--muted:#766f63;--line:#e7dfd0;--good:#3f7a4c;--warn:#a46b1f;--bad:#a6423a;--primary:#6f5e46;--shadow:0 12px 30px rgba(69,56,38,.08)}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui}.wrap{max-width:1180px;margin:0 auto;padding:20px 18px 56px}.topbar{display:flex;justify-content:space-between;gap:14px;align-items:center;background:rgba(255,253,248,.94);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px;padding:16px 18px;margin-bottom:16px}h1{margin:0;font-size:30px}.subtitle{margin:6px 0 0;color:var(--muted)}.actions{display:flex;gap:8px;flex-wrap:wrap}.btn{border:0;border-radius:999px;padding:9px 13px;background:#e8dfcf;color:var(--text);font-weight:650;text-decoration:none;cursor:pointer}.btn.primary{background:var(--primary);color:#fff}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.band,.panel{background:rgba(255,253,248,.94);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:16px;padding:16px;margin-bottom:14px}.metric{font-size:30px;font-weight:800;margin-top:8px}.muted{color:var(--muted)}.chip{display:inline-flex;align-items:center;border-radius:999px;padding:5px 9px;font-size:12px;font-weight:750}.ok{background:#dfeee3;color:var(--good)}.degraded,.warning{background:#f4ead8;color:var(--warn)}.critical,.failed{background:#f5d7d3;color:var(--bad)}table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}th,td{border-bottom:1px solid var(--line);padding:9px 10px;text-align:left;font-size:13px;vertical-align:top}th{background:#f2eadc}.list{display:grid;gap:8px}.attention{border-left:4px solid var(--warn);padding:8px 10px;background:#fff;border-radius:8px}.attention.critical{border-left-color:var(--bad)}@media (max-width:900px){.grid{grid-template-columns:1fr}.topbar{align-items:flex-start;flex-direction:column}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <div><h1>API Health</h1><p class="subtitle">服务器、同步任务、差异校验与需要人工关注的状态。</p></div>
+      <nav class="actions"><a class="btn" href="/">首页</a><a class="btn" href="/api/healthz" target="_blank">JSON Health</a><button id="refreshBtn" class="btn primary" type="button">刷新</button></nav>
+    </header>
+    <section id="summary" class="grid"></section>
+    <section class="band"><h2>需要关注</h2><div id="attention" class="list muted">加载中...</div></section>
+    <section class="band"><h2>T+ 同步</h2><div id="tplus"></div></section>
+    <section class="band"><h2>差异校验</h2><div id="reconciliation"></div></section>
+    <section class="band"><h2>外部主机</h2><div id="hosts"></div></section>
+  </div>
+  <script>
+    const API_BASE=location.port==='8080'?'http://localhost:8000':'/api';
+    const fmtTime=(v)=>v?new Date(v).toLocaleString():'-';
+    const chip=(status)=>`<span class="chip ${status||'degraded'}">${status||'unknown'}</span>`;
+    async function loadStatus(){const res=await fetch(`${API_BASE}/v1/ops/status`);if(!res.ok)throw new Error(`HTTP ${res.status}`);return await res.json();}
+    function renderSummary(data){const sys=data.system||{},db=data.database||{},t=data.tplus||{},r=data.reconciliation||{};summary.innerHTML=[`<article class="panel"><div>整体状态 ${chip(data.status)}</div><div class="metric">${data.status||'unknown'}</div><div class="muted">${data.service||''}</div></article>`,`<article class="panel"><div>数据库 ${chip(db.ok?'ok':'critical')}</div><div class="metric">${db.ok?'OK':'异常'}</div><div class="muted">${db.message||''}</div></article>`,`<article class="panel"><div>待处理队列</div><div class="metric">${t.pending_requests||0}</div><div class="muted">失败 ${t.failed_requests||0}，差异待审 ${r.needs_review||0}</div></article>`,`<article class="panel"><div>磁盘</div><div class="metric">${sys.disk_percent||0}%</div><div class="muted">内存 ${sys.memory_percent||0}%</div></article>`,`<article class="panel"><div>最近 T+ 成功</div><div class="metric" style="font-size:18px">${fmtTime(t.last_success_at)}</div><div class="muted">${t.last_run?`${t.last_run.module}/${t.last_run.mode}/${t.last_run.status}`:'暂无 run'}</div></article>`,`<article class="panel"><div>外部主机</div><div class="metric">${(data.hosts||[]).filter(x=>x.ok).length}/${(data.hosts||[]).length}</div><div class="muted">通过 OPS_HEALTH_HTTP_TARGETS_JSON 配置</div></article>`].join('');}
+    function renderAttention(items){if(!items||!items.length){attention.innerHTML='<div class="muted">当前没有需要人工关注的项目。</div>';return}attention.innerHTML=items.map(x=>`<div class="attention ${x.level||'warning'}"><strong>${x.code}</strong><br/><span>${x.message||''}</span></div>`).join('');}
+    function renderTplus(t){const rows=(t.recent_requests||[]).map(x=>`<tr><td>${x.id}</td><td>${x.module}</td><td>${x.mode}</td><td>${x.status}</td><td>${fmtTime(x.requested_at)}</td><td>${fmtTime(x.finished_at)}</td><td>${x.reason_event_id||''}</td></tr>`).join('');tplus.innerHTML=`<p class="muted">pending ${t.pending_requests||0} · running ${t.running_requests||0} · failed ${t.failed_requests||0}</p><table><thead><tr><th>ID</th><th>模块</th><th>模式</th><th>状态</th><th>请求时间</th><th>完成时间</th><th>事件</th></tr></thead><tbody>${rows||'<tr><td colspan="7" class="muted">暂无请求</td></tr>'}</tbody></table>`;}
+    function renderRecon(r){const rows=(r.recent||[]).map(x=>`<tr><td>${x.id}</td><td>${x.module}</td><td>${x.severity}</td><td>${x.summary}</td><td>${fmtTime(x.created_at)}</td></tr>`).join('');reconciliation.innerHTML=`<p class="muted">待人工确认：${r.needs_review||0}</p><table><thead><tr><th>ID</th><th>模块</th><th>级别</th><th>摘要</th><th>时间</th></tr></thead><tbody>${rows||'<tr><td colspan="5" class="muted">暂无差异</td></tr>'}</tbody></table>`;}
+    function renderHosts(items){const rows=(items||[]).map(x=>`<tr><td>${x.name}</td><td>${chip(x.ok?'ok':'failed')}</td><td>${x.status_code||''}</td><td>${x.latency_ms||''}</td><td>${x.message||x.url||''}</td></tr>`).join('');hosts.innerHTML=`<table><thead><tr><th>名称</th><th>状态</th><th>HTTP</th><th>ms</th><th>说明</th></tr></thead><tbody>${rows||'<tr><td colspan="5" class="muted">未配置外部主机探测。</td></tr>'}</tbody></table>`;}
+    async function refresh(){refreshBtn.disabled=true;try{const data=await loadStatus();renderSummary(data);renderAttention(data.attention_items);renderTplus(data.tplus||{});renderRecon(data.reconciliation||{});renderHosts(data.hosts||[]);}catch(err){attention.innerHTML=`<div class="attention critical"><strong>health_load_failed</strong><br/>${err.message}</div>`;}finally{refreshBtn.disabled=false}}
+    refreshBtn.onclick=refresh;refresh();
+  </script>
+</body>
+</html>

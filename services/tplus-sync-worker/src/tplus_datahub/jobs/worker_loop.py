@@ -6,6 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from tplus_datahub.core.logger import get_logger
+from tplus_datahub.jobs.db_sync_requests import fetch_next_bom_request, finish_bom_request
 from tplus_datahub.jobs.job_sync_bom import main as sync_bom_main
 from tplus_datahub.jobs.job_sync_all import main as sync_all_main
 
@@ -62,11 +63,45 @@ def _run_pending_bom_request(sync_bom_once: Callable[[], int | None], logger) ->
     return exit_code
 
 
+def _truthy(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _run_pending_db_bom_request(
+    *,
+    fetch_db_bom_request: Callable[..., dict | None],
+    finish_db_bom_request: Callable[[int, str, int, dict], None],
+    sync_bom_request_once: Callable[[dict], int | None],
+    logger,
+) -> int | None:
+    if not _truthy(os.getenv("TPLUS_DB_SYNC_REQUESTS_ENABLED", "true")):
+        return None
+    request = fetch_db_bom_request(limit=5)
+    if request is None:
+        return None
+    request_id = int(request["id"])
+    logger.info("DB T+ BOM sync request detected: id=%s mode=%s", request_id, request.get("mode"))
+    try:
+        exit_code = int(sync_bom_request_once(request) or 0)
+    except Exception as exc:
+        logger.exception("DB T+ BOM sync failed with unexpected exception: id=%s", request_id)
+        exit_code = 1
+        detail = {"error": str(exc), "mode": request.get("mode"), "target_json": request.get("target_json") or {}}
+    else:
+        detail = {"mode": request.get("mode"), "target_json": request.get("target_json") or {}}
+    status = "success" if exit_code == 0 else "failed"
+    finish_db_bom_request(request_id, status, exit_code, detail)
+    return exit_code
+
+
 def _sleep_with_manual_bom_polling(
     *,
     interval_seconds: int,
     sleep: Callable[[int], None],
     sync_bom_once: Callable[[], int | None],
+    sync_bom_request_once: Callable[[dict], int | None],
+    fetch_db_bom_request: Callable[..., dict | None],
+    finish_db_bom_request: Callable[[int, str, int, dict], None],
     logger,
 ) -> int | None:
     poll_seconds = min(_read_positive_int("TPLUS_SYNC_POLL_SECONDS", 30), interval_seconds)
@@ -79,13 +114,35 @@ def _sleep_with_manual_bom_polling(
         manual_exit_code = _run_pending_bom_request(sync_bom_once, logger)
         if manual_exit_code is not None:
             last_manual_exit_code = manual_exit_code
+        db_exit_code = _run_pending_db_bom_request(
+            fetch_db_bom_request=fetch_db_bom_request,
+            finish_db_bom_request=finish_db_bom_request,
+            sync_bom_request_once=sync_bom_request_once,
+            logger=logger,
+        )
+        if db_exit_code is not None:
+            last_manual_exit_code = db_exit_code
     return last_manual_exit_code
+
+
+def _default_fetch_db_bom_request(limit: int = 5) -> dict | None:
+    return fetch_next_bom_request(limit=limit)
+
+
+def _default_finish_db_bom_request(request_id: int, status: str, exit_code: int, detail: dict) -> None:
+    finish_bom_request(request_id, status, exit_code, detail)
 
 
 def run_forever(
     *,
     sync_once: Callable[[], int | None] = sync_all_main,
     sync_bom_once: Callable[[], int | None] = sync_bom_main,
+    sync_bom_request_once: Callable[[dict], int | None] = lambda request: sync_bom_main(
+        target=request.get("target_json") or {},
+        mode=str(request.get("mode") or "incremental"),
+    ),
+    fetch_db_bom_request: Callable[..., dict | None] = _default_fetch_db_bom_request,
+    finish_db_bom_request: Callable[[int, str, int, dict], None] = _default_finish_db_bom_request,
     sleep: Callable[[int], None] = time.sleep,
     max_runs: int | None = None,
 ) -> int:
@@ -116,6 +173,9 @@ def run_forever(
             interval_seconds=interval_seconds,
             sleep=sleep,
             sync_bom_once=sync_bom_once,
+            sync_bom_request_once=sync_bom_request_once,
+            fetch_db_bom_request=fetch_db_bom_request,
+            finish_db_bom_request=finish_db_bom_request,
             logger=logger,
         )
         if manual_exit_code is not None:
