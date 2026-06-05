@@ -11,11 +11,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Thread
+from threading import Condition, Lock, Thread
 from typing import Any
 
 
 FALLBACK_MESSAGE = os.getenv("WEB_DOCK_FALLBACK_MESSAGE", "ChatGPT 浏览器暂不可用，请稍后再试。")
+NO_REPLY = "__OPENCLAW_BRIDGE_NO_REPLY__"
 OPENCLAW_METADATA_RE = re.compile(
     r"^Conversation info \(untrusted metadata\):\s*```json\s*.*?```\s*",
     flags=re.DOTALL,
@@ -49,6 +50,34 @@ ENGLISH_ERROR_PATTERNS = (
 )
 _recent_lane_metadata: dict[str, Any] = {}
 _recent_lane_metadata_at = 0.0
+_pending_batches: dict[str, Any] = {}
+_pending_batches_lock = Lock()
+
+
+class PendingBatch:
+    def __init__(self, body: dict[str, Any], details: dict[str, Any]) -> None:
+        self.condition = Condition()
+        self.body = body
+        self.user_text = details["user_text"]
+        self.images = list(details["images"])
+        self.metadata = dict(details["metadata"])
+        self.created = time.monotonic()
+
+    def merge(self, details: dict[str, Any]) -> None:
+        if details["user_text"]:
+            self.user_text = details["user_text"]
+        self.images.extend(details["images"])
+        self.images = self.images[:MAX_BRIDGE_IMAGES]
+        for key, value in details["metadata"].items():
+            if value and not self.metadata.get(key):
+                self.metadata[key] = value
+
+    def to_body(self) -> dict[str, Any]:
+        body = dict(self.body)
+        body["messages"] = [{"role": "user", "content": build_outbound_content(self.user_text, self.images)}]
+        if self.metadata:
+            body["metadata"] = dict(self.metadata)
+        return body
 
 
 def clean_user_text(text: Any) -> str:
@@ -226,21 +255,27 @@ def webdock_timeout() -> int:
         return 320
 
 
-def build_webdock_body(body: dict[str, Any]) -> dict[str, Any]:
+def request_details(body: dict[str, Any]) -> dict[str, Any]:
     messages = body.get("messages")
     user_text = get_last_user_message(messages)
     images = get_last_user_images(messages)
-    outbound = {
-        "model": os.getenv("WEB_DOCK_MODEL", "browser-chatgpt"),
-        "messages": [{"role": "user", "content": build_outbound_content(user_text, images)}],
-        "stream": False,
-    }
     metadata = build_webdock_metadata(body)
     if images and not metadata.get("peer_id"):
         inherited_metadata = get_recent_lane_metadata()
         if inherited_metadata:
             inherited_metadata.update(metadata)
             metadata = inherited_metadata
+    return {"user_text": user_text, "images": images, "metadata": metadata}
+
+
+def build_webdock_body(body: dict[str, Any]) -> dict[str, Any]:
+    details = request_details(body)
+    outbound = {
+        "model": os.getenv("WEB_DOCK_MODEL", "browser-chatgpt"),
+        "messages": [{"role": "user", "content": build_outbound_content(details["user_text"], details["images"])}],
+        "stream": False,
+    }
+    metadata = details["metadata"]
     if metadata:
         outbound["metadata"] = metadata
         remember_lane_metadata(metadata)
@@ -318,6 +353,63 @@ def get_recent_lane_metadata() -> dict[str, Any]:
     return dict(_recent_lane_metadata)
 
 
+def bridge_batch_seconds() -> float:
+    try:
+        return max(0.0, float(os.getenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "2.0")))
+    except ValueError:
+        return 2.0
+
+
+def lane_batch_key(metadata: dict[str, Any]) -> str:
+    peer_id = metadata.get("peer_id")
+    if not peer_id:
+        return ""
+    return "|".join(
+        [
+            str(metadata.get("wechat_account") or "default"),
+            str(metadata.get("chat_type") or "private"),
+            str(peer_id),
+        ]
+    )
+
+
+def maybe_batch_request(body: dict[str, Any]) -> dict[str, Any] | str:
+    wait_seconds = bridge_batch_seconds()
+    if wait_seconds <= 0:
+        return body
+    details = request_details(body)
+    if not (details["user_text"] or details["images"]):
+        return body
+    if details["metadata"]:
+        remember_lane_metadata(details["metadata"])
+    key = lane_batch_key(details["metadata"])
+    if not key:
+        return body
+
+    with _pending_batches_lock:
+        pending = _pending_batches.get(key)
+        if pending and time.monotonic() - pending.created <= wait_seconds:
+            with pending.condition:
+                pending.merge(details)
+                pending.condition.notify_all()
+            return NO_REPLY
+        pending = PendingBatch(body, details)
+        _pending_batches[key] = pending
+
+    deadline = pending.created + wait_seconds
+    with pending.condition:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            pending.condition.wait(timeout=remaining)
+
+    with _pending_batches_lock:
+        if _pending_batches.get(key) is pending:
+            del _pending_batches[key]
+    return pending.to_body()
+
+
 def _first_metadata_value(metadata: dict[str, Any], *keys: str) -> Any:
     for key in keys:
         value = metadata.get(key)
@@ -392,7 +484,10 @@ def build_reply(body: dict[str, Any]) -> str:
     if not webdock_configured():
         return f"已收到你的微信消息：{user_text}" if user_text else "已收到你的微信消息。"
     try:
-        return call_webdock(body)
+        batched_body = maybe_batch_request(body)
+        if batched_body == NO_REPLY:
+            return NO_REPLY
+        return call_webdock(batched_body)
     except urllib.error.HTTPError as exc:
         if exc.code == 429:
             return diagnostic_message(
@@ -487,7 +582,12 @@ def stream_sse(
         if not write(_stream_chunk(model, delta={"content": ""}, finish_reason=None)):
             return  # OpenClaw disconnected; drop the (still-running) worker result
 
-    reply = result.get("reply") or FALLBACK_MESSAGE
+    reply = result.get("reply")
+    if reply == NO_REPLY:
+        write(_stream_chunk(model, delta={}, finish_reason="stop"))
+        write(b"data: [DONE]\n\n")
+        return
+    reply = reply or FALLBACK_MESSAGE
     write(_stream_chunk(model, delta={"content": reply}, finish_reason=None))
     write(_stream_chunk(model, delta={}, finish_reason="stop"))
     write(b"data: [DONE]\n\n")
@@ -559,6 +659,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._stream_reply(body, model)
 
         reply = build_reply(body)
+        content = "" if reply == NO_REPLY else reply
         return self._json(
             200,
             {
@@ -566,7 +667,7 @@ class Handler(BaseHTTPRequestHandler):
                 "object": "chat.completion",
                 "created": int(time.time()),
                 "model": model,
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}],
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             },
         )

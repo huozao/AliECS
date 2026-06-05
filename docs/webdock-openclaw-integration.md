@@ -76,6 +76,9 @@ For OpenClaw WeChat media, the bridge reads inbound files from
 converts them to data URLs before calling WebDock. A metadata-less media request
 also inherits the most recent WeChat lane metadata for a short window so text and
 image messages from the same WeChat send do not fall into WebDock's default lane.
+The bridge also waits briefly (`OPENCLAW_BRIDGE_BATCH_SECONDS`, default `2.0`) so
+separate WeChat text/media events in the same lane are sent to WebDock as one
+ChatGPT turn.
 
 It removes the OpenClaw `Conversation info (untrusted metadata)` prefix before calling WebDock. This keeps the ChatGPT page clean and avoids confusing the browser session with internal OpenClaw instructions.
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import threading
 import time
 import urllib.error
 from pathlib import Path
@@ -192,6 +193,55 @@ def test_bridge_inherits_recent_lane_metadata_for_media_only_message(tmp_path, m
     assert outbound["metadata"]["wechat_account"] == "A"
     assert outbound["metadata"]["peer_id"] == "user-1"
     assert outbound["messages"][0]["content"][0]["type"] == "image_url"
+
+
+def test_bridge_batches_text_then_followup_media_into_one_webdock_call(tmp_path, monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "0.3")
+    media_file = tmp_path / "image-a.jpg"
+    media_file.write_bytes(b"\xff\xd8\xffimage-a")
+    monkeypatch.setenv("OPENCLAW_INBOUND_MEDIA_DIR", str(tmp_path))
+    calls: list[dict] = []
+
+    def fake_call_webdock(body):
+        calls.append(bridge.build_webdock_body(body))
+        return "已按图片完成修改"
+
+    monkeypatch.setattr(bridge, "call_webdock", fake_call_webdock)
+    text_body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Conversation info (untrusted metadata):\n"
+                    "```json\n"
+                    '{"wechat_account":"A","chat_type":"private","peer_id":"user-1"}\n'
+                    "```\n\n"
+                    "/新对话 帮我把这张图片背景改为纯色，让主体更清晰"
+                ),
+            }
+        ]
+    }
+    media_body = {
+        "messages": [{"role": "user", "content": "[media attached: media://inbound/image-a.jpg (image/*)]"}]
+    }
+    text_reply: dict[str, str] = {}
+    worker = threading.Thread(target=lambda: text_reply.setdefault("value", bridge.build_reply(text_body)))
+    worker.start()
+    time.sleep(0.05)
+
+    media_reply = bridge.build_reply(media_body)
+    worker.join(timeout=2)
+
+    assert media_reply == bridge.NO_REPLY
+    assert text_reply["value"] == "已按图片完成修改"
+    assert len(calls) == 1
+    content = calls[0]["messages"][0]["content"]
+    assert content[0] == {"type": "text", "text": "/新对话 帮我把这张图片背景改为纯色，让主体更清晰"}
+    assert content[1]["type"] == "image_url"
+    assert calls[0]["metadata"]["peer_id"] == "user-1"
 
 
 def test_bridge_normalizes_english_timeout_errors_to_fallback():
