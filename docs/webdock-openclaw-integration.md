@@ -63,7 +63,11 @@ curl -fsS http://127.0.0.1:18080/v1/chat/completions \
 
 OpenClaw sends a large runtime context to the model. The bridge intentionally does not forward that full context to the browser relay.
 
-The bridge forwards only the last real user message.
+The bridge forwards only the last real user message, plus any image attachments
+on it. When the message carries images, the bridge sends OpenAI vision content
+(`[{"type":"text",...},{"type":"image_url","image_url":{"url":...}}]`) so WebDock
+uploads the image(s) to ChatGPT before sending the text; a text-only message is
+still forwarded as a plain string. URLs may be http(s) or base64 `data:` URLs.
 
 It removes the OpenClaw `Conversation info (untrusted metadata)` prefix before calling WebDock. This keeps the ChatGPT page clean and avoids confusing the browser session with internal OpenClaw instructions.
 
@@ -96,7 +100,11 @@ OpenClaw should call the bridge from inside its gateway container:
           "id": "echo",
           "name": "微信本地桥接",
           "reasoning": false,
-          "input": ["text"]
+          "input": ["text", "image"],
+          "compat": {
+            "requiresStringContent": false,
+            "supportsTools": false
+          }
         }
       ]
     }
@@ -105,6 +113,9 @@ OpenClaw should call the bridge from inside its gateway container:
 ```
 
 The OpenClaw model name may remain `wechat-bridge/echo`; the ECS bridge maps the request to `browser-chatgpt` when WebDock is configured.
+Keep `requiresStringContent` disabled for image input. If it is set to `true`,
+OpenClaw flattens OpenAI completion messages to plain string content before
+calling the bridge, which drops `image_url` parts.
 
 ## Failure Behavior
 

@@ -21,6 +21,7 @@ OPENCLAW_METADATA_CAPTURE_RE = re.compile(
     r"^Conversation info \(untrusted metadata\):\s*```json\s*(.*?)```\s*",
     flags=re.DOTALL,
 )
+MAX_BRIDGE_IMAGES = 4
 ENGLISH_ERROR_PATTERNS = (
     "llm request timed out",
     "model idle timeout",
@@ -87,6 +88,35 @@ def get_last_user_metadata(messages: Any) -> dict[str, Any]:
     return extract_openclaw_metadata(get_last_user_raw_text(messages))
 
 
+def extract_image_parts(content: Any) -> list[dict[str, Any]]:
+    """Normalize any image parts in an OpenClaw message content to the OpenAI
+    vision shape WebDock expects: {"type": "image_url", "image_url": {"url": ...}}.
+    Accepts both {"image_url": {"url": ...}} and {"image_url": "<url>"}; URLs may
+    be http(s) or base64 data URLs. Text-only content yields nothing."""
+    if not isinstance(content, list):
+        return []
+    parts: list[dict[str, Any]] = []
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        image_url = item.get("image_url")
+        if image_url is None:
+            continue
+        url = image_url.get("url") if isinstance(image_url, dict) else image_url
+        if isinstance(url, str) and url.strip():
+            parts.append({"type": "image_url", "image_url": {"url": url.strip()}})
+    return parts[:MAX_BRIDGE_IMAGES]
+
+
+def get_last_user_images(messages: Any) -> list[dict[str, Any]]:
+    if not isinstance(messages, list):
+        return []
+    for msg in reversed(messages):
+        if isinstance(msg, dict) and msg.get("role") == "user":
+            return extract_image_parts(msg.get("content"))
+    return []
+
+
 def webdock_configured() -> bool:
     return bool(os.getenv("WEB_DOCK_BASE_URL") and os.getenv("WEB_DOCK_API_TOKEN"))
 
@@ -115,16 +145,32 @@ def webdock_timeout() -> int:
 
 
 def build_webdock_body(body: dict[str, Any]) -> dict[str, Any]:
-    user_text = get_last_user_message(body.get("messages"))
+    messages = body.get("messages")
+    user_text = get_last_user_message(messages)
+    images = get_last_user_images(messages)
     outbound = {
         "model": os.getenv("WEB_DOCK_MODEL", "browser-chatgpt"),
-        "messages": [{"role": "user", "content": user_text or "请回复这条微信消息。"}],
+        "messages": [{"role": "user", "content": build_outbound_content(user_text, images)}],
         "stream": False,
     }
     metadata = build_webdock_metadata(body)
     if metadata:
         outbound["metadata"] = metadata
     return outbound
+
+
+def build_outbound_content(user_text: str, images: list[dict[str, Any]]) -> Any:
+    """Plain string when there are no images (unchanged behavior); otherwise the
+    OpenAI vision parts list so WebDock uploads the image(s). An image with no
+    caption is forwarded with no text part (WeChat sends text and each image as
+    separate messages)."""
+    if not images:
+        return user_text or "请回复这条微信消息。"
+    parts: list[dict[str, Any]] = []
+    if user_text:
+        parts.append({"type": "text", "text": user_text})
+    parts.extend(images)
+    return parts
 
 
 def build_webdock_metadata(body: dict[str, Any]) -> dict[str, Any]:

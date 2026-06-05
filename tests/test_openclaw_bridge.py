@@ -90,6 +90,48 @@ def test_bridge_forwards_openclaw_metadata_to_webdock_lane(monkeypatch):
     }
 
 
+def test_bridge_forwards_inbound_image_as_vision_parts(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_MODEL", "browser-chatgpt")
+
+    data_url = "data:image/png;base64,AAAA"
+    outbound = bridge.build_webdock_body(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "把这张图改成卡通风格"},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert outbound["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "把这张图改成卡通风格"},
+                {"type": "image_url", "image_url": {"url": data_url}},
+            ],
+        }
+    ]
+
+
+def test_bridge_forwards_image_only_message_without_text_part():
+    bridge = load_bridge()
+
+    outbound = bridge.build_webdock_body(
+        {"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "http://x/y.png"}}]}]}
+    )
+
+    assert outbound["messages"][0]["content"] == [
+        {"type": "image_url", "image_url": {"url": "http://x/y.png"}}
+    ]
+
+
 def test_bridge_normalizes_english_timeout_errors_to_fallback():
     bridge = load_bridge()
 
