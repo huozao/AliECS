@@ -96,6 +96,50 @@ def record_bom_snapshot_if_configured(rows: list[Any], *, mode: str, source_json
         return
 
 
+def record_tplus_sync_run_if_configured(
+    *,
+    module: str,
+    mode: str,
+    status: str,
+    row_count: int = 0,
+    exit_code: int | None = None,
+    detail_json: dict[str, Any] | None = None,
+    error_json: dict[str, Any] | None = None,
+) -> int | None:
+    if psycopg is None:
+        return None
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if not database_url:
+        return None
+    try:
+        with closing(psycopg.connect(database_url, connect_timeout=3)) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO integration_sync_runs(
+                        provider, module, mode, status, finished_at, row_count,
+                        exit_code, detail_json, error_json
+                    )
+                    VALUES ('chanjet', %s, %s, %s, NOW(), %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        module,
+                        mode,
+                        status,
+                        row_count,
+                        exit_code,
+                        Jsonb(detail_json or {}),
+                        Jsonb(error_json or {}),
+                    ),
+                )
+                run_id = int(cur.fetchone()[0])
+            conn.commit()
+            return run_id
+    except Exception:
+        return None
+
+
 def _latest_full_snapshot(conn: Any) -> dict[str, Any] | None:
     with conn.cursor() as cur:
         cur.execute(

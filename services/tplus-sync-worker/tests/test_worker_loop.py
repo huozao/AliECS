@@ -38,6 +38,50 @@ class WorkerLoopTests(unittest.TestCase):
 
         self.assertEqual(result, 3)
 
+    def test_run_forever_records_full_sync_run_status(self):
+        recorded = []
+
+        result = run_forever(
+            sync_once=lambda: 0,
+            record_sync_run=lambda **kwargs: recorded.append(kwargs),
+            sleep=lambda _seconds: None,
+            max_runs=1,
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            [
+                {
+                    "module": "all",
+                    "mode": "scheduled_full",
+                    "status": "success",
+                    "row_count": 0,
+                    "exit_code": 0,
+                    "detail_json": {"run": 1},
+                    "error_json": {},
+                }
+            ],
+            recorded,
+        )
+
+    def test_run_forever_records_failed_full_sync_run_status(self):
+        recorded = []
+
+        def fail_sync():
+            raise RuntimeError("boom")
+
+        result = run_forever(
+            sync_once=fail_sync,
+            record_sync_run=lambda **kwargs: recorded.append(kwargs),
+            sleep=lambda _seconds: None,
+            max_runs=1,
+        )
+
+        self.assertEqual(result, 1)
+        self.assertEqual("failed", recorded[0]["status"])
+        self.assertEqual(1, recorded[0]["exit_code"])
+        self.assertEqual({"run": 1}, recorded[0]["detail_json"])
+
     def test_run_forever_consumes_manual_bom_request_between_full_runs(self):
         old_interval = os.environ.get("TPLUS_SYNC_INTERVAL_SECONDS")
         old_poll = os.environ.get("TPLUS_SYNC_POLL_SECONDS")

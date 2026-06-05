@@ -9,6 +9,7 @@ from tplus_datahub.core.logger import get_logger
 from tplus_datahub.jobs.db_sync_requests import fetch_next_bom_request, finish_bom_request
 from tplus_datahub.jobs.job_sync_bom import main as sync_bom_main
 from tplus_datahub.jobs.job_sync_all import main as sync_all_main
+from tplus_datahub.jobs.sync_state import record_tplus_sync_run_if_configured
 
 
 def _read_positive_int(name: str, default: int) -> int:
@@ -143,6 +144,7 @@ def run_forever(
     ),
     fetch_db_bom_request: Callable[..., dict | None] = _default_fetch_db_bom_request,
     finish_db_bom_request: Callable[[int, str, int, dict], None] = _default_finish_db_bom_request,
+    record_sync_run: Callable[..., int | None] = record_tplus_sync_run_if_configured,
     sleep: Callable[[int], None] = time.sleep,
     max_runs: int | None = None,
 ) -> int:
@@ -162,8 +164,23 @@ def run_forever(
 
         if last_exit_code == 0:
             logger.info("T+ sync run finished: run=%s status=success", run_count)
+            status = "success"
         else:
             logger.error("T+ sync run finished: run=%s status=failed exit_code=%s", run_count, last_exit_code)
+            status = "failed"
+
+        try:
+            record_sync_run(
+                module="all",
+                mode="scheduled_full",
+                status=status,
+                row_count=0,
+                exit_code=last_exit_code,
+                detail_json={"run": run_count},
+                error_json={},
+            )
+        except Exception:
+            logger.exception("Failed to record T+ sync run status: run=%s", run_count)
 
         if max_runs is not None and run_count >= max_runs:
             return last_exit_code
