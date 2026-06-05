@@ -64,9 +64,12 @@ Do not commit real AppKey, AppSecret, AES key, appTicket, certificate, auth code
 | `DEFAULT_PAGE_SIZE` | tplus-sync-worker | T+ QueryPage page size | Optional, default 500 |
 | `REQUEST_TIMEOUT_CONNECT` / `REQUEST_TIMEOUT_READ` | tplus-sync-worker | T+ OpenAPI request timeouts | Optional |
 | `TPLUS_SYNC_INTERVAL_SECONDS` | tplus-sync-worker | Seconds between long-running sync cycles; first run starts immediately | Optional, default 3600 |
+| `TPLUS_SYNC_POLL_SECONDS` | tplus-sync-worker | Poll interval for manual BOM sync request files during long sleeps | Optional, default 30 |
+| `TPLUS_BOM_SYNC_REQUEST_DIR` | backend-api / tplus-sync-worker | Shared runtime directory for homepage "manual sync recipe" requests | Optional |
 
 Production stores worker output in Docker volumes mounted at `/app/data` and `/app/output`.
 The current long-running worker scope is verified read-only `QueryPage` sync for BOM, inventory, and partner records. Other T+ modules must be added only after confirming their official read-only endpoints.
+Homepage manual recipe sync only writes a request file for the BOM worker path. The worker consumes it by running `job_sync_bom`, whose default BOM sync queries both enabled and disabled BOM rows.
 
 ## 7. Recipe query API
 

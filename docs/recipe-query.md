@@ -21,6 +21,13 @@ No real source workbook belongs in Git.
 - `include_disabled=false` excludes rows whose `停用` value indicates disabled.
 - Query output includes match count, recipe count, source workbook name, preview rows, a generated `file_id`, and a download URL.
 
+## Manual BOM Sync
+
+- The homepage `手动同步配方` button calls `POST /v1/recipes/sync-bom`.
+- This endpoint only creates a T+ BOM sync request file under `TPLUS_BOM_SYNC_REQUEST_DIR`; it does not run a broad full-system sync from the web request.
+- `tplus-sync-worker` polls the same request directory and runs `job_sync_bom` when a request is present.
+- `job_sync_bom` uses the BOM sync defaults, which query both enabled and disabled BOM rows.
+
 ## Downloaded Workbook
 
 `GET /v1/recipes/download/{file_id}` returns the generated workbook. The workbook includes:
@@ -37,6 +44,7 @@ Generated files are temporary runtime outputs under `RECIPE_EXPORT_DIR`.
 - The API never returns local source paths, only the source file name.
 - Download IDs must be service-generated 32-character hex IDs.
 - The backend reads T+ output read-only and does not call Chanjet APIs from this route.
+- Manual BOM sync requests contain no Chanjet tokens or secrets.
 - Do not commit generated workbooks, raw BOM data, real tokens, or local env files.
 
 ## Validation

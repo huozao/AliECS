@@ -396,6 +396,27 @@ class RecipeQueryRequest(BaseModel):
     include_disabled: bool = True
 
 
+def _tplus_bom_sync_request_dir() -> Path:
+    return Path(os.getenv("TPLUS_BOM_SYNC_REQUEST_DIR", "/tmp/aliecs-tplus-sync-requests"))
+
+
+def _create_tplus_bom_sync_request(requested_by: str | None) -> dict[str, Any]:
+    request_dir = _tplus_bom_sync_request_dir()
+    request_dir.mkdir(parents=True, exist_ok=True)
+    request_id = uuid.uuid4().hex
+    payload = {
+        "id": request_id,
+        "provider": "chanjet",
+        "module": "bom",
+        "mode": "manual_bom_full_include_disabled",
+        "include_disabled": True,
+        "requested_by": requested_by or "",
+        "requested_at": int(time.time()),
+    }
+    (request_dir / f"{request_id}.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return {"id": request_id, "status": "pending", "mode": payload["mode"]}
+
+
 class LocalPhotoStorage:
     def __init__(self) -> None:
         self.base_dir = Path(os.getenv("LOCAL_UPLOAD_DIR", "/tmp/aliecs-uploads"))
@@ -669,6 +690,21 @@ def recipe_query(body: RecipeQueryRequest, user: dict[str, Any] = Depends(requir
         "file_id": file_id,
         "download_url": f"/v1/recipes/download/{file_id}",
         "preview": result.preview_rows(limit=20),
+    }
+
+
+@app.post("/v1/recipes/sync-bom")
+def recipe_sync_bom(user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
+    require_permission("formula.read", user)
+    try:
+        request = _create_tplus_bom_sync_request(user.get("sub"))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"BOM 同步请求创建失败：{type(exc).__name__}") from exc
+    return {
+        **request,
+        "module": "bom",
+        "include_disabled": True,
+        "message": "已请求同步 T+ 物料清单 BOM；默认全量包含停用配方。",
     }
 
 

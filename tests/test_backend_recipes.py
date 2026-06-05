@@ -21,6 +21,7 @@ class BackendRecipeRouteTests(unittest.TestCase):
             "AUTH_TOKEN_SECRET": os.environ.get("AUTH_TOKEN_SECRET"),
             "RECIPE_BOM_INPUT_PATH": os.environ.get("RECIPE_BOM_INPUT_PATH"),
             "RECIPE_EXPORT_DIR": os.environ.get("RECIPE_EXPORT_DIR"),
+            "TPLUS_BOM_SYNC_REQUEST_DIR": os.environ.get("TPLUS_BOM_SYNC_REQUEST_DIR"),
         }
         for name in list(sys.modules):
             if name == "app" or name.startswith("app."):
@@ -35,6 +36,7 @@ class BackendRecipeRouteTests(unittest.TestCase):
         os.environ["AUTH_TOKEN_SECRET"] = "test-recipe-secret"
         os.environ["RECIPE_BOM_INPUT_PATH"] = str(self.source_path)
         os.environ["RECIPE_EXPORT_DIR"] = str(self.tmp_path / "exports")
+        os.environ["TPLUS_BOM_SYNC_REQUEST_DIR"] = str(self.tmp_path / "tplus-sync-requests")
 
         from app.main import _encode_token, app
 
@@ -213,6 +215,38 @@ class BackendRecipeRouteTests(unittest.TestCase):
         )
 
         self.assertEqual(404, response.status_code)
+
+    def test_formula_read_user_can_request_manual_bom_sync(self) -> None:
+        import json
+
+        token = self._token(permissions=["formula.read"])
+
+        response = self.client.post(
+            "/v1/recipes/sync-bom",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()
+        self.assertEqual("pending", data["status"])
+        self.assertEqual("bom", data["module"])
+        self.assertTrue(data["include_disabled"])
+        request_files = list((self.tmp_path / "tplus-sync-requests").glob("*.json"))
+        self.assertEqual(1, len(request_files))
+        payload = json.loads(request_files[0].read_text(encoding="utf-8"))
+        self.assertEqual("bom", payload["module"])
+        self.assertEqual("manual_bom_full_include_disabled", payload["mode"])
+        self.assertTrue(payload["include_disabled"])
+
+    def test_manual_bom_sync_requires_formula_read_permission(self) -> None:
+        token = self._token(permissions=["production.schedule.read"])
+
+        response = self.client.post(
+            "/v1/recipes/sync-bom",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(403, response.status_code)
 
 
 if __name__ == "__main__":

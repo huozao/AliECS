@@ -103,3 +103,11 @@ python -m unittest discover -s tests -v
 - Sales, purchase, warehouse, price, and cost modules remain pending until their official read-only endpoints are confirmed against the current account and covered by tests.
 - Production output is written inside the container to `/app/data` and `/app/output`, backed by Docker volumes `tplus_sync_data` and `tplus_sync_output`.
 - Real `CHANJET_APP_KEY`, `CHANJET_APP_SECRET`, and `CHANJET_OPEN_TOKEN` must stay in ECS/KMS runtime config, never in Git.
+
+## Manual BOM sync requests
+
+- `backend-api` writes request files to `TPLUS_BOM_SYNC_REQUEST_DIR` when the homepage `手动同步配方` button is clicked.
+- `worker_loop` polls the same directory every `TPLUS_SYNC_POLL_SECONDS` seconds while waiting between scheduled full sync runs.
+- A request triggers only `job_sync_bom`, not inventory, partner, Feishu, WeCom, or other sync jobs.
+- BOM sync defaults include both enabled and disabled rows, so manual recipe sync is intended to refresh all formulas including `停用` BOMs.
+- Finished request files are renamed with `.done`; failed ones are renamed with `.failed`.

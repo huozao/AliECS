@@ -1,5 +1,7 @@
 import os
+import tempfile
 import unittest
+from pathlib import Path
 
 from tplus_datahub.jobs.worker_loop import run_forever
 
@@ -35,6 +37,42 @@ class WorkerLoopTests(unittest.TestCase):
         )
 
         self.assertEqual(result, 3)
+
+    def test_run_forever_consumes_manual_bom_request_between_full_runs(self):
+        old_interval = os.environ.get("TPLUS_SYNC_INTERVAL_SECONDS")
+        old_poll = os.environ.get("TPLUS_SYNC_POLL_SECONDS")
+        old_request_dir = os.environ.get("TPLUS_BOM_SYNC_REQUEST_DIR")
+        calls = []
+        sleeps = []
+        with tempfile.TemporaryDirectory() as tmp:
+            request_dir = Path(tmp)
+            (request_dir / "manual-bom.json").write_text('{"module":"bom","include_disabled":true}', encoding="utf-8")
+            os.environ["TPLUS_SYNC_INTERVAL_SECONDS"] = "2"
+            os.environ["TPLUS_SYNC_POLL_SECONDS"] = "1"
+            os.environ["TPLUS_BOM_SYNC_REQUEST_DIR"] = str(request_dir)
+            try:
+                result = run_forever(
+                    sync_once=lambda: calls.append("full") or 0,
+                    sync_bom_once=lambda: calls.append("bom") or 0,
+                    sleep=sleeps.append,
+                    max_runs=2,
+                )
+            finally:
+                for key, value in {
+                    "TPLUS_SYNC_INTERVAL_SECONDS": old_interval,
+                    "TPLUS_SYNC_POLL_SECONDS": old_poll,
+                    "TPLUS_BOM_SYNC_REQUEST_DIR": old_request_dir,
+                }.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+
+            self.assertEqual(result, 0)
+            self.assertEqual(calls, ["full", "bom", "full"])
+            self.assertEqual(sleeps, [1, 1])
+            self.assertFalse((request_dir / "manual-bom.json").exists())
+            self.assertTrue((request_dir / "manual-bom.json.done").exists())
 
 
 if __name__ == "__main__":

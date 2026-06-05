@@ -39,11 +39,13 @@ services:
       RECIPE_BOM_INPUT_DIR: ${RECIPE_BOM_INPUT_DIR:-/app/tplus-output/excel}
       RECIPE_BOM_INPUT_GLOB: ${RECIPE_BOM_INPUT_GLOB:-*物料清单合并*.xlsx;*bom*.xlsx;*物料清单*.xlsx}
       RECIPE_EXPORT_DIR: ${RECIPE_EXPORT_DIR:-/tmp/aliecs-recipe-exports}
+      TPLUS_BOM_SYNC_REQUEST_DIR: ${TPLUS_BOM_SYNC_REQUEST_DIR:-/app/tplus-sync-requests}
       ENV: prod
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
       - tplus_sync_output:/app/tplus-output:ro
+      - tplus_sync_requests:/app/tplus-sync-requests
     depends_on:
       postgres:
         condition: service_healthy
@@ -118,9 +120,12 @@ services:
       OUTPUT_DIR: /app/output
       DATA_DIR: /app/data
       TPLUS_SYNC_INTERVAL_SECONDS: ${TPLUS_SYNC_INTERVAL_SECONDS:-3600}
+      TPLUS_SYNC_POLL_SECONDS: ${TPLUS_SYNC_POLL_SECONDS:-30}
+      TPLUS_BOM_SYNC_REQUEST_DIR: ${TPLUS_BOM_SYNC_REQUEST_DIR:-/app/sync-requests}
     volumes:
       - tplus_sync_data:/app/data
       - tplus_sync_output:/app/output
+      - tplus_sync_requests:/app/sync-requests
 
   postgres:
     image: postgres:16
@@ -141,3 +146,4 @@ volumes:
   pgdata:
   tplus_sync_data:
   tplus_sync_output:
+  tplus_sync_requests:
