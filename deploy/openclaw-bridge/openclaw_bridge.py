@@ -31,6 +31,7 @@ RECENT_METADATA_WINDOW_SECONDS = 120.0
 OPENCLAW_MEDIA_URI_RE = re.compile(r"media://inbound/([^\s\]\)\"'`]+)")
 OPENCLAW_MEDIA_ATTACHED_LINE_RE = re.compile(r"^\s*\[media attached:\s+media://inbound/[^\]]+\]\s*$", re.MULTILINE)
 OPENCLAW_MEDIA_NO_CAPTION_RE = re.compile(r"^\s*\[User sent media without caption\]\s*$", re.MULTILINE)
+MEDIA_INTENT_RE = re.compile(r"(图片|照片|这张图|图像|背景|修图|改图|抠图|image|photo|picture)", re.IGNORECASE)
 OPENCLAW_MEDIA_HELPER_PREFIXES = (
     "To send an image back, prefer ",
     "If you must inline, use MEDIA:",
@@ -55,13 +56,15 @@ _pending_batches_lock = Lock()
 
 
 class PendingBatch:
-    def __init__(self, body: dict[str, Any], details: dict[str, Any]) -> None:
+    def __init__(self, body: dict[str, Any], details: dict[str, Any], wait_seconds: float) -> None:
         self.condition = Condition()
         self.body = body
         self.user_text = details["user_text"]
         self.images = list(details["images"])
         self.metadata = dict(details["metadata"])
         self.created = time.monotonic()
+        self.deadline = self.created + wait_seconds
+        self.updated = self.created
 
     def merge(self, details: dict[str, Any]) -> None:
         if details["user_text"]:
@@ -71,6 +74,10 @@ class PendingBatch:
         for key, value in details["metadata"].items():
             if value and not self.metadata.get(key):
                 self.metadata[key] = value
+        self.updated = time.monotonic()
+
+    def has_text_and_images(self) -> bool:
+        return bool(self.user_text and self.images)
 
     def to_body(self) -> dict[str, Any]:
         body = dict(self.body)
@@ -353,11 +360,26 @@ def get_recent_lane_metadata() -> dict[str, Any]:
     return dict(_recent_lane_metadata)
 
 
-def bridge_batch_seconds() -> float:
+def _float_env(name: str, default: float) -> float:
     try:
-        return max(0.0, float(os.getenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "2.0")))
+        return max(0.0, float(os.getenv(name, str(default))))
     except ValueError:
-        return 2.0
+        return default
+
+
+def bridge_batch_seconds(details: dict[str, Any] | None = None) -> float:
+    base_seconds = _float_env("OPENCLAW_BRIDGE_BATCH_SECONDS", 2.0)
+    if details and should_wait_for_followup_media(details):
+        return max(base_seconds, _float_env("OPENCLAW_BRIDGE_MEDIA_INTENT_BATCH_SECONDS", 8.0))
+    return base_seconds
+
+
+def bridge_batch_settle_seconds() -> float:
+    return _float_env("OPENCLAW_BRIDGE_BATCH_SETTLE_SECONDS", 0.35)
+
+
+def should_wait_for_followup_media(details: dict[str, Any]) -> bool:
+    return bool(details["user_text"] and not details["images"] and MEDIA_INTENT_RE.search(details["user_text"]))
 
 
 def lane_batch_key(metadata: dict[str, Any]) -> str:
@@ -374,10 +396,10 @@ def lane_batch_key(metadata: dict[str, Any]) -> str:
 
 
 def maybe_batch_request(body: dict[str, Any]) -> dict[str, Any] | str:
-    wait_seconds = bridge_batch_seconds()
+    details = request_details(body)
+    wait_seconds = bridge_batch_seconds(details)
     if wait_seconds <= 0:
         return body
-    details = request_details(body)
     if not (details["user_text"] or details["images"]):
         return body
     if details["metadata"]:
@@ -388,18 +410,22 @@ def maybe_batch_request(body: dict[str, Any]) -> dict[str, Any] | str:
 
     with _pending_batches_lock:
         pending = _pending_batches.get(key)
-        if pending and time.monotonic() - pending.created <= wait_seconds:
+        if pending and time.monotonic() <= pending.deadline:
             with pending.condition:
                 pending.merge(details)
                 pending.condition.notify_all()
             return NO_REPLY
-        pending = PendingBatch(body, details)
+        pending = PendingBatch(body, details, wait_seconds)
         _pending_batches[key] = pending
 
-    deadline = pending.created + wait_seconds
+    deadline = pending.deadline
     with pending.condition:
         while True:
-            remaining = deadline - time.monotonic()
+            now = time.monotonic()
+            next_deadline = deadline
+            if pending.has_text_and_images():
+                next_deadline = min(deadline, pending.updated + bridge_batch_settle_seconds())
+            remaining = next_deadline - now
             if remaining <= 0:
                 break
             pending.condition.wait(timeout=remaining)
