@@ -14,10 +14,18 @@ from typing import Any
 import psycopg
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from passlib.context import CryptContext
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 
+from app.recipes.bom_query import (
+    export_path_for_id,
+    locate_recipe_source,
+    new_export_path,
+    query_recipe_workbook,
+    save_recipe_workbook,
+)
 from app.routers.webhooks import router as webhooks_router
 
 
@@ -65,7 +73,7 @@ DEFAULT_FEATURES: list[dict[str, Any]] = [
     {"id": 4, "code": "naming_form", "title": "产品命名登记", "description": "产品命名录入", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_a577fc", "category": "业务录入", "required_permission": "formula.write", "status": "active", "sort_order": 40},
     {"id": 5, "code": "qc_form", "title": "检测数据登记表", "description": "检测数据登记", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_b669cf", "category": "质检", "required_permission": "formula.read", "status": "active", "sort_order": 50},
     {"id": 6, "code": "density_calculator", "title": "配方密度计算器", "description": "配方密度工具", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_bac993", "category": "质检", "required_permission": "formula.read", "status": "active", "sort_order": 60},
-    {"id": 7, "code": "formula_query", "title": "配方查询", "description": "配方检索入口", "url": None, "category": "业务查询", "required_permission": "formula.read", "status": "reserved", "sort_order": 70},
+    {"id": 7, "code": "formula_query", "title": "配方查询", "description": "按编号查询 T+ BOM 配方并下载核对表", "url": "#recipe-query", "category": "业务查询", "required_permission": "formula.read", "status": "active", "sort_order": 70},
     {"id": 8, "code": "midea_requirement", "title": "美的需求", "description": "需求查询入口", "url": None, "category": "业务查询", "required_permission": "midea.requirement.read", "status": "reserved", "sort_order": 80},
     {"id": 9, "code": "raw_inventory", "title": "原材料库存", "description": "原材料库存入口", "url": None, "category": "业务查询", "required_permission": "inventory.raw.read", "status": "reserved", "sort_order": 90},
     {"id": 10, "code": "finished_inventory", "title": "成品库存", "description": "成品库存入口", "url": None, "category": "业务查询", "required_permission": "inventory.finished.read", "status": "reserved", "sort_order": 100},
@@ -278,6 +286,14 @@ def require_admin(user: dict[str, Any] = Depends(get_current_user)) -> dict[str,
     raise HTTPException(status_code=403, detail="permission denied")
 
 
+def require_permission(permission: str, user: dict[str, Any]) -> dict[str, Any]:
+    roles = user.get("roles", [])
+    permissions = user.get("permissions", [])
+    if "admin" in roles or "admin.access" in permissions or permission in permissions:
+        return user
+    raise HTTPException(status_code=403, detail="permission denied")
+
+
 def _couple_feature_enabled() -> bool:
     return os.getenv("COUPLE_FEATURE_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 
@@ -372,6 +388,12 @@ class MemoryUpsertRequest(BaseModel):
     cover_photo_url: str | None = None
     visibility: str = "private"
     tags: list[str] = Field(default_factory=list)
+
+
+class RecipeQueryRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=100)
+    default_bom: str = "all"
+    include_disabled: bool = True
 
 
 class LocalPhotoStorage:
@@ -615,6 +637,55 @@ def features(
         },
         "features": items,
     }
+
+
+@app.post("/v1/recipes/query")
+def recipe_query(body: RecipeQueryRequest, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
+    require_permission("formula.read", user)
+    try:
+        source_path = locate_recipe_source()
+        result = query_recipe_workbook(
+            source_path,
+            query_text=body.query,
+            default_bom=body.default_bom,
+            include_disabled=body.include_disabled,
+        )
+        file_id, output_path = new_export_path()
+        save_recipe_workbook(output_path, result)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="BOM 输入文件未找到") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"配方查询失败：{type(exc).__name__}") from exc
+
+    return {
+        "query": body.query,
+        "source_file": source_path.name,
+        "match_count": result.match_count,
+        "recipe_count": result.recipe_count,
+        "default_bom": result.default_bom,
+        "include_disabled": result.include_disabled,
+        "file_id": file_id,
+        "download_url": f"/v1/recipes/download/{file_id}",
+        "preview": result.preview_rows(limit=20),
+    }
+
+
+@app.get("/v1/recipes/download/{file_id}")
+def recipe_download(file_id: str, user: dict[str, Any] = Depends(require_login)) -> FileResponse:
+    require_permission("formula.read", user)
+    try:
+        path = export_path_for_id(file_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="download file not found")
+    return FileResponse(
+        path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=f"配方查询_{file_id}.xlsx",
+    )
 
 
 

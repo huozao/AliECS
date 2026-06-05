@@ -67,3 +67,29 @@ Do not commit real AppKey, AppSecret, AES key, appTicket, certificate, auth code
 
 Production stores worker output in Docker volumes mounted at `/app/data` and `/app/output`.
 The current long-running worker scope is verified read-only `QueryPage` sync for BOM, inventory, and partner records. Other T+ modules must be added only after confirming their official read-only endpoints.
+
+## 7. Recipe query API
+
+| Variable | Scope | Purpose | Required |
+|---|---|---|---|
+| `RECIPE_BOM_INPUT_DIR` | backend-api | Directory scanned for the latest T+ BOM workbook | Optional, default `/app/tplus-output/excel` |
+| `RECIPE_BOM_INPUT_GLOB` | backend-api | Semicolon-separated workbook filename patterns | Optional |
+| `RECIPE_EXPORT_DIR` | backend-api | Temporary directory for generated recipe query workbooks | Optional, default `/tmp/aliecs-recipe-exports` |
+
+`backend-api` mounts the T+ worker output volume read-only. Query outputs are generated per request and should be treated as temporary files, not source data.
+
+## 8. Feishu full sync worker
+
+| Variable | Scope | Purpose | Required |
+|---|---|---|---|
+| `FEISHU_ENV_PROFILES` | doc-sync-worker | Comma-separated company profiles, for example `COMPANY_A,COMPANY_B` | Required for `sync-feishu-full` unless profiles are passed by CLI |
+| `FEISHU_<PROFILE>_APP_ID` | doc-sync-worker | Feishu app ID for the profile | Required |
+| `FEISHU_<PROFILE>_APP_SECRET` | doc-sync-worker | Feishu app secret for the profile | Required |
+| `FEISHU_<PROFILE>_APP_TOKEN` | doc-sync-worker | Bitable app token | Required unless `WIKI_NODE_TOKEN` is configured |
+| `FEISHU_<PROFILE>_TABLE_ID` | doc-sync-worker | Bitable table ID | Required |
+| `FEISHU_<PROFILE>_VIEW_ID` | doc-sync-worker | Optional bitable view filter | Optional |
+| `FEISHU_<PROFILE>_WIKI_NODE_TOKEN` | doc-sync-worker | Wiki node token used to resolve app token | Optional alternative to `APP_TOKEN` |
+| `FEISHU_<PROFILE>_WIKI_URL` | doc-sync-worker | Human-readable source URL saved with source metadata | Optional |
+| `FEISHU_<PROFILE>_APP_NAME` / `FEISHU_<PROFILE>_TABLE_NAME` | doc-sync-worker | Source display name | Optional |
+
+Do not commit real Feishu app IDs, app secrets, app tokens, wiki node tokens, tenant access tokens, or business table data. Feishu sync writes normalized fields, records, and run diagnostics into Postgres through `doc-sync-worker`.

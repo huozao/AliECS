@@ -171,5 +171,164 @@ class EnvProfileTests(unittest.TestCase):
             self.assertEqual("点检表", sources[0].source_name)
 
 
+class FeishuProviderEnvTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._old_sys_path = list(sys.path)
+        for name in list(sys.modules):
+            if name == "app" or name.startswith("app."):
+                del sys.modules[name]
+        worker_root = str(WORKER_ROOT)
+        sys.path[:] = [item for item in sys.path if item != worker_root]
+        sys.path.insert(0, worker_root)
+
+    def tearDown(self) -> None:
+        for name in list(sys.modules):
+            if name == "app" or name.startswith("app."):
+                del sys.modules[name]
+        sys.path[:] = self._old_sys_path
+
+    def test_feishu_env_profiles_can_be_inferred_from_company_variables(self) -> None:
+        from app.providers.feishu import env_profiles
+
+        with patch.dict(
+            "os.environ",
+            {
+                "FEISHU_COMPANY_A_APP_ID": "cli_a",
+                "FEISHU_COMPANY_A_APP_SECRET": "secret-a",
+                "FEISHU_COMPANY_B_APP_ID": "cli_b",
+                "FEISHU_COMPANY_B_APP_SECRET": "secret-b",
+            },
+            clear=True,
+        ):
+            self.assertEqual(["COMPANY_A", "COMPANY_B"], env_profiles(""))
+
+    def test_feishu_profile_discovers_bitable_source_from_env(self) -> None:
+        from app.providers.feishu import credentials_for_profile, discover_profile_sources
+
+        with patch.dict(
+            "os.environ",
+            {
+                "FEISHU_COMPANY_A_APP_ID": "cli_a",
+                "FEISHU_COMPANY_A_APP_SECRET": "secret-a",
+                "FEISHU_COMPANY_A_APP_TOKEN": "bascn_test_token",
+                "FEISHU_COMPANY_A_TABLE_ID": "tbl_test_table",
+                "FEISHU_COMPANY_A_TABLE_NAME": "生产任务",
+            },
+            clear=True,
+        ):
+            credentials = credentials_for_profile("COMPANY_A")
+            sources = discover_profile_sources("COMPANY_A")
+
+        self.assertEqual(1, len(credentials))
+        self.assertEqual("COMPANY_A", credentials[0].env_profile)
+        self.assertEqual(1, len(sources))
+        self.assertEqual("bascn_test_token", sources[0].app_token)
+        self.assertEqual("tbl_test_table", sources[0].table_id)
+        self.assertEqual("生产任务", sources[0].source_name)
+
+
+class FeishuBitablePaginationTests(unittest.TestCase):
+    def test_get_records_merges_two_pages(self) -> None:
+        from app.providers.feishu import FeishuBitableClient
+
+        pages = [
+            {"code": 0, "data": {"items": [{"record_id": "r1"}], "has_more": True, "page_token": "next"}},
+            {"code": 0, "data": {"items": [{"record_id": "r2"}], "has_more": False}},
+        ]
+
+        class FakeClient(FeishuBitableClient):
+            def __init__(self) -> None:
+                super().__init__("cli_a", "secret-a")
+                self._tenant_token = "tenant-token"
+                self.calls: list[dict] = []
+
+            def _request_json(self, method: str, path: str, **kwargs: object) -> dict:
+                self.calls.append({"method": method, "path": path, "kwargs": kwargs})
+                return pages.pop(0)
+
+        client = FakeClient()
+
+        result = client.get_records("bascn_test_token", "tbl_test_table")
+
+        self.assertEqual(["r1", "r2"], [x["record_id"] for x in result["records"]])
+        self.assertEqual(2, result["page_count"])
+        self.assertEqual(2, result["fetched_count"])
+        self.assertEqual("next", client.calls[1]["kwargs"]["params"]["page_token"])
+
+    def test_get_records_errors_when_has_more_without_page_token(self) -> None:
+        from app.providers.feishu import FeishuBitableClient
+
+        class FakeClient(FeishuBitableClient):
+            def __init__(self) -> None:
+                super().__init__("cli_a", "secret-a")
+                self._tenant_token = "tenant-token"
+
+            def _request_json(self, method: str, path: str, **kwargs: object) -> dict:
+                return {"code": 0, "data": {"items": [{"record_id": "r1"}], "has_more": True}}
+
+        with self.assertRaisesRegex(RuntimeError, "缺少 page_token"):
+            FakeClient().get_records("bascn_test_token", "tbl_test_table")
+
+    def test_get_records_errors_when_page_token_repeats(self) -> None:
+        from app.providers.feishu import FeishuBitableClient
+
+        class FakeClient(FeishuBitableClient):
+            def __init__(self) -> None:
+                super().__init__("cli_a", "secret-a")
+                self._tenant_token = "tenant-token"
+
+            def _request_json(self, method: str, path: str, **kwargs: object) -> dict:
+                return {"code": 0, "data": {"items": [], "has_more": True, "page_token": "repeat"}}
+
+        with self.assertRaisesRegex(RuntimeError, "page_token 重复"):
+            FakeClient().get_records("bascn_test_token", "tbl_test_table")
+
+    def test_redact_path_hides_bitable_app_token(self) -> None:
+        from app.providers.feishu import FeishuBitableClient
+
+        path = "/bitable/v1/apps/bascn_secret_token/tables/tbl_test_table/records"
+
+        safe_path = FeishuBitableClient._redact_path(path)
+
+        self.assertEqual("/bitable/v1/apps/***/tables/tbl_test_table/records", safe_path)
+        self.assertNotIn("bascn_secret_token", safe_path)
+
+
+class FeishuBitableErrorTests(unittest.TestCase):
+    def test_request_json_http_error_includes_status_without_secrets(self) -> None:
+        import requests
+
+        from app.providers.feishu import FeishuBitableClient
+
+        class FakeResponse:
+            status_code = 403
+            text = "app_secret=secret-a tenant_access_token=tenant-token"
+
+            def raise_for_status(self) -> None:
+                raise requests.HTTPError("403 Client Error", response=self)
+
+            def json(self) -> dict:
+                return {}
+
+        class FakeSession:
+            trust_env = False
+
+            def request(self, *args: object, **kwargs: object) -> FakeResponse:
+                return FakeResponse()
+
+        client = FeishuBitableClient("cli_a", "secret-a")
+        client.session = FakeSession()  # type: ignore[assignment]
+
+        with self.assertRaises(RuntimeError) as raised:
+            client._request_json("GET", "/bitable/v1/apps/app/tables/table/records")
+
+        error = str(raised.exception)
+        self.assertIn("/bitable/v1/apps/***/tables/table/records", error)
+        self.assertNotIn("/bitable/v1/apps/app/tables/table/records", error)
+        self.assertIn("http_status=403", error)
+        self.assertNotIn("secret-a", error)
+        self.assertNotIn("tenant-token", error)
+
+
 if __name__ == "__main__":
     unittest.main()
