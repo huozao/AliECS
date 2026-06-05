@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import base64
+import calendar
 import hashlib
 import hmac
 import json
 import os
+import secrets
 import shutil
 import time
 import urllib.request
 import uuid
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -395,6 +397,34 @@ class MemoryUpsertRequest(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class PatchCoupleSpaceRequest(BaseModel):
+    name: str | None = None
+    start_date: str | None = None
+    theme: str | None = None
+    cover_image_url: str | None = None
+
+
+class AnniversaryUpsertRequest(BaseModel):
+    couple_space_id: int | None = None
+    title: str
+    date: str
+    repeat_type: str = "yearly"
+    description: str | None = None
+
+
+class BucketItemUpsertRequest(BaseModel):
+    couple_space_id: int | None = None
+    title: str
+    description: str | None = None
+    status: str = "want"
+    target_date: str | None = None
+    completed_memory_id: int | None = None
+
+
+class CreateShareLinkRequest(BaseModel):
+    expires_in_days: int | None = Field(default=None, ge=1, le=365)
+
+
 class RecipeQueryRequest(BaseModel):
     query: str = Field(min_length=1, max_length=100)
     default_bom: str = "all"
@@ -431,30 +461,125 @@ def _create_tplus_bom_sync_request(requested_by: str | None) -> dict[str, Any]:
     return {"id": request_id, "status": "pending", "mode": payload["mode"]}
 
 
-class LocalPhotoStorage:
+ALLOWED_UPLOAD_MIMES = {
+    "image/jpeg": {".jpg", ".jpeg"},
+    "image/png": {".png"},
+    "image/webp": {".webp"},
+    "image/gif": {".gif"},
+}
+
+
+def _max_upload_bytes() -> int:
+    raw = os.getenv("MAX_UPLOAD_MB", os.getenv("PHOTO_MAX_UPLOAD_MB", "15"))
+    try:
+        mb = max(1, int(raw))
+    except ValueError:
+        mb = 15
+    return mb * 1024 * 1024
+
+
+def _detect_image_mime(data: bytes) -> str | None:
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data.startswith(b"RIFF") and len(data) >= 12 and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def _validate_photo_upload(filename: str | None, declared_mime: str | None, content: bytes) -> tuple[str, str]:
+    ext = Path(filename or "").suffix.lower()
+    detected_mime = _detect_image_mime(content)
+    declared = (declared_mime or "").split(";", 1)[0].strip().lower()
+    if not content:
+        raise HTTPException(status_code=400, detail="empty file")
+    if len(content) > _max_upload_bytes():
+        raise HTTPException(status_code=400, detail="file too large")
+    if not detected_mime or detected_mime not in ALLOWED_UPLOAD_MIMES:
+        raise HTTPException(status_code=400, detail="unsupported file type")
+    if ext not in ALLOWED_UPLOAD_MIMES[detected_mime]:
+        raise HTTPException(status_code=400, detail="file extension does not match image type")
+    if declared and declared not in ALLOWED_UPLOAD_MIMES:
+        raise HTTPException(status_code=400, detail="unsupported file type")
+    if declared and declared != detected_mime:
+        raise HTTPException(status_code=400, detail="mime type does not match file content")
+    return ext, detected_mime
+
+
+def _public_upload_url(filename: str) -> str:
+    public_base = os.getenv("APP_BASE_URL", "").rstrip("/")
+    relative_url = f"/uploads/{filename}"
+    return f"{public_base}{relative_url}" if public_base else relative_url
+
+
+class PhotoStorage:
+    driver = "local"
+
+    async def save(self, file: UploadFile) -> dict[str, str]:
+        raise NotImplementedError
+
+    def delete(self, original_storage_url: str | None) -> None:
+        return None
+
+
+class LocalPhotoStorage(PhotoStorage):
+    driver = "local"
+
     def __init__(self) -> None:
         self.base_dir = Path(os.getenv("LOCAL_UPLOAD_DIR", "/tmp/aliecs-uploads"))
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
     async def save(self, file: UploadFile) -> dict[str, str]:
-        ext = Path(file.filename or "").suffix.lower()
-        if ext not in {".jpg", ".jpeg", ".png", ".webp"}:
-            raise HTTPException(status_code=400, detail="unsupported file type")
+        content = await file.read()
+        ext, _mime = _validate_photo_upload(file.filename, file.content_type, content)
         filename = f"{uuid.uuid4().hex}{ext}"
         full_path = self.base_dir / filename
-        content = await file.read()
-        max_mb = int(os.getenv("PHOTO_MAX_UPLOAD_MB", "10"))
-        if len(content) > max_mb * 1024 * 1024:
-            raise HTTPException(status_code=400, detail="file too large")
         full_path.write_bytes(content)
-        public_base = os.getenv("APP_BASE_URL", "").rstrip("/")
-        relative_url = f"/uploads/{filename}"
+        self._warn_if_disk_high()
+        public_url = _public_upload_url(filename)
         return {
             "original_storage_url": str(full_path),
-            "display_url": f"{public_base}{relative_url}" if public_base else relative_url,
-            "thumbnail_url": f"{public_base}{relative_url}" if public_base else relative_url,
-            "storage_driver": "local",
+            "display_url": public_url,
+            "thumbnail_url": public_url,
+            "storage_driver": self.driver,
         }
+
+    def delete(self, original_storage_url: str | None) -> None:
+        if original_storage_url:
+            Path(original_storage_url).unlink(missing_ok=True)
+
+    def _warn_if_disk_high(self) -> None:
+        raw = os.getenv("UPLOAD_DISK_WARN_PCT", "").strip()
+        if not raw:
+            return
+        try:
+            threshold = float(raw)
+            usage = shutil.disk_usage(self.base_dir)
+            used_pct = usage.used * 100 / usage.total
+        except Exception:
+            return
+        if used_pct >= threshold:
+            print(f"upload disk usage high: {used_pct:.1f}% >= {threshold:.1f}%")
+
+
+class OssPhotoStorage(PhotoStorage):
+    driver = "oss"
+
+    async def save(self, file: UploadFile) -> dict[str, str]:
+        await file.read()
+        raise HTTPException(status_code=501, detail="OSS storage is not configured in this build")
+
+
+def photo_storage() -> PhotoStorage:
+    driver = os.getenv("STORAGE_DRIVER", "local").strip().lower() or "local"
+    if driver == "local":
+        return LocalPhotoStorage()
+    if driver == "oss":
+        return OssPhotoStorage()
+    raise HTTPException(status_code=500, detail="invalid STORAGE_DRIVER")
 
 
 class CreateFeatureRequest(BaseModel):
@@ -1233,33 +1358,168 @@ def _resolve_couple_space_id(user_id: int, requested_space_id: int | None) -> in
     raise HTTPException(status_code=404, detail="not found")
 
 
-@app.get("/v1/memories")
-def list_memories(
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=10, ge=1, le=50),
-    couple_space_id: int | None = Query(default=None),
-    user: dict[str, Any] = Depends(require_login),
-) -> dict[str, Any]:
+def _require_couple_user(user: dict[str, Any]) -> int:
+    if not _has_couple_access(user):
+        raise HTTPException(status_code=403, detail="permission denied")
     user_id = _user_id_by_username(str(user.get("sub", "")))
     if not user_id:
         raise HTTPException(status_code=401, detail="invalid user")
+    return user_id
+
+
+def _is_space_owner(user: dict[str, Any], user_id: int, space_id: int) -> bool:
+    roles = [str(r).lower() for r in user.get("roles", [])]
+    permissions = [str(p).lower() for p in user.get("permissions", [])]
+    if "admin" in roles or "admin.access" in permissions:
+        return True
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT role
+                FROM couple_members
+                WHERE couple_space_id = %s AND user_id = %s
+                LIMIT 1
+                """,
+                (space_id, user_id),
+            )
+            row = cur.fetchone()
+    return bool(row and row[0] == "owner")
+
+
+def _parse_date_or_none(value: str | date | None) -> date | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid date") from exc
+
+
+def _normalize_tags(tags: list[str]) -> list[str]:
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for raw in tags:
+        tag = str(raw).strip()
+        if not tag or tag in seen:
+            continue
+        seen.add(tag)
+        cleaned.append(tag[:40])
+    return cleaned
+
+
+def _safe_date(year: int, month: int, day: int) -> date:
+    last_day = calendar.monthrange(year, month)[1]
+    return date(year, month, min(day, last_day))
+
+
+def _next_anniversary_occurrence(base_date: date, repeat_type: str, today: date | None = None) -> date | None:
+    today = today or date.today()
+    if repeat_type == "none":
+        return base_date if base_date >= today else None
+    if repeat_type == "yearly":
+        current = _safe_date(today.year, base_date.month, base_date.day)
+        if current < today:
+            current = _safe_date(today.year + 1, base_date.month, base_date.day)
+        return current
+    if repeat_type == "monthly":
+        current = _safe_date(today.year, today.month, base_date.day)
+        if current < today:
+            year = today.year + (1 if today.month == 12 else 0)
+            month = 1 if today.month == 12 else today.month + 1
+            current = _safe_date(year, month, base_date.day)
+        return current
+    raise HTTPException(status_code=400, detail="invalid repeat_type")
+
+
+def _anniversary_payload(row: tuple[Any, ...], today: date | None = None) -> dict[str, Any] | None:
+    occurrence = _next_anniversary_occurrence(row[2], row[3], today)
+    if occurrence is None:
+        return None
+    today = today or date.today()
+    return {
+        "id": row[0],
+        "title": row[1],
+        "date": str(row[2]),
+        "repeat_type": row[3],
+        "description": row[4],
+        "next_occurrence": str(occurrence),
+        "days_remaining": (occurrence - today).days,
+    }
+
+
+def _share_base_url() -> str:
+    return os.getenv("SHARE_BASE_URL", os.getenv("APP_BASE_URL", "https://www.hydwang.xyz")).rstrip("/")
+
+
+_share_hits: dict[str, list[float]] = {}
+
+
+def _check_share_rate(token: str) -> None:
+    now = time.monotonic()
+    hits = [ts for ts in _share_hits.get(token, []) if now - ts < 60]
+    hits.append(now)
+    _share_hits[token] = hits
+    if len(hits) > 120:
+        raise HTTPException(status_code=429, detail="too many requests")
+
+
+@app.get("/v1/memories")
+def list_memories(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=200),
+    couple_space_id: int | None = Query(default=None),
+    archived: str = Query(default="false"),
+    tag: str | None = Query(default=None),
+    from_date: str | None = Query(default=None, alias="from"),
+    to_date: str | None = Query(default=None, alias="to"),
+    q: str | None = Query(default=None),
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, Any]:
+    user_id = _require_couple_user(user)
     space_id = _resolve_couple_space_id(user_id, couple_space_id)
     offset = (page - 1) * page_size
+    where = ["m.couple_space_id = %s"]
+    params: list[Any] = [space_id]
+    archived_value = archived.strip().lower()
+    if archived_value not in {"all", "true", "1", "yes"}:
+        where.append("m.archived = false")
+    elif archived_value in {"true", "1", "yes"}:
+        where.append("m.archived = true")
+    if tag:
+        where.append("EXISTS (SELECT 1 FROM memory_tags mt WHERE mt.memory_id = m.id AND mt.tag = %s)")
+        params.append(tag.strip())
+    start = _parse_date_or_none(from_date)
+    end = _parse_date_or_none(to_date)
+    if start:
+        where.append("m.memory_date >= %s")
+        params.append(start)
+    if end:
+        where.append("m.memory_date <= %s")
+        params.append(end)
+    if q and q.strip():
+        where.append("(m.title ILIKE %s OR COALESCE(m.content, '') ILIKE %s)")
+        pattern = f"%{q.strip()}%"
+        params.extend([pattern, pattern])
+    where_sql = " AND ".join(where)
 
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM memories WHERE couple_space_id = %s", (space_id,))
+            cur.execute(f"SELECT COUNT(*) FROM memories m WHERE {where_sql}", params)
             total = cur.fetchone()[0]
             cur.execute(
-                """
+                f"""
                 SELECT id, couple_space_id, title, content, memory_date, place_name, latitude, longitude,
-                       cover_photo_url, visibility, created_by, created_at, updated_at
-                FROM memories
-                WHERE couple_space_id = %s
+                       cover_photo_url, visibility, created_by, created_at, updated_at, archived,
+                       COALESCE((SELECT COUNT(*) FROM photos p WHERE p.memory_id = m.id), 0) AS photo_count
+                FROM memories m
+                WHERE {where_sql}
                 ORDER BY memory_date DESC NULLS LAST, id DESC
                 LIMIT %s OFFSET %s
                 """,
-                (space_id, page_size, offset),
+                [*params, page_size, offset],
             )
             rows = cur.fetchall()
 
@@ -1289,6 +1549,8 @@ def list_memories(
                 "created_by": row[10],
                 "created_at": str(row[11]),
                 "updated_at": str(row[12]),
+                "archived": row[13],
+                "photo_count": row[14],
                 "tags": tags_map.get(row[0], []),
             }
             for row in rows
@@ -1302,12 +1564,11 @@ def list_memories(
 
 @app.post("/v1/memories")
 def create_memory(body: MemoryUpsertRequest, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
-    user_id = _user_id_by_username(str(user.get("sub", "")))
-    if not user_id:
-        raise HTTPException(status_code=401, detail="invalid user")
+    user_id = _require_couple_user(user)
     space_id = _resolve_couple_space_id(user_id, body.couple_space_id)
     if body.visibility not in {"private", "shareable"}:
         raise HTTPException(status_code=400, detail="invalid visibility")
+    memory_date = _parse_date_or_none(body.memory_date)
 
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
@@ -1324,7 +1585,7 @@ def create_memory(body: MemoryUpsertRequest, user: dict[str, Any] = Depends(requ
                     space_id,
                     body.title,
                     body.content,
-                    body.memory_date,
+                    memory_date,
                     body.place_name,
                     body.latitude,
                     body.longitude,
@@ -1334,28 +1595,25 @@ def create_memory(body: MemoryUpsertRequest, user: dict[str, Any] = Depends(requ
                 ),
             )
             memory_id = cur.fetchone()[0]
-            for tag in body.tags:
-                tag_clean = tag.strip()
-                if tag_clean:
-                    cur.execute(
-                        "INSERT INTO memory_tags(memory_id, tag) VALUES (%s, %s) ON CONFLICT DO NOTHING",
-                        (memory_id, tag_clean),
-                    )
+            for tag_clean in _normalize_tags(body.tags):
+                cur.execute(
+                    "INSERT INTO memory_tags(memory_id, tag) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                    (memory_id, tag_clean),
+                )
         conn.commit()
     return {"id": memory_id}
 
 
 @app.get("/v1/memories/{memory_id}")
 def get_memory(memory_id: int, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
-    user_id = _user_id_by_username(str(user.get("sub", "")))
-    if not user_id:
-        raise HTTPException(status_code=401, detail="invalid user")
+    user_id = _require_couple_user(user)
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT m.id, m.couple_space_id, m.title, m.content, m.memory_date, m.place_name, m.latitude, m.longitude,
-                       m.cover_photo_url, m.visibility, m.created_by, m.created_at, m.updated_at
+                       m.cover_photo_url, m.visibility, m.created_by, m.created_at, m.updated_at, m.archived,
+                       COALESCE((SELECT COUNT(*) FROM photos p WHERE p.memory_id = m.id), 0) AS photo_count
                 FROM memories m
                 JOIN couple_members cm ON cm.couple_space_id = m.couple_space_id
                 WHERE m.id = %s AND cm.user_id = %s
@@ -1382,17 +1640,18 @@ def get_memory(memory_id: int, user: dict[str, Any] = Depends(require_login)) ->
         "created_by": row[10],
         "created_at": str(row[11]),
         "updated_at": str(row[12]),
+        "archived": row[13],
+        "photo_count": row[14],
         "tags": tags,
     }
 
 
 @app.put("/v1/memories/{memory_id}")
 def update_memory(memory_id: int, body: MemoryUpsertRequest, user: dict[str, Any] = Depends(require_login)) -> dict[str, str]:
-    user_id = _user_id_by_username(str(user.get("sub", "")))
-    if not user_id:
-        raise HTTPException(status_code=401, detail="invalid user")
+    user_id = _require_couple_user(user)
     if body.visibility not in {"private", "shareable"}:
         raise HTTPException(status_code=400, detail="invalid visibility")
+    memory_date = _parse_date_or_none(body.memory_date)
 
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
@@ -1419,7 +1678,7 @@ def update_memory(memory_id: int, body: MemoryUpsertRequest, user: dict[str, Any
                 (
                     body.title,
                     body.content,
-                    body.memory_date,
+                    memory_date,
                     body.place_name,
                     body.latitude,
                     body.longitude,
@@ -1429,19 +1688,47 @@ def update_memory(memory_id: int, body: MemoryUpsertRequest, user: dict[str, Any
                 ),
             )
             cur.execute("DELETE FROM memory_tags WHERE memory_id = %s", (memory_id,))
-            for tag in body.tags:
-                tag_clean = tag.strip()
-                if tag_clean:
-                    cur.execute("INSERT INTO memory_tags(memory_id, tag) VALUES (%s, %s)", (memory_id, tag_clean))
+            for tag_clean in _normalize_tags(body.tags):
+                cur.execute(
+                    "INSERT INTO memory_tags(memory_id, tag) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                    (memory_id, tag_clean),
+                )
+        conn.commit()
+    return {"status": "ok"}
+
+
+@app.post("/v1/memories/{memory_id}/archive")
+def archive_memory(memory_id: int, user: dict[str, Any] = Depends(require_login)) -> dict[str, str]:
+    return _set_memory_archived(memory_id, True, user)
+
+
+@app.post("/v1/memories/{memory_id}/unarchive")
+def unarchive_memory(memory_id: int, user: dict[str, Any] = Depends(require_login)) -> dict[str, str]:
+    return _set_memory_archived(memory_id, False, user)
+
+
+def _set_memory_archived(memory_id: int, archived: bool, user: dict[str, Any]) -> dict[str, str]:
+    user_id = _require_couple_user(user)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE memories m
+                SET archived = %s, updated_at = NOW()
+                FROM couple_members cm
+                WHERE m.id = %s AND cm.user_id = %s AND cm.couple_space_id = m.couple_space_id
+                """,
+                (archived, memory_id, user_id),
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="not found")
         conn.commit()
     return {"status": "ok"}
 
 
 @app.delete("/v1/memories/{memory_id}")
 def delete_memory(memory_id: int, user: dict[str, Any] = Depends(require_login)) -> dict[str, str]:
-    user_id = _user_id_by_username(str(user.get("sub", "")))
-    if not user_id:
-        raise HTTPException(status_code=401, detail="invalid user")
+    user_id = _require_couple_user(user)
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -1463,9 +1750,7 @@ def map_memories(
     couple_space_id: int | None = Query(default=None),
     user: dict[str, Any] = Depends(require_login),
 ) -> dict[str, Any]:
-    user_id = _user_id_by_username(str(user.get("sub", "")))
-    if not user_id:
-        raise HTTPException(status_code=401, detail="invalid user")
+    user_id = _require_couple_user(user)
     space_id = _resolve_couple_space_id(user_id, couple_space_id)
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
@@ -1473,7 +1758,7 @@ def map_memories(
                 """
                 SELECT id, title, memory_date, place_name, latitude, longitude, cover_photo_url
                 FROM memories
-                WHERE couple_space_id = %s AND latitude IS NOT NULL AND longitude IS NOT NULL
+                WHERE couple_space_id = %s AND archived = false AND latitude IS NOT NULL AND longitude IS NOT NULL
                 ORDER BY memory_date DESC NULLS LAST, id DESC
                 """,
                 (space_id,),
@@ -1502,9 +1787,7 @@ async def upload_photo(
     couple_space_id: int | None = Query(default=None),
     user: dict[str, Any] = Depends(require_login),
 ) -> dict[str, Any]:
-    user_id = _user_id_by_username(str(user.get("sub", "")))
-    if not user_id:
-        raise HTTPException(status_code=401, detail="invalid user")
+    user_id = _require_couple_user(user)
     space_id = _resolve_couple_space_id(user_id, couple_space_id)
     if memory_id is not None:
         with closing(_conn()) as conn:
@@ -1520,7 +1803,7 @@ async def upload_photo(
                 )
                 if not cur.fetchone():
                     raise HTTPException(status_code=400, detail="memory_id not in current couple space")
-    saved = await LocalPhotoStorage().save(file)
+    saved = await photo_storage().save(file)
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -1558,27 +1841,34 @@ async def upload_photo(
 def list_photos(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    memory_id: int | None = Query(default=None),
     couple_space_id: int | None = Query(default=None),
     user: dict[str, Any] = Depends(require_login),
 ) -> dict[str, Any]:
-    user_id = _user_id_by_username(str(user.get("sub", "")))
-    if not user_id:
-        raise HTTPException(status_code=401, detail="invalid user")
+    user_id = _require_couple_user(user)
     space_id = _resolve_couple_space_id(user_id, couple_space_id)
     offset = (page - 1) * page_size
+    where = ["p.couple_space_id = %s"]
+    params: list[Any] = [space_id]
+    if memory_id is not None:
+        where.append("p.memory_id = %s")
+        params.append(memory_id)
+    where_sql = " AND ".join(where)
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM photos WHERE couple_space_id = %s", (space_id,))
+            cur.execute(f"SELECT COUNT(*) FROM photos p WHERE {where_sql}", params)
             total = cur.fetchone()[0]
             cur.execute(
-                """
-                SELECT id, memory_id, original_filename, display_url, thumbnail_url, taken_at, created_at
-                FROM photos
-                WHERE couple_space_id = %s
-                ORDER BY COALESCE(taken_at, created_at) DESC, id DESC
+                f"""
+                SELECT p.id, p.memory_id, p.original_filename, p.display_url, p.thumbnail_url, p.taken_at, p.created_at,
+                       m.title AS memory_title
+                FROM photos p
+                LEFT JOIN memories m ON m.id = p.memory_id
+                WHERE {where_sql}
+                ORDER BY COALESCE(p.taken_at, p.created_at) DESC, p.id DESC
                 LIMIT %s OFFSET %s
                 """,
-                (space_id, page_size, offset),
+                [*params, page_size, offset],
             )
             rows = cur.fetchall()
     return {
@@ -1591,6 +1881,7 @@ def list_photos(
                 "thumbnail_url": row[4],
                 "taken_at": str(row[5]) if row[5] else None,
                 "created_at": str(row[6]),
+                "memory_title": row[7],
             }
             for row in rows
         ],
@@ -1603,16 +1894,15 @@ def list_photos(
 
 @app.get("/v1/photos/{photo_id}")
 def get_photo(photo_id: int, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
-    user_id = _user_id_by_username(str(user.get("sub", "")))
-    if not user_id:
-        raise HTTPException(status_code=401, detail="invalid user")
+    user_id = _require_couple_user(user)
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT p.id, p.memory_id, p.original_filename, p.original_storage_url, p.display_url, p.thumbnail_url,
-                       p.storage_driver, p.created_at
+                       p.storage_driver, p.created_at, m.title AS memory_title
                 FROM photos p
+                LEFT JOIN memories m ON m.id = p.memory_id
                 JOIN couple_members cm ON cm.couple_space_id = p.couple_space_id
                 WHERE p.id = %s AND cm.user_id = %s
                 LIMIT 1
@@ -1631,14 +1921,13 @@ def get_photo(photo_id: int, user: dict[str, Any] = Depends(require_login)) -> d
         "thumbnail_url": row[5],
         "storage_driver": row[6],
         "created_at": str(row[7]),
+        "memory_title": row[8],
     }
 
 
 @app.delete("/v1/photos/{photo_id}")
 def delete_photo(photo_id: int, user: dict[str, Any] = Depends(require_login)) -> dict[str, str]:
-    user_id = _user_id_by_username(str(user.get("sub", "")))
-    if not user_id:
-        raise HTTPException(status_code=401, detail="invalid user")
+    user_id = _require_couple_user(user)
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -1646,7 +1935,7 @@ def delete_photo(photo_id: int, user: dict[str, Any] = Depends(require_login)) -
                 DELETE FROM photos p
                 USING couple_members cm
                 WHERE p.id = %s AND cm.user_id = %s AND cm.couple_space_id = p.couple_space_id
-                RETURNING p.original_storage_url
+                RETURNING p.original_storage_url, p.storage_driver
                 """,
                 (photo_id, user_id),
             )
@@ -1655,11 +1944,511 @@ def delete_photo(photo_id: int, user: dict[str, Any] = Depends(require_login)) -
                 raise HTTPException(status_code=404, detail="not found")
         conn.commit()
     try:
-        if row[0]:
-            Path(row[0]).unlink(missing_ok=True)
+        if row[1] == "local":
+            LocalPhotoStorage().delete(row[0])
     except Exception:
         pass
     return {"status": "ok"}
+
+
+@app.get("/v1/couple/space")
+def get_couple_space(
+    couple_space_id: int | None = Query(default=None),
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, Any]:
+    user_id = _require_couple_user(user)
+    space_id = _resolve_couple_space_id(user_id, couple_space_id)
+    today = date.today()
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, name, start_date, theme, cover_image_url
+                FROM couple_spaces
+                WHERE id = %s
+                """,
+                (space_id,),
+            )
+            space = cur.fetchone()
+            if not space:
+                raise HTTPException(status_code=404, detail="not found")
+            cur.execute(
+                """
+                SELECT u.id, u.display_name, u.username, cm.role
+                FROM couple_members cm
+                JOIN users u ON u.id = cm.user_id
+                WHERE cm.couple_space_id = %s
+                ORDER BY cm.role DESC, cm.joined_at ASC
+                """,
+                (space_id,),
+            )
+            members = cur.fetchall()
+            counts: dict[str, int] = {}
+            for key, table in [
+                ("memories", "memories"),
+                ("photos", "photos"),
+                ("anniversaries", "anniversaries"),
+                ("bucket_items", "bucket_items"),
+            ]:
+                cur.execute(f"SELECT COUNT(*) FROM {table} WHERE couple_space_id = %s", (space_id,))
+                counts[key] = cur.fetchone()[0]
+            cur.execute(
+                """
+                SELECT id, title, date, repeat_type, description
+                FROM anniversaries
+                WHERE couple_space_id = %s
+                """,
+                (space_id,),
+            )
+            anniversary_rows = cur.fetchall()
+
+    next_items = [item for row in anniversary_rows if (item := _anniversary_payload(row, today))]
+    next_items.sort(key=lambda item: (item["days_remaining"], item["id"]))
+    start_date = space[2]
+    return {
+        "id": space[0],
+        "name": space[1],
+        "start_date": str(start_date) if start_date else None,
+        "theme": space[3],
+        "cover_image_url": space[4],
+        "days_together": (today - start_date).days if start_date else None,
+        "members": [
+            {
+                "user_id": row[0],
+                "display_name": row[1] or row[2],
+                "username": row[2],
+                "role": row[3],
+            }
+            for row in members
+        ],
+        "next_anniversary": next_items[0] if next_items else None,
+        "counts": counts,
+    }
+
+
+@app.patch("/v1/couple/space")
+def patch_couple_space(
+    body: PatchCoupleSpaceRequest,
+    couple_space_id: int | None = Query(default=None),
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, str]:
+    user_id = _require_couple_user(user)
+    space_id = _resolve_couple_space_id(user_id, couple_space_id)
+    if not _is_space_owner(user, user_id, space_id):
+        raise HTTPException(status_code=403, detail="permission denied")
+    fields: list[str] = []
+    params: list[Any] = []
+    if body.name is not None:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="name is required")
+        fields.append("name = %s")
+        params.append(name)
+    if body.start_date is not None:
+        fields.append("start_date = %s")
+        params.append(_parse_date_or_none(body.start_date))
+    if body.theme is not None:
+        fields.append("theme = %s")
+        params.append(body.theme.strip() or None)
+    if body.cover_image_url is not None:
+        fields.append("cover_image_url = %s")
+        params.append(body.cover_image_url.strip() or None)
+    if not fields:
+        return {"status": "ok"}
+    params.append(space_id)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE couple_spaces SET {', '.join(fields)}, updated_at = NOW() WHERE id = %s",
+                params,
+            )
+        conn.commit()
+    return {"status": "ok"}
+
+
+@app.get("/v1/tags")
+def list_tags(
+    couple_space_id: int | None = Query(default=None),
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, Any]:
+    user_id = _require_couple_user(user)
+    space_id = _resolve_couple_space_id(user_id, couple_space_id)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT mt.tag, COUNT(*) AS count
+                FROM memory_tags mt
+                JOIN memories m ON m.id = mt.memory_id
+                WHERE m.couple_space_id = %s
+                GROUP BY mt.tag
+                ORDER BY count DESC, mt.tag ASC
+                """,
+                (space_id,),
+            )
+            rows = cur.fetchall()
+    return {"items": [{"tag": row[0], "count": row[1]} for row in rows]}
+
+
+@app.get("/v1/anniversaries")
+def list_anniversaries(
+    couple_space_id: int | None = Query(default=None),
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, Any]:
+    user_id = _require_couple_user(user)
+    space_id = _resolve_couple_space_id(user_id, couple_space_id)
+    today = date.today()
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, title, date, repeat_type, description
+                FROM anniversaries
+                WHERE couple_space_id = %s
+                ORDER BY date ASC, id ASC
+                """,
+                (space_id,),
+            )
+            rows = cur.fetchall()
+    items = [item for row in rows if (item := _anniversary_payload(row, today))]
+    items.sort(key=lambda item: (item["days_remaining"], item["id"]))
+    return {"items": items}
+
+
+@app.get("/v1/anniversaries/next")
+def next_anniversary(
+    couple_space_id: int | None = Query(default=None),
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, Any] | None:
+    items = list_anniversaries(couple_space_id, user)["items"]
+    return items[0] if items else None
+
+
+@app.post("/v1/anniversaries")
+def create_anniversary(body: AnniversaryUpsertRequest, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
+    user_id = _require_couple_user(user)
+    space_id = _resolve_couple_space_id(user_id, body.couple_space_id)
+    if body.repeat_type not in {"none", "yearly", "monthly"}:
+        raise HTTPException(status_code=400, detail="invalid repeat_type")
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="title is required")
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO anniversaries(couple_space_id, title, date, repeat_type, description)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (space_id, title, _parse_date_or_none(body.date), body.repeat_type, body.description),
+            )
+            new_id = cur.fetchone()[0]
+        conn.commit()
+    return {"id": new_id}
+
+
+@app.put("/v1/anniversaries/{anniversary_id}")
+def update_anniversary(
+    anniversary_id: int,
+    body: AnniversaryUpsertRequest,
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, str]:
+    user_id = _require_couple_user(user)
+    space_id = _resolve_couple_space_id(user_id, body.couple_space_id)
+    if body.repeat_type not in {"none", "yearly", "monthly"}:
+        raise HTTPException(status_code=400, detail="invalid repeat_type")
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE anniversaries
+                SET title = %s, date = %s, repeat_type = %s, description = %s, updated_at = NOW()
+                WHERE id = %s AND couple_space_id = %s
+                """,
+                (body.title.strip(), _parse_date_or_none(body.date), body.repeat_type, body.description, anniversary_id, space_id),
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="not found")
+        conn.commit()
+    return {"status": "ok"}
+
+
+@app.delete("/v1/anniversaries/{anniversary_id}")
+def delete_anniversary(
+    anniversary_id: int,
+    couple_space_id: int | None = Query(default=None),
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, str]:
+    user_id = _require_couple_user(user)
+    space_id = _resolve_couple_space_id(user_id, couple_space_id)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM anniversaries WHERE id = %s AND couple_space_id = %s", (anniversary_id, space_id))
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="not found")
+        conn.commit()
+    return {"status": "ok"}
+
+
+@app.get("/v1/bucket-items")
+def list_bucket_items(
+    status: str | None = Query(default=None),
+    couple_space_id: int | None = Query(default=None),
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, Any]:
+    user_id = _require_couple_user(user)
+    space_id = _resolve_couple_space_id(user_id, couple_space_id)
+    where = ["b.couple_space_id = %s"]
+    params: list[Any] = [space_id]
+    if status:
+        if status not in {"want", "planned", "done"}:
+            raise HTTPException(status_code=400, detail="invalid status")
+        where.append("b.status = %s")
+        params.append(status)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT b.id, b.title, b.description, b.status, b.target_date, b.completed_memory_id,
+                       m.title AS completed_memory_title
+                FROM bucket_items b
+                LEFT JOIN memories m ON m.id = b.completed_memory_id
+                WHERE {' AND '.join(where)}
+                ORDER BY CASE b.status WHEN 'planned' THEN 1 WHEN 'want' THEN 2 ELSE 3 END,
+                         b.target_date ASC NULLS LAST, b.id DESC
+                """,
+                params,
+            )
+            rows = cur.fetchall()
+    return {
+        "items": [
+            {
+                "id": row[0],
+                "title": row[1],
+                "description": row[2],
+                "status": row[3],
+                "target_date": str(row[4]) if row[4] else None,
+                "completed_memory_id": row[5],
+                "completed_memory_title": row[6],
+            }
+            for row in rows
+        ]
+    }
+
+
+def _validate_bucket_body(body: BucketItemUpsertRequest, space_id: int) -> None:
+    if body.status not in {"want", "planned", "done"}:
+        raise HTTPException(status_code=400, detail="invalid status")
+    if body.completed_memory_id is not None:
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM memories WHERE id = %s AND couple_space_id = %s LIMIT 1",
+                    (body.completed_memory_id, space_id),
+                )
+                if not cur.fetchone():
+                    raise HTTPException(status_code=400, detail="completed_memory_id not in current couple space")
+
+
+@app.post("/v1/bucket-items")
+def create_bucket_item(body: BucketItemUpsertRequest, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
+    user_id = _require_couple_user(user)
+    space_id = _resolve_couple_space_id(user_id, body.couple_space_id)
+    _validate_bucket_body(body, space_id)
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="title is required")
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO bucket_items(couple_space_id, title, description, status, target_date, completed_memory_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (
+                    space_id,
+                    title,
+                    body.description,
+                    body.status,
+                    _parse_date_or_none(body.target_date),
+                    body.completed_memory_id,
+                ),
+            )
+            new_id = cur.fetchone()[0]
+        conn.commit()
+    return {"id": new_id}
+
+
+@app.put("/v1/bucket-items/{item_id}")
+def update_bucket_item(
+    item_id: int,
+    body: BucketItemUpsertRequest,
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, str]:
+    user_id = _require_couple_user(user)
+    space_id = _resolve_couple_space_id(user_id, body.couple_space_id)
+    _validate_bucket_body(body, space_id)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE bucket_items
+                SET title = %s, description = %s, status = %s, target_date = %s,
+                    completed_memory_id = %s, updated_at = NOW()
+                WHERE id = %s AND couple_space_id = %s
+                """,
+                (
+                    body.title.strip(),
+                    body.description,
+                    body.status,
+                    _parse_date_or_none(body.target_date),
+                    body.completed_memory_id,
+                    item_id,
+                    space_id,
+                ),
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="not found")
+        conn.commit()
+    return {"status": "ok"}
+
+
+@app.delete("/v1/bucket-items/{item_id}")
+def delete_bucket_item(
+    item_id: int,
+    couple_space_id: int | None = Query(default=None),
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, str]:
+    user_id = _require_couple_user(user)
+    space_id = _resolve_couple_space_id(user_id, couple_space_id)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM bucket_items WHERE id = %s AND couple_space_id = %s", (item_id, space_id))
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="not found")
+        conn.commit()
+    return {"status": "ok"}
+
+
+@app.post("/v1/memories/{memory_id}/share")
+def create_memory_share(
+    memory_id: int,
+    body: CreateShareLinkRequest,
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, Any]:
+    user_id = _require_couple_user(user)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT m.couple_space_id
+                FROM memories m
+                JOIN couple_members cm ON cm.couple_space_id = m.couple_space_id
+                WHERE m.id = %s AND cm.user_id = %s
+                LIMIT 1
+                """,
+                (memory_id, user_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="not found")
+            token = secrets.token_urlsafe(24)
+            expires_at = None
+            if body.expires_in_days:
+                expires_at = datetime.now(timezone.utc) + timedelta(days=body.expires_in_days)
+            cur.execute(
+                """
+                INSERT INTO share_links(couple_space_id, memory_id, token, expires_at)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (row[0], memory_id, token, expires_at),
+            )
+            cur.execute("UPDATE memories SET visibility = 'shareable', updated_at = NOW() WHERE id = %s", (memory_id,))
+        conn.commit()
+    url = f"{_share_base_url()}/s/{token}"
+    return {"token": token, "url": url, "expires_at": expires_at.isoformat() if expires_at else None}
+
+
+@app.delete("/v1/share/{token}")
+def revoke_share_link(token: str, user: dict[str, Any] = Depends(require_login)) -> dict[str, str]:
+    user_id = _require_couple_user(user)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE share_links sl
+                SET revoked_at = NOW()
+                FROM couple_members cm
+                WHERE sl.token = %s AND cm.user_id = %s AND cm.couple_space_id = sl.couple_space_id
+                """,
+                (token, user_id),
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="not found")
+        conn.commit()
+    return {"status": "ok"}
+
+
+@app.get("/v1/share/{token}")
+def get_shared_memory(token: str) -> dict[str, Any]:
+    _check_share_rate(token)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT m.id, m.title, m.content, m.memory_date, m.place_name, m.latitude, m.longitude,
+                       m.cover_photo_url, m.visibility, sl.expires_at, sl.revoked_at
+                FROM share_links sl
+                JOIN memories m ON m.id = sl.memory_id
+                WHERE sl.token = %s
+                LIMIT 1
+                """,
+                (token,),
+            )
+            row = cur.fetchone()
+            if not row or row[8] != "shareable" or row[10] is not None:
+                raise HTTPException(status_code=404, detail="not found")
+            if row[9] is not None:
+                now = datetime.now(row[9].tzinfo) if row[9].tzinfo else datetime.now()
+                if row[9] <= now:
+                    raise HTTPException(status_code=404, detail="not found")
+            cur.execute(
+                """
+                SELECT id, display_url, thumbnail_url, original_filename, taken_at
+                FROM photos
+                WHERE memory_id = %s
+                ORDER BY COALESCE(taken_at, created_at) ASC, id ASC
+                """,
+                (row[0],),
+            )
+            photos = cur.fetchall()
+            cur.execute("SELECT tag FROM memory_tags WHERE memory_id = %s ORDER BY id", (row[0],))
+            tags = [r[0] for r in cur.fetchall()]
+    return {
+        "memory": {
+            "id": row[0],
+            "title": row[1],
+            "content": row[2],
+            "memory_date": str(row[3]) if row[3] else None,
+            "place_name": row[4],
+            "latitude": row[5],
+            "longitude": row[6],
+            "cover_photo_url": row[7],
+            "tags": tags,
+        },
+        "photos": [
+            {
+                "id": p[0],
+                "display_url": p[1],
+                "thumbnail_url": p[2],
+                "original_filename": p[3],
+                "taken_at": str(p[4]) if p[4] else None,
+            }
+            for p in photos
+        ],
+    }
 
 @app.get("/v1/admin/users")
 def admin_users(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
@@ -2370,4 +3159,71 @@ def admin_add_couple_member(
         conn.commit()
 
     _audit(actor.get("sub"), "admin.couple_spaces.add_member", "couple_spaces", str(space_id), {"username": username, "role": role})
+    return {"status": "ok"}
+
+
+@app.delete("/v1/admin/couple-spaces/{space_id}/members/{user_id}")
+def admin_remove_couple_member(
+    space_id: int,
+    user_id: int,
+    actor: dict[str, Any] = Depends(require_admin),
+) -> dict[str, str]:
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM couple_members WHERE couple_space_id = %s AND user_id = %s",
+                (space_id, user_id),
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="member not found")
+        conn.commit()
+
+    _audit(actor.get("sub"), "admin.couple_spaces.remove_member", "couple_spaces", str(space_id), {"user_id": user_id})
+    return {"status": "ok"}
+
+
+@app.post("/v1/admin/users/{user_id}/grant-couple-access")
+def admin_grant_couple_access(
+    user_id: int,
+    actor: dict[str, Any] = Depends(require_admin),
+) -> dict[str, str]:
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM users WHERE id = %s", (user_id,))
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="user not found")
+            cur.execute(
+                """
+                INSERT INTO permissions(code, name, description)
+                VALUES ('couple_memory_access', 'Couple Memory 访问', '访问双人私密回忆空间')
+                ON CONFLICT(code) DO NOTHING
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO roles(code, name, description)
+                VALUES ('couple_memory', 'Couple Memory 成员', '可访问 Couple Memory 私密空间')
+                ON CONFLICT(code) DO NOTHING
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO role_permissions(role_id, permission_id)
+                SELECT r.id, p.id
+                FROM roles r, permissions p
+                WHERE r.code = 'couple_memory' AND p.code = 'couple_memory_access'
+                ON CONFLICT DO NOTHING
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO user_roles(user_id, role_id)
+                SELECT %s, id FROM roles WHERE code = 'couple_memory'
+                ON CONFLICT DO NOTHING
+                """,
+                (user_id,),
+            )
+        conn.commit()
+
+    _audit(actor.get("sub"), "admin.users.grant_couple_access", "users", str(user_id))
     return {"status": "ok"}

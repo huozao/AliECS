@@ -1,15 +1,90 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>回忆详情</title>
-<style>body{font-family:system-ui;background:#f8f4ec;margin:0}.wrap{max-width:980px;margin:0 auto;padding:20px}.card{background:#fff;border:1px solid #eadfcf;border-radius:16px;padding:16px}.btn{display:inline-block;background:#e8dfcf;border-radius:999px;padding:8px 12px;text-decoration:none;color:#222}.muted{color:#7b6d5f}</style></head>
-<body><div class="wrap"><div id="userBadge" style="margin:0 0 8px;color:#7b6d5f;font-size:13px"></div><a class="btn" href="/memories/">返回回忆列表</a><p id="hint" class="muted"></p><article class="card"><h1 id="title">回忆详情</h1><div id="meta"></div><p id="content"></p><div id="tags"></div></article></div>
-<script src="/common/user-badge.js"></script><script>
-const API_BASE=location.port==='8080'?'http://localhost:8000':'/api';
-const id=new URLSearchParams(location.search).get('id');
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>回忆详情</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    :root{--bg:#f8f4ec;--card:#fffdfa;--text:#2f2721;--muted:#7c6b5d;--line:#ecdfd2;--primary:#8c5f6a;--danger:#a6423a;--shadow:0 10px 28px rgba(93,71,52,.08)}*{box-sizing:border-box}body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);margin:0}.wrap{max-width:1050px;margin:0 auto;padding:20px 16px 52px}.card{background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:16px;padding:16px;margin:12px 0}.btn,button{display:inline-flex;align-items:center;justify-content:center;border:0;background:#e8dfcf;border-radius:999px;padding:8px 12px;text-decoration:none;color:#222;cursor:pointer;font-weight:700}.primary{background:var(--primary);color:white}.danger{background:#f1d4d1;color:var(--danger)}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:space-between}.muted,.small{color:var(--muted)}.small{font-size:13px}.grid{display:grid;gap:12px}.two{grid-template-columns:1.15fr .85fr}.photo-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}.photo{border-radius:12px;overflow:hidden;border:1px solid var(--line);background:#fff}.photo img{width:100%;aspect-ratio:4/3;object-fit:cover;display:block}.pill{display:inline-block;border-radius:999px;background:#f0e6dc;padding:3px 8px;margin:2px;font-size:12px;color:#6f5d50}input,select,textarea{width:100%;border:1px solid var(--line);border-radius:12px;padding:10px;background:white}label{display:block;margin:7px 0 5px;font-size:13px;color:var(--muted)}#detailMap{height:260px;border:1px solid var(--line);border-radius:14px}.hidden{display:none!important}@media(max-width:860px){.two{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<main class="wrap">
+  <div id="userBadge" class="small" style="margin-bottom:8px"></div>
+  <div class="row"><a class="btn" href="/memories/">返回回忆列表</a><a class="btn" href="/couple/">Dashboard</a></div>
+  <p id="hint" class="muted"></p>
+  <section class="grid two">
+    <article class="card">
+      <div class="row"><h1 id="title">回忆详情</h1><span id="archivedBadge" class="pill hidden">已归档</span></div>
+      <div id="meta" class="small"></div>
+      <p id="content" style="line-height:1.8"></p>
+      <div id="tags"></div>
+      <div class="row" style="justify-content:flex-start;margin-top:12px">
+        <button id="editBtn" type="button">编辑</button>
+        <button id="archiveBtn" type="button">归档</button>
+        <button id="deleteBtn" class="danger" type="button">删除</button>
+      </div>
+    </article>
+    <aside class="card">
+      <h2>地点</h2>
+      <div id="detailMap"></div>
+      <p id="mapHint" class="small"></p>
+    </aside>
+  </section>
 
-async function load(){
-  const tk=localStorage.getItem('portal_token')||''; const h={'Content-Type':'application/json'}; if(tk) h.Authorization=`Bearer ${tk}`;
-  const r=await fetch(`${API_BASE}/v1/memories/${id}`,{headers:h}); if(!r.ok) throw new Error();
-  const x=await r.json(); title.textContent=x.title; meta.textContent=`${x.memory_date||''} · ${x.place_name||''}`; content.textContent=x.content||''; tags.textContent='标签：'+((x.tags||[]).join('，')||'无');
-}
-(async()=>{try{if(!id) throw new Error(); await window.AliECSAuth.renderUserBadge();load();}catch{hint.textContent='加载失败，请从回忆列表重新进入。';}})();
-</script></body></html>
+  <section id="editCard" class="card hidden">
+    <h2>编辑回忆</h2>
+    <form id="editForm" class="grid two">
+      <div><label>标题</label><input id="eTitle" required /></div>
+      <div><label>日期</label><input id="eDate" type="date" /></div>
+      <div><label>地点</label><input id="ePlace" /></div>
+      <div><label>标签</label><input id="eTags" placeholder="旅行,日落" /></div>
+      <div><label>纬度</label><input id="eLat" type="number" step="0.000001" /></div>
+      <div><label>经度</label><input id="eLng" type="number" step="0.000001" /></div>
+      <div><label>可见性</label><select id="eVisibility"><option value="private">private</option><option value="shareable">shareable</option></select></div>
+      <div style="grid-column:1/-1"><label>内容</label><textarea id="eContent" rows="5"></textarea></div>
+      <div class="row" style="grid-column:1/-1;justify-content:flex-start"><button class="primary" type="submit">保存</button><button id="cancelEditBtn" type="button">取消</button><span id="editHint" class="small"></span></div>
+    </form>
+  </section>
+
+  <section class="card">
+    <div class="row"><h2>照片画廊</h2><form id="photoForm" class="row"><input id="photoInput" type="file" accept="image/*" /><button type="submit">上传照片</button></form></div>
+    <div id="photos" class="photo-grid"></div>
+  </section>
+
+  <section class="card">
+    <h2>分享链接</h2>
+    <div class="row" style="justify-content:flex-start">
+      <label style="margin:0">有效天数 <input id="shareDays" type="number" min="1" max="365" placeholder="留空不过期" style="width:140px"></label>
+      <button id="shareBtn" class="primary" type="button">生成分享链接</button>
+      <button id="revokeShareBtn" class="danger hidden" type="button">撤销当前链接</button>
+    </div>
+    <p id="shareBox" class="small"></p>
+  </section>
+</main>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/common/user-badge.js"></script>
+<script>
+const API_BASE=window.AliECSAuth.API_BASE;
+const id=new URLSearchParams(location.search).get('id');
+let memory=null, photos=[], shareToken=null, detailMap=null;
+const $=(id)=>document.getElementById(id);
+const esc=(v)=>String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#039;");
+const headers=()=>{const tk=window.AliECSAuth.getToken();return tk?{Authorization:`Bearer ${tk}`}:{};
+};
+async function api(path,options={}){const opts={...options,headers:{...(options.headers||{}),...headers()}};if(opts.body&&!(opts.body instanceof FormData))opts.headers['Content-Type']='application/json';const r=await fetch(`${API_BASE}${path}`,opts);const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.detail||`HTTP ${r.status}`);return d;}
+function numOrNull(id){const v=$(id).value;return v===''?null:Number(v);}
+async function load(){if(!id)throw new Error('missing id');memory=await api(`/v1/memories/${id}`);const p=await api(`/v1/photos?memory_id=${id}&page=1&page_size=100`);photos=p.items||[];render();}
+function render(){document.title=memory.title;$('title').textContent=memory.title;$('meta').textContent=`${memory.memory_date||'未知日期'} · ${memory.place_name||'未知地点'} · ${memory.photo_count||0} 张照片`;$('content').textContent=memory.content||'';$('tags').innerHTML=(memory.tags||[]).map(t=>`<span class="pill">${esc(t)}</span>`).join('')||'<span class="small">无标签</span>';$('archivedBadge').classList.toggle('hidden',!memory.archived);$('archiveBtn').textContent=memory.archived?'取消归档':'归档';$('photos').innerHTML=photos.map(p=>`<a class="photo" href="${esc(p.display_url)}" target="_blank" rel="noreferrer"><img src="${esc(p.thumbnail_url||p.display_url)}" alt="${esc(p.original_filename||'photo')}" loading="lazy"></a>`).join('')||'<div class="muted">暂无照片。</div>';renderMap();}
+function renderMap(){if(memory.latitude==null||memory.longitude==null){$('mapHint').textContent='这条回忆没有坐标。';return;}$('mapHint').textContent='';if(!detailMap){detailMap=L.map('detailMap').setView([memory.latitude,memory.longitude],13);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap'}).addTo(detailMap);}detailMap.setView([memory.latitude,memory.longitude],13);L.marker([memory.latitude,memory.longitude]).addTo(detailMap).bindPopup(esc(memory.place_name||memory.title));}
+function fillEdit(){ $('eTitle').value=memory.title||'';$('eDate').value=memory.memory_date||'';$('ePlace').value=memory.place_name||'';$('eTags').value=(memory.tags||[]).join(',');$('eLat').value=memory.latitude??'';$('eLng').value=memory.longitude??'';$('eVisibility').value=memory.visibility||'private';$('eContent').value=memory.content||'';$('editCard').classList.remove('hidden');}
+async function saveEdit(ev){ev.preventDefault();$('editHint').textContent='保存中...';await api(`/v1/memories/${id}`,{method:'PUT',body:JSON.stringify({title:$('eTitle').value.trim(),memory_date:$('eDate').value||null,place_name:$('ePlace').value.trim()||null,tags:$('eTags').value.split(',').map(x=>x.trim()).filter(Boolean),latitude:numOrNull('eLat'),longitude:numOrNull('eLng'),visibility:$('eVisibility').value,content:$('eContent').value.trim()||null})});$('editHint').textContent='已保存。';$('editCard').classList.add('hidden');await load();}
+async function uploadPhoto(ev){ev.preventDefault();const f=$('photoInput').files[0];if(!f)return;const fd=new FormData();fd.append('file',f);await api(`/v1/photos/upload?memory_id=${id}`,{method:'POST',body:fd});$('photoInput').value='';await load();}
+async function share(){const days=$('shareDays').value?Number($('shareDays').value):null;const body=days?{expires_in_days:days}:{};const d=await api(`/v1/memories/${id}/share`,{method:'POST',body:JSON.stringify(body)});shareToken=d.token;$('revokeShareBtn').classList.remove('hidden');$('shareBox').innerHTML=`<a href="${esc(d.url)}" target="_blank" rel="noreferrer">${esc(d.url)}</a>${d.expires_at?` · 过期：${esc(d.expires_at)}`:''}`;try{await navigator.clipboard.writeText(d.url);}catch{}}
+async function boot(){try{await window.AliECSAuth.renderUserBadge();await load();}catch(e){$('hint').textContent='加载失败：'+e.message;}}
+$('editBtn').onclick=fillEdit;$('cancelEditBtn').onclick=()=>$('editCard').classList.add('hidden');$('editForm').onsubmit=(e)=>saveEdit(e).catch(err=>$('editHint').textContent=err.message);$('photoForm').onsubmit=(e)=>uploadPhoto(e).catch(err=>$('hint').textContent=err.message);$('archiveBtn').onclick=async()=>{await api(`/v1/memories/${id}/${memory.archived?'unarchive':'archive'}`,{method:'POST'});await load();};$('deleteBtn').onclick=async()=>{if(confirm('确认删除这条回忆？')){await api(`/v1/memories/${id}`,{method:'DELETE'});location.href='/memories/';}};$('shareBtn').onclick=()=>share().catch(err=>$('shareBox').textContent=err.message);$('revokeShareBtn').onclick=async()=>{if(shareToken){await api(`/v1/share/${shareToken}`,{method:'DELETE'});$('shareBox').textContent='链接已撤销。';$('revokeShareBtn').classList.add('hidden');}};
+boot();
+</script>
+</body>
+</html>

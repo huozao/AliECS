@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>共享回忆</title>
+  <style>
+    :root{--bg:#f8f4ec;--card:#fffdfa;--text:#2f2721;--muted:#7c6b5d;--line:#ecdfd2;--shadow:0 10px 28px rgba(93,71,52,.08)}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}.wrap{max-width:920px;margin:0 auto;padding:28px 16px 54px}.card{background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:16px;padding:18px}.muted{color:var(--muted)}.photo-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:14px}.photo{border-radius:12px;overflow:hidden;border:1px solid var(--line);background:#fff}.photo img{width:100%;aspect-ratio:4/3;object-fit:cover;display:block}.pill{display:inline-block;border-radius:999px;background:#f0e6dc;padding:3px 8px;margin:2px;font-size:12px;color:#6f5d50}
+  </style>
+</head>
+<body>
+<main class="wrap">
+  <article class="card">
+    <p id="status" class="muted">正在打开分享链接...</p>
+    <h1 id="title"></h1>
+    <div id="meta" class="muted"></div>
+    <p id="content" style="line-height:1.85"></p>
+    <div id="tags"></div>
+    <div id="photos" class="photo-grid"></div>
+  </article>
+</main>
+<script>
+const API_BASE = location.port === "8080" ? "http://localhost:8000" : "/api";
+const token = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || new URLSearchParams(location.search).get('token') || '');
+const esc=(v)=>String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#039;");
+async function boot(){
+  if(!token || token === 's'){status.textContent='链接已失效。';return;}
+  const r=await fetch(`${API_BASE}/v1/share/${encodeURIComponent(token)}`);
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){status.textContent='链接已失效。';return;}
+  const m=d.memory||{};
+  status.textContent='';
+  title.textContent=m.title||'共享回忆';
+  meta.textContent=`${m.memory_date||'未知日期'} · ${m.place_name||'未知地点'}`;
+  content.textContent=m.content||'';
+  tags.innerHTML=(m.tags||[]).map(t=>`<span class="pill">${esc(t)}</span>`).join('');
+  photos.innerHTML=(d.photos||[]).map(p=>`<a class="photo" href="${esc(p.display_url)}" target="_blank" rel="noreferrer"><img src="${esc(p.thumbnail_url||p.display_url)}" alt="${esc(p.original_filename||'photo')}" loading="lazy"></a>`).join('');
+}
+boot().catch(()=>{status.textContent='链接已失效。';});
+</script>
+</body>
+</html>

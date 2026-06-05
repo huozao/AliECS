@@ -5,65 +5,45 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>回忆列表</title>
   <style>
-    body{font-family:system-ui;background:#f8f4ec;margin:0}.wrap{max-width:1100px;margin:0 auto;padding:20px}
-    .card{background:#fff;border:1px solid #eadfcf;border-radius:16px;padding:14px;margin-bottom:12px}
-    .row{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}
-    .btn{border:0;background:#e8dfcf;border-radius:999px;padding:8px 12px;text-decoration:none;color:#222;cursor:pointer}
-    .muted{color:#7b6d5f}
+    :root{--bg:#f8f4ec;--card:#fffdfa;--text:#2f2721;--muted:#7c6b5d;--line:#ecdfd2;--primary:#8c5f6a;--shadow:0 10px 28px rgba(93,71,52,.08)}
+    *{box-sizing:border-box}body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);margin:0}.wrap{max-width:1120px;margin:0 auto;padding:20px 16px 50px}.card{background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:16px;padding:14px;margin-bottom:12px}.row{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}.btn,button{border:0;background:#e8dfcf;border-radius:999px;padding:8px 12px;text-decoration:none;color:#222;cursor:pointer;font-weight:700}.primary{background:var(--primary);color:white}.muted,.small{color:var(--muted)}.small{font-size:13px}.filters{display:grid;grid-template-columns:1.2fr 1fr 1fr 1fr 1fr auto;gap:8px;align-items:end}.pill{display:inline-block;border-radius:999px;background:#f0e6dc;padding:3px 8px;margin:2px;font-size:12px;color:#6f5d50}input,select{width:100%;border:1px solid var(--line);border-radius:12px;padding:9px 10px;background:white}label{font-size:12px;color:var(--muted)}@media(max-width:900px){.filters{grid-template-columns:1fr 1fr}.filters button{grid-column:1/-1}}
   </style>
 </head>
 <body>
-<div class="wrap"><div id="userBadge" style="margin:0 0 8px;color:#7b6d5f;font-size:13px"></div>
-  <div class="row"><h1>回忆列表</h1><a class="btn" href="/couple/">返回 Dashboard</a></div>
+<main class="wrap">
+  <div id="userBadge" class="small" style="margin-bottom:8px"></div>
+  <header class="row"><h1>回忆列表</h1><div class="row"><a class="btn" href="/couple/">Dashboard</a><a class="btn" href="/map/">地图</a></div></header>
+  <section class="card">
+    <form id="filterForm" class="filters">
+      <div><label>关键词</label><input id="q" placeholder="标题或内容" /></div>
+      <div><label>标签</label><select id="tag"><option value="">全部标签</option></select></div>
+      <div><label>开始日期</label><input id="fromDate" type="date" /></div>
+      <div><label>结束日期</label><input id="toDate" type="date" /></div>
+      <div><label>归档</label><select id="archived"><option value="false">默认不含归档</option><option value="all">全部</option><option value="true">仅归档</option></select></div>
+      <button class="primary" type="submit">筛选</button>
+    </form>
+  </section>
   <p id="hint" class="muted"></p>
   <div id="list"></div>
-  <div class="row"><button id="prev" class="btn">上一页</button><span id="pageInfo"></span><button id="next" class="btn">下一页</button></div>
-</div>
-<script src="/common/user-badge.js"></script><script>
-const API_BASE = location.port==='8080'?'http://localhost:8000':'/api';
-const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
-const getAuthToken=()=>AUTH_KEYS.map((k)=>localStorage.getItem(k)||'').find(Boolean)||'';
-const pinnedMemory={title:'春分礼物：我做的第一个网站',date:'2026-03-20 20:18（星期五）',place:'线上',url:'/memories/spring-equinox-20260320.html',excerpt:'宝宝，今日春分，风软云轻，万物向暖，所有美好都恰逢其时～ 我把满心的温柔和心意，揉进了为你做的一个小网站里👉https://hydwang.xyz/，这也是我人生中第一个亲手做的网站，每一个字、每一份祝福，都是为你量身而写。愿春分的温柔护着你，愿往后的岁岁年年，浪漫与好运都独独偏爱你，就像我始终偏爱你一样。希望我的小女孩会喜欢这份专属心意，往后的日子，我也会把更多美好都攒给你❤️'};
+  <div class="row"><button id="prev" class="btn">上一页</button><span id="pageInfo" class="small"></span><button id="next" class="btn">下一页</button></div>
+</main>
+<script src="/common/user-badge.js"></script>
+<script>
+const API_BASE = window.AliECSAuth.API_BASE;
+const pinnedMemory={title:'春分礼物：我做的第一个网站',date:'2026-03-20 20:18（星期五）',place:'线上',url:'/memories/spring-equinox-20260320.html',excerpt:'宝宝，今日春分，风软云轻，万物向暖，所有美好都恰逢其时。我把满心的温柔和心意，揉进了为你做的一个小网站里。'};
 let page=1,totalPages=1;
-function authHeaders(){
-  const tk=getAuthToken();
-  const h={'Content-Type':'application/json'};
-  if(tk) h.Authorization=`Bearer ${tk}`;
-  return h;
+const $=(id)=>document.getElementById(id);
+const esc=(v)=>String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#039;");
+function authHeaders(){const tk=window.AliECSAuth.getToken();return tk?{Authorization:`Bearer ${tk}`}:{};
 }
-async function checkCoupleAccess(){
-  const r=await fetch(`${API_BASE}/couple/access`,{headers:authHeaders()});
-  if(!r.ok) throw new Error(`ACCESS_${r.status}`);
-  const d=await r.json();
-  if(!d || d.allowed!==true) throw new Error('ACCESS_DENIED');
-}
-
-async function load(){
-  const r=await fetch(`${API_BASE}/v1/memories?page=${page}&page_size=6`,{headers:authHeaders()});
-  if(!r.ok){ throw new Error(`MEMORY_${r.status}`); }
-  render(await r.json());
-}
-function render(d){
-  totalPages=d.total_pages||1;
-  pageInfo.textContent=`第 ${d.page} / ${totalPages} 页，共 ${d.total} 条`;
-  const pinned=`<article class='card' style='border-color:#d9b6cc;background:#fff8fc;'><div class='row'><h3 style='margin:0'>${pinnedMemory.title}</h3><a class='btn' href='${pinnedMemory.url}'>进入回忆</a></div><div>${pinnedMemory.date} · ${pinnedMemory.place}</div><p>${pinnedMemory.excerpt}</p></article>`;
-  const dynamic=(d.items||[]).map(x=>`<article class='card'><div class='row'><h3 style='margin:0'>${x.title}</h3><a class='btn' href='/memories/detail.html?id=${x.id}'>详情</a></div><div>${x.memory_date||'未知日期'} · ${x.place_name||'未知地点'}</div><p>${(x.content||'').slice(0,80)}</p></article>`).join('');
-  list.innerHTML=pinned + (dynamic || '<div class="card">暂无回忆数据</div>');
-}
-prev.onclick=()=>{ if(page>1){page--; boot();} };
-next.onclick=()=>{ if(page<totalPages){page++; boot();} };
-async function boot(){
-  try{ hint.textContent=''; await checkCoupleAccess(); await window.AliECSAuth.renderUserBadge();load(); }
-  catch(e){
-    const pinned=`<article class='card' style='border-color:#d9b6cc;background:#fff8fc;'><div class='row'><h3 style='margin:0'>${pinnedMemory.title}</h3><a class='btn' href='${pinnedMemory.url}'>进入回忆</a></div><div>${pinnedMemory.date} · ${pinnedMemory.place}</div><p>${pinnedMemory.excerpt}</p></article>`;
-    list.innerHTML=pinned;
-    if(String(e.message).startsWith('ACCESS_')){
-      hint.textContent='当前登录态无法访问 Couple 空间，请重新从首页点击 💗 入口登录。';
-      return;
-    }
-    hint.textContent='你已进入 Couple 页面，但动态回忆暂不可用（通常是未绑定 couple_members 数据），可先查看预设回忆。';
-  }
-}
+async function api(path){const r=await fetch(`${API_BASE}${path}`,{headers:authHeaders()});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.detail||`HTTP ${r.status}`);return d;}
+async function checkCoupleAccess(){const r=await fetch(`${API_BASE}/couple/access`,{headers:authHeaders()});if(!r.ok)throw new Error(`ACCESS_${r.status}`);}
+function query(){const p=new URLSearchParams({page:String(page),page_size:'8',archived:$('archived').value});if($('q').value.trim())p.set('q',$('q').value.trim());if($('tag').value)p.set('tag',$('tag').value);if($('fromDate').value)p.set('from',$('fromDate').value);if($('toDate').value)p.set('to',$('toDate').value);return p.toString();}
+async function loadTags(){const d=await api('/v1/tags');$('tag').innerHTML='<option value="">全部标签</option>'+(d.items||[]).map(x=>`<option value="${esc(x.tag)}">${esc(x.tag)} (${x.count})</option>`).join('');}
+async function load(){const d=await api(`/v1/memories?${query()}`);render(d);}
+function render(d){totalPages=d.total_pages||1;$('pageInfo').textContent=`第 ${d.page} / ${totalPages} 页，共 ${d.total} 条`;const pinned=`<article class="card" style="border-color:#d9b6cc;background:#fff8fc"><div class="row"><h3 style="margin:0">${pinnedMemory.title}</h3><a class="btn" href="${pinnedMemory.url}">进入回忆</a></div><div class="small">${pinnedMemory.date} · ${pinnedMemory.place}</div><p>${pinnedMemory.excerpt}</p></article>`;const dynamic=(d.items||[]).map(x=>`<article class="card"><div class="row"><h3 style="margin:0">${esc(x.title)}</h3><a class="btn" href="/memories/detail.html?id=${x.id}">详情</a></div><div class="small">${esc(x.memory_date||'未知日期')} · ${esc(x.place_name||'未知地点')} · ${x.photo_count||0} 张照片 ${x.archived?'· 已归档':''}</div><p>${esc((x.content||'').slice(0,140))}</p><div>${(x.tags||[]).map(t=>`<span class="pill">${esc(t)}</span>`).join('')}</div></article>`).join('');$('list').innerHTML=pinned+(dynamic||'<div class="card">暂无回忆数据</div>');}
+$('prev').onclick=()=>{if(page>1){page--;boot();}};$('next').onclick=()=>{if(page<totalPages){page++;boot();}};$('filterForm').onsubmit=(e)=>{e.preventDefault();page=1;boot();};
+async function boot(){try{$('hint').textContent='';await checkCoupleAccess();await window.AliECSAuth.renderUserBadge();await loadTags();await load();}catch(e){$('hint').textContent=String(e.message).startsWith('ACCESS_')?'当前登录态无法访问 Couple 空间。':'加载失败：'+e.message;}}
 boot();
 </script>
 </body>
