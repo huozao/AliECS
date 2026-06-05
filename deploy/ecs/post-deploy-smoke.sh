@@ -22,8 +22,11 @@ compose=(docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE")
 
 require_service() {
   local service="$1"
-  if ! "${compose[@]}" config --services | grep -Fxq "$service"; then
+  local services
+  services="$("${compose[@]}" config --services)"
+  if ! grep -Fxq "$service" <<< "$services"; then
     echo "[post-deploy] Missing compose service: $service" >&2
+    echo "$services" >&2
     exit 1
   fi
 }
