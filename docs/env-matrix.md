@@ -76,7 +76,7 @@ Homepage manual recipe sync only writes a request file for the BOM worker path. 
 
 | Variable | Scope | Purpose | Required |
 |---|---|---|---|
-| `OPS_HEALTH_HTTP_TARGETS_JSON` | backend-api | Optional JSON list of HTTP targets to show on `/health/`, for example old laptop or WebDock endpoints | Optional, default empty list |
+| `OPS_HEALTH_HTTP_TARGETS_JSON` | backend-api | Optional JSON list of HTTP targets to show on `/health/`, for example old laptop or WebDock endpoints. If unset, backend-api probes AliECS public web/API plus default WebDock API/noVNC targets. | Optional, unset uses built-in defaults |
 
 ## 8. Recipe query API
 

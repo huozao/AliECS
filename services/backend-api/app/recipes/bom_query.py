@@ -32,8 +32,20 @@ OUTPUT_COLUMNS = [
     "计量单位_子件",
     "需用数量",
     "比例",
+    "系统单价",
     "默认BOM",
     "停用",
+]
+
+PRICE_COLUMNS = [
+    "系统单价",
+    "材料单价",
+    "存货单价",
+    "最新成本",
+    "参考成本",
+    "成本单价",
+    "含税单价",
+    "单价",
 ]
 
 CUSTOM_COLUMNS_ORDER = [
@@ -45,6 +57,7 @@ CUSTOM_COLUMNS_ORDER = [
     "规格型号_子件",
     "计量单位_子件",
     "需用数量",
+    "系统单价",
     "生产数量_子件",
     "比例",
     "规格型号_父件",
@@ -261,7 +274,18 @@ def _detail_from_merged(merged: pd.DataFrame) -> pd.DataFrame:
         aligned[column] = aligned[column].map(normalize_cell)
     aligned["需用数量"] = pd.to_numeric(aligned.get("需用数量"), errors="coerce")
     aligned["比例"] = pd.to_numeric(aligned.get("比例"), errors="coerce")
+    aligned["系统单价"] = _first_numeric_column(aligned, PRICE_COLUMNS)
     return aligned.reindex(columns=OUTPUT_COLUMNS)
+
+
+def _first_numeric_column(df: pd.DataFrame, columns: list[str]) -> pd.Series:
+    values = pd.Series([pd.NA] * len(df), index=df.index, dtype="object")
+    for column in columns:
+        if column not in df.columns:
+            continue
+        numeric = pd.to_numeric(df[column], errors="coerce")
+        values = values.where(values.notna(), numeric)
+    return pd.to_numeric(values, errors="coerce")
 
 
 def load_detail_from_workbook(input_path: Path) -> pd.DataFrame:
@@ -349,6 +373,83 @@ def query_recipe_workbook(
         default_bom=default_bom or "all",
         include_disabled=include_disabled,
     )
+
+
+def _cost_quantity(quantity: object, unit: object) -> float:
+    value = pd.to_numeric(pd.Series([quantity]), errors="coerce").iloc[0]
+    if pd.isna(value):
+        return 0.0
+    unit_text = normalize_cell(unit)
+    if unit_text in GRAM_UNITS:
+        return float(value) / 1000
+    return float(value)
+
+
+def _float_or_zero(value: object) -> float:
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        return 0.0
+    return float(numeric)
+
+
+def calculate_recipe_costs(
+    result: RecipeQueryResult,
+    manual_prices: dict[str, float] | None = None,
+) -> list[dict[str, object]]:
+    manual_prices = {normalize_cell(key): float(value) for key, value in (manual_prices or {}).items()}
+    recipes: list[dict[str, object]] = []
+    if result.detail.empty:
+        return recipes
+
+    for (version, parent_code), group in result.detail.groupby(["版本号_子件", "父件编码"], sort=False, dropna=False):
+        lines: list[dict[str, object]] = []
+        system_total = 0.0
+        current_total = 0.0
+        group = group.reset_index(drop=True)
+        for _, row in group.iterrows():
+            child_code = normalize_cell(row.get("子件编码"))
+            unit = normalize_cell(row.get("计量单位_子件"))
+            quantity = _float_or_zero(row.get("需用数量"))
+            cost_quantity = _cost_quantity(row.get("需用数量"), unit)
+            system_price = _float_or_zero(row.get("系统单价"))
+            manual_price = manual_prices.get(child_code)
+            current_price = system_price if manual_price is None else float(manual_price)
+            system_amount = cost_quantity * system_price
+            current_amount = cost_quantity * current_price
+            system_total += system_amount
+            current_total += current_amount
+            lines.append(
+                {
+                    "child_code": child_code,
+                    "child_name": normalize_cell(row.get("子件名称")),
+                    "spec": normalize_cell(row.get("规格型号_子件")),
+                    "unit": unit,
+                    "quantity": quantity,
+                    "cost_quantity": cost_quantity,
+                    "ratio": _float_or_zero(row.get("比例")),
+                    "system_price": system_price,
+                    "current_price": current_price,
+                    "system_amount": system_amount,
+                    "current_amount": current_amount,
+                    "manual_price_applied": manual_price is not None,
+                    "disabled": normalize_cell(row.get("停用")),
+                }
+            )
+
+        first = group.iloc[0]
+        recipes.append(
+            {
+                "key": f"{normalize_cell(parent_code)}::{normalize_cell(version)}",
+                "parent_code": normalize_cell(parent_code),
+                "parent_name": normalize_cell(first.get("父件名称")),
+                "version": normalize_cell(version),
+                "disabled": normalize_cell(first.get("停用")),
+                "system_total": system_total,
+                "current_total": current_total,
+                "lines": lines,
+            }
+        )
+    return recipes
 
 
 def _style_title(cell, fill: str = "FF1F2937") -> None:

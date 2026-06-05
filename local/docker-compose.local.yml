@@ -42,6 +42,7 @@ services:
       RECIPE_BOM_INPUT_GLOB: ${RECIPE_BOM_INPUT_GLOB:-*物料清单合并*.xlsx;*bom*.xlsx;*物料清单*.xlsx}
       RECIPE_EXPORT_DIR: ${RECIPE_EXPORT_DIR:-/tmp/aliecs-recipe-exports}
       TPLUS_BOM_SYNC_REQUEST_DIR: ${TPLUS_BOM_SYNC_REQUEST_DIR:-/app/tplus-sync-requests}
+      OPS_HEALTH_HTTP_TARGETS_JSON: ${OPS_HEALTH_HTTP_TARGETS_JSON:-}
     ports:
       - "127.0.0.1:8000:8000"
     volumes:

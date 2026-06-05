@@ -88,6 +88,7 @@ class BackendRecipeRouteTests(unittest.TestCase):
                 "规格型号": "A",
                 "计量单位": "kg",
                 "需用数量": 2,
+                "系统单价": 10,
             },
             {
                 "版本号": "V1",
@@ -97,6 +98,7 @@ class BackendRecipeRouteTests(unittest.TestCase):
                 "规格型号": "B",
                 "计量单位": "g",
                 "需用数量": 500,
+                "系统单价": 20,
             },
             {
                 "版本号": "V0",
@@ -106,6 +108,7 @@ class BackendRecipeRouteTests(unittest.TestCase):
                 "规格型号": "C",
                 "计量单位": "kg",
                 "需用数量": 1,
+                "系统单价": 30,
             },
         ]
         with pd.ExcelWriter(source, engine="openpyxl") as writer:
@@ -244,6 +247,42 @@ class BackendRecipeRouteTests(unittest.TestCase):
         response = self.client.post(
             "/v1/recipes/sync-bom",
             headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(403, response.status_code)
+
+    def test_formula_read_user_can_calculate_recipe_cost_with_manual_prices(self) -> None:
+        token = self._token(permissions=["formula.read"])
+
+        response = self.client.post(
+            "/v1/recipes/cost",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "query": "3027",
+                "default_bom": "1",
+                "manual_prices": {"C002": 25},
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()
+        self.assertEqual(1, data["recipe_count"])
+        recipe = data["recipes"][0]
+        self.assertEqual("V1", recipe["version"])
+        self.assertAlmostEqual(30.0, recipe["system_total"])
+        self.assertAlmostEqual(32.5, recipe["current_total"])
+        by_code = {line["child_code"]: line for line in recipe["lines"]}
+        self.assertAlmostEqual(20.0, by_code["C002"]["system_price"])
+        self.assertAlmostEqual(25.0, by_code["C002"]["current_price"])
+        self.assertAlmostEqual(12.5, by_code["C002"]["current_amount"])
+
+    def test_recipe_cost_requires_formula_read_permission(self) -> None:
+        token = self._token(permissions=["production.schedule.read"])
+
+        response = self.client.post(
+            "/v1/recipes/cost",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"query": "3027"},
         )
 
         self.assertEqual(403, response.status_code)

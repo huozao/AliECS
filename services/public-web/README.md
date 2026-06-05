@@ -1,14 +1,14 @@
 # public-web
 
-Static public homepage for AliECS. It shows business feature entries, login/register controls, and the in-page recipe query panel.
+Static public pages for AliECS. The homepage shows business feature entries and auth controls. `/formula/` is the system formula page for BOM query, manual BOM sync, workbook download, and formula cost calculation. `/health/` renders ops status, reconciliation details, and external host checks.
 
 ## Runtime Inputs
 
 - Browser local storage auth token keys: `aliecs_auth_token`, `portal_token`, `admin_token`.
 - Backend API at `/api` in production or `http://localhost:8000` when served on local port `8080`.
 - Feature list from `GET /v1/features?include_all=true`.
-- Ops status from `GET /v1/ops/status` for `/health/`.
-- Recipe query from `POST /v1/recipes/query` and `GET /v1/recipes/download/{file_id}`.
+- Ops status from `GET /v1/ops/status`, host refresh from `GET /v1/ops/hosts/{host_name}/refresh`, and reconciliation detail/actions for `/health/`.
+- Recipe query from `POST /v1/recipes/query`, cost calculation from `POST /v1/recipes/cost`, and downloads from `GET /v1/recipes/download/{file_id}`.
 - Manual recipe sync from `POST /v1/recipes/sync-bom`; this only requests T+ BOM sync, including disabled BOM rows.
 
 ## Runtime Outputs
@@ -27,4 +27,4 @@ Do not commit downloaded workbooks, screenshots containing private data, browser
 docker compose -f AliECS\local\docker-compose.local.yml config
 ```
 
-After frontend edits, also verify browser behavior against `http://localhost:8080` when the local stack is running. At minimum check page load, login button/modal, recipe query panel entry, manual BOM sync button, `/health/`, and no console syntax errors.
+After frontend edits, also verify browser behavior against `http://localhost:8080` when the local stack is running. At minimum check page load, login button/modal, `/formula/`, manual BOM sync button, cost table interactions, `/health/`, host detail refresh, and no console syntax errors.

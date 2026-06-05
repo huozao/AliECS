@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>AliECS · 系统配方</title>
+  <style>
+    :root{--bg:#f7f5f0;--panel:#fffdf8;--text:#25211b;--muted:#766f63;--line:#e7dfd0;--primary:#6f5e46;--good:#3f7a4c;--bad:#a6423a;--shadow:0 12px 30px rgba(69,56,38,.08)}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top left,rgba(180,157,118,.16),transparent 36%),var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui}.wrap{max-width:1280px;margin:0 auto;padding:20px 18px 56px}.topbar{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;background:rgba(255,253,248,.94);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px;padding:18px 20px;margin-bottom:16px}h1{margin:0;font-size:34px}h2{margin:0 0 12px}.subtitle{margin:8px 0 0;color:var(--muted)}.actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.btn,button{border:0;border-radius:999px;padding:10px 14px;background:#e8dfcf;color:var(--text);cursor:pointer;font-weight:700;text-decoration:none}.btn.primary{background:var(--primary);color:#fff}.btn.subtle{background:#efe8dc;color:#6e6355}.btn:disabled{opacity:.58;cursor:not-allowed}.panel{background:rgba(255,253,248,.94);border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:var(--shadow);margin-bottom:16px}.form{display:grid;grid-template-columns:minmax(220px,1fr) 170px auto;gap:10px;align-items:end}.form label{display:grid;gap:6px;font-size:13px;color:var(--muted)}input,select,textarea{width:100%;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:#fff;color:var(--text);font:inherit}.notice,.error,.success{border-radius:14px;padding:12px 14px;margin-bottom:14px}.notice{background:#f2eadc;color:var(--muted)}.error{display:none;background:#f5d7d3;color:var(--bad)}.success{display:none;background:#dfeee3;color:var(--good)}.hidden{display:none!important}.muted{color:var(--muted)}.small{font-size:12px}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px;background:#fff}.data-table{width:100%;border-collapse:collapse;font-size:13px;min-width:980px}.data-table th,.data-table td{border-bottom:1px solid var(--line);padding:9px 10px;text-align:left;vertical-align:middle}.data-table th{background:#f2eadc;position:sticky;top:0}.version-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.version-tabs button{border:1px solid var(--line);background:#fff}.version-tabs button.active{background:var(--primary);color:#fff}.total-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:12px 0}.metric{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px}.metric strong{display:block;font-size:22px;margin-top:4px}.price-input{max-width:120px}.row-actions{display:flex;gap:6px;align-items:center}.modal{position:fixed;inset:0;background:rgba(30,22,12,.28);display:none;align-items:center;justify-content:center;padding:16px}.modal.show{display:flex}.auth-panel{width:min(440px,100%);background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px}@media (max-width:900px){.form{grid-template-columns:1fr}.topbar{flex-direction:column}.total-row{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <div>
+        <h1>系统配方</h1>
+        <p class="subtitle">查询 T+ 物料清单 BOM，下载核对表，并按系统价格或人工价格核算配方成本。</p>
+      </div>
+      <nav class="actions">
+        <a class="btn" href="/">首页</a>
+        <a class="btn" href="/health/">API Health</a>
+        <button id="loginBtn" class="btn" type="button">登录</button>
+        <button id="logoutBtn" class="btn hidden" type="button">退出登录</button>
+      </nav>
+    </header>
+    <div id="errorBox" class="error"></div>
+    <div id="successBox" class="success"></div>
+    <section class="panel">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
+        <h2>配方查询</h2>
+        <button id="syncBtn" class="btn subtle" type="button">手动同步配方</button>
+      </div>
+      <form id="queryForm" class="form">
+        <label>编号或父件编码
+          <input id="queryInput" placeholder="例如 4197 或 HYD-4197PC" autocomplete="off"/>
+        </label>
+        <label>BOM 范围
+          <select id="defaultBom">
+            <option value="all">全部版本</option>
+            <option value="1">默认 BOM</option>
+          </select>
+        </label>
+        <button id="queryBtn" class="btn primary" type="submit">查询</button>
+      </form>
+      <div id="resultBox" class="notice hidden"></div>
+      <div id="previewWrap" class="table-wrap hidden" style="margin-top:12px">
+        <table class="data-table">
+          <thead><tr><th>父件编码</th><th>父件名称</th><th>版本</th><th>子件编码</th><th>子件名称</th><th>单位</th><th>数量</th><th>比例</th><th>停用</th></tr></thead>
+          <tbody id="previewBody"></tbody>
+        </table>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px">
+        <button id="downloadBtn" class="btn hidden" type="button">下载结果</button>
+        <span id="downloadHint" class="small muted"></span>
+      </div>
+    </section>
+    <section id="costPanel" class="panel hidden">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
+        <h2>成本核算</h2>
+        <button id="resetAllPricesBtn" class="btn subtle" type="button">全部重置为系统价格</button>
+      </div>
+      <div id="versionTabs" class="version-tabs"></div>
+      <div id="costTotals" class="total-row"></div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>子件编码</th><th>子件名称</th><th>单位</th><th>数量</th><th>比例</th><th>系统单价</th><th>当下价格</th><th>系统分价</th><th>当下分价</th><th>操作</th></tr></thead>
+          <tbody id="costBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+  <div id="authModal" class="modal">
+    <div class="auth-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h3 style="margin:0">登录</h3>
+        <button id="closeModal" class="btn" type="button">关闭</button>
+      </div>
+      <p class="small muted">请输入已有账号密码。</p>
+      <input id="usernameInput" placeholder="用户名"/>
+      <input id="passwordInput" type="password" placeholder="密码"/>
+      <div style="display:flex;justify-content:flex-end">
+        <button id="submitLoginBtn" class="btn primary" type="button">提交</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    const API_BASE=location.port==='8080'?'http://localhost:8000':'/api';
+    const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
+    const PRICE_KEY='formula_manual_prices';
+    const state={token:'',fileId:'',cost:null,selectedKey:'',manualPrices:{}};
+    const getAuthToken=()=>AUTH_KEYS.map((key)=>localStorage.getItem(key)||'').find(Boolean)||'';
+    const setAuthToken=(token)=>AUTH_KEYS.forEach((key)=>localStorage.setItem(key,token));
+    const clearAuthToken=()=>AUTH_KEYS.forEach((key)=>localStorage.removeItem(key));
+    const loadManualPrices=()=>{try{return JSON.parse(localStorage.getItem(PRICE_KEY)||'{}')}catch{return {}}};
+    const saveManualPrices=()=>localStorage.setItem(PRICE_KEY,JSON.stringify(state.manualPrices));
+    const syncAuth=()=>{state.token=getAuthToken();loginBtn.classList.toggle('hidden',Boolean(state.token));logoutBtn.classList.toggle('hidden',!state.token);};
+    function showError(message){errorBox.textContent=message;errorBox.style.display='block';successBox.style.display='none'}
+    function showSuccess(message){successBox.textContent=message;successBox.style.display='block';errorBox.style.display='none'}
+    function clearMessage(){errorBox.style.display='none';successBox.style.display='none'}
+    async function api(path,opt={}){
+      const headers=Object.assign({'Content-Type':'application/json'},opt.headers||{});
+      syncAuth();
+      if(state.token)headers.Authorization=`Bearer ${state.token}`;
+      const response=await fetch(`${API_BASE}${path}`,{...opt,headers});
+      const text=await response.text();
+      let data={};
+      if(text){try{data=JSON.parse(text)}catch{data={raw:text}}}
+      if(!response.ok){
+        if(response.status===401){clearAuthToken();syncAuth();}
+        throw new Error(data.detail||`HTTP ${response.status}`);
+      }
+      return data;
+    }
+    const money=(value)=>Number(value||0).toLocaleString('zh-CN',{minimumFractionDigits:3,maximumFractionDigits:3});
+    const qty=(value)=>Number(value||0).toLocaleString('zh-CN',{maximumFractionDigits:6});
+    const ratio=(value)=>Number.isFinite(Number(value))?`${(Number(value)*100).toFixed(3)}%`:'';
+    function renderPreview(rows){
+      const items=rows||[];
+      previewWrap.classList.toggle('hidden',!items.length);
+      previewBody.innerHTML=items.map((row)=>`<tr><td>${row['父件编码']||''}</td><td>${row['父件名称']||''}</td><td>${row['版本号_子件']||''}</td><td>${row['子件编码']||''}</td><td>${row['子件名称']||''}</td><td>${row['计量单位_子件']||''}</td><td>${row['需用数量']||''}</td><td>${ratio(row['比例'])}</td><td>${row['停用']||''}</td></tr>`).join('');
+    }
+    async function fetchCost(){
+      const query=queryInput.value.trim();
+      if(!query)return;
+      state.cost=await api('/v1/recipes/cost',{method:'POST',body:JSON.stringify({query,default_bom:defaultBom.value,include_disabled:true,manual_prices:state.manualPrices})});
+      if(!state.selectedKey&&state.cost.recipes&&state.cost.recipes.length)state.selectedKey=state.cost.recipes[0].key;
+      renderCost();
+    }
+    async function queryFormula(event){
+      event.preventDefault();
+      clearMessage();
+      state.fileId='';state.cost=null;state.selectedKey='';downloadBtn.classList.add('hidden');downloadHint.textContent='';costPanel.classList.add('hidden');
+      const query=queryInput.value.trim();
+      if(!query){showError('请输入编号或父件编码。');return;}
+      queryBtn.disabled=true;resultBox.classList.remove('hidden');resultBox.textContent='正在查询...';
+      try{
+        const data=await api('/v1/recipes/query',{method:'POST',body:JSON.stringify({query,default_bom:defaultBom.value,include_disabled:true})});
+        state.fileId=data.file_id||'';
+        resultBox.textContent=`匹配 ${data.match_count||0} 条明细，配方 ${data.recipe_count||0} 个，来源：${data.source_file||'unknown'}`;
+        renderPreview(data.preview||[]);
+        downloadBtn.classList.toggle('hidden',!state.fileId);
+        downloadHint.textContent=state.fileId?'结果已生成，可下载核对表。':'';
+        await fetchCost();
+      }catch(error){
+        resultBox.classList.add('hidden');renderPreview([]);showError(error.message);
+      }finally{queryBtn.disabled=false;}
+    }
+    function selectedRecipe(){
+      const recipes=(state.cost&&state.cost.recipes)||[];
+      return recipes.find((item)=>item.key===state.selectedKey)||recipes[0]||null;
+    }
+    function renderCost(){
+      const recipes=(state.cost&&state.cost.recipes)||[];
+      costPanel.classList.toggle('hidden',!recipes.length);
+      if(!recipes.length)return;
+      versionTabs.innerHTML=recipes.map((recipe)=>`<button type="button" class="${recipe.key===state.selectedKey?'active':''}" onclick="selectVersion('${recipe.key}')">${recipe.parent_name||recipe.parent_code} · ${recipe.version||'-'}${recipe.disabled&&recipe.disabled!=='0'?' · 停用':''}</button>`).join('');
+      const recipe=selectedRecipe();
+      if(!recipe)return;
+      costTotals.innerHTML=`<div class="metric"><span class="muted">版本</span><strong>${recipe.version||'-'}</strong></div><div class="metric"><span class="muted">系统合价</span><strong>${money(recipe.system_total)}</strong></div><div class="metric"><span class="muted">当下合价</span><strong>${money(recipe.current_total)}</strong></div>`;
+      costBody.innerHTML=(recipe.lines||[]).map((line)=>`<tr><td>${line.child_code}</td><td>${line.child_name}</td><td>${line.unit||''}</td><td>${qty(line.quantity)}</td><td>${ratio(line.ratio)}</td><td>${money(line.system_price)}</td><td><input class="price-input" data-code="${line.child_code}" value="${line.current_price||0}" inputmode="decimal"/></td><td>${money(line.system_amount)}</td><td>${money(line.current_amount)}</td><td><button class="btn subtle" type="button" onclick="resetPrice('${line.child_code}')">重置</button></td></tr>`).join('');
+      costBody.querySelectorAll('.price-input').forEach((input)=>input.addEventListener('change',onPriceChange));
+    }
+    function selectVersion(key){state.selectedKey=key;renderCost();}
+    async function onPriceChange(event){
+      const input=event.target;
+      const code=input.dataset.code;
+      const value=Number(input.value);
+      if(!Number.isFinite(value)||value<0){showError('价格必须是非负数字。');renderCost();return;}
+      state.manualPrices[code]=value;
+      saveManualPrices();
+      await fetchCost();
+    }
+    async function resetPrice(code){
+      delete state.manualPrices[code];
+      saveManualPrices();
+      await fetchCost();
+    }
+    async function resetAllPrices(){
+      const recipe=selectedRecipe();
+      for(const line of (recipe&&recipe.lines)||[])delete state.manualPrices[line.child_code];
+      saveManualPrices();
+      await fetchCost();
+      showSuccess('当前配方价格已重置为系统价格。');
+    }
+    async function syncBom(){
+      clearMessage();syncBtn.disabled=true;syncBtn.textContent='正在请求同步...';
+      try{const data=await api('/v1/recipes/sync-bom',{method:'POST',body:JSON.stringify({})});showSuccess(data.message||'已请求同步 T+ 物料清单 BOM。');}
+      catch(error){showError(error.message);}
+      finally{syncBtn.disabled=false;syncBtn.textContent='手动同步配方';}
+    }
+    async function downloadResult(){
+      if(!state.fileId)return;
+      const headers={};syncAuth();if(state.token)headers.Authorization=`Bearer ${state.token}`;
+      const response=await fetch(`${API_BASE}/v1/recipes/download/${state.fileId}`,{headers});
+      if(!response.ok){let message=`HTTP ${response.status}`;try{const data=await response.json();message=data.detail||message;}catch{}throw new Error(message);}
+      const blob=await response.blob();
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a');
+      a.href=url;a.download=`recipe-${state.fileId}.xlsx`;document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+    }
+    async function login(){
+      const username=usernameInput.value.trim(),password=passwordInput.value;
+      if(!username||!password){showError('请输入用户名和密码。');return;}
+      const data=await api('/v1/auth/login',{method:'POST',body:JSON.stringify({username,password})});
+      setAuthToken(data.token);syncAuth();authModal.classList.remove('show');showSuccess('登录成功。');
+    }
+    document.addEventListener('DOMContentLoaded',()=>{
+      state.manualPrices=loadManualPrices();syncAuth();
+      queryForm.onsubmit=(event)=>queryFormula(event).catch((error)=>showError(error.message));
+      syncBtn.onclick=()=>syncBom().catch((error)=>showError(error.message));
+      downloadBtn.onclick=()=>downloadResult().catch((error)=>showError(error.message));
+      resetAllPricesBtn.onclick=()=>resetAllPrices().catch((error)=>showError(error.message));
+      loginBtn.onclick=()=>authModal.classList.add('show');
+      logoutBtn.onclick=()=>{clearAuthToken();syncAuth();showSuccess('已退出登录。');};
+      closeModal.onclick=()=>authModal.classList.remove('show');
+      submitLoginBtn.onclick=()=>login().catch((error)=>showError(error.message));
+      passwordInput.onkeydown=(event)=>{if(event.key==='Enter')login().catch((error)=>showError(error.message));};
+      authModal.onclick=(event)=>{if(event.target===authModal)authModal.classList.remove('show');};
+    });
+  </script>
+</body>
+</html>

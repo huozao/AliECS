@@ -10,6 +10,7 @@ import time
 import urllib.request
 import uuid
 from contextlib import closing
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from app.integrations.events import build_ops_attention_items
 from app.recipes.bom_query import (
+    calculate_recipe_costs,
     export_path_for_id,
     locate_recipe_source,
     new_export_path,
@@ -70,16 +72,16 @@ app.add_middleware(
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 DEFAULT_FEATURES: list[dict[str, Any]] = [
-    {"id": 1, "code": "new_model_form", "title": "新品型号录入表", "description": "新品型号登记", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_4b7094", "category": "业务录入", "required_permission": "production.schedule.write", "status": "active", "sort_order": 10},
-    {"id": 2, "code": "schedule_form", "title": "排产登记表", "description": "排产信息登记", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_e3792e", "category": "业务录入", "required_permission": "production.schedule.write", "status": "active", "sort_order": 20},
-    {"id": 3, "code": "pending_return_alert", "title": "待处理+退货提醒", "description": "待处理与退货提醒", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_4501d0", "category": "业务录入", "required_permission": "production.schedule.read", "status": "active", "sort_order": 30},
-    {"id": 4, "code": "naming_form", "title": "产品命名登记", "description": "产品命名录入", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_a577fc", "category": "业务录入", "required_permission": "formula.write", "status": "active", "sort_order": 40},
-    {"id": 5, "code": "qc_form", "title": "检测数据登记表", "description": "检测数据登记", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_b669cf", "category": "质检", "required_permission": "formula.read", "status": "active", "sort_order": 50},
-    {"id": 6, "code": "density_calculator", "title": "配方密度计算器", "description": "配方密度工具", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_bac993", "category": "质检", "required_permission": "formula.read", "status": "active", "sort_order": 60},
-    {"id": 7, "code": "formula_query", "title": "配方查询", "description": "按编号查询 T+ BOM 配方并下载核对表", "url": "#recipe-query", "category": "业务查询", "required_permission": "formula.read", "status": "active", "sort_order": 70},
-    {"id": 8, "code": "midea_requirement", "title": "美的需求", "description": "需求查询入口", "url": None, "category": "业务查询", "required_permission": "midea.requirement.read", "status": "reserved", "sort_order": 80},
-    {"id": 9, "code": "raw_inventory", "title": "原材料库存", "description": "原材料库存入口", "url": None, "category": "业务查询", "required_permission": "inventory.raw.read", "status": "reserved", "sort_order": 90},
-    {"id": 10, "code": "finished_inventory", "title": "成品库存", "description": "成品库存入口", "url": None, "category": "业务查询", "required_permission": "inventory.finished.read", "status": "reserved", "sort_order": 100},
+    {"id": 9, "code": "raw_inventory", "title": "原材料库存", "description": "原材料库存查询", "url": "/inventory/raw-materials/", "category": "业务查询", "required_permission": "inventory.raw.read", "status": "active", "sort_order": 10},
+    {"id": 10, "code": "finished_inventory", "title": "成品库存", "description": "成品库存查询", "url": "/inventory/finished-goods/", "category": "业务查询", "required_permission": "inventory.finished.read", "status": "active", "sort_order": 20},
+    {"id": 7, "code": "formula_query", "title": "系统配方", "description": "配方检索、BOM 同步与成本核算", "url": "/formula/", "category": "业务查询", "required_permission": "formula.read", "status": "active", "sort_order": 30},
+    {"id": 1, "code": "new_model_form", "title": "新品型号录入表", "description": "新品型号登记", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_4b7094", "category": "业务录入", "required_permission": "production.schedule.write", "status": "active", "sort_order": 40},
+    {"id": 2, "code": "schedule_form", "title": "排产登记表", "description": "排产信息登记", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_e3792e", "category": "业务录入", "required_permission": "production.schedule.write", "status": "active", "sort_order": 50},
+    {"id": 3, "code": "pending_return_alert", "title": "待处理+退货提醒", "description": "待处理与退货提醒", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_4501d0", "category": "业务录入", "required_permission": "production.schedule.read", "status": "active", "sort_order": 60},
+    {"id": 4, "code": "naming_form", "title": "产品命名登记", "description": "产品命名录入", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_a577fc", "category": "业务录入", "required_permission": "formula.write", "status": "active", "sort_order": 70},
+    {"id": 5, "code": "qc_form", "title": "检测数据登记表", "description": "检测数据登记", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_b669cf", "category": "质检", "required_permission": "formula.read", "status": "active", "sort_order": 80},
+    {"id": 6, "code": "density_calculator", "title": "配方密度计算器", "description": "配方密度工具", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_bac993", "category": "质检", "required_permission": "formula.read", "status": "active", "sort_order": 90},
+    {"id": 8, "code": "midea_requirement", "title": "美的需求", "description": "需求查询入口", "url": None, "category": "业务查询", "required_permission": "midea.requirement.read", "status": "reserved", "sort_order": 100},
     {"id": 11, "code": "personal_section", "title": "个人板块", "description": "个人工具入口", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_0c521a", "category": "个人", "required_permission": "personal.access", "status": "active", "sort_order": 110},
     {"id": 12, "code": "admin_ui", "title": "Admin UI", "description": "管理后台入口", "url": "/admin/", "category": "系统", "required_permission": "admin.access", "status": "active", "sort_order": 120},
 ]
@@ -399,6 +401,15 @@ class RecipeQueryRequest(BaseModel):
     include_disabled: bool = True
 
 
+class RecipeCostRequest(RecipeQueryRequest):
+    manual_prices: dict[str, float] = Field(default_factory=dict)
+
+
+class ReconciliationActionRequest(BaseModel):
+    action: str = Field(pattern="^(use_full|use_incremental|ignore)$")
+    note: str | None = Field(default=None, max_length=500)
+
+
 def _tplus_bom_sync_request_dir() -> Path:
     return Path(os.getenv("TPLUS_BOM_SYNC_REQUEST_DIR", "/tmp/aliecs-tplus-sync-requests"))
 
@@ -504,6 +515,19 @@ def ops_status() -> dict[str, Any]:
     if status["attention_items"]:
         status["status"] = "degraded"
     return status
+
+
+@app.get("/v1/ops/hosts")
+def ops_hosts() -> dict[str, Any]:
+    return {"items": _configured_host_statuses()}
+
+
+@app.get("/v1/ops/hosts/{host_name}/refresh")
+def ops_host_refresh(host_name: str) -> dict[str, Any]:
+    for target in _ops_http_targets():
+        if str(target.get("name") or target.get("url") or "target") == host_name:
+            return _probe_http_target(target)
+    raise HTTPException(status_code=404, detail="host target not found")
 
 
 def _empty_tplus_status() -> dict[str, Any]:
@@ -664,6 +688,95 @@ def _reconciliation_status_from_db() -> dict[str, Any]:
         return {"needs_review": 0, "recent": [], "error": str(exc)}
 
 
+def _json_value(value: Any) -> Any:
+    if value is None:
+        return {}
+    if isinstance(value, (dict, list)):
+        return value
+    if hasattr(value, "obj"):
+        return getattr(value, "obj")
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            return {"raw": value}
+    return value
+
+
+def _reconciliation_diff_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
+    return {
+        "id": row[0],
+        "provider": row[1],
+        "module": row[2],
+        "status": row[3],
+        "severity": row[4],
+        "summary": row[5],
+        "diff_json": _json_value(row[6]),
+        "full_snapshot_id": row[7],
+        "incremental_snapshot_id": row[8],
+        "created_at": str(row[9]) if row[9] else None,
+        "reviewed_at": str(row[10]) if row[10] else None,
+        "reviewed_by": row[11],
+        "resolution": _json_value(row[12]),
+    }
+
+
+@app.get("/v1/ops/reconciliation/{diff_id}")
+def ops_reconciliation_detail(diff_id: int, _: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, provider, module, status, severity, summary, diff_json,
+                       full_snapshot_id, incremental_snapshot_id, created_at,
+                       reviewed_at, reviewed_by, resolution_json
+                FROM integration_reconciliation_diffs
+                WHERE id = %s
+                """,
+                (diff_id,),
+            )
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="reconciliation diff not found")
+    return _reconciliation_diff_to_dict(row)
+
+
+@app.post("/v1/ops/reconciliation/{diff_id}/actions")
+def ops_reconciliation_action(
+    diff_id: int,
+    body: ReconciliationActionRequest,
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    next_status = "ignored" if body.action == "ignore" else "resolved"
+    resolution = {
+        "action": body.action,
+        "note": body.note or "",
+        "resolved_at": datetime.now(timezone.utc).isoformat(),
+    }
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE integration_reconciliation_diffs
+                SET status = %s,
+                    resolution_json = %s,
+                    reviewed_at = NOW(),
+                    reviewed_by = %s
+                WHERE id = %s
+                RETURNING id, provider, module, status, severity, summary, diff_json,
+                          full_snapshot_id, incremental_snapshot_id, created_at,
+                          reviewed_at, reviewed_by, resolution_json
+                """,
+                (next_status, Jsonb(resolution), user.get("sub", ""), diff_id),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    if not row:
+        raise HTTPException(status_code=404, detail="reconciliation diff not found")
+    _audit(user.get("sub"), "ops.reconciliation.resolve", "integration_reconciliation_diffs", str(diff_id), resolution)
+    return _reconciliation_diff_to_dict(row)
+
+
 def _sync_run_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
     return {
         "id": row[0],
@@ -679,34 +792,81 @@ def _sync_run_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
 
 
 def _configured_host_statuses() -> list[dict[str, Any]]:
+    return [_probe_http_target(item) for item in _ops_http_targets()]
+
+
+def _ops_http_targets() -> list[dict[str, Any]]:
     raw = os.getenv("OPS_HEALTH_HTTP_TARGETS_JSON", "").strip()
     if not raw:
-        return []
+        return [
+            {
+                "name": "AliECS Backend API",
+                "url": os.getenv("OPS_HEALTH_BACKEND_URL", "https://hydwang.xyz/api/healthz"),
+                "description": "公网反代后的 AliECS 后端健康检查。",
+                "timeout": 3,
+            },
+            {
+                "name": "AliECS Public Web",
+                "url": os.getenv("OPS_HEALTH_PUBLIC_WEB_URL", "https://hydwang.xyz/"),
+                "description": "公网首页入口。",
+                "timeout": 3,
+            },
+            {
+                "name": "WebDock API",
+                "url": os.getenv("OPS_HEALTH_WEBDOCK_API_URL", "http://100.97.176.57:18000/healthz"),
+                "description": "旧电脑 WebDock API，走 Tailscale 地址。",
+                "timeout": 3,
+            },
+            {
+                "name": "WebDock noVNC",
+                "url": os.getenv("OPS_HEALTH_WEBDOCK_NOVNC_URL", "http://100.97.176.57:6080/"),
+                "description": "旧电脑 noVNC 页面，走 Tailscale 地址。",
+                "timeout": 3,
+            },
+        ]
     try:
         targets = json.loads(raw)
     except Exception as exc:
-        return [{"name": "OPS_HEALTH_HTTP_TARGETS_JSON", "ok": False, "message": f"invalid json: {exc}"}]
+        return [{"name": "OPS_HEALTH_HTTP_TARGETS_JSON", "url": "", "description": f"invalid json: {exc}"}]
     if not isinstance(targets, list):
-        return [{"name": "OPS_HEALTH_HTTP_TARGETS_JSON", "ok": False, "message": "must be a list"}]
-    return [_probe_http_target(item) for item in targets if isinstance(item, dict)]
+        return [{"name": "OPS_HEALTH_HTTP_TARGETS_JSON", "url": "", "description": "must be a list"}]
+    return [item for item in targets if isinstance(item, dict)]
 
 
 def _probe_http_target(item: dict[str, Any]) -> dict[str, Any]:
     name = str(item.get("name") or item.get("url") or "target")
     url = str(item.get("url") or "")
+    description = str(item.get("description") or "")
+    checked_at = datetime.now(timezone.utc).isoformat()
     timeout = float(item.get("timeout") or 2)
     if not url:
-        return {"name": name, "ok": False, "message": "url is empty"}
+        return {"name": name, "url": url, "description": description, "ok": False, "message": "url is empty", "last_checked_at": checked_at}
     started = time.perf_counter()
     try:
         request = urllib.request.Request(url, method="GET")
         with urllib.request.urlopen(request, timeout=timeout) as response:
             status_code = int(getattr(response, "status", 0) or 0)
         elapsed_ms = round((time.perf_counter() - started) * 1000)
-        return {"name": name, "url": url, "ok": 200 <= status_code < 500, "status_code": status_code, "latency_ms": elapsed_ms}
+        return {
+            "name": name,
+            "url": url,
+            "description": description,
+            "ok": 200 <= status_code < 500,
+            "status_code": status_code,
+            "latency_ms": elapsed_ms,
+            "last_checked_at": checked_at,
+        }
     except Exception as exc:
         elapsed_ms = round((time.perf_counter() - started) * 1000)
-        return {"name": name, "url": url, "ok": False, "message": str(exc), "latency_ms": elapsed_ms}
+        return {
+            "name": name,
+            "url": url,
+            "description": description,
+            "ok": False,
+            "message": str(exc),
+            "latency_ms": elapsed_ms,
+            "last_checked_at": checked_at,
+        }
 
 
 @app.get("/readyz")
@@ -914,6 +1074,36 @@ def recipe_query(body: RecipeQueryRequest, user: dict[str, Any] = Depends(requir
         "file_id": file_id,
         "download_url": f"/v1/recipes/download/{file_id}",
         "preview": result.preview_rows(limit=20),
+    }
+
+
+@app.post("/v1/recipes/cost")
+def recipe_cost(body: RecipeCostRequest, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
+    require_permission("formula.read", user)
+    try:
+        source_path = locate_recipe_source()
+        result = query_recipe_workbook(
+            source_path,
+            query_text=body.query,
+            default_bom=body.default_bom,
+            include_disabled=body.include_disabled,
+        )
+        recipes = calculate_recipe_costs(result, manual_prices=body.manual_prices)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="BOM 输入文件未找到") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"配方成本核算失败：{type(exc).__name__}") from exc
+
+    return {
+        "query": body.query,
+        "source_file": source_path.name,
+        "recipe_count": len(recipes),
+        "default_bom": result.default_bom,
+        "include_disabled": result.include_disabled,
+        "manual_price_count": len(body.manual_prices),
+        "recipes": recipes,
     }
 
 
