@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import json
+import base64
+import mimetypes
 import os
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
@@ -22,6 +25,18 @@ OPENCLAW_METADATA_CAPTURE_RE = re.compile(
     flags=re.DOTALL,
 )
 MAX_BRIDGE_IMAGES = 4
+MAX_BRIDGE_IMAGE_BYTES = 20 * 1024 * 1024
+RECENT_METADATA_WINDOW_SECONDS = 120.0
+OPENCLAW_MEDIA_URI_RE = re.compile(r"media://inbound/([^\s\]\)\"'`]+)")
+OPENCLAW_MEDIA_ATTACHED_LINE_RE = re.compile(r"^\s*\[media attached:\s+media://inbound/[^\]]+\]\s*$", re.MULTILINE)
+OPENCLAW_MEDIA_NO_CAPTION_RE = re.compile(r"^\s*\[User sent media without caption\]\s*$", re.MULTILINE)
+OPENCLAW_MEDIA_HELPER_PREFIXES = (
+    "To send an image back, prefer ",
+    "If you must inline, use MEDIA:",
+    "Absolute and ~ paths only work ",
+    "read boundary; host file:// URLs are blocked.",
+    "body.",
+)
 ENGLISH_ERROR_PATTERNS = (
     "llm request timed out",
     "model idle timeout",
@@ -32,12 +47,27 @@ ENGLISH_ERROR_PATTERNS = (
     "cannot find chatgpt input box",
     "chatgpt is not logged in",
 )
+_recent_lane_metadata: dict[str, Any] = {}
+_recent_lane_metadata_at = 0.0
 
 
 def clean_user_text(text: Any) -> str:
     if not isinstance(text, str):
         return ""
-    return OPENCLAW_METADATA_RE.sub("", text).strip()
+    cleaned = OPENCLAW_METADATA_RE.sub("", text)
+    return strip_openclaw_media_helper_text(cleaned).strip()
+
+
+def strip_openclaw_media_helper_text(text: str) -> str:
+    text = OPENCLAW_MEDIA_ATTACHED_LINE_RE.sub("", text)
+    text = OPENCLAW_MEDIA_NO_CAPTION_RE.sub("", text)
+    lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if any(stripped.startswith(prefix) for prefix in OPENCLAW_MEDIA_HELPER_PREFIXES):
+            continue
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def extract_openclaw_metadata(text: Any) -> dict[str, Any]:
@@ -93,12 +123,18 @@ def extract_image_parts(content: Any) -> list[dict[str, Any]]:
     vision shape WebDock expects: {"type": "image_url", "image_url": {"url": ...}}.
     Accepts both {"image_url": {"url": ...}} and {"image_url": "<url>"}; URLs may
     be http(s) or base64 data URLs. Text-only content yields nothing."""
+    if isinstance(content, str):
+        return extract_openclaw_media_image_parts(content)
     if not isinstance(content, list):
         return []
     parts: list[dict[str, Any]] = []
     for item in content:
         if not isinstance(item, dict):
             continue
+        for key in ("text", "content"):
+            value = item.get(key)
+            if isinstance(value, str):
+                parts.extend(extract_openclaw_media_image_parts(value))
         image_url = item.get("image_url")
         if image_url is None:
             continue
@@ -106,6 +142,52 @@ def extract_image_parts(content: Any) -> list[dict[str, Any]]:
         if isinstance(url, str) and url.strip():
             parts.append({"type": "image_url", "image_url": {"url": url.strip()}})
     return parts[:MAX_BRIDGE_IMAGES]
+
+
+def extract_openclaw_media_image_parts(text: str) -> list[dict[str, Any]]:
+    parts: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_id in OPENCLAW_MEDIA_URI_RE.findall(text or ""):
+        if raw_id in seen:
+            continue
+        seen.add(raw_id)
+        data_url = resolve_openclaw_inbound_media(raw_id)
+        if data_url:
+            parts.append({"type": "image_url", "image_url": {"url": data_url}})
+        if len(parts) >= MAX_BRIDGE_IMAGES:
+            break
+    return parts
+
+
+def resolve_openclaw_inbound_media(raw_id: str) -> str | None:
+    media_id = urllib.parse.unquote(raw_id).strip()
+    if not media_id or any(ch in media_id for ch in ("/", "\\", "\x00")) or media_id in {".", ".."}:
+        return None
+    base_dir = os.path.abspath(os.getenv("OPENCLAW_INBOUND_MEDIA_DIR", "/root/.openclaw/media/inbound"))
+    path = os.path.abspath(os.path.join(base_dir, media_id))
+    if not path.startswith(base_dir + os.sep):
+        return None
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read(MAX_BRIDGE_IMAGE_BYTES + 1)
+    except OSError:
+        return None
+    if not data or len(data) > MAX_BRIDGE_IMAGE_BYTES:
+        return None
+    mime = mimetypes.guess_type(path)[0] or guess_image_mime(data)
+    return "data:" + mime + ";base64," + base64.b64encode(data).decode("ascii")
+
+
+def guess_image_mime(data: bytes) -> str:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/png"
 
 
 def get_last_user_images(messages: Any) -> list[dict[str, Any]]:
@@ -154,8 +236,14 @@ def build_webdock_body(body: dict[str, Any]) -> dict[str, Any]:
         "stream": False,
     }
     metadata = build_webdock_metadata(body)
+    if images and not metadata.get("peer_id"):
+        inherited_metadata = get_recent_lane_metadata()
+        if inherited_metadata:
+            inherited_metadata.update(metadata)
+            metadata = inherited_metadata
     if metadata:
         outbound["metadata"] = metadata
+        remember_lane_metadata(metadata)
     return outbound
 
 
@@ -192,18 +280,42 @@ def build_webdock_metadata(body: dict[str, Any]) -> dict[str, Any]:
         "sender_id",
     )
 
+    has_lane_identity = bool(wechat_account or peer_id)
+
     if wechat_account:
         normalized["wechat_account"] = str(wechat_account)
         normalized["chatgpt_project"] = str(
             _first_metadata_value(metadata, "chatgpt_project", "project") or f"WeChat-{wechat_account}"
         )
-    if chat_type:
+    if has_lane_identity and chat_type:
         normalized["chat_type"] = str(chat_type)
     if peer_id:
         normalized["peer_id"] = str(peer_id)
     if metadata.get("message_id"):
         normalized["message_id"] = str(metadata["message_id"])
     return normalized
+
+
+def remember_lane_metadata(metadata: dict[str, Any]) -> None:
+    global _recent_lane_metadata_at
+    lane_metadata = {
+        key: metadata[key]
+        for key in ("wechat_account", "chat_type", "peer_id", "chatgpt_project")
+        if metadata.get(key)
+    }
+    if "peer_id" not in lane_metadata:
+        return
+    _recent_lane_metadata.clear()
+    _recent_lane_metadata.update(lane_metadata)
+    _recent_lane_metadata_at = time.monotonic()
+
+
+def get_recent_lane_metadata() -> dict[str, Any]:
+    if not _recent_lane_metadata:
+        return {}
+    if time.monotonic() - _recent_lane_metadata_at > RECENT_METADATA_WINDOW_SECONDS:
+        return {}
+    return dict(_recent_lane_metadata)
 
 
 def _first_metadata_value(metadata: dict[str, Any], *keys: str) -> Any:

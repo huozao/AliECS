@@ -132,6 +132,68 @@ def test_bridge_forwards_image_only_message_without_text_part():
     ]
 
 
+def test_bridge_resolves_openclaw_media_uri_text_to_image_part(tmp_path, monkeypatch):
+    bridge = load_bridge()
+    media_file = tmp_path / "785de3ce-7429-422a-9526-4bfb63724b2d.jpg"
+    media_file.write_bytes(b"\xff\xd8\xffsample-jpeg")
+    monkeypatch.setenv("OPENCLAW_INBOUND_MEDIA_DIR", str(tmp_path))
+
+    outbound = bridge.build_webdock_body(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "[media attached: media://inbound/785de3ce-7429-422a-9526-4bfb63724b2d.jpg (image/*)]\n"
+                        "To send an image back, prefer the message tool (media/path/filePath).\n"
+                        "If you must inline, use MEDIA:https://example.com/image.jpg.\n"
+                        "Absolute and ~ paths only work when they stay inside your allowed file-read boundary.\n"
+                        "[User sent media without caption]"
+                    ),
+                }
+            ],
+        }
+    )
+
+    assert outbound["messages"][0]["content"] == [
+        {
+            "type": "image_url",
+            "image_url": {"url": "data:image/jpeg;base64,/9j/c2FtcGxlLWpwZWc="},
+        }
+    ]
+
+
+def test_bridge_inherits_recent_lane_metadata_for_media_only_message(tmp_path, monkeypatch):
+    bridge = load_bridge()
+    media_file = tmp_path / "image-a.jpg"
+    media_file.write_bytes(b"\xff\xd8\xffimage-a")
+    monkeypatch.setenv("OPENCLAW_INBOUND_MEDIA_DIR", str(tmp_path))
+
+    bridge.build_webdock_body(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Conversation info (untrusted metadata):\n"
+                        "```json\n"
+                        '{"wechat_account":"A","chat_type":"private","peer_id":"user-1"}\n'
+                        "```\n\n"
+                        "/新对话 帮我把这张图片背景改为纯色"
+                    ),
+                },
+            ],
+        }
+    )
+    outbound = bridge.build_webdock_body(
+        {"messages": [{"role": "user", "content": "[media attached: media://inbound/image-a.jpg (image/*)]"}]}
+    )
+
+    assert outbound["metadata"]["wechat_account"] == "A"
+    assert outbound["metadata"]["peer_id"] == "user-1"
+    assert outbound["messages"][0]["content"][0]["type"] == "image_url"
+
+
 def test_bridge_normalizes_english_timeout_errors_to_fallback():
     bridge = load_bridge()
 

@@ -64,10 +64,18 @@ curl -fsS http://127.0.0.1:18080/v1/chat/completions \
 OpenClaw sends a large runtime context to the model. The bridge intentionally does not forward that full context to the browser relay.
 
 The bridge forwards only the last real user message, plus any image attachments
-on it. When the message carries images, the bridge sends OpenAI vision content
+on it. When the message carries standard OpenAI image parts or OpenClaw
+`media://inbound/<id>` claim-check URIs, the bridge sends OpenAI vision content
 (`[{"type":"text",...},{"type":"image_url","image_url":{"url":...}}]`) so WebDock
 uploads the image(s) to ChatGPT before sending the text; a text-only message is
-still forwarded as a plain string. URLs may be http(s) or base64 `data:` URLs.
+still forwarded as a plain string. URLs may be http(s), base64 `data:` URLs, or
+OpenClaw inbound media files.
+
+For OpenClaw WeChat media, the bridge reads inbound files from
+`OPENCLAW_INBOUND_MEDIA_DIR` (default `/root/.openclaw/media/inbound`) and
+converts them to data URLs before calling WebDock. A metadata-less media request
+also inherits the most recent WeChat lane metadata for a short window so text and
+image messages from the same WeChat send do not fall into WebDock's default lane.
 
 It removes the OpenClaw `Conversation info (untrusted metadata)` prefix before calling WebDock. This keeps the ChatGPT page clean and avoids confusing the browser session with internal OpenClaw instructions.
 
