@@ -106,6 +106,8 @@ jobs:
             context: services/doc-sync-worker
           - image: tplus-sync-worker
             context: services/tplus-sync-worker
+          - image: openclaw-bridge
+            context: deploy/openclaw-bridge
     steps:
       - uses: actions/checkout@v4
 
