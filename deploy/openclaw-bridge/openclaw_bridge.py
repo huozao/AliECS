@@ -2,17 +2,22 @@
 from __future__ import annotations
 
 import json
+import base64
+import mimetypes
 import os
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Thread
+from threading import Condition, Lock, Thread
 from typing import Any
 
 
 FALLBACK_MESSAGE = os.getenv("WEB_DOCK_FALLBACK_MESSAGE", "ChatGPT 浏览器暂不可用，请稍后再试。")
+NO_REPLY = "__OPENCLAW_BRIDGE_NO_REPLY__"
 OPENCLAW_METADATA_RE = re.compile(
     r"^Conversation info \(untrusted metadata\):\s*```json\s*.*?```\s*",
     flags=re.DOTALL,
@@ -20,6 +25,25 @@ OPENCLAW_METADATA_RE = re.compile(
 OPENCLAW_METADATA_CAPTURE_RE = re.compile(
     r"^Conversation info \(untrusted metadata\):\s*```json\s*(.*?)```\s*",
     flags=re.DOTALL,
+)
+MAX_BRIDGE_IMAGES = 4
+MAX_BRIDGE_IMAGE_BYTES = 20 * 1024 * 1024
+RECENT_METADATA_WINDOW_SECONDS = 120.0
+OPENCLAW_MEDIA_URI_RE = re.compile(r"media://inbound/([^\s\]\)\"'`]+)")
+OPENCLAW_MEDIA_ATTACHED_LINE_RE = re.compile(r"^\s*\[media attached:\s+media://inbound/[^\]]+\]\s*$", re.MULTILINE)
+OPENCLAW_MEDIA_NO_CAPTION_RE = re.compile(r"^\s*\[User sent media without caption\]\s*$", re.MULTILINE)
+MEDIA_INTENT_RE = re.compile(
+    r"(图片|照片|这张图|图像|头像|原图|参考图|风格图|背景|修图|改图|抠图|"
+    r"第一张|第二张|第三张|两张|多张|image|photo|picture|avatar|reference)",
+    re.IGNORECASE,
+)
+CN_IMAGE_COUNT = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4}
+OPENCLAW_MEDIA_HELPER_PREFIXES = (
+    "To send an image back, prefer ",
+    "If you must inline, use MEDIA:",
+    "Absolute and ~ paths only work ",
+    "read boundary; host file:// URLs are blocked.",
+    "body.",
 )
 ENGLISH_ERROR_PATTERNS = (
     "llm request timed out",
@@ -31,12 +55,66 @@ ENGLISH_ERROR_PATTERNS = (
     "cannot find chatgpt input box",
     "chatgpt is not logged in",
 )
+_recent_lane_metadata: dict[str, Any] = {}
+_recent_lane_metadata_at = 0.0
+_pending_batches: dict[str, Any] = {}
+_pending_batches_lock = Lock()
+
+
+class PendingBatch:
+    def __init__(self, body: dict[str, Any], details: dict[str, Any], wait_seconds: float) -> None:
+        self.condition = Condition()
+        self.body = body
+        self.user_text = details["user_text"]
+        self.images = list(details["images"])
+        self.metadata = dict(details["metadata"])
+        self.expected_images = expected_image_count(details)
+        self.created = time.monotonic()
+        self.deadline = self.created + wait_seconds
+        self.updated = self.created
+
+    def merge(self, details: dict[str, Any]) -> None:
+        if details["user_text"]:
+            self.user_text = details["user_text"]
+            self.expected_images = max(self.expected_images, expected_image_count(details))
+        self.images.extend(details["images"])
+        self.images = self.images[:MAX_BRIDGE_IMAGES]
+        for key, value in details["metadata"].items():
+            if value and not self.metadata.get(key):
+                self.metadata[key] = value
+        self.updated = time.monotonic()
+
+    def has_text_and_images(self) -> bool:
+        return bool(self.user_text and self.images)
+
+    def has_expected_images(self) -> bool:
+        return self.has_text_and_images() and len(self.images) >= max(1, self.expected_images)
+
+    def to_body(self) -> dict[str, Any]:
+        body = dict(self.body)
+        body["messages"] = [{"role": "user", "content": build_outbound_content(self.user_text, self.images)}]
+        if self.metadata:
+            body["metadata"] = dict(self.metadata)
+        return body
 
 
 def clean_user_text(text: Any) -> str:
     if not isinstance(text, str):
         return ""
-    return OPENCLAW_METADATA_RE.sub("", text).strip()
+    cleaned = OPENCLAW_METADATA_RE.sub("", text)
+    return strip_openclaw_media_helper_text(cleaned).strip()
+
+
+def strip_openclaw_media_helper_text(text: str) -> str:
+    text = OPENCLAW_MEDIA_ATTACHED_LINE_RE.sub("", text)
+    text = OPENCLAW_MEDIA_NO_CAPTION_RE.sub("", text)
+    lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if any(stripped.startswith(prefix) for prefix in OPENCLAW_MEDIA_HELPER_PREFIXES):
+            continue
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def extract_openclaw_metadata(text: Any) -> dict[str, Any]:
@@ -87,6 +165,87 @@ def get_last_user_metadata(messages: Any) -> dict[str, Any]:
     return extract_openclaw_metadata(get_last_user_raw_text(messages))
 
 
+def extract_image_parts(content: Any) -> list[dict[str, Any]]:
+    """Normalize any image parts in an OpenClaw message content to the OpenAI
+    vision shape WebDock expects: {"type": "image_url", "image_url": {"url": ...}}.
+    Accepts both {"image_url": {"url": ...}} and {"image_url": "<url>"}; URLs may
+    be http(s) or base64 data URLs. Text-only content yields nothing."""
+    if isinstance(content, str):
+        return extract_openclaw_media_image_parts(content)
+    if not isinstance(content, list):
+        return []
+    parts: list[dict[str, Any]] = []
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        for key in ("text", "content"):
+            value = item.get(key)
+            if isinstance(value, str):
+                parts.extend(extract_openclaw_media_image_parts(value))
+        image_url = item.get("image_url")
+        if image_url is None:
+            continue
+        url = image_url.get("url") if isinstance(image_url, dict) else image_url
+        if isinstance(url, str) and url.strip():
+            parts.append({"type": "image_url", "image_url": {"url": url.strip()}})
+    return parts[:MAX_BRIDGE_IMAGES]
+
+
+def extract_openclaw_media_image_parts(text: str) -> list[dict[str, Any]]:
+    parts: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_id in OPENCLAW_MEDIA_URI_RE.findall(text or ""):
+        if raw_id in seen:
+            continue
+        seen.add(raw_id)
+        data_url = resolve_openclaw_inbound_media(raw_id)
+        if data_url:
+            parts.append({"type": "image_url", "image_url": {"url": data_url}})
+        if len(parts) >= MAX_BRIDGE_IMAGES:
+            break
+    return parts
+
+
+def resolve_openclaw_inbound_media(raw_id: str) -> str | None:
+    media_id = urllib.parse.unquote(raw_id).strip()
+    if not media_id or any(ch in media_id for ch in ("/", "\\", "\x00")) or media_id in {".", ".."}:
+        return None
+    base_dir = os.path.abspath(os.getenv("OPENCLAW_INBOUND_MEDIA_DIR", "/root/.openclaw/media/inbound"))
+    path = os.path.abspath(os.path.join(base_dir, media_id))
+    if not path.startswith(base_dir + os.sep):
+        return None
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read(MAX_BRIDGE_IMAGE_BYTES + 1)
+    except OSError:
+        return None
+    if not data or len(data) > MAX_BRIDGE_IMAGE_BYTES:
+        return None
+    mime = mimetypes.guess_type(path)[0] or guess_image_mime(data)
+    return "data:" + mime + ";base64," + base64.b64encode(data).decode("ascii")
+
+
+def guess_image_mime(data: bytes) -> str:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/png"
+
+
+def get_last_user_images(messages: Any) -> list[dict[str, Any]]:
+    if not isinstance(messages, list):
+        return []
+    for msg in reversed(messages):
+        if isinstance(msg, dict) and msg.get("role") == "user":
+            return extract_image_parts(msg.get("content"))
+    return []
+
+
 def webdock_configured() -> bool:
     return bool(os.getenv("WEB_DOCK_BASE_URL") and os.getenv("WEB_DOCK_API_TOKEN"))
 
@@ -114,17 +273,45 @@ def webdock_timeout() -> int:
         return 320
 
 
+def request_details(body: dict[str, Any]) -> dict[str, Any]:
+    messages = body.get("messages")
+    user_text = get_last_user_message(messages)
+    images = get_last_user_images(messages)
+    metadata = build_webdock_metadata(body)
+    if images and not metadata.get("peer_id"):
+        inherited_metadata = get_recent_lane_metadata()
+        if inherited_metadata:
+            inherited_metadata.update(metadata)
+            metadata = inherited_metadata
+    return {"request_id": uuid.uuid4().hex[:12], "user_text": user_text, "images": images, "metadata": metadata}
+
+
 def build_webdock_body(body: dict[str, Any]) -> dict[str, Any]:
-    user_text = get_last_user_message(body.get("messages"))
+    details = request_details(body)
     outbound = {
         "model": os.getenv("WEB_DOCK_MODEL", "browser-chatgpt"),
-        "messages": [{"role": "user", "content": user_text or "请回复这条微信消息。"}],
+        "messages": [{"role": "user", "content": build_outbound_content(details["user_text"], details["images"])}],
         "stream": False,
     }
-    metadata = build_webdock_metadata(body)
+    metadata = details["metadata"]
     if metadata:
         outbound["metadata"] = metadata
+        remember_lane_metadata(metadata)
     return outbound
+
+
+def build_outbound_content(user_text: str, images: list[dict[str, Any]]) -> Any:
+    """Plain string when there are no images (unchanged behavior); otherwise the
+    OpenAI vision parts list so WebDock uploads the image(s). An image with no
+    caption is forwarded with no text part (WeChat sends text and each image as
+    separate messages)."""
+    if not images:
+        return user_text or "请回复这条微信消息。"
+    parts: list[dict[str, Any]] = []
+    if user_text:
+        parts.append({"type": "text", "text": user_text})
+    parts.extend(images)
+    return parts
 
 
 def build_webdock_metadata(body: dict[str, Any]) -> dict[str, Any]:
@@ -146,18 +333,189 @@ def build_webdock_metadata(body: dict[str, Any]) -> dict[str, Any]:
         "sender_id",
     )
 
+    has_lane_identity = bool(wechat_account or peer_id)
+
     if wechat_account:
         normalized["wechat_account"] = str(wechat_account)
         normalized["chatgpt_project"] = str(
             _first_metadata_value(metadata, "chatgpt_project", "project") or f"WeChat-{wechat_account}"
         )
-    if chat_type:
+    if has_lane_identity and chat_type:
         normalized["chat_type"] = str(chat_type)
     if peer_id:
         normalized["peer_id"] = str(peer_id)
     if metadata.get("message_id"):
         normalized["message_id"] = str(metadata["message_id"])
     return normalized
+
+
+def remember_lane_metadata(metadata: dict[str, Any]) -> None:
+    global _recent_lane_metadata_at
+    lane_metadata = {
+        key: metadata[key]
+        for key in ("wechat_account", "chat_type", "peer_id", "chatgpt_project")
+        if metadata.get(key)
+    }
+    if "peer_id" not in lane_metadata:
+        return
+    _recent_lane_metadata.clear()
+    _recent_lane_metadata.update(lane_metadata)
+    _recent_lane_metadata_at = time.monotonic()
+
+
+def get_recent_lane_metadata() -> dict[str, Any]:
+    if not _recent_lane_metadata:
+        return {}
+    if time.monotonic() - _recent_lane_metadata_at > RECENT_METADATA_WINDOW_SECONDS:
+        return {}
+    return dict(_recent_lane_metadata)
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return max(0.0, float(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+def bridge_batch_seconds(details: dict[str, Any] | None = None) -> float:
+    base_seconds = _float_env("OPENCLAW_BRIDGE_BATCH_SECONDS", 2.0)
+    if details and should_wait_for_followup_media(details):
+        return max(base_seconds, _float_env("OPENCLAW_BRIDGE_MEDIA_INTENT_BATCH_SECONDS", 8.0))
+    return base_seconds
+
+
+def bridge_batch_settle_seconds() -> float:
+    return _float_env("OPENCLAW_BRIDGE_BATCH_SETTLE_SECONDS", 0.35)
+
+
+def should_wait_for_followup_media(details: dict[str, Any]) -> bool:
+    return bool(details["user_text"] and not details["images"] and MEDIA_INTENT_RE.search(details["user_text"]))
+
+
+def expected_image_count(details: dict[str, Any]) -> int:
+    text = str(details.get("user_text") or "")
+    if details.get("images"):
+        return len(details["images"])
+    if not MEDIA_INTENT_RE.search(text):
+        return 0
+    expected = 1
+    for digit in re.findall(r"([1-4])\s*张", text):
+        expected = max(expected, int(digit))
+    for marker, count in CN_IMAGE_COUNT.items():
+        if f"{marker}张" in text:
+            expected = max(expected, count)
+    for ordinal, count in (("第一张", 1), ("第二张", 2), ("第三张", 3), ("第四张", 4)):
+        if ordinal in text:
+            expected = max(expected, count)
+    return min(expected, MAX_BRIDGE_IMAGES)
+
+
+def trace_enabled() -> bool:
+    return os.getenv("OPENCLAW_BRIDGE_TRACE", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def trace_batch_event(
+    event: str,
+    details: dict[str, Any],
+    *,
+    key: str = "",
+    pending: PendingBatch | None = None,
+    wait_seconds: float | None = None,
+    result: str = "",
+) -> None:
+    if not trace_enabled():
+        return
+    metadata = details.get("metadata") or {}
+    image_count = len(pending.images) if pending is not None else len(details.get("images") or [])
+    expected_images = pending.expected_images if pending is not None else expected_image_count(details)
+    payload = {
+        "event": event,
+        "request_id": details.get("request_id"),
+        "wechat_account": metadata.get("wechat_account"),
+        "chat_type": metadata.get("chat_type"),
+        "peer_id": metadata.get("peer_id"),
+        "message_id": metadata.get("message_id"),
+        "batch_key": key,
+        "text_len": len(details.get("user_text") or ""),
+        "image_count": image_count,
+        "expected_images": expected_images,
+        "has_media_intent": bool(MEDIA_INTENT_RE.search(details.get("user_text") or "")),
+    }
+    if wait_seconds is not None:
+        payload["wait_seconds"] = round(wait_seconds, 3)
+    if pending is not None:
+        payload["batch_age_ms"] = int((time.monotonic() - pending.created) * 1000)
+    if result:
+        payload["result"] = result
+    print("bridge_request_trace " + json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
+
+
+def lane_batch_key(metadata: dict[str, Any]) -> str:
+    peer_id = metadata.get("peer_id")
+    if not peer_id:
+        return ""
+    return "|".join(
+        [
+            str(metadata.get("wechat_account") or "default"),
+            str(metadata.get("chat_type") or "private"),
+            str(peer_id),
+        ]
+    )
+
+
+def maybe_batch_request(body: dict[str, Any]) -> dict[str, Any] | str:
+    details = request_details(body)
+    wait_seconds = bridge_batch_seconds(details)
+    if wait_seconds <= 0:
+        trace_batch_event("batch_passthrough", details, wait_seconds=wait_seconds, result="batch_disabled")
+        return body
+    if not (details["user_text"] or details["images"]):
+        trace_batch_event("batch_passthrough", details, wait_seconds=wait_seconds, result="empty")
+        return body
+    if details["metadata"]:
+        remember_lane_metadata(details["metadata"])
+    key = lane_batch_key(details["metadata"])
+    if not key:
+        trace_batch_event("batch_passthrough", details, wait_seconds=wait_seconds, result="missing_lane")
+        return body
+
+    with _pending_batches_lock:
+        pending = _pending_batches.get(key)
+        if pending and time.monotonic() <= pending.deadline:
+            with pending.condition:
+                pending.merge(details)
+                trace_batch_event(
+                    "batch_merge",
+                    details,
+                    key=key,
+                    pending=pending,
+                    wait_seconds=wait_seconds,
+                    result="no_reply",
+                )
+                pending.condition.notify_all()
+            return NO_REPLY
+        pending = PendingBatch(body, details, wait_seconds)
+        _pending_batches[key] = pending
+        trace_batch_event("batch_wait", details, key=key, pending=pending, wait_seconds=wait_seconds)
+
+    deadline = pending.deadline
+    with pending.condition:
+        while True:
+            now = time.monotonic()
+            next_deadline = deadline
+            if pending.has_expected_images():
+                next_deadline = min(deadline, pending.updated + bridge_batch_settle_seconds())
+            remaining = next_deadline - now
+            if remaining <= 0:
+                break
+            pending.condition.wait(timeout=remaining)
+
+    with _pending_batches_lock:
+        if _pending_batches.get(key) is pending:
+            del _pending_batches[key]
+    trace_batch_event("batch_flush", details, key=key, pending=pending, wait_seconds=wait_seconds)
+    return pending.to_body()
 
 
 def _first_metadata_value(metadata: dict[str, Any], *keys: str) -> Any:
@@ -234,7 +592,10 @@ def build_reply(body: dict[str, Any]) -> str:
     if not webdock_configured():
         return f"已收到你的微信消息：{user_text}" if user_text else "已收到你的微信消息。"
     try:
-        return call_webdock(body)
+        batched_body = maybe_batch_request(body)
+        if batched_body == NO_REPLY:
+            return NO_REPLY
+        return call_webdock(batched_body)
     except urllib.error.HTTPError as exc:
         if exc.code == 429:
             return diagnostic_message(
@@ -329,7 +690,12 @@ def stream_sse(
         if not write(_stream_chunk(model, delta={"content": ""}, finish_reason=None)):
             return  # OpenClaw disconnected; drop the (still-running) worker result
 
-    reply = result.get("reply") or FALLBACK_MESSAGE
+    reply = result.get("reply")
+    if reply == NO_REPLY:
+        write(_stream_chunk(model, delta={}, finish_reason="stop"))
+        write(b"data: [DONE]\n\n")
+        return
+    reply = reply or FALLBACK_MESSAGE
     write(_stream_chunk(model, delta={"content": reply}, finish_reason=None))
     write(_stream_chunk(model, delta={}, finish_reason="stop"))
     write(b"data: [DONE]\n\n")
@@ -401,6 +767,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._stream_reply(body, model)
 
         reply = build_reply(body)
+        content = "" if reply == NO_REPLY else reply
         return self._json(
             200,
             {
@@ -408,7 +775,7 @@ class Handler(BaseHTTPRequestHandler):
                 "object": "chat.completion",
                 "created": int(time.time()),
                 "model": model,
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}],
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             },
         )
