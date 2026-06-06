@@ -255,6 +255,11 @@ def test_bridge_uses_longer_default_batch_window_for_image_intent(monkeypatch):
         "images": [],
         "metadata": {"peer_id": "user-1"},
     }
+    avatar_reference_intent = {
+        "user_text": "把一张头像改的像第二张头像的风格",
+        "images": [],
+        "metadata": {"peer_id": "user-1"},
+    }
     plain_text = {
         "user_text": "今天晚饭吃什么",
         "images": [],
@@ -262,6 +267,7 @@ def test_bridge_uses_longer_default_batch_window_for_image_intent(monkeypatch):
     }
 
     assert bridge.bridge_batch_seconds(media_intent) == 6.5
+    assert bridge.bridge_batch_seconds(avatar_reference_intent) == 6.5
     assert bridge.bridge_batch_seconds(plain_text) == 2.0
 
 
@@ -359,6 +365,99 @@ def test_bridge_batches_delayed_media_after_normal_window_for_image_intent(tmp_p
     content = calls[0]["messages"][0]["content"]
     assert content[0]["type"] == "text"
     assert content[1]["type"] == "image_url"
+
+
+def test_bridge_waits_for_second_expected_image_before_flushing(tmp_path, monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "2")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_MEDIA_INTENT_BATCH_SECONDS", "2")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SETTLE_SECONDS", "0.05")
+    image_a = tmp_path / "image-a.jpg"
+    image_b = tmp_path / "image-b.jpg"
+    image_a.write_bytes(b"\xff\xd8\xffimage-a")
+    image_b.write_bytes(b"\xff\xd8\xffimage-b")
+    monkeypatch.setenv("OPENCLAW_INBOUND_MEDIA_DIR", str(tmp_path))
+    calls: list[dict] = []
+
+    def fake_call_webdock(body):
+        calls.append(bridge.build_webdock_body(body))
+        return "done"
+
+    monkeypatch.setattr(bridge, "call_webdock", fake_call_webdock)
+    text_body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Conversation info (untrusted metadata):\n"
+                    "```json\n"
+                    '{"wechat_account":"A","chat_type":"private","peer_id":"user-1"}\n'
+                    "```\n\n"
+                    "把第一张头像改成第二张头像的风格"
+                ),
+            }
+        ]
+    }
+    media_a_body = {
+        "messages": [{"role": "user", "content": "[media attached: media://inbound/image-a.jpg (image/*)]"}]
+    }
+    media_b_body = {
+        "messages": [{"role": "user", "content": "[media attached: media://inbound/image-b.jpg (image/*)]"}]
+    }
+    text_reply: dict[str, str] = {}
+    worker = threading.Thread(target=lambda: text_reply.setdefault("value", bridge.build_reply(text_body)))
+    worker.start()
+    time.sleep(0.05)
+
+    assert bridge.build_reply(media_a_body) == bridge.NO_REPLY
+    time.sleep(0.15)
+    assert worker.is_alive()
+
+    assert bridge.build_reply(media_b_body) == bridge.NO_REPLY
+    worker.join(timeout=1)
+
+    assert text_reply["value"] == "done"
+    assert len(calls) == 1
+    content = calls[0]["messages"][0]["content"]
+    assert content[0] == {"type": "text", "text": "把第一张头像改成第二张头像的风格"}
+    assert [part["type"] for part in content[1:]] == ["image_url", "image_url"]
+
+
+def test_bridge_emits_redacted_request_trace_for_batch(monkeypatch, capsys):
+    bridge = load_bridge()
+    monkeypatch.setenv("OPENCLAW_BRIDGE_TRACE", "1")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "0.01")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_MEDIA_INTENT_BATCH_SECONDS", "0.01")
+    body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Conversation info (untrusted metadata):\n"
+                    "```json\n"
+                    '{"wechat_account":"A","chat_type":"private","peer_id":"user-1","message_id":"msg-1"}\n'
+                    "```\n\n"
+                    "把一张头像改的像第二张头像的风格"
+                ),
+            }
+        ]
+    }
+
+    bridge.maybe_batch_request(body)
+
+    lines = [line for line in capsys.readouterr().out.splitlines() if "bridge_request_trace" in line]
+    assert lines
+    event = json.loads(lines[-1].split(" ", 1)[1])
+    assert event["event"] == "batch_flush"
+    assert event["peer_id"] == "user-1"
+    assert event["message_id"] == "msg-1"
+    assert event["text_len"] == len("把一张头像改的像第二张头像的风格")
+    assert event["image_count"] == 0
+    assert event["wait_seconds"] == 0.01
+    assert event["expected_images"] == 2
+    assert "把一张头像" not in lines[-1]
 
 
 def test_bridge_normalizes_english_timeout_errors_to_fallback():

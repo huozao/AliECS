@@ -33,6 +33,10 @@ WEB_DOCK_API_TOKEN=replace_with_long_random_api_token
 WEB_DOCK_MODEL=browser-chatgpt
 WEB_DOCK_TIMEOUT_SECONDS=320
 OPENCLAW_BRIDGE_KEEPALIVE_SECONDS=15
+OPENCLAW_BRIDGE_TRACE=1
+OPENCLAW_BRIDGE_BATCH_SECONDS=2
+OPENCLAW_BRIDGE_MEDIA_INTENT_BATCH_SECONDS=8
+OPENCLAW_BRIDGE_BATCH_SETTLE_SECONDS=0.35
 WEB_DOCK_FALLBACK_MESSAGE=ChatGPT 浏览器暂不可用，请稍后再试。
 ```
 
@@ -78,7 +82,17 @@ also inherits the most recent WeChat lane metadata for a short window so text an
 image messages from the same WeChat send do not fall into WebDock's default lane.
 The bridge also waits briefly (`OPENCLAW_BRIDGE_BATCH_SECONDS`, default `2.0`) so
 separate WeChat text/media events in the same lane are sent to WebDock as one
-ChatGPT turn.
+ChatGPT turn. If the text looks like an image-editing request, including avatar,
+reference-image, or multi-image wording such as "第一张/第二张", it uses
+`OPENCLAW_BRIDGE_MEDIA_INTENT_BATCH_SECONDS` (default `8.0`) and waits until the
+expected number of images arrive before the short settle window can flush the
+batch.
+
+Request-level diagnostics are enabled by default with `OPENCLAW_BRIDGE_TRACE=1`.
+The bridge writes `bridge_request_trace` JSON lines containing only safe routing
+and batching metadata such as lane, message id, text length, image count,
+expected image count, wait seconds, and batch event. It does not log message text
+or image bytes.
 
 It removes the OpenClaw `Conversation info (untrusted metadata)` prefix before calling WebDock. This keeps the ChatGPT page clean and avoids confusing the browser session with internal OpenClaw instructions.
 

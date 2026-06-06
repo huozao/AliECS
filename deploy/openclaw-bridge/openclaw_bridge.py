@@ -10,6 +10,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Condition, Lock, Thread
 from typing import Any
@@ -31,7 +32,12 @@ RECENT_METADATA_WINDOW_SECONDS = 120.0
 OPENCLAW_MEDIA_URI_RE = re.compile(r"media://inbound/([^\s\]\)\"'`]+)")
 OPENCLAW_MEDIA_ATTACHED_LINE_RE = re.compile(r"^\s*\[media attached:\s+media://inbound/[^\]]+\]\s*$", re.MULTILINE)
 OPENCLAW_MEDIA_NO_CAPTION_RE = re.compile(r"^\s*\[User sent media without caption\]\s*$", re.MULTILINE)
-MEDIA_INTENT_RE = re.compile(r"(图片|照片|这张图|图像|背景|修图|改图|抠图|image|photo|picture)", re.IGNORECASE)
+MEDIA_INTENT_RE = re.compile(
+    r"(图片|照片|这张图|图像|头像|原图|参考图|风格图|背景|修图|改图|抠图|"
+    r"第一张|第二张|第三张|两张|多张|image|photo|picture|avatar|reference)",
+    re.IGNORECASE,
+)
+CN_IMAGE_COUNT = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4}
 OPENCLAW_MEDIA_HELPER_PREFIXES = (
     "To send an image back, prefer ",
     "If you must inline, use MEDIA:",
@@ -62,6 +68,7 @@ class PendingBatch:
         self.user_text = details["user_text"]
         self.images = list(details["images"])
         self.metadata = dict(details["metadata"])
+        self.expected_images = expected_image_count(details)
         self.created = time.monotonic()
         self.deadline = self.created + wait_seconds
         self.updated = self.created
@@ -69,6 +76,7 @@ class PendingBatch:
     def merge(self, details: dict[str, Any]) -> None:
         if details["user_text"]:
             self.user_text = details["user_text"]
+            self.expected_images = max(self.expected_images, expected_image_count(details))
         self.images.extend(details["images"])
         self.images = self.images[:MAX_BRIDGE_IMAGES]
         for key, value in details["metadata"].items():
@@ -78,6 +86,9 @@ class PendingBatch:
 
     def has_text_and_images(self) -> bool:
         return bool(self.user_text and self.images)
+
+    def has_expected_images(self) -> bool:
+        return self.has_text_and_images() and len(self.images) >= max(1, self.expected_images)
 
     def to_body(self) -> dict[str, Any]:
         body = dict(self.body)
@@ -272,7 +283,7 @@ def request_details(body: dict[str, Any]) -> dict[str, Any]:
         if inherited_metadata:
             inherited_metadata.update(metadata)
             metadata = inherited_metadata
-    return {"user_text": user_text, "images": images, "metadata": metadata}
+    return {"request_id": uuid.uuid4().hex[:12], "user_text": user_text, "images": images, "metadata": metadata}
 
 
 def build_webdock_body(body: dict[str, Any]) -> dict[str, Any]:
@@ -382,6 +393,64 @@ def should_wait_for_followup_media(details: dict[str, Any]) -> bool:
     return bool(details["user_text"] and not details["images"] and MEDIA_INTENT_RE.search(details["user_text"]))
 
 
+def expected_image_count(details: dict[str, Any]) -> int:
+    text = str(details.get("user_text") or "")
+    if details.get("images"):
+        return len(details["images"])
+    if not MEDIA_INTENT_RE.search(text):
+        return 0
+    expected = 1
+    for digit in re.findall(r"([1-4])\s*张", text):
+        expected = max(expected, int(digit))
+    for marker, count in CN_IMAGE_COUNT.items():
+        if f"{marker}张" in text:
+            expected = max(expected, count)
+    for ordinal, count in (("第一张", 1), ("第二张", 2), ("第三张", 3), ("第四张", 4)):
+        if ordinal in text:
+            expected = max(expected, count)
+    return min(expected, MAX_BRIDGE_IMAGES)
+
+
+def trace_enabled() -> bool:
+    return os.getenv("OPENCLAW_BRIDGE_TRACE", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def trace_batch_event(
+    event: str,
+    details: dict[str, Any],
+    *,
+    key: str = "",
+    pending: PendingBatch | None = None,
+    wait_seconds: float | None = None,
+    result: str = "",
+) -> None:
+    if not trace_enabled():
+        return
+    metadata = details.get("metadata") or {}
+    image_count = len(pending.images) if pending is not None else len(details.get("images") or [])
+    expected_images = pending.expected_images if pending is not None else expected_image_count(details)
+    payload = {
+        "event": event,
+        "request_id": details.get("request_id"),
+        "wechat_account": metadata.get("wechat_account"),
+        "chat_type": metadata.get("chat_type"),
+        "peer_id": metadata.get("peer_id"),
+        "message_id": metadata.get("message_id"),
+        "batch_key": key,
+        "text_len": len(details.get("user_text") or ""),
+        "image_count": image_count,
+        "expected_images": expected_images,
+        "has_media_intent": bool(MEDIA_INTENT_RE.search(details.get("user_text") or "")),
+    }
+    if wait_seconds is not None:
+        payload["wait_seconds"] = round(wait_seconds, 3)
+    if pending is not None:
+        payload["batch_age_ms"] = int((time.monotonic() - pending.created) * 1000)
+    if result:
+        payload["result"] = result
+    print("bridge_request_trace " + json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
+
+
 def lane_batch_key(metadata: dict[str, Any]) -> str:
     peer_id = metadata.get("peer_id")
     if not peer_id:
@@ -399,13 +468,16 @@ def maybe_batch_request(body: dict[str, Any]) -> dict[str, Any] | str:
     details = request_details(body)
     wait_seconds = bridge_batch_seconds(details)
     if wait_seconds <= 0:
+        trace_batch_event("batch_passthrough", details, wait_seconds=wait_seconds, result="batch_disabled")
         return body
     if not (details["user_text"] or details["images"]):
+        trace_batch_event("batch_passthrough", details, wait_seconds=wait_seconds, result="empty")
         return body
     if details["metadata"]:
         remember_lane_metadata(details["metadata"])
     key = lane_batch_key(details["metadata"])
     if not key:
+        trace_batch_event("batch_passthrough", details, wait_seconds=wait_seconds, result="missing_lane")
         return body
 
     with _pending_batches_lock:
@@ -413,17 +485,26 @@ def maybe_batch_request(body: dict[str, Any]) -> dict[str, Any] | str:
         if pending and time.monotonic() <= pending.deadline:
             with pending.condition:
                 pending.merge(details)
+                trace_batch_event(
+                    "batch_merge",
+                    details,
+                    key=key,
+                    pending=pending,
+                    wait_seconds=wait_seconds,
+                    result="no_reply",
+                )
                 pending.condition.notify_all()
             return NO_REPLY
         pending = PendingBatch(body, details, wait_seconds)
         _pending_batches[key] = pending
+        trace_batch_event("batch_wait", details, key=key, pending=pending, wait_seconds=wait_seconds)
 
     deadline = pending.deadline
     with pending.condition:
         while True:
             now = time.monotonic()
             next_deadline = deadline
-            if pending.has_text_and_images():
+            if pending.has_expected_images():
                 next_deadline = min(deadline, pending.updated + bridge_batch_settle_seconds())
             remaining = next_deadline - now
             if remaining <= 0:
@@ -433,6 +514,7 @@ def maybe_batch_request(body: dict[str, Any]) -> dict[str, Any] | str:
     with _pending_batches_lock:
         if _pending_batches.get(key) is pending:
             del _pending_batches[key]
+    trace_batch_event("batch_flush", details, key=key, pending=pending, wait_seconds=wait_seconds)
     return pending.to_body()
 
 
