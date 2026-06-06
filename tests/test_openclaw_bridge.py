@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import threading
 import time
 import urllib.error
 from pathlib import Path
@@ -88,6 +89,375 @@ def test_bridge_forwards_openclaw_metadata_to_webdock_lane(monkeypatch):
         "message_id": "msg-1",
         "chatgpt_project": "WeChat-A",
     }
+
+
+def test_bridge_forwards_inbound_image_as_vision_parts(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_MODEL", "browser-chatgpt")
+
+    data_url = "data:image/png;base64,AAAA"
+    outbound = bridge.build_webdock_body(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "把这张图改成卡通风格"},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert outbound["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "把这张图改成卡通风格"},
+                {"type": "image_url", "image_url": {"url": data_url}},
+            ],
+        }
+    ]
+
+
+def test_bridge_forwards_image_only_message_without_text_part():
+    bridge = load_bridge()
+
+    outbound = bridge.build_webdock_body(
+        {"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "http://x/y.png"}}]}]}
+    )
+
+    assert outbound["messages"][0]["content"] == [
+        {"type": "image_url", "image_url": {"url": "http://x/y.png"}}
+    ]
+
+
+def test_bridge_resolves_openclaw_media_uri_text_to_image_part(tmp_path, monkeypatch):
+    bridge = load_bridge()
+    media_file = tmp_path / "785de3ce-7429-422a-9526-4bfb63724b2d.jpg"
+    media_file.write_bytes(b"\xff\xd8\xffsample-jpeg")
+    monkeypatch.setenv("OPENCLAW_INBOUND_MEDIA_DIR", str(tmp_path))
+
+    outbound = bridge.build_webdock_body(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "[media attached: media://inbound/785de3ce-7429-422a-9526-4bfb63724b2d.jpg (image/*)]\n"
+                        "To send an image back, prefer the message tool (media/path/filePath).\n"
+                        "If you must inline, use MEDIA:https://example.com/image.jpg.\n"
+                        "Absolute and ~ paths only work when they stay inside your allowed file-read boundary.\n"
+                        "[User sent media without caption]"
+                    ),
+                }
+            ],
+        }
+    )
+
+    assert outbound["messages"][0]["content"] == [
+        {
+            "type": "image_url",
+            "image_url": {"url": "data:image/jpeg;base64,/9j/c2FtcGxlLWpwZWc="},
+        }
+    ]
+
+
+def test_bridge_inherits_recent_lane_metadata_for_media_only_message(tmp_path, monkeypatch):
+    bridge = load_bridge()
+    media_file = tmp_path / "image-a.jpg"
+    media_file.write_bytes(b"\xff\xd8\xffimage-a")
+    monkeypatch.setenv("OPENCLAW_INBOUND_MEDIA_DIR", str(tmp_path))
+
+    bridge.build_webdock_body(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Conversation info (untrusted metadata):\n"
+                        "```json\n"
+                        '{"wechat_account":"A","chat_type":"private","peer_id":"user-1"}\n'
+                        "```\n\n"
+                        "/新对话 帮我把这张图片背景改为纯色"
+                    ),
+                },
+            ],
+        }
+    )
+    outbound = bridge.build_webdock_body(
+        {"messages": [{"role": "user", "content": "[media attached: media://inbound/image-a.jpg (image/*)]"}]}
+    )
+
+    assert outbound["metadata"]["wechat_account"] == "A"
+    assert outbound["metadata"]["peer_id"] == "user-1"
+    assert outbound["messages"][0]["content"][0]["type"] == "image_url"
+
+
+def test_bridge_batches_text_then_followup_media_into_one_webdock_call(tmp_path, monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "0.3")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_MEDIA_INTENT_BATCH_SECONDS", "0.3")
+    media_file = tmp_path / "image-a.jpg"
+    media_file.write_bytes(b"\xff\xd8\xffimage-a")
+    monkeypatch.setenv("OPENCLAW_INBOUND_MEDIA_DIR", str(tmp_path))
+    calls: list[dict] = []
+
+    def fake_call_webdock(body):
+        calls.append(bridge.build_webdock_body(body))
+        return "已按图片完成修改"
+
+    monkeypatch.setattr(bridge, "call_webdock", fake_call_webdock)
+    text_body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Conversation info (untrusted metadata):\n"
+                    "```json\n"
+                    '{"wechat_account":"A","chat_type":"private","peer_id":"user-1"}\n'
+                    "```\n\n"
+                    "/新对话 帮我把这张图片背景改为纯色，让主体更清晰"
+                ),
+            }
+        ]
+    }
+    media_body = {
+        "messages": [{"role": "user", "content": "[media attached: media://inbound/image-a.jpg (image/*)]"}]
+    }
+    text_reply: dict[str, str] = {}
+    worker = threading.Thread(target=lambda: text_reply.setdefault("value", bridge.build_reply(text_body)))
+    worker.start()
+    time.sleep(0.05)
+
+    media_reply = bridge.build_reply(media_body)
+    worker.join(timeout=2)
+
+    assert media_reply == bridge.NO_REPLY
+    assert text_reply["value"] == "已按图片完成修改"
+    assert len(calls) == 1
+    content = calls[0]["messages"][0]["content"]
+    assert content[0] == {"type": "text", "text": "/新对话 帮我把这张图片背景改为纯色，让主体更清晰"}
+    assert content[1]["type"] == "image_url"
+    assert calls[0]["metadata"]["peer_id"] == "user-1"
+
+
+def test_bridge_uses_longer_default_batch_window_for_image_intent(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.delenv("OPENCLAW_BRIDGE_BATCH_SECONDS", raising=False)
+    monkeypatch.setenv("OPENCLAW_BRIDGE_MEDIA_INTENT_BATCH_SECONDS", "6.5")
+
+    media_intent = {
+        "user_text": "帮我把这张图片背景改为纯色，让主体更清晰",
+        "images": [],
+        "metadata": {"peer_id": "user-1"},
+    }
+    avatar_reference_intent = {
+        "user_text": "把一张头像改的像第二张头像的风格",
+        "images": [],
+        "metadata": {"peer_id": "user-1"},
+    }
+    plain_text = {
+        "user_text": "今天晚饭吃什么",
+        "images": [],
+        "metadata": {"peer_id": "user-1"},
+    }
+
+    assert bridge.bridge_batch_seconds(media_intent) == 6.5
+    assert bridge.bridge_batch_seconds(avatar_reference_intent) == 6.5
+    assert bridge.bridge_batch_seconds(plain_text) == 2.0
+
+
+def test_bridge_flushes_shortly_after_followup_media_joins_batch(tmp_path, monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "5")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_MEDIA_INTENT_BATCH_SECONDS", "5")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SETTLE_SECONDS", "0.05")
+    media_file = tmp_path / "image-a.jpg"
+    media_file.write_bytes(b"\xff\xd8\xffimage-a")
+    monkeypatch.setenv("OPENCLAW_INBOUND_MEDIA_DIR", str(tmp_path))
+
+    def fake_call_webdock(body):
+        bridge.build_webdock_body(body)
+        return "done"
+
+    monkeypatch.setattr(bridge, "call_webdock", fake_call_webdock)
+    text_body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Conversation info (untrusted metadata):\n"
+                    "```json\n"
+                    '{"wechat_account":"A","chat_type":"private","peer_id":"user-1"}\n'
+                    "```\n\n"
+                    "帮我把这张图片背景改为纯色"
+                ),
+            }
+        ]
+    }
+    media_body = {
+        "messages": [{"role": "user", "content": "[media attached: media://inbound/image-a.jpg (image/*)]"}]
+    }
+    text_reply: dict[str, str] = {}
+    start = time.monotonic()
+    worker = threading.Thread(target=lambda: text_reply.setdefault("value", bridge.build_reply(text_body)))
+    worker.start()
+    time.sleep(0.05)
+
+    assert bridge.build_reply(media_body) == bridge.NO_REPLY
+    worker.join(timeout=1)
+
+    assert text_reply["value"] == "done"
+    assert time.monotonic() - start < 1
+
+
+def test_bridge_batches_delayed_media_after_normal_window_for_image_intent(tmp_path, monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "0.3")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_MEDIA_INTENT_BATCH_SECONDS", "1.2")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SETTLE_SECONDS", "0.05")
+    media_file = tmp_path / "image-a.jpg"
+    media_file.write_bytes(b"\xff\xd8\xffimage-a")
+    monkeypatch.setenv("OPENCLAW_INBOUND_MEDIA_DIR", str(tmp_path))
+    calls: list[dict] = []
+
+    def fake_call_webdock(body):
+        calls.append(bridge.build_webdock_body(body))
+        return "done"
+
+    monkeypatch.setattr(bridge, "call_webdock", fake_call_webdock)
+    text_body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Conversation info (untrusted metadata):\n"
+                    "```json\n"
+                    '{"wechat_account":"A","chat_type":"private","peer_id":"user-1"}\n'
+                    "```\n\n"
+                    "帮我把这张图片背景改为纯色，让主体更清晰"
+                ),
+            }
+        ]
+    }
+    media_body = {
+        "messages": [{"role": "user", "content": "[media attached: media://inbound/image-a.jpg (image/*)]"}]
+    }
+    text_reply: dict[str, str] = {}
+    worker = threading.Thread(target=lambda: text_reply.setdefault("value", bridge.build_reply(text_body)))
+    worker.start()
+    time.sleep(0.7)
+
+    media_reply = bridge.build_reply(media_body)
+    worker.join(timeout=2)
+
+    assert media_reply == bridge.NO_REPLY
+    assert text_reply["value"] == "done"
+    assert len(calls) == 1
+    content = calls[0]["messages"][0]["content"]
+    assert content[0]["type"] == "text"
+    assert content[1]["type"] == "image_url"
+
+
+def test_bridge_waits_for_second_expected_image_before_flushing(tmp_path, monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "2")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_MEDIA_INTENT_BATCH_SECONDS", "2")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SETTLE_SECONDS", "0.05")
+    image_a = tmp_path / "image-a.jpg"
+    image_b = tmp_path / "image-b.jpg"
+    image_a.write_bytes(b"\xff\xd8\xffimage-a")
+    image_b.write_bytes(b"\xff\xd8\xffimage-b")
+    monkeypatch.setenv("OPENCLAW_INBOUND_MEDIA_DIR", str(tmp_path))
+    calls: list[dict] = []
+
+    def fake_call_webdock(body):
+        calls.append(bridge.build_webdock_body(body))
+        return "done"
+
+    monkeypatch.setattr(bridge, "call_webdock", fake_call_webdock)
+    text_body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Conversation info (untrusted metadata):\n"
+                    "```json\n"
+                    '{"wechat_account":"A","chat_type":"private","peer_id":"user-1"}\n'
+                    "```\n\n"
+                    "把第一张头像改成第二张头像的风格"
+                ),
+            }
+        ]
+    }
+    media_a_body = {
+        "messages": [{"role": "user", "content": "[media attached: media://inbound/image-a.jpg (image/*)]"}]
+    }
+    media_b_body = {
+        "messages": [{"role": "user", "content": "[media attached: media://inbound/image-b.jpg (image/*)]"}]
+    }
+    text_reply: dict[str, str] = {}
+    worker = threading.Thread(target=lambda: text_reply.setdefault("value", bridge.build_reply(text_body)))
+    worker.start()
+    time.sleep(0.05)
+
+    assert bridge.build_reply(media_a_body) == bridge.NO_REPLY
+    time.sleep(0.15)
+    assert worker.is_alive()
+
+    assert bridge.build_reply(media_b_body) == bridge.NO_REPLY
+    worker.join(timeout=1)
+
+    assert text_reply["value"] == "done"
+    assert len(calls) == 1
+    content = calls[0]["messages"][0]["content"]
+    assert content[0] == {"type": "text", "text": "把第一张头像改成第二张头像的风格"}
+    assert [part["type"] for part in content[1:]] == ["image_url", "image_url"]
+
+
+def test_bridge_emits_redacted_request_trace_for_batch(monkeypatch, capsys):
+    bridge = load_bridge()
+    monkeypatch.setenv("OPENCLAW_BRIDGE_TRACE", "1")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "0.01")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_MEDIA_INTENT_BATCH_SECONDS", "0.01")
+    body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Conversation info (untrusted metadata):\n"
+                    "```json\n"
+                    '{"wechat_account":"A","chat_type":"private","peer_id":"user-1","message_id":"msg-1"}\n'
+                    "```\n\n"
+                    "把一张头像改的像第二张头像的风格"
+                ),
+            }
+        ]
+    }
+
+    bridge.maybe_batch_request(body)
+
+    lines = [line for line in capsys.readouterr().out.splitlines() if "bridge_request_trace" in line]
+    assert lines
+    event = json.loads(lines[-1].split(" ", 1)[1])
+    assert event["event"] == "batch_flush"
+    assert event["peer_id"] == "user-1"
+    assert event["message_id"] == "msg-1"
+    assert event["text_len"] == len("把一张头像改的像第二张头像的风格")
+    assert event["image_count"] == 0
+    assert event["wait_seconds"] == 0.01
+    assert event["expected_images"] == 2
+    assert "把一张头像" not in lines[-1]
 
 
 def test_bridge_normalizes_english_timeout_errors_to_fallback():

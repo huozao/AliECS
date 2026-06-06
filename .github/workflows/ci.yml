@@ -24,7 +24,9 @@ jobs:
 
       - name: Python 单元测试
         run: |
+          python -m pip install -r services/backend-api/requirements.txt
           python -m pip install -r services/doc-sync-worker/requirements.txt
+          python -m pip install httpx==0.28.1
           python -m unittest discover -s tests
 
       - name: Shell 语法检查
