@@ -10,7 +10,26 @@ WORKER_ROOT = Path(__file__).resolve().parents[1] / "services" / "doc-sync-worke
 sys.path.insert(0, str(WORKER_ROOT))
 
 
-class WeComSmartsheetPaginationTests(unittest.TestCase):
+def _clear_app_modules() -> None:
+    for name in list(sys.modules):
+        if name == "app" or name.startswith("app."):
+            del sys.modules[name]
+
+
+class WorkerImportTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self._old_sys_path = list(sys.path)
+        _clear_app_modules()
+        worker_root = str(WORKER_ROOT)
+        sys.path[:] = [item for item in sys.path if item != worker_root]
+        sys.path.insert(0, worker_root)
+
+    def tearDown(self) -> None:
+        _clear_app_modules()
+        sys.path[:] = self._old_sys_path
+
+
+class WeComSmartsheetPaginationTests(WorkerImportTestCase):
     def test_get_records_stops_after_single_page_when_has_more_false(self) -> None:
         from app.providers.wecom import WeComSmartsheetClient
 
@@ -67,7 +86,7 @@ class WeComSmartsheetPaginationTests(unittest.TestCase):
         self.assertEqual("cursor-2", client.calls[2]["payload"]["next"])
 
 
-class ExternalRecordHashTests(unittest.TestCase):
+class ExternalRecordHashTests(WorkerImportTestCase):
     def test_same_record_hash_is_unchanged(self) -> None:
         from app.storage.postgres import build_record_snapshot, decide_record_upsert
 
@@ -91,7 +110,7 @@ class ExternalRecordHashTests(unittest.TestCase):
         self.assertTrue(decision.should_write)
 
 
-class SourceUrlTests(unittest.TestCase):
+class SourceUrlTests(WorkerImportTestCase):
     def test_build_smartsheet_open_url_prefers_source_url(self) -> None:
         from app.storage.postgres import build_smartsheet_open_url
 
@@ -107,7 +126,7 @@ class SourceUrlTests(unittest.TestCase):
         self.assertEqual("https://doc.weixin.qq.com/smartsheet/dcabc?sheet_id=sheet1", url)
 
 
-class SourceNameTests(unittest.TestCase):
+class SourceNameTests(WorkerImportTestCase):
     def test_compose_source_name_keeps_document_and_sheet_names_separate(self) -> None:
         from app.storage.postgres import compose_source_name
 
@@ -123,7 +142,7 @@ class SourceNameTests(unittest.TestCase):
         self.assertEqual({"document_name": "点检表", "sheet_name": "点检明细"}, names)
 
 
-class EnvProfileTests(unittest.TestCase):
+class EnvProfileTests(WorkerImportTestCase):
     def test_env_profiles_can_be_inferred_from_company_variables(self) -> None:
         from app.providers.wecom import env_profiles
 
@@ -171,22 +190,7 @@ class EnvProfileTests(unittest.TestCase):
             self.assertEqual("点检表", sources[0].source_name)
 
 
-class FeishuProviderEnvTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self._old_sys_path = list(sys.path)
-        for name in list(sys.modules):
-            if name == "app" or name.startswith("app."):
-                del sys.modules[name]
-        worker_root = str(WORKER_ROOT)
-        sys.path[:] = [item for item in sys.path if item != worker_root]
-        sys.path.insert(0, worker_root)
-
-    def tearDown(self) -> None:
-        for name in list(sys.modules):
-            if name == "app" or name.startswith("app."):
-                del sys.modules[name]
-        sys.path[:] = self._old_sys_path
-
+class FeishuProviderEnvTests(WorkerImportTestCase):
     def test_feishu_env_profiles_can_be_inferred_from_company_variables(self) -> None:
         from app.providers.feishu import env_profiles
 
@@ -227,7 +231,7 @@ class FeishuProviderEnvTests(unittest.TestCase):
         self.assertEqual("生产任务", sources[0].source_name)
 
 
-class FeishuBitablePaginationTests(unittest.TestCase):
+class FeishuBitablePaginationTests(WorkerImportTestCase):
     def test_get_records_merges_two_pages(self) -> None:
         from app.providers.feishu import FeishuBitableClient
 
@@ -294,7 +298,7 @@ class FeishuBitablePaginationTests(unittest.TestCase):
         self.assertNotIn("bascn_secret_token", safe_path)
 
 
-class FeishuBitableErrorTests(unittest.TestCase):
+class FeishuBitableErrorTests(WorkerImportTestCase):
     def test_request_json_http_error_includes_status_without_secrets(self) -> None:
         import requests
 
