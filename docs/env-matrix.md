@@ -86,7 +86,16 @@ Homepage manual recipe sync only writes a request file for the BOM worker path. 
 |---|---|---|---|
 | `OPS_HEALTH_HTTP_TARGETS_JSON` | backend-api | Optional JSON list of HTTP targets to show on `/health/`, for example old laptop or WebDock endpoints. If unset, backend-api probes AliECS public web/API plus default WebDock API/noVNC targets. | Optional, unset uses built-in defaults |
 
-Default WebDock health targets use the ECS-side SSH tunnel host alias `host.docker.internal` and port `11800`, not the old Tailscale address. Compose maps `host.docker.internal` to the Docker host through `host-gateway`. noVNC should be added through `OPS_HEALTH_HTTP_TARGETS_JSON` or `OPS_HEALTH_WEBDOCK_NOVNC_URL` only after a reachable tunnel is configured.
+Default WebDock health targets use the ECS-side SSH tunnel host alias `host.docker.internal` and port `11800`, not the old Tailscale address. Compose maps `host.docker.internal` to the Docker host through `host-gateway`. ECS installs `webdock-tunnel-proxy.service` to forward Docker-host traffic on `172.17.0.1:11800` to the existing reverse SSH tunnel on `127.0.0.1:11800`; this keeps the SSH tunnel private to ECS while making it reachable from containers. noVNC should be added through `OPS_HEALTH_HTTP_TARGETS_JSON` or `OPS_HEALTH_WEBDOCK_NOVNC_URL` only after a reachable tunnel is configured.
+
+| Variable | Scope | Purpose | Required |
+|---|---|---|---|
+| `WEBDOCK_TUNNEL_PROXY_ENABLED` | ECS deploy host | When `true`, `deploy/ecs/deploy.sh` installs or refreshes `webdock-tunnel-proxy.service`. | Optional, default `true` |
+| `WEBDOCK_TUNNEL_PROXY_BIND_HOST` | ECS deploy host | Host address exposed to Docker containers. Default is Docker bridge gateway `172.17.0.1`. | Optional |
+| `WEBDOCK_TUNNEL_PROXY_BIND_PORT` | ECS deploy host | Host port exposed to Docker containers. Keep `11800` to match `host.docker.internal:11800`. | Optional |
+| `WEBDOCK_TUNNEL_PROXY_TARGET_HOST` | ECS deploy host | Local reverse SSH tunnel host, normally `127.0.0.1`. | Optional |
+| `WEBDOCK_TUNNEL_PROXY_TARGET_PORT` | ECS deploy host | Local reverse SSH tunnel port, normally `11800`. | Optional |
+| `WEBDOCK_TUNNEL_PROXY_BACKLOG` | ECS deploy host | TCP listen backlog for the local proxy. | Optional |
 
 ## 8. Recipe query API
 

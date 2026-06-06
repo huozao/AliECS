@@ -47,16 +47,22 @@ OpenClaw's ~120s idle timeout does not cut the connection.
 
 `127.0.0.1:11800` is the ECS side of the reverse SSH tunnel created by the laptop. ECS does not need to join Tailscale for this path.
 
+Docker containers cannot reach a listener that is bound only to ECS loopback. Production deploy therefore installs `webdock-tunnel-proxy.service`, which listens on the Docker bridge host address `172.17.0.1:11800` and forwards to `127.0.0.1:11800`. Compose maps `host.docker.internal` to that host gateway, so backend health probes use `http://host.docker.internal:11800/healthz`.
+
 Restart after changing config:
 
 ```bash
 sudo systemctl restart openclaw-bridge.service
+sudo systemctl restart webdock-tunnel-proxy.service
 ```
 
 Verify on ECS:
 
 ```bash
 curl -fsS http://127.0.0.1:11800/healthz
+docker compose --env-file /root/AliECS/deploy/ecs/runtime.env \
+  -f /root/AliECS/deploy/ecs/compose.prod.yml \
+  exec -T backend-api python -c 'import urllib.request; print(urllib.request.urlopen("http://host.docker.internal:11800/healthz", timeout=3).read().decode())'
 curl -fsS http://127.0.0.1:18080/v1/models
 curl -fsS http://127.0.0.1:18080/v1/chat/completions \
   -H 'Content-Type: application/json' \

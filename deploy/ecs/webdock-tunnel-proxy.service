@@ -1,0 +1,19 @@
+[Unit]
+Description=AliECS WebDock reverse-tunnel proxy for Docker containers
+After=network-online.target ssh.service docker.service
+Wants=network-online.target
+ConditionPathExists=/opt/aliecs/webdock-tunnel-proxy.py
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/webdock-tunnel-proxy
+ExecStart=/usr/bin/python3 /opt/aliecs/webdock-tunnel-proxy.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
