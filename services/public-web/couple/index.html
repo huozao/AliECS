@@ -4,160 +4,253 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Couple Memory</title>
-  <meta name="description" content="Couple Memory 私密双人记忆空间：时间线、地图足迹、相册与纪念日。" />
+  <meta name="description" content="Couple Memory 私密双人记忆空间：时间线、地图足迹、相册、纪念日和愿望清单。" />
   <link rel="canonical" href="https://www.hydwang.xyz/couple/" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
-    :root{--bg:#f8f4ec;--card:#fffdfa;--text:#2f2721;--muted:#7c6b5d;--line:#ecdfd2;--primary:#8c5f6a;--shadow:0 10px 28px rgba(93,71,52,.08)}
-    *{box-sizing:border-box} body{margin:0;background:linear-gradient(145deg,#f9f4ea,#f7f1f7 55%,#fffdfa);color:var(--text);font-family:ui-sans-serif,system-ui}
-    .wrap{max-width:1140px;margin:0 auto;padding:24px 18px 52px}
-    .topbar{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;background:rgba(255,253,248,.92);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:20px;padding:16px 20px;margin-bottom:18px}
-    .top-actions{display:flex;gap:8px;flex-wrap:wrap}.btn{border:0;border-radius:999px;padding:9px 13px;background:#e9dfd0;color:var(--text);text-decoration:none;font-weight:650}
-    .user-chip{border-radius:999px;padding:8px 12px;background:#f5ebe1;color:#674b39;font-size:13px;font-weight:700}
-    .heart{background:transparent;color:rgba(164,98,127,.72)}
-    .hero,.card{background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px}
-    .hero{padding:22px;margin-bottom:14px}.hero h1{margin:0 0 10px;font-size:34px}.hero p{margin:0;color:var(--muted);line-height:1.8}
-    .host-note{margin-top:12px;padding:10px 12px;background:#fff7f0;border:1px dashed #e5cdb8;border-radius:12px;color:#7a5f48;font-size:13px}
-    .grid{display:grid;gap:12px}.kpi{grid-template-columns:repeat(auto-fit,minmax(250px,1fr));margin:0 0 14px}
-    .entry{grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin:0 0 14px}
-    .memory{grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin:0 0 14px}
-    .card{padding:16px}.label{font-size:13px;color:#876e5f}.value{font-size:28px;font-weight:750;margin-top:7px}
-    .entry .card{min-height:90px;display:flex;align-items:center;color:#6f5d50}
-    .memory .card h3{margin:0 0 4px}.small{font-size:13px;color:var(--muted)}
-    .hidden{display:none!important}
+    :root{--bg:#f8f4ec;--card:#fffdfa;--text:#2f2721;--muted:#7c6b5d;--line:#ecdfd2;--primary:#8c5f6a;--primary-dark:#68424e;--ok:#4f7f5a;--warn:#a36b16;--danger:#a6423a;--shadow:0 10px 28px rgba(93,71,52,.08)}
+    *{box-sizing:border-box}body{margin:0;background:#f8f4ec;color:var(--text);font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}a{color:var(--primary-dark)}
+    .wrap{max-width:1180px;margin:0 auto;padding:22px 16px 54px}.hidden{display:none!important}.muted,.small{color:var(--muted)}.small{font-size:13px}.topbar{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap;margin-bottom:14px}
+    .topbar h1{margin:0 0 6px;font-size:30px}.top-actions,.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.btn,button{border:0;border-radius:999px;padding:9px 13px;background:#e9dfd0;color:var(--text);text-decoration:none;font-weight:700;cursor:pointer}button.primary,.btn.primary{background:var(--primary);color:white}button.danger{background:#f1d4d1;color:var(--danger)}
+    .card{background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:16px;padding:16px}.grid{display:grid;gap:12px}.kpis{grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin-bottom:12px}.modules{grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-bottom:12px}.two{grid-template-columns:repeat(2,minmax(0,1fr))}.three{grid-template-columns:repeat(3,minmax(0,1fr))}
+    @media(max-width:860px){.two,.three{grid-template-columns:1fr}.topbar h1{font-size:24px}}.label{font-size:13px;color:var(--muted)}.value{font-size:28px;font-weight:850;margin-top:5px}.section{margin-top:14px}.section h2{margin:0 0 10px;font-size:20px}input,select,textarea{width:100%;border:1px solid var(--line);border-radius:12px;padding:10px 11px;background:white;color:var(--text);font-size:14px}label{display:block;margin:7px 0 5px;color:var(--muted);font-size:13px}
+    .memory-card h3{margin:0 0 5px}.memory-card p{line-height:1.65}.pill{display:inline-block;border-radius:999px;padding:3px 8px;background:#f0e6dc;color:#6f5d50;font-size:12px;margin:2px}.photo-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}.photo{display:block;border-radius:12px;overflow:hidden;background:#eee;border:1px solid var(--line);text-decoration:none;color:inherit}.photo img{width:100%;aspect-ratio:4/3;object-fit:cover;display:block}.photo div{padding:8px}
+    #miniMap{height:260px;border:1px solid var(--line);border-radius:14px;overflow:hidden}.timeline-group{border-left:3px solid #d8c2cb;padding-left:10px;margin:8px 0}.bucket-board{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.bucket-col{border:1px solid var(--line);border-radius:14px;padding:10px;background:#fff}.bucket-item{border:1px solid var(--line);border-radius:12px;padding:10px;margin-top:8px;background:#fffdfa}
+    @media(max-width:760px){.bucket-board{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
   <div id="booting" style="padding:28px 18px;color:#7c6b5d;">正在验证访问权限...</div>
-  <div id="protectedApp" class="wrap hidden">
+  <main id="protectedApp" class="wrap hidden">
     <header class="topbar">
       <div>
-        <h2 style="margin:0;font-size:30px">两个人的记忆地图</h2>
-        <p style="margin:8px 0 0;color:var(--muted)">把照片、文字、地点和时间，整理成只属于我们的故事。</p>
-        <div class="host-note">推荐入口：<strong>https://www.hydwang.xyz/couple/</strong>（HTTPS + 登录鉴权）</div>
+        <h1 id="spaceTitle">两个人的记忆地图</h1>
+        <div id="spaceMeta" class="muted">把照片、文字、地点和时间整理成闭环。</div>
       </div>
       <nav class="top-actions">
-        <span id="userChip" class="user-chip hidden">用户：-</span><a class="btn" href="/">首页</a><a class="btn" href="/admin/">Admin UI</a><a class="btn" href="/api/healthz" target="_blank">API Health</a><a class="btn" href="https://github.com/huozao/AliECS" target="_blank">GitHub</a><button id="topHeart" class="btn heart" type="button">💗</button>
+        <span id="userChip" class="pill hidden">用户：-</span>
+        <a class="btn" href="/">首页</a>
+        <a class="btn" href="/memories/">回忆</a>
+        <a class="btn" href="/map/">地图</a>
+        <a class="btn" href="/admin/">Admin</a>
+        <button id="topHeart" class="btn" type="button">💗</button>
       </nav>
     </header>
 
-    <section class="hero">
-      <h1>Our Memory Dashboard</h1>
-      <p>在日常里收集记忆，在地图上留下足迹，在时间线里看见我们一起长大的样子。</p>
+    <section class="grid kpis">
+      <article class="card"><div class="label">恋爱天数</div><div id="daysTogether" class="value">-</div></article>
+      <article class="card"><div class="label">下一个纪念日</div><div id="nextAnniversary" class="value">-</div></article>
+      <article class="card"><div class="label">回忆 / 照片</div><div id="memoryCount" class="value">-</div></article>
+      <article class="card"><div class="label">愿望 / 纪念日</div><div id="planCount" class="value">-</div></article>
     </section>
 
-    <section class="grid kpi">
-      <article class="card"><div class="label">恋爱天数</div><div class="value">520 天</div></article>
-      <article class="card"><div class="label">下一个纪念日</div><div class="value">还有 18 天</div></article>
+    <section class="grid modules">
+      <a class="card" href="/memories/"><strong>回忆列表</strong><div class="small">筛选、分页、进入详情。</div></a>
+      <a class="card" href="/map/"><strong>地图足迹</strong><div class="small">查看所有带坐标的回忆。</div></a>
+      <a class="card" href="#timeline"><strong>时间线</strong><div class="small">按月份回看。</div></a>
+      <a class="card" href="#gallery"><strong>相册</strong><div class="small">照片网格和归属回忆。</div></a>
+      <a class="card" href="#anniversaries"><strong>纪念日</strong><div class="small">倒计时和 CRUD。</div></a>
+      <a class="card" href="#wishlist"><strong>愿望清单</strong><div class="small">want / planned / done。</div></a>
     </section>
 
-    <section class="grid entry">
-      <article class="card"><div><strong><a href="/memories/" style="color:inherit;text-decoration:none;">回忆列表</a></strong><div class="small">案例：写下「第一次看海」并关联 3 张照片。</div></div></article>
-      <article class="card"><div><strong><a href="/map/" style="color:inherit;text-decoration:none;">地图足迹</a></strong><div class="small">案例：杭州西湖 + 宁波象山两个 marker。</div></div></article>
-      <article class="card"><div><strong>时间线</strong><div class="small">案例：按月份回看相识、旅行、跨年。</div></div></article>
-      <article class="card"><div><strong>相册</strong><div class="small">案例：展示图网格 + 拍摄日期 + 归属回忆。</div></div></article>
-      <article class="card"><div><strong>纪念日</strong><div class="small">案例：恋爱纪念日倒计时 18 天。</div></div></article>
-      <article class="card"><div><strong>愿望清单</strong><div class="small">案例：一起看极光（计划中）。</div></div></article>
-    </section>
-
-    <section class="grid memory">
+    <section class="grid two section">
       <article class="card">
-        <h3>快速发布回忆</h3>
-        <div class="small">填写标题、内容、日期与地点，可附带上传图片；保存后会展示在下方案例中。</div>
-        <form id="memoryForm" style="margin-top:12px;display:grid;gap:8px;">
-          <input id="mTitle" required placeholder="标题（例如：第一次看海）" />
-          <textarea id="mContent" rows="4" placeholder="写下这段回忆内容..."></textarea>
-          <input id="mDate" type="date" />
-          <input id="mPlace" placeholder="地点（例如：杭州西湖）" />
-          <input id="mTags" placeholder="标签，逗号分隔（例如：旅行,日落）" />
-          <input id="mPhoto" type="file" accept="image/*" />
-          <button class="btn" type="submit">发布回忆</button>
+        <h2>快速发布回忆</h2>
+        <form id="memoryForm" class="grid two">
+          <div><label>标题</label><input id="mTitle" required placeholder="第一次看海" /></div>
+          <div><label>日期</label><input id="mDate" type="date" /></div>
+          <div><label>地点</label><input id="mPlace" placeholder="杭州西湖" /></div>
+          <div><label>标签</label><input id="mTags" placeholder="旅行,日落" /></div>
+          <div><label>纬度</label><input id="mLat" type="number" step="0.000001" placeholder="30.2741" /></div>
+          <div><label>经度</label><input id="mLng" type="number" step="0.000001" placeholder="120.1551" /></div>
+          <div style="grid-column:1/-1"><label>内容</label><textarea id="mContent" rows="4" placeholder="写下这段回忆..."></textarea></div>
+          <div style="grid-column:1/-1"><label>照片</label><input id="mPhoto" type="file" accept="image/*" /></div>
+          <div class="row" style="grid-column:1/-1"><button class="primary" type="submit">发布回忆</button><span id="publishHint" class="small"></span></div>
         </form>
-        <div id="publishHint" class="small" style="margin-top:8px;"></div>
       </article>
-      <article class="card"><h3>初秋散步</h3><div class="small">2025-09-12 · 杭州西湖</div><p>晚风很轻，我们沿着湖边走了很久。</p></article>
-      <article class="card"><h3>第一次旅行</h3><div class="small">2025-11-22 · 宁波象山</div><p>看日落时你说，想把今天记一辈子。</p></article>
-      <article class="card"><h3>跨年夜</h3><div class="small">2025-12-31 · 上海外滩</div><p>人群很吵，但拥抱的时候很安静。</p></article>
+      <article class="card">
+        <h2>地图预览</h2>
+        <div id="miniMap"></div>
+        <p id="mapHint" class="small"></p>
+      </article>
     </section>
 
-    <section class="grid entry">
-      <article class="card">地图预览（下一阶段接 Leaflet）</article>
-      <article class="card">时间线预览（下一阶段接真实 API）</article>
+    <section class="section">
+      <h2>最近回忆</h2>
+      <div id="recentMemories" class="grid three"></div>
     </section>
-    <section class="grid memory" id="recentMemories"></section>
-  </div>
 
+    <section id="timeline" class="section card">
+      <h2>时间线</h2>
+      <div id="timelineList"></div>
+    </section>
+
+    <section id="gallery" class="section card">
+      <div class="row" style="justify-content:space-between"><h2>相册</h2><button id="refreshGalleryBtn" type="button">刷新</button></div>
+      <div id="galleryGrid" class="photo-grid"></div>
+    </section>
+
+    <section id="anniversaries" class="section card">
+      <h2>纪念日</h2>
+      <form id="anniversaryForm" class="grid three">
+        <div><label>标题</label><input id="aTitle" required placeholder="恋爱纪念日" /></div>
+        <div><label>日期</label><input id="aDate" type="date" required /></div>
+        <div><label>重复</label><select id="aRepeat"><option value="yearly">每年</option><option value="monthly">每月</option><option value="none">不重复</option></select></div>
+        <div style="grid-column:1/-1"><label>说明</label><input id="aDesc" placeholder="可选" /></div>
+        <div class="row" style="grid-column:1/-1"><button class="primary" type="submit">新增纪念日</button><span id="anniversaryHint" class="small"></span></div>
+      </form>
+      <div id="anniversaryList" class="grid three" style="margin-top:12px"></div>
+    </section>
+
+    <section id="wishlist" class="section card">
+      <h2>愿望清单</h2>
+      <form id="bucketForm" class="grid three">
+        <div><label>愿望</label><input id="bTitle" required placeholder="一起看极光" /></div>
+        <div><label>状态</label><select id="bStatus"><option value="want">想做</option><option value="planned">计划中</option><option value="done">已完成</option></select></div>
+        <div><label>目标日期</label><input id="bTarget" type="date" /></div>
+        <div style="grid-column:1/-1"><label>说明</label><input id="bDesc" placeholder="可选" /></div>
+        <div class="row" style="grid-column:1/-1"><button class="primary" type="submit">新增愿望</button><span id="bucketHint" class="small"></span></div>
+      </form>
+      <div id="bucketBoard" class="bucket-board" style="margin-top:12px"></div>
+    </section>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="/common/user-badge.js"></script>
   <script>
     const API_BASE = window.AliECSAuth.API_BASE;
-    const EXPECTED_HOSTS = new Set(['www.hydwang.xyz', 'hydwang.xyz', 'localhost']);
     const token = () => window.AliECSAuth.getToken();
-    async function loadRecentMemories(){
-      const t = token();
-      const r = await fetch(`${API_BASE}/v1/memories?page=1&page_size=6`, {headers:{Authorization:`Bearer ${t}`}});
-      if (!r.ok) return [];
-      const d = await r.json();
-      return d.items || [];
+    const state = {space:null, memories:[], map:[], photos:[], anniversaries:[], bucket:[]};
+    let miniMap, markerLayer;
+    const $ = (id) => document.getElementById(id);
+    const esc = (v) => String(v ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#039;");
+    const headers = () => token() ? {Authorization:`Bearer ${token()}`} : {};
+    async function api(path, options = {}) {
+      const opts = {...options, headers:{...(options.headers || {}), ...headers()}};
+      if (opts.body && !(opts.body instanceof FormData)) opts.headers["Content-Type"] = "application/json";
+      const resp = await fetch(`${API_BASE}${path}`, opts);
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+      return data;
     }
-    function renderRecent(items){
-      const box = document.getElementById('recentMemories');
-      if (!items.length) {
-        box.innerHTML = `<article class="card"><h3>暂无真实回忆</h3><div class="small">请先通过上方表单发布第一条 couple 回忆。</div></article>`;
-        return;
+    async function checkAccess(){
+      const resp = await fetch(`${API_BASE}/couple/access`, {headers:headers()});
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      return data.allowed ? (data.route || '/couple/') : null;
+    }
+    function numberOrNull(id){const v=$(id).value;return v === '' ? null : Number(v);}
+    async function loadAll(){
+      const [space, memories, map, photos, anniversaries, bucket] = await Promise.all([
+        api('/v1/couple/space'),
+        api('/v1/memories?page=1&page_size=60'),
+        api('/v1/map/memories'),
+        api('/v1/photos?page=1&page_size=30'),
+        api('/v1/anniversaries'),
+        api('/v1/bucket-items')
+      ]);
+      state.space = space;
+      state.memories = memories.items || [];
+      state.map = map.items || [];
+      state.photos = photos.items || [];
+      state.anniversaries = anniversaries.items || [];
+      state.bucket = bucket.items || [];
+      renderAll();
+    }
+    function renderAll(){renderSpace();renderRecent();renderTimeline();renderMiniMap();renderGallery();renderAnniversaries();renderBucket();}
+    function renderSpace(){
+      const s = state.space || {};
+      $('spaceTitle').textContent = s.name || '两个人的记忆地图';
+      $('spaceMeta').textContent = `${s.members?.map(m=>m.display_name).join('、') || 'Couple Memory'} · ${s.start_date || '未设置开始日期'}`;
+      $('daysTogether').textContent = s.days_together == null ? '未设置' : `${s.days_together} 天`;
+      $('nextAnniversary').textContent = s.next_anniversary ? `还有 ${s.next_anniversary.days_remaining} 天` : '未设置';
+      $('memoryCount').textContent = `${s.counts?.memories || 0} / ${s.counts?.photos || 0}`;
+      $('planCount').textContent = `${s.counts?.bucket_items || 0} / ${s.counts?.anniversaries || 0}`;
+    }
+    function renderRecent(){
+      $('recentMemories').innerHTML = state.memories.slice(0,6).map(m => `<article class="card memory-card"><h3>${esc(m.title)}</h3><div class="small">${esc(m.memory_date || '未知日期')} · ${esc(m.place_name || '未知地点')} · ${m.photo_count || 0} 张照片</div><p>${esc((m.content || '').slice(0,110))}</p><div>${(m.tags||[]).map(t=>`<span class="pill">${esc(t)}</span>`).join('')}</div><p><a class="btn" href="/memories/detail.html?id=${m.id}">详情</a></p></article>`).join('') || '<article class="card">暂无回忆，先发布第一条。</article>';
+    }
+    function renderTimeline(){
+      const groups = {};
+      state.memories.forEach(m => {const key = (m.memory_date || '未设置日期').slice(0,7);(groups[key] ||= []).push(m);});
+      $('timelineList').innerHTML = Object.entries(groups).slice(0,8).map(([month, items]) => `<div class="timeline-group"><strong>${esc(month)}</strong>${items.map(m=>`<div><a href="/memories/detail.html?id=${m.id}">${esc(m.title)}</a> <span class="small">${esc(m.place_name || '')}</span></div>`).join('')}</div>`).join('') || '<div class="muted">暂无时间线数据。</div>';
+    }
+    function renderMiniMap(){
+      if (!state.map.length) {$('mapHint').textContent='暂无带坐标的回忆点。';return;}
+      $('mapHint').textContent='';
+      if (!miniMap) {
+        miniMap = L.map('miniMap', {scrollWheelZoom:false}).setView([30.27,120.15],5);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap'}).addTo(miniMap);
+        markerLayer = L.layerGroup().addTo(miniMap);
       }
-      box.innerHTML = items.map((x)=>`<article class="card"><h3>${x.title||'未命名回忆'}</h3><div class="small">${x.memory_date||'未设置日期'} · ${x.place_name||'未设置地点'}</div><p>${x.content||''}</p></article>`).join('');
+      markerLayer.clearLayers();
+      const bounds = [];
+      state.map.slice(0,20).forEach(m => {
+        const p = [m.latitude, m.longitude]; bounds.push(p);
+        L.marker(p).addTo(markerLayer).bindPopup(`<b>${esc(m.title)}</b><br>${esc(m.memory_date || '')}<br><a href="/memories/detail.html?id=${m.id}">查看详情</a>`);
+      });
+      miniMap.fitBounds(bounds, {padding:[20,20], maxZoom:12});
+    }
+    function renderGallery(){
+      $('galleryGrid').innerHTML = state.photos.map(p => `<a class="photo" href="${esc(p.display_url)}" target="_blank" rel="noreferrer"><img src="${esc(p.thumbnail_url || p.display_url)}" alt="${esc(p.original_filename || 'photo')}" loading="lazy"><div class="small">${esc(p.taken_at || p.created_at || '')}<br>${p.memory_id ? `<span>${esc(p.memory_title || '回忆')}</span>` : '未关联回忆'}</div></a>`).join('') || '<div class="muted">暂无照片。</div>';
+    }
+    function renderAnniversaries(){
+      $('anniversaryList').innerHTML = state.anniversaries.map(a => `<article class="card"><h3>${esc(a.title)}</h3><div class="small">${esc(a.date)} · ${esc(a.repeat_type)} · 还有 ${a.days_remaining} 天</div><p>${esc(a.description || '')}</p><div class="row"><button data-anniv-edit="${a.id}">编辑</button><button class="danger" data-anniv-del="${a.id}">删除</button></div></article>`).join('') || '<div class="muted">暂无纪念日。</div>';
+    }
+    function renderBucket(){
+      const labels = {want:'想做', planned:'计划中', done:'已完成'};
+      $('bucketBoard').innerHTML = ['want','planned','done'].map(status => `<section class="bucket-col"><strong>${labels[status]}</strong>${state.bucket.filter(b=>b.status===status).map(b => `<div class="bucket-item"><strong>${esc(b.title)}</strong><div class="small">${esc(b.target_date || '')}${b.completed_memory_title ? ` · ${esc(b.completed_memory_title)}` : ''}</div><p>${esc(b.description || '')}</p><div class="row"><button data-bucket-status="${b.id}:want">想做</button><button data-bucket-status="${b.id}:planned">计划</button><button data-bucket-status="${b.id}:done">完成</button><button class="danger" data-bucket-del="${b.id}">删除</button></div></div>`).join('') || '<div class="small">暂无</div>'}</section>`).join('');
     }
     async function submitMemory(ev){
       ev.preventDefault();
-      const hint = document.getElementById('publishHint');
-      hint.textContent = '正在发布...';
-      const body = {
-        title: document.getElementById('mTitle').value.trim(),
-        content: document.getElementById('mContent').value.trim() || null,
-        memory_date: document.getElementById('mDate').value || null,
-        place_name: document.getElementById('mPlace').value.trim() || null,
-        visibility: 'private',
-        tags: (document.getElementById('mTags').value || '').split(',').map(x=>x.trim()).filter(Boolean),
-      };
-      const t = token();
-      const cr = await fetch(`${API_BASE}/v1/memories`, {method:'POST', headers:{'Content-Type':'application/json', Authorization:`Bearer ${t}`}, body:JSON.stringify(body)});
-      if (!cr.ok) { hint.textContent = '发布失败，请检查登录状态与输入。'; return; }
-      const created = await cr.json();
-      const f = document.getElementById('mPhoto').files[0];
-      if (f && created.id) {
-        const fd = new FormData(); fd.append('file', f);
-        await fetch(`${API_BASE}/v1/photos/upload?memory_id=${created.id}`, {method:'POST', headers:{Authorization:`Bearer ${t}`}, body:fd});
-      }
-      hint.textContent = '发布成功，已刷新案例列表。';
-      ev.target.reset();
-      renderRecent(await loadRecentMemories());
+      $('publishHint').textContent='发布中...';
+      const body = {title:$('mTitle').value.trim(),content:$('mContent').value.trim()||null,memory_date:$('mDate').value||null,place_name:$('mPlace').value.trim()||null,latitude:numberOrNull('mLat'),longitude:numberOrNull('mLng'),visibility:'private',tags:($('mTags').value||'').split(',').map(x=>x.trim()).filter(Boolean)};
+      const created = await api('/v1/memories', {method:'POST', body:JSON.stringify(body)});
+      const file = $('mPhoto').files[0];
+      if (file) {const fd = new FormData(); fd.append('file', file); await api(`/v1/photos/upload?memory_id=${created.id}`, {method:'POST', body:fd});}
+      ev.target.reset(); $('publishHint').textContent='已发布。'; await loadAll();
     }
-    async function checkAccess(){
-      try {
-        const headers = {'Content-Type':'application/json'};
-        const t = token();
-        if (t) headers.Authorization = `Bearer ${t}`;
-        const resp = await fetch(`${API_BASE}/couple/access`, {headers});
-        if (!resp.ok) return null;
-        const data = await resp.json();
-        return data && data.allowed ? (data.route || '/couple/') : null;
-      } catch { return null; }
+    async function submitAnniversary(ev){
+      ev.preventDefault(); $('anniversaryHint').textContent='保存中...';
+      await api('/v1/anniversaries',{method:'POST',body:JSON.stringify({title:$('aTitle').value.trim(),date:$('aDate').value,repeat_type:$('aRepeat').value,description:$('aDesc').value.trim()||null})});
+      ev.target.reset(); $('anniversaryHint').textContent='已保存。'; await loadAll();
     }
+    async function submitBucket(ev){
+      ev.preventDefault(); $('bucketHint').textContent='保存中...';
+      await api('/v1/bucket-items',{method:'POST',body:JSON.stringify({title:$('bTitle').value.trim(),description:$('bDesc').value.trim()||null,status:$('bStatus').value,target_date:$('bTarget').value||null})});
+      ev.target.reset(); $('bucketHint').textContent='已保存。'; await loadAll();
+    }
+    async function editAnniversary(id){
+      const item = state.anniversaries.find(x=>x.id===id); if(!item) return;
+      const title = prompt('标题', item.title); if(title === null) return;
+      const date = prompt('日期 YYYY-MM-DD', item.date); if(date === null) return;
+      const repeat_type = prompt('repeat_type: none/yearly/monthly', item.repeat_type); if(repeat_type === null) return;
+      const description = prompt('说明', item.description || ''); if(description === null) return;
+      await api(`/v1/anniversaries/${id}`,{method:'PUT',body:JSON.stringify({title,date,repeat_type,description:description||null})}); await loadAll();
+    }
+    async function updateBucketStatus(id,status){
+      const item = state.bucket.find(x=>x.id===id); if(!item) return;
+      let completed_memory_id = item.completed_memory_id || null;
+      if(status === 'done'){const raw = prompt('可选：关联回忆 ID', completed_memory_id || ''); completed_memory_id = raw ? Number(raw) : null;}
+      await api(`/v1/bucket-items/${id}`,{method:'PUT',body:JSON.stringify({title:item.title,description:item.description,status,target_date:item.target_date,completed_memory_id})}); await loadAll();
+    }
+    document.addEventListener('click', async (ev) => {
+      const t = ev.target;
+      if (t.dataset?.annivDel && confirm('删除这个纪念日？')) {await api(`/v1/anniversaries/${t.dataset.annivDel}`,{method:'DELETE'}); await loadAll();}
+      if (t.dataset?.annivEdit) await editAnniversary(Number(t.dataset.annivEdit));
+      if (t.dataset?.bucketDel && confirm('删除这个愿望？')) {await api(`/v1/bucket-items/${t.dataset.bucketDel}`,{method:'DELETE'}); await loadAll();}
+      if (t.dataset?.bucketStatus) {const [id,status]=t.dataset.bucketStatus.split(':'); await updateBucketStatus(Number(id),status);}
+    });
     document.addEventListener('DOMContentLoaded', async () => {
-      if (!EXPECTED_HOSTS.has(location.hostname) && location.protocol.startsWith('http')) {
-        console.warn('当前域名不在推荐入口列表，建议使用 https://www.hydwang.xyz/couple/ 访问。');
-      }
-      const route = await checkAccess();
-      if (!route) { location.replace('/'); return; }
-      const me = await window.AliECSAuth.renderUserBadge('userChip', '用户：');
-      if (me && me.sub) {
-        const chip = document.getElementById('userChip');
-        chip.classList.remove('hidden');
-      }
-      document.getElementById('booting').classList.add('hidden');
-      document.getElementById('protectedApp').classList.remove('hidden');
-      document.getElementById('topHeart').addEventListener('click', () => location.assign(route));
-      document.getElementById('memoryForm').addEventListener('submit', submitMemory);
-      renderRecent(await loadRecentMemories());
+      const route = await checkAccess(); if(!route){location.replace('/');return;}
+      await window.AliECSAuth.renderUserBadge('userChip','用户：'); $('userChip').classList.remove('hidden');
+      $('booting').classList.add('hidden'); $('protectedApp').classList.remove('hidden');
+      $('topHeart').onclick = () => location.assign(route);
+      $('memoryForm').onsubmit = (e) => submitMemory(e).catch(err => $('publishHint').textContent = err.message);
+      $('anniversaryForm').onsubmit = (e) => submitAnniversary(e).catch(err => $('anniversaryHint').textContent = err.message);
+      $('bucketForm').onsubmit = (e) => submitBucket(e).catch(err => $('bucketHint').textContent = err.message);
+      $('refreshGalleryBtn').onclick = () => loadAll().catch(console.error);
+      await loadAll();
     });
   </script>
 </body>

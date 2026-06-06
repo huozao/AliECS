@@ -36,6 +36,14 @@
 | `COUPLE_ROUTE` | Couple 路径 | 建议 | 前后端入口不一致 |
 | `COUPLE_ALLOWED_USERS` | 用户白名单 | 建议 | 授权边界不明确 |
 | `COUPLE_ALLOWED_EMAILS` | 邮箱白名单 | 可选 | 无法按邮箱维度限制 |
+| `MAX_UPLOAD_MB` | Couple 图片上传大小上限 | 建议，默认 15 | 上传限制不符合预期 |
+| `STORAGE_DRIVER` | 照片存储驱动：`local` / `oss` | 建议，默认 local | 生产照片存储策略不明确 |
+| `LOCAL_UPLOAD_DIR` | local 驱动上传目录 | local 必填 | local 上传无法落盘 |
+| `OSS_ENDPOINT` / `OSS_BUCKET` | OSS 目标地址与 bucket | `STORAGE_DRIVER=oss` 时必填 | OSS 上传不可用 |
+| `OSS_ACCESS_KEY_ID` / `OSS_ACCESS_KEY_SECRET` | OSS 凭据 | `STORAGE_DRIVER=oss` 时必填 | OSS 上传不可用 |
+| `SHARE_BASE_URL` | 分享链接生成根地址 | 建议 | 分享 URL 可能使用错误域名 |
+
+> 当前 backend-api 已抽象 `local` / `oss` driver；`local` 可直接使用，`oss` 仍需配置 bucket/keys 并接入对象存储实现后再切生产。
 
 ## 4. 维护要求
 

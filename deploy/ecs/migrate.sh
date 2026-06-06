@@ -64,6 +64,12 @@ run_psql_file() {
   done
 }
 
+run_psql_query() {
+  local sql="$1"
+  docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" exec -T postgres \
+    psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -Atc "$sql"
+}
+
 echo "[迁移] 执行 $MIGRATIONS_DIR 下的 SQL"
 shopt -s nullglob
 sql_files=("$MIGRATIONS_DIR"/*.sql)
@@ -72,9 +78,31 @@ if (( ${#sql_files[@]} == 0 )); then
   exit 0
 fi
 
+echo "[迁移] 确保 schema_migrations 存在"
+run_psql_query "CREATE TABLE IF NOT EXISTS schema_migrations(version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());" >/dev/null
+
+registered_count="$(run_psql_query "SELECT COUNT(*) FROM schema_migrations;")"
+has_users_table="$(run_psql_query "SELECT CASE WHEN to_regclass('public.users') IS NULL THEN 'f' ELSE 't' END;")"
+if [[ "$registered_count" == "0" && "$has_users_table" == "t" ]]; then
+  echo "[迁移] 检测到既有库首次启用登记表，预登记 0009 之前的迁移"
+  for sql in "${sql_files[@]}"; do
+    version="$(basename "$sql" .sql)"
+    if [[ "$version" < "0009_couple_phase3" ]]; then
+      run_psql_query "INSERT INTO schema_migrations(version) VALUES ('$version') ON CONFLICT(version) DO NOTHING;" >/dev/null
+    fi
+  done
+fi
+
 for sql in "${sql_files[@]}"; do
+  version="$(basename "$sql" .sql)"
+  already_applied="$(run_psql_query "SELECT CASE WHEN EXISTS (SELECT 1 FROM schema_migrations WHERE version = '$version') THEN 't' ELSE 'f' END;")"
+  if [[ "$already_applied" == "t" ]]; then
+    echo "[迁移] 跳过已登记 $version"
+    continue
+  fi
   echo "[迁移] 应用 $sql"
   run_psql_file "$sql"
+  run_psql_query "INSERT INTO schema_migrations(version) VALUES ('$version') ON CONFLICT(version) DO NOTHING;" >/dev/null
 done
 
 echo "[迁移] 完成"
