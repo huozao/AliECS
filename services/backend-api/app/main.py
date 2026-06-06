@@ -23,6 +23,7 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 
 from app.integrations.events import build_ops_attention_items
+from app.recipes.active_bom import copy_latest_bom_source, export_active_bom_rows
 from app.recipes.bom_query import (
     calculate_recipe_costs,
     export_path_for_id,
@@ -406,7 +407,7 @@ class RecipeCostRequest(RecipeQueryRequest):
 
 
 class ReconciliationActionRequest(BaseModel):
-    action: str = Field(pattern="^(use_full|use_incremental|ignore)$")
+    action: str = Field(pattern="^(use_current|use_previous|use_full|use_incremental|ignore)$")
     note: str | None = Field(default=None, max_length=500)
 
 
@@ -668,6 +669,7 @@ def _reconciliation_status_from_db() -> dict[str, Any]:
                     """
                     SELECT id, provider, module, severity, summary, created_at
                     FROM integration_reconciliation_diffs
+                    WHERE status = 'needs_review'
                     ORDER BY created_at DESC, id DESC
                     LIMIT 10
                     """
@@ -748,13 +750,37 @@ def ops_reconciliation_action(
     user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     next_status = "ignored" if body.action == "ignore" else "resolved"
-    resolution = {
-        "action": body.action,
-        "note": body.note or "",
-        "resolved_at": datetime.now(timezone.utc).isoformat(),
-    }
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, provider, module, status, severity, summary, diff_json,
+                       full_snapshot_id, incremental_snapshot_id, created_at,
+                       reviewed_at, reviewed_by, resolution_json
+                FROM integration_reconciliation_diffs
+                WHERE id = %s
+                FOR UPDATE
+                """,
+                (diff_id,),
+            )
+            existing = cur.fetchone()
+            if not existing:
+                raise HTTPException(status_code=404, detail="reconciliation diff not found")
+
+            existing_diff = _reconciliation_diff_to_dict(existing)
+            selected_snapshot_id = _selected_reconciliation_snapshot(existing_diff, body.action)
+            resolution = {
+                "action": body.action,
+                "note": body.note or "",
+                "resolved_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if next_status == "resolved":
+                if selected_snapshot_id is None:
+                    raise HTTPException(status_code=400, detail="selected snapshot not found")
+                activation = _activate_bom_snapshot(conn, selected_snapshot_id, allow_latest_fallback=body.action != "use_previous")
+                resolution.update(activation)
+                resolution["selected_snapshot_id"] = selected_snapshot_id
+
             cur.execute(
                 """
                 UPDATE integration_reconciliation_diffs
@@ -770,11 +796,82 @@ def ops_reconciliation_action(
                 (next_status, Jsonb(resolution), user.get("sub", ""), diff_id),
             )
             row = cur.fetchone()
+            if next_status == "resolved":
+                cur.execute(
+                    """
+                    UPDATE integration_reconciliation_diffs
+                    SET status = 'superseded',
+                        resolution_json = %s,
+                        reviewed_at = NOW(),
+                        reviewed_by = %s
+                    WHERE provider = %s
+                      AND module = %s
+                      AND status = 'needs_review'
+                      AND id < %s
+                    """,
+                    (
+                        Jsonb(
+                            {
+                                "action": "superseded_by_newer_resolution",
+                                "superseded_by_diff_id": diff_id,
+                                "selected_snapshot_id": selected_snapshot_id,
+                                "active_export_name": resolution.get("active_export_name"),
+                                "resolved_at": resolution["resolved_at"],
+                            }
+                        ),
+                        user.get("sub", ""),
+                        existing_diff["provider"],
+                        existing_diff["module"],
+                        diff_id,
+                    ),
+                )
         conn.commit()
-    if not row:
-        raise HTTPException(status_code=404, detail="reconciliation diff not found")
     _audit(user.get("sub"), "ops.reconciliation.resolve", "integration_reconciliation_diffs", str(diff_id), resolution)
     return _reconciliation_diff_to_dict(row)
+
+
+def _selected_reconciliation_snapshot(diff: dict[str, Any], action: str) -> int | None:
+    diff_json = diff.get("diff_json") if isinstance(diff.get("diff_json"), dict) else {}
+    if action == "ignore":
+        return None
+    if action in {"use_current", "use_incremental"}:
+        return _int_or_none(diff.get("incremental_snapshot_id")) or _int_or_none(diff_json.get("current_snapshot_id")) or _int_or_none(diff.get("full_snapshot_id"))
+    if action == "use_previous":
+        return _int_or_none(diff_json.get("previous_snapshot_id"))
+    if action == "use_full":
+        return _int_or_none(diff.get("full_snapshot_id")) or _int_or_none(diff_json.get("current_snapshot_id"))
+    return None
+
+
+def _activate_bom_snapshot(conn: psycopg.Connection, snapshot_id: int, *, allow_latest_fallback: bool = True) -> dict[str, Any]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT source_json
+            FROM integration_sync_snapshots
+            WHERE id = %s
+            """,
+            (snapshot_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="selected snapshot not found")
+    source = _json_value(row[0])
+    records = source.get("records") if isinstance(source.get("records"), list) else []
+    if records:
+        return export_active_bom_rows(records)
+    if not allow_latest_fallback:
+        raise HTTPException(status_code=409, detail="selected snapshot has no stored BOM records")
+    return copy_latest_bom_source()
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        if value is None or value == "":
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _sync_run_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
@@ -798,7 +895,7 @@ def _configured_host_statuses() -> list[dict[str, Any]]:
 def _ops_http_targets() -> list[dict[str, Any]]:
     raw = os.getenv("OPS_HEALTH_HTTP_TARGETS_JSON", "").strip()
     if not raw:
-        return [
+        targets = [
             {
                 "name": "AliECS Backend API",
                 "url": os.getenv("OPS_HEALTH_BACKEND_URL", "https://hydwang.xyz/api/healthz"),
@@ -813,17 +910,22 @@ def _ops_http_targets() -> list[dict[str, Any]]:
             },
             {
                 "name": "WebDock API",
-                "url": os.getenv("OPS_HEALTH_WEBDOCK_API_URL", "http://100.97.176.57:18000/healthz"),
-                "description": "旧电脑 WebDock API，走 Tailscale 地址。",
-                "timeout": 3,
-            },
-            {
-                "name": "WebDock noVNC",
-                "url": os.getenv("OPS_HEALTH_WEBDOCK_NOVNC_URL", "http://100.97.176.57:6080/"),
-                "description": "旧电脑 noVNC 页面，走 Tailscale 地址。",
+                "url": os.getenv("OPS_HEALTH_WEBDOCK_API_URL", "http://host.docker.internal:11800/healthz"),
+                "description": "旧电脑 WebDock API，经服务器 SSH 隧道 11800 端口探测。",
                 "timeout": 3,
             },
         ]
+        novnc_url = os.getenv("OPS_HEALTH_WEBDOCK_NOVNC_URL", "").strip()
+        if novnc_url:
+            targets.append(
+                {
+                    "name": "WebDock noVNC",
+                    "url": novnc_url,
+                    "description": "旧电脑 noVNC 页面，需显式配置可由 backend-api 访问的地址。",
+                    "timeout": 3,
+                }
+            )
+        return targets
     try:
         targets = json.loads(raw)
     except Exception as exc:

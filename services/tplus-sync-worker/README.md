@@ -97,7 +97,7 @@ python -m unittest discover -s tests -v
 
 - Production Compose runs `tplus-sync-worker` with `restart: always`.
 - The container command is `python -m tplus_datahub.jobs.worker_loop`.
-- The first sync starts immediately; later cycles wait `TPLUS_SYNC_INTERVAL_SECONDS` seconds, default `3600`.
+- The first sync starts immediately; later cycles wait `TPLUS_SYNC_INTERVAL_SECONDS` seconds, default `86400` for one full reconciliation per day.
 - Current `job_sync_all` runs verified read-only `QueryPage` sync for BOM, inventory, and partner records.
 - `inventory` is the T+ 存货 archive. `partner` is the T+ 往来单位 archive and covers customer/supplier style counterparties at this stage.
 - Sales, purchase, warehouse, price, and cost modules remain pending until their official read-only endpoints are confirmed against the current account and covered by tests.
@@ -119,4 +119,4 @@ python -m unittest discover -s tests -v
 - `worker_loop` polls Postgres when `TPLUS_DB_SYNC_REQUESTS_ENABLED=true`.
 - Requests with `mode='incremental'` pass `parent_code` and `version` into `job_sync_bom`; if the event payload lacks a target, the worker falls back to BOM-only full sync.
 - Targeted BOM sync still includes both enabled and disabled rows by adding the existing `Disabled=0/1` scope around the target query.
-- BOM sync results create stable snapshots. Full BOM snapshots are compared with the previous full snapshot and differences are surfaced through `/v1/ops/status` and `/health/`.
+- BOM sync results create stable snapshots. Full BOM snapshots are compared with the previous full snapshot and item-level differences are surfaced through `/v1/ops/status` and `/health/`.

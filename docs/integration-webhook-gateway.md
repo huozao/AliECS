@@ -93,7 +93,7 @@ AliECS 作为公网 webhook 入口，负责接收畅捷通、企业微信、飞�
 ## 2026-06 T+ long-running worker
 
 - Production Compose now includes `tplus-sync-worker` as a long-running service.
-- The first sync starts immediately after container start, then repeats by `TPLUS_SYNC_INTERVAL_SECONDS`.
+- The first sync starts immediately after container start, then repeats by `TPLUS_SYNC_INTERVAL_SECONDS`; production default is one full reconciliation per day.
 - Output is persisted through Docker volumes at `/app/data` and `/app/output`.
 - The current safe production scope is verified read-only `QueryPage` sync for BOM, inventory, and partner records.
 - `inventory` maps to T+ 存货. `partner` maps to T+ 往来单位 and covers customer/supplier-style counterparties for the first pass.
@@ -106,5 +106,6 @@ AliECS 作为公网 webhook 入口，负责接收畅捷通、企业微信、飞�
 - `tplus-sync-worker` consumes pending BOM requests from Postgres between scheduled full sync runs.
 - If the event payload contains a parent code and/or version, the worker runs an incremental BOM query for that target and still includes disabled BOM rows.
 - If the payload cannot identify the BOM target, the request falls back to BOM-only full sync. It does not trigger inventory, partner, Feishu, WeCom, or full-system sync.
-- Full BOM snapshots are hashed and compared with the previous full snapshot. Hash changes create `integration_reconciliation_diffs` rows with `needs_review` status for manual confirmation.
+- Full BOM snapshots are hashed and compared with the previous full snapshot. Hash changes create `integration_reconciliation_diffs` rows with `needs_review` status for manual confirmation, including item-level added/removed/changed detail where snapshot rows are available.
+- Confirming a BOM diff activates a new `bom_YYYYMMDD_HHMMSS.xlsx` in the backend active BOM directory. Recipe query reads that confirmed active workbook before falling back to raw worker output.
 - `/v1/ops/status` returns machine-readable service, T+ queue, reconciliation, system, and configured host status. `/health/` renders the same data for humans.

@@ -63,7 +63,7 @@ Do not commit real AppKey, AppSecret, AES key, appTicket, certificate, auth code
 | `CHANJET_OPEN_TOKEN` | tplus-sync-worker | T+ OpenAPI read-only sync token | Required for the worker |
 | `DEFAULT_PAGE_SIZE` | tplus-sync-worker | T+ QueryPage page size | Optional, default 500 |
 | `REQUEST_TIMEOUT_CONNECT` / `REQUEST_TIMEOUT_READ` | tplus-sync-worker | T+ OpenAPI request timeouts | Optional |
-| `TPLUS_SYNC_INTERVAL_SECONDS` | tplus-sync-worker | Seconds between long-running sync cycles; first run starts immediately | Optional, default 3600 |
+| `TPLUS_SYNC_INTERVAL_SECONDS` | tplus-sync-worker | Seconds between long-running full reconciliation cycles; first run starts immediately | Optional, default 86400 |
 | `TPLUS_SYNC_POLL_SECONDS` | tplus-sync-worker | Poll interval for manual BOM sync request files during long sleeps | Optional, default 30 |
 | `TPLUS_DB_SYNC_REQUESTS_ENABLED` | tplus-sync-worker | Whether the worker polls Postgres `integration_sync_requests` for event-driven BOM sync | Optional, default true |
 | `TPLUS_BOM_SYNC_REQUEST_DIR` | backend-api / tplus-sync-worker | Shared runtime directory for homepage "manual sync recipe" requests | Optional |
@@ -78,15 +78,18 @@ Homepage manual recipe sync only writes a request file for the BOM worker path. 
 |---|---|---|---|
 | `OPS_HEALTH_HTTP_TARGETS_JSON` | backend-api | Optional JSON list of HTTP targets to show on `/health/`, for example old laptop or WebDock endpoints. If unset, backend-api probes AliECS public web/API plus default WebDock API/noVNC targets. | Optional, unset uses built-in defaults |
 
+Default WebDock health targets use the ECS-side SSH tunnel host alias `host.docker.internal` and port `11800`, not the old Tailscale address. Compose maps `host.docker.internal` to the Docker host through `host-gateway`. noVNC should be added through `OPS_HEALTH_HTTP_TARGETS_JSON` or `OPS_HEALTH_WEBDOCK_NOVNC_URL` only after a reachable tunnel is configured.
+
 ## 8. Recipe query API
 
 | Variable | Scope | Purpose | Required |
 |---|---|---|---|
 | `RECIPE_BOM_INPUT_DIR` | backend-api | Directory scanned for the latest T+ BOM workbook | Optional, default `/app/tplus-output/excel` |
 | `RECIPE_BOM_INPUT_GLOB` | backend-api | Semicolon-separated workbook filename patterns | Optional |
+| `RECIPE_ACTIVE_BOM_DIR` | backend-api | Persistent directory for the human-confirmed active BOM workbook generated after reconciliation | Optional, default `/app/recipe-active-bom` |
 | `RECIPE_EXPORT_DIR` | backend-api | Temporary directory for generated recipe query workbooks | Optional, default `/tmp/aliecs-recipe-exports` |
 
-`backend-api` mounts the T+ worker output volume read-only. Query outputs are generated per request and should be treated as temporary files, not source data.
+`backend-api` mounts the T+ worker output volume read-only. Confirmed reconciliation files are written to `RECIPE_ACTIVE_BOM_DIR` and are preferred by recipe query before the raw worker output. Query outputs are generated per request and should be treated as temporary files, not source data.
 
 ## 9. Feishu full sync worker
 

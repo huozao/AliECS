@@ -162,7 +162,7 @@ def flatten_codes(values: Iterable[str] | None) -> list[str]:
     return list(dict.fromkeys(result))
 
 
-def locate_recipe_source() -> Path:
+def locate_recipe_source(*, include_active: bool = True) -> Path:
     configured_path = os.getenv("RECIPE_BOM_INPUT_PATH", "").strip()
     if configured_path:
         path = Path(configured_path)
@@ -170,14 +170,27 @@ def locate_recipe_source() -> Path:
             return path
         raise FileNotFoundError(f"RECIPE_BOM_INPUT_PATH 不存在：{path}")
 
+    if include_active:
+        active_dir = Path(os.getenv("RECIPE_ACTIVE_BOM_DIR", "/app/recipe-active-bom"))
+        active_files = _matching_recipe_files(active_dir, ["bom_*.xlsx", "*bom*.xlsx", "*物料清单*.xlsx"])
+        if active_files:
+            return max(active_files, key=lambda path: path.stat().st_mtime)
+
     input_dir = Path(os.getenv("RECIPE_BOM_INPUT_DIR", "/app/tplus-output/excel"))
     patterns = flatten_codes([os.getenv("RECIPE_BOM_INPUT_GLOB", "*物料清单合并*.xlsx;*bom*.xlsx;*物料清单*.xlsx")])
-    files: list[Path] = []
-    for pattern in patterns:
-        files.extend(path for path in input_dir.glob(pattern) if path.is_file() and not path.name.startswith("~$"))
+    files = _matching_recipe_files(input_dir, patterns)
     if not files:
         raise FileNotFoundError(f"未找到 BOM 输入文件：{input_dir} / {patterns}")
     return max(files, key=lambda path: path.stat().st_mtime)
+
+
+def _matching_recipe_files(input_dir: Path, patterns: Iterable[str]) -> list[Path]:
+    if not input_dir.exists():
+        return []
+    files: list[Path] = []
+    for pattern in patterns:
+        files.extend(path for path in input_dir.glob(pattern) if path.is_file() and not path.name.startswith("~$"))
+    return files
 
 
 def recipe_export_dir() -> Path:

@@ -37,6 +37,7 @@
     const token=()=>AUTH_KEYS.map((key)=>localStorage.getItem(key)||'').find(Boolean)||'';
     const fmtTime=(value)=>value?new Date(value).toLocaleString():'-';
     const chip=(status)=>`<span class="chip ${status||'degraded'}">${status||'unknown'}</span>`;
+    const esc=(value)=>String(value??'').replace(/[&<>"']/g,(char)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
     function authHeaders(){const headers={'Content-Type':'application/json'};const t=token();if(t)headers.Authorization=`Bearer ${t}`;return headers;}
     async function api(path,opt={}){
       const response=await fetch(`${API_BASE}${path}`,{...opt,headers:Object.assign(authHeaders(),opt.headers||{})});
@@ -76,17 +77,35 @@
     function scrollToHosts(){hosts.scrollIntoView({behavior:'smooth',block:'start'});}
     function openModal(title,html){modalTitle.textContent=title;modalBody.innerHTML=html;detailModal.classList.add('show');}
     function closeModal(){detailModal.classList.remove('show');modalBody.innerHTML='';}
+    function renderDiffItemRows(title,items){
+      const rows=(items||[]).map((item)=>`<tr><td>${esc(item.parent_code)}</td><td>${esc(item.parent_name)}</td><td>${esc(item.version)}</td><td>${esc(item.child_code)}</td><td>${esc(item.child_name)}</td><td>${esc(item.unit)}</td><td>${esc(item.quantity)}</td><td>${esc(item.disabled)}</td></tr>`).join('');
+      return `<h4>${title}（${(items||[]).length}）</h4><table><thead><tr><th>父件编码</th><th>父件名称</th><th>版本</th><th>子件编码</th><th>子件名称</th><th>单位</th><th>数量</th><th>停用</th></tr></thead><tbody>${rows||'<tr><td colspan="8" class="muted">无</td></tr>'}</tbody></table>`;
+    }
+    function renderChangedRows(items){
+      const rows=(items||[]).map((item)=>`<tr><td>${esc(item.key&&item.key.parent_code)}</td><td>${esc(item.key&&item.key.version)}</td><td>${esc(item.key&&item.key.child_code)}</td><td>${esc((item.changed_fields||[]).join(', '))}</td><td>${esc(item.before&&item.before.quantity)}</td><td>${esc(item.after&&item.after.quantity)}</td><td>${esc(item.before&&item.before.child_name)}</td><td>${esc(item.after&&item.after.child_name)}</td></tr>`).join('');
+      return `<h4>字段变化（${(items||[]).length}）</h4><table><thead><tr><th>父件编码</th><th>版本</th><th>子件编码</th><th>变化字段</th><th>原数量</th><th>新数量</th><th>原子件名</th><th>新子件名</th></tr></thead><tbody>${rows||'<tr><td colspan="8" class="muted">无</td></tr>'}</tbody></table>`;
+    }
+    function renderDiffDetail(diff){
+      const d=diff||{};
+      return `<p class="muted">新增 ${d.added_count||0} · 删除 ${d.removed_count||0} · 变化 ${d.changed_count||0} · 行数变化 ${d.row_count_delta||0}</p>${renderDiffItemRows('新增子件',d.added||[])}${renderDiffItemRows('删除子件',d.removed||[])}${renderChangedRows(d.changed||[])}<details style="margin-top:12px"><summary>原始 JSON</summary><pre>${esc(JSON.stringify(d,null,2))}</pre></details>`;
+    }
+    function renderReconActions(data){
+      if(data.status!=='needs_review')return `<pre>${esc(JSON.stringify(data.resolution||{},null,2))}</pre>`;
+      const previousId=(data.diff_json||{}).previous_snapshot_id;
+      return `<textarea id="reconNote" placeholder="人工确认备注"></textarea><div class="row" style="margin-top:10px"><button class="btn primary" onclick="resolveRecon(${data.id},'use_current')">采用当前快照</button><button class="btn primary" ${previousId?'':'disabled'} onclick="resolveRecon(${data.id},'use_previous')">保留上一快照</button><button class="btn" onclick="resolveRecon(${data.id},'ignore')">忽略差异</button></div>`;
+    }
     async function openRecon(id){
       try{
         const data=await api(`/v1/ops/reconciliation/${id}`);
-        openModal(`差异详情 #${id}`,`<p><strong>${data.summary}</strong></p><p class="muted">状态：${data.status} · 全量快照：${data.full_snapshot_id||'-'} · 增量快照：${data.incremental_snapshot_id||'-'}</p><pre>${JSON.stringify(data.diff_json||{},null,2)}</pre><textarea id="reconNote" placeholder="人工确认备注"></textarea><div class="row" style="margin-top:10px"><button class="btn primary" onclick="resolveRecon(${id},'use_full')">以全量版本为准</button><button class="btn primary" onclick="resolveRecon(${id},'use_incremental')">以变动版本为准</button><button class="btn" onclick="resolveRecon(${id},'ignore')">忽略差异</button></div>`);
+        openModal(`差异详情 #${id}`,`<p><strong>${esc(data.summary)}</strong></p><p class="muted">状态：${esc(data.status)} · 全量快照：${data.full_snapshot_id||'-'} · 增量快照：${data.incremental_snapshot_id||'-'}</p>${renderDiffDetail(data.diff_json||{})}${renderReconActions(data)}`);
       }catch(error){openModal(`差异详情 #${id}`,`<div class="attention critical"><strong>需要管理员登录</strong><br/>${error.message}</div>`);}
     }
     async function resolveRecon(id,action){
       try{
         const note=document.getElementById('reconNote')?.value||'';
         const data=await api(`/v1/ops/reconciliation/${id}/actions`,{method:'POST',body:JSON.stringify({action,note})});
-        openModal(`差异已处理 #${id}`,`<p>处理状态：${data.status}</p><pre>${JSON.stringify(data.resolution||{},null,2)}</pre>`);
+        const resolution=data.resolution||{};
+        openModal(`差异已处理 #${id}`,`<p>处理状态：${esc(data.status)}</p><p class="muted">生成文件：${esc(resolution.active_export_name||'-')}</p><pre>${esc(JSON.stringify(resolution,null,2))}</pre>`);
         await refresh();
       }catch(error){openModal(`差异处理失败 #${id}`,`<div class="attention critical"><strong>处理失败</strong><br/>${error.message}</div>`);}
     }

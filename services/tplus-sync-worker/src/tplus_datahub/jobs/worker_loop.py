@@ -149,7 +149,7 @@ def run_forever(
     max_runs: int | None = None,
 ) -> int:
     logger = get_logger("tplus_datahub.worker_loop", "output/logs/worker_loop.log")
-    interval_seconds = _read_positive_int("TPLUS_SYNC_INTERVAL_SECONDS", 3600)
+    interval_seconds = _read_positive_int("TPLUS_SYNC_INTERVAL_SECONDS", 86400)
     run_count = 0
     last_exit_code = 0
 

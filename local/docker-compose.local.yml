@@ -40,13 +40,17 @@ services:
       CHANJET_AUTO_EXCHANGE_OAUTH_CODE: ${CHANJET_AUTO_EXCHANGE_OAUTH_CODE:-false}
       RECIPE_BOM_INPUT_DIR: ${RECIPE_BOM_INPUT_DIR:-/app/tplus-output/excel}
       RECIPE_BOM_INPUT_GLOB: ${RECIPE_BOM_INPUT_GLOB:-*物料清单合并*.xlsx;*bom*.xlsx;*物料清单*.xlsx}
+      RECIPE_ACTIVE_BOM_DIR: ${RECIPE_ACTIVE_BOM_DIR:-/app/recipe-active-bom}
       RECIPE_EXPORT_DIR: ${RECIPE_EXPORT_DIR:-/tmp/aliecs-recipe-exports}
       TPLUS_BOM_SYNC_REQUEST_DIR: ${TPLUS_BOM_SYNC_REQUEST_DIR:-/app/tplus-sync-requests}
       OPS_HEALTH_HTTP_TARGETS_JSON: ${OPS_HEALTH_HTTP_TARGETS_JSON:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
       - ../services/tplus-sync-worker/output:/app/tplus-output:ro
+      - recipe_active_bom:/app/recipe-active-bom
       - tplus_sync_requests:/app/tplus-sync-requests
     depends_on:
       postgres:
@@ -129,7 +133,7 @@ services:
       REQUEST_TIMEOUT_READ: ${REQUEST_TIMEOUT_READ:-30}
       OUTPUT_DIR: /app/output
       DATA_DIR: /app/data
-      TPLUS_SYNC_INTERVAL_SECONDS: ${TPLUS_SYNC_INTERVAL_SECONDS:-3600}
+      TPLUS_SYNC_INTERVAL_SECONDS: ${TPLUS_SYNC_INTERVAL_SECONDS:-86400}
       TPLUS_SYNC_POLL_SECONDS: ${TPLUS_SYNC_POLL_SECONDS:-30}
       TPLUS_DB_SYNC_REQUESTS_ENABLED: ${TPLUS_DB_SYNC_REQUESTS_ENABLED:-true}
       TPLUS_BOM_SYNC_REQUEST_DIR: ${TPLUS_BOM_SYNC_REQUEST_DIR:-/app/sync-requests}
@@ -155,4 +159,5 @@ services:
 
 volumes:
   pgdata:
+  recipe_active_bom:
   tplus_sync_requests:

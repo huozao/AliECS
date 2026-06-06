@@ -4,7 +4,7 @@ The recipe query feature lets an authenticated user enter a formula code, parent
 
 ## Data Source
 
-`backend-api` reads the latest workbook from `RECIPE_BOM_INPUT_DIR`, default `/app/tplus-output/excel`. In local and production compose this path is backed by the `tplus-sync-worker` output mounted read-only.
+`backend-api` first reads the latest confirmed workbook from `RECIPE_ACTIVE_BOM_DIR`, default `/app/recipe-active-bom`. If no confirmed file exists, it falls back to the latest workbook from `RECIPE_BOM_INPUT_DIR`, default `/app/tplus-output/excel`. In local and production compose the fallback path is backed by the `tplus-sync-worker` output mounted read-only.
 
 The source workbook may contain either:
 
@@ -27,6 +27,13 @@ No real source workbook belongs in Git.
 - This endpoint only creates a T+ BOM sync request file under `TPLUS_BOM_SYNC_REQUEST_DIR`; it does not run a broad full-system sync from the web request.
 - `tplus-sync-worker` polls the same request directory and runs `job_sync_bom` when a request is present.
 - `job_sync_bom` uses the BOM sync defaults, which query both enabled and disabled BOM rows.
+
+## Reconciliation Active BOM
+
+- `/health/` shows BOM snapshot differences with added, removed, and changed child rows.
+- When an admin confirms a diff with the current or previous snapshot, `backend-api` creates a new active workbook named like `bom_20260606_061353.xlsx`.
+- The confirmation response includes the generated filename, and later recipe queries prefer that active workbook.
+- Historical diffs that are older than an accepted diff are marked `superseded`, so they no longer remain in the pending review list.
 
 ## Downloaded Workbook
 

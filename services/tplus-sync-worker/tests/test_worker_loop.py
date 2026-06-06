@@ -38,6 +38,25 @@ class WorkerLoopTests(unittest.TestCase):
 
         self.assertEqual(result, 3)
 
+    def test_run_forever_defaults_to_daily_full_reconciliation_interval(self):
+        old_interval = os.environ.get("TPLUS_SYNC_INTERVAL_SECONDS")
+        sleeps = []
+        try:
+            os.environ.pop("TPLUS_SYNC_INTERVAL_SECONDS", None)
+            result = run_forever(
+                sync_once=lambda: 0,
+                sleep=sleeps.append,
+                max_runs=2,
+            )
+        finally:
+            if old_interval is None:
+                os.environ.pop("TPLUS_SYNC_INTERVAL_SECONDS", None)
+            else:
+                os.environ["TPLUS_SYNC_INTERVAL_SECONDS"] = old_interval
+
+        self.assertEqual(result, 0)
+        self.assertEqual(86400, sum(sleeps))
+
     def test_run_forever_records_full_sync_run_status(self):
         recorded = []
 

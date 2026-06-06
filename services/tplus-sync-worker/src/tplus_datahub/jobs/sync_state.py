@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from collections.abc import Mapping
 from contextlib import closing
 from typing import Any
 
@@ -18,13 +19,18 @@ except Exception:  # pragma: no cover
 
 
 def snapshot_bom_rows(rows: list[Any]) -> dict[str, Any]:
-    normalized = [_normalize_row(row) for row in rows]
+    raw_records = _json_safe(rows)
+    normalized = [_normalize_row(row) for row in raw_records]
     normalized.sort(key=lambda row: row["record_key"])
+    items = _extract_bom_items(raw_records)
+    items.sort(key=lambda item: item["record_key"])
     snapshot_hash = _stable_hash(normalized)
     return {
         "row_count": len(rows),
         "snapshot_hash": snapshot_hash,
         "records": normalized,
+        "raw_records": raw_records,
+        "items": items,
     }
 
 
@@ -33,6 +39,7 @@ def build_snapshot_diff(previous: dict[str, Any] | None, current: dict[str, Any]
         return None
     previous_count = int(previous.get("row_count") or 0)
     current_count = int(current.get("row_count") or 0)
+    item_diff = _diff_snapshot_items(previous.get("items") or [], current.get("items") or [])
     return {
         "status": "needs_review",
         "severity": "warning",
@@ -45,6 +52,7 @@ def build_snapshot_diff(previous: dict[str, Any] | None, current: dict[str, Any]
             "previous_row_count": previous_count,
             "current_row_count": current_count,
             "row_count_delta": current_count - previous_count,
+            **item_diff,
         },
     }
 
@@ -58,6 +66,9 @@ def record_bom_snapshot_if_configured(rows: list[Any], *, mode: str, source_json
     snapshot = snapshot_bom_rows(rows)
     source = dict(source_json or {})
     source["mode"] = mode
+    source["snapshot_hash"] = snapshot["snapshot_hash"]
+    source["records"] = snapshot["raw_records"]
+    source["items"] = snapshot["items"]
     try:
         with closing(psycopg.connect(database_url, connect_timeout=3)) as conn:
             previous = _latest_full_snapshot(conn) if mode in {"full_bom", "scheduled_full"} else None
@@ -91,6 +102,7 @@ def record_bom_snapshot_if_configured(rows: list[Any], *, mode: str, source_json
                                 snapshot_id,
                             ),
                         )
+                _upsert_tplus_bom_records(cur, snapshot["records"])
             conn.commit()
     except Exception:
         return
@@ -144,7 +156,7 @@ def _latest_full_snapshot(conn: Any) -> dict[str, Any] | None:
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT id, row_count, snapshot_hash
+            SELECT id, row_count, snapshot_hash, source_json
             FROM integration_sync_snapshots
             WHERE provider = 'chanjet'
               AND module = 'bom'
@@ -156,7 +168,29 @@ def _latest_full_snapshot(conn: Any) -> dict[str, Any] | None:
         row = cur.fetchone()
     if not row:
         return None
-    return {"id": row[0], "row_count": row[1], "snapshot_hash": row[2]}
+    source = _json_value(row[3])
+    return {
+        "id": row[0],
+        "row_count": row[1],
+        "snapshot_hash": row[2],
+        "items": source.get("items") or _extract_bom_items(source.get("records") or []),
+    }
+
+
+def _upsert_tplus_bom_records(cur: Any, records: list[dict[str, Any]]) -> None:
+    for record in records:
+        cur.execute(
+            """
+            INSERT INTO tplus_bom_records(record_key, record_hash, raw_json, last_seen_at, missing_since)
+            VALUES (%s, %s, %s, NOW(), NULL)
+            ON CONFLICT(record_key) DO UPDATE
+            SET record_hash = EXCLUDED.record_hash,
+                raw_json = EXCLUDED.raw_json,
+                last_seen_at = NOW(),
+                missing_since = NULL
+            """,
+            (record["record_key"], record["record_hash"], Jsonb(record["raw"])),
+        )
 
 
 def _normalize_row(row: Any) -> dict[str, Any]:
@@ -180,3 +214,166 @@ def _record_key(row: Any) -> str:
 def _stable_hash(value: Any) -> str:
     body = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def _extract_bom_items(rows: list[Any]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for parent_index, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            value = _json_safe(row)
+            items.append(
+                {
+                    "record_key": f"raw|{parent_index}",
+                    "record_hash": _stable_hash(value),
+                    "parent_code": "",
+                    "parent_name": "",
+                    "version": "",
+                    "disabled": "",
+                    "child_code": "",
+                    "child_name": "",
+                    "unit": "",
+                    "quantity": None,
+                    "raw": value,
+                }
+            )
+            continue
+
+        children = row.get("BOMChilds")
+        if not isinstance(children, list) or not children:
+            item = _bom_item_from_parent_child(row, None, parent_index, 0)
+            items.append(item)
+            continue
+
+        for child_index, child in enumerate(children):
+            item = _bom_item_from_parent_child(row, child if isinstance(child, Mapping) else None, parent_index, child_index)
+            items.append(item)
+    return items
+
+
+def _bom_item_from_parent_child(
+    parent: Mapping[str, Any],
+    child: Mapping[str, Any] | None,
+    parent_index: int,
+    child_index: int,
+) -> dict[str, Any]:
+    child_row = child or {}
+    key = {
+        "parent_code": _text(parent.get("Code")),
+        "version": _text(parent.get("Version")),
+        "disabled": _text(parent.get("Disabled")),
+        "child_code": _text(child_row.get("Code")),
+        "child_id": _text(child_row.get("ID") or child_row.get("Id") or child_index),
+    }
+    comparable = {
+        "parent_code": key["parent_code"],
+        "parent_name": _text(parent.get("Name")),
+        "version": key["version"],
+        "disabled": key["disabled"],
+        "default_bom": _text(parent.get("IsDefaultBom")),
+        "child_code": key["child_code"],
+        "child_name": _text(child_row.get("Name")),
+        "unit": _text(_nested_value(child_row, "Unit", "Name")),
+        "quantity": child_row.get("RequiredQuantity"),
+        "memo": _text(child_row.get("Memo")),
+        "waste_rate": child_row.get("WasteRate"),
+    }
+    if not key["parent_code"] and not key["version"] and not key["child_code"]:
+        record_key = f"raw|{parent_index}|{child_index}"
+    else:
+        record_key = "|".join(str(key[name]) for name in ["parent_code", "version", "disabled", "child_code", "child_id"])
+    return {
+        "record_key": record_key,
+        "record_hash": _stable_hash(comparable),
+        **comparable,
+    }
+
+
+def _diff_snapshot_items(previous_items: list[Any], current_items: list[Any]) -> dict[str, Any]:
+    previous = _items_by_key(previous_items)
+    current = _items_by_key(current_items)
+    added_keys = sorted(set(current) - set(previous))
+    removed_keys = sorted(set(previous) - set(current))
+    common_keys = sorted(set(previous) & set(current))
+    changed: list[dict[str, Any]] = []
+    for key in common_keys:
+        before = previous[key]
+        after = current[key]
+        if before.get("record_hash") == after.get("record_hash"):
+            continue
+        changed_fields = [
+            field
+            for field in ["parent_name", "version", "disabled", "default_bom", "child_name", "unit", "quantity", "memo", "waste_rate"]
+            if before.get(field) != after.get(field)
+        ]
+        changed.append(
+            {
+                "key": _item_key(after),
+                "changed_fields": changed_fields,
+                "before": _strip_item_meta(before),
+                "after": _strip_item_meta(after),
+            }
+        )
+    return {
+        "added_count": len(added_keys),
+        "removed_count": len(removed_keys),
+        "changed_count": len(changed),
+        "added": [_strip_item_meta(current[key]) for key in added_keys[:200]],
+        "removed": [_strip_item_meta(previous[key]) for key in removed_keys[:200]],
+        "changed": changed[:200],
+    }
+
+
+def _items_by_key(items: list[Any]) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        key = _text(item.get("record_key"))
+        if key:
+            result[key] = dict(item)
+    return result
+
+
+def _strip_item_meta(item: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in item.items() if key not in {"record_key", "record_hash", "raw"}}
+
+
+def _item_key(item: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "parent_code": item.get("parent_code") or "",
+        "version": item.get("version") or "",
+        "disabled": item.get("disabled") or "",
+        "child_code": item.get("child_code") or "",
+    }
+
+
+def _nested_value(row: Mapping[str, Any], key: str, nested_key: str) -> Any:
+    value = row.get(key)
+    if isinstance(value, Mapping):
+        return value.get(nested_key)
+    return None
+
+
+def _text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _json_value(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if hasattr(value, "obj"):
+        obj = getattr(value, "obj")
+        return obj if isinstance(obj, dict) else {}
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _json_safe(value: Any) -> Any:
+    return json.loads(json.dumps(value, ensure_ascii=False, default=str))

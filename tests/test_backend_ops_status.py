@@ -69,6 +69,16 @@ class BackendOpsStatusTests(unittest.TestCase):
         self.assertIn("AliECS Backend API", names)
         self.assertIn("WebDock API", names)
 
+    def test_default_webdock_host_uses_ecs_ssh_tunnel_not_tailscale(self) -> None:
+        from app.main import _ops_http_targets
+
+        targets = _ops_http_targets()
+        webdock_api = next(item for item in targets if item["name"] == "WebDock API")
+
+        self.assertIn("11800", webdock_api["url"])
+        self.assertNotIn("100.97.", webdock_api["url"])
+        self.assertIn("SSH", webdock_api["description"])
+
     def test_ops_host_detail_can_refresh_configured_target(self) -> None:
         import json
         from fastapi.testclient import TestClient
@@ -123,7 +133,7 @@ class BackendOpsDatabaseActionTests(unittest.TestCase):
             "status": "needs_review",
             "severity": "warning",
             "summary": "BOM snapshot differs",
-            "diff_json": {"changed": 2},
+            "diff_json": {"changed": 2, "current_snapshot_id": 11, "previous_snapshot_id": 10},
             "full_snapshot_id": 10,
             "incremental_snapshot_id": 11,
             "created_at": "2026-06-05 10:00:00+08",
@@ -131,7 +141,9 @@ class BackendOpsDatabaseActionTests(unittest.TestCase):
             "reviewed_by": None,
             "resolution_json": {},
         }
-        main_module._conn = lambda: _FakeOpsConn(self.diff)
+        self.fake_conn = _FakeOpsConn(self.diff)
+        main_module._conn = lambda: self.fake_conn
+        self.main_module = main_module
         self._encode_token = _encode_token
         self.client = TestClient(app)
 
@@ -168,26 +180,64 @@ class BackendOpsDatabaseActionTests(unittest.TestCase):
         )
 
         self.assertEqual(200, detail.status_code)
-        self.assertEqual({"changed": 2}, detail.json()["diff_json"])
+        self.assertEqual(2, detail.json()["diff_json"]["changed"])
 
-        action = self.client.post(
-            f"/v1/ops/reconciliation/{diff_id}/actions",
-            headers={"Authorization": f"Bearer {token}"},
-            json={"action": "use_full", "note": "人工确认以全量同步为准"},
-        )
+        from unittest.mock import patch
+
+        with patch.object(
+            self.main_module,
+            "_activate_bom_snapshot",
+            return_value={"active_export_name": "bom_20260606_061353.xlsx", "selected_snapshot_id": 10},
+        ):
+            action = self.client.post(
+                f"/v1/ops/reconciliation/{diff_id}/actions",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"action": "use_full", "note": "人工确认以全量同步为准"},
+            )
 
         self.assertEqual(200, action.status_code)
         data = action.json()
         self.assertEqual("resolved", data["status"])
         self.assertEqual("use_full", data["resolution"]["action"])
 
+    def test_admin_resolution_activates_selected_bom_file_and_supersedes_older_diffs(self) -> None:
+        diff_id = self.diff["id"]
+        token = self._token(roles=["admin"], permissions=["admin.access"])
+
+        from unittest.mock import patch
+
+        with patch.object(
+            self.main_module,
+            "_activate_bom_snapshot",
+            return_value={
+                "active_export_name": "bom_20260606_061353.xlsx",
+                "active_export_source": "snapshot_records",
+                "selected_snapshot_id": 11,
+            },
+        ) as activate:
+            response = self.client.post(
+                f"/v1/ops/reconciliation/{diff_id}/actions",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"action": "use_current", "note": "采用当前变动快照"},
+            )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()
+        activate.assert_called_once()
+        self.assertEqual("resolved", data["status"])
+        self.assertEqual("use_current", data["resolution"]["action"])
+        self.assertEqual(11, data["resolution"]["selected_snapshot_id"])
+        self.assertEqual("bom_20260606_061353.xlsx", data["resolution"]["active_export_name"])
+        self.assertEqual([0], self.fake_conn.superseded_diff_ids)
+
 
 class _FakeOpsConn:
     def __init__(self, diff: dict[str, Any]) -> None:
         self.diff = diff
+        self.superseded_diff_ids: list[int] = []
 
     def cursor(self) -> "_FakeOpsCursor":
-        return _FakeOpsCursor(self.diff)
+        return _FakeOpsCursor(self)
 
     def commit(self) -> None:
         pass
@@ -197,8 +247,9 @@ class _FakeOpsConn:
 
 
 class _FakeOpsCursor:
-    def __init__(self, diff: dict[str, Any]) -> None:
-        self.diff = diff
+    def __init__(self, conn: _FakeOpsConn) -> None:
+        self.conn = conn
+        self.diff = conn.diff
         self._one: tuple[Any, ...] | None = None
 
     def __enter__(self) -> "_FakeOpsCursor":
@@ -211,6 +262,10 @@ class _FakeOpsCursor:
         normalized = " ".join(sql.lower().split())
         if normalized.startswith("select id, provider, module, status"):
             self._one = self._row()
+            return
+        if "update integration_reconciliation_diffs" in normalized and "where provider = %s" in normalized:
+            self.conn.superseded_diff_ids.append(0)
+            self._one = None
             return
         if normalized.startswith("update integration_reconciliation_diffs"):
             action_status, resolution_json, reviewed_by, diff_id = params or []

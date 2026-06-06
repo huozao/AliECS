@@ -38,6 +38,49 @@ class SyncStateTests(unittest.TestCase):
         self.assertIn("BOM full snapshot changed", diff["summary"])
         self.assertEqual(1, diff["diff_json"]["row_count_delta"])
 
+    def test_build_snapshot_diff_includes_bom_item_level_changes(self):
+        previous = snapshot_bom_rows(
+            [
+                {
+                    "Code": "HYD-4197PC",
+                    "Name": "HYD-4197PC珠光红",
+                    "Version": "2026-06-03F",
+                    "Disabled": "0",
+                    "BOMChilds": [
+                        {"ID": "1", "Code": "10001024", "Name": "340钛白粉", "RequiredQuantity": 0.04, "Unit": {"Name": "kg"}},
+                    ],
+                }
+            ]
+        )
+        current = snapshot_bom_rows(
+            [
+                {
+                    "Code": "HYD-4197PC",
+                    "Name": "HYD-4197PC珠光红",
+                    "Version": "2026-06-03F",
+                    "Disabled": "0",
+                    "BOMChilds": [
+                        {"ID": "1", "Code": "10001024", "Name": "340钛白粉", "RequiredQuantity": 0.05, "Unit": {"Name": "kg"}},
+                        {"ID": "2", "Code": "90016", "Name": "L-EG红", "RequiredQuantity": 0.206, "Unit": {"Name": "kg"}},
+                    ],
+                }
+            ]
+        )
+        previous["id"] = 27
+        current["id"] = 28
+
+        diff = build_snapshot_diff(previous=previous, current=current)
+
+        self.assertIsNotNone(diff)
+        assert diff is not None
+        detail = diff["diff_json"]
+        self.assertEqual(1, detail["added_count"])
+        self.assertEqual(0, detail["removed_count"])
+        self.assertEqual(1, detail["changed_count"])
+        self.assertEqual("90016", detail["added"][0]["child_code"])
+        self.assertEqual("10001024", detail["changed"][0]["key"]["child_code"])
+        self.assertIn("quantity", detail["changed"][0]["changed_fields"])
+
 
 if __name__ == "__main__":
     unittest.main()
