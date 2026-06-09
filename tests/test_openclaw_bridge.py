@@ -164,6 +164,94 @@ def test_bridge_resolves_openclaw_media_uri_text_to_image_part(tmp_path, monkeyp
     ]
 
 
+def test_bridge_resolves_pdf_file_block_to_attachment(tmp_path, monkeypatch):
+    # OpenClaw forwards a binary document as a <file name mime> block (body is a
+    # placeholder); the real bytes live in the inbound dir under that name. The
+    # bridge reads them and forwards a data-URL attachment.
+    bridge = load_bridge()
+    pdf_name = "report---9e7f833c-d14b-4f3e-bb17-736b63fdc799.pdf"
+    (tmp_path / pdf_name).write_bytes(b"%PDF-1.4 sample document bytes")
+    monkeypatch.setenv("OPENCLAW_INBOUND_MEDIA_DIR", str(tmp_path))
+
+    outbound = bridge.build_webdock_body(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "看看这个文件做个海报\n"
+                        f'<file name="{pdf_name}" mime="application/pdf">\n'
+                        "[PDF content rendered to images; images not forwarded to model]\n"
+                        "</file>"
+                    ),
+                }
+            ],
+        }
+    )
+
+    content = outbound["messages"][0]["content"]
+    text_part = next(p for p in content if p["type"] == "text")
+    assert "海报" in text_part["text"]
+    assert "PDF content rendered" not in text_part["text"]  # noisy placeholder dropped
+    img_part = next(p for p in content if p["type"] == "image_url")
+    assert img_part["image_url"]["url"].startswith("data:application/pdf;base64,")
+
+
+def test_bridge_skips_text_file_block(tmp_path, monkeypatch):
+    # text/* files are inlined by OpenClaw, so the block must NOT be uploaded; the
+    # outbound content stays a plain string with the inlined text preserved.
+    bridge = load_bridge()
+    txt_name = "notes.txt"
+    (tmp_path / txt_name).write_bytes(b"should-not-be-uploaded")
+    monkeypatch.setenv("OPENCLAW_INBOUND_MEDIA_DIR", str(tmp_path))
+
+    outbound = bridge.build_webdock_body(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        f'<file name="{txt_name}" mime="text/plain">\n'
+                        "actual inlined content here\n"
+                        "</file>"
+                    ),
+                }
+            ],
+        }
+    )
+
+    content = outbound["messages"][0]["content"]
+    assert isinstance(content, str)
+    assert "actual inlined content here" in content
+
+
+def test_bridge_ignores_file_block_inside_conversation_history(tmp_path, monkeypatch):
+    # A <file> block embedded in a <conversation> context-checkpoint is history and
+    # must not be re-uploaded.
+    bridge = load_bridge()
+    pdf_name = "old---abc.pdf"
+    (tmp_path / pdf_name).write_bytes(b"%PDF-1.4 old")
+    monkeypatch.setenv("OPENCLAW_INBOUND_MEDIA_DIR", str(tmp_path))
+
+    outbound = bridge.build_webdock_body(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "<conversation>\n[User]: earlier\n"
+                        f'<file name="{pdf_name}" mime="application/pdf">x</file>\n'
+                        "</conversation>\n请总结上面的对话"
+                    ),
+                }
+            ],
+        }
+    )
+
+    # No fresh attachment -> plain string outbound, no image parts.
+    assert isinstance(outbound["messages"][0]["content"], str)
+
+
 def test_bridge_inherits_recent_lane_metadata_for_media_only_message(tmp_path, monkeypatch):
     bridge = load_bridge()
     media_file = tmp_path / "image-a.jpg"

@@ -28,9 +28,47 @@ OPENCLAW_METADATA_CAPTURE_RE = re.compile(
 )
 MAX_BRIDGE_IMAGES = 4
 MAX_BRIDGE_IMAGE_BYTES = 20 * 1024 * 1024
+
+# MIME types forwarded to webdock as file attachments.
+# text/* is already inlined by OpenClaw as <file ...> blocks in the message text,
+# so those are skipped here (no duplicate upload). application/octet-stream
+# (truly unknown binary) is also skipped — better to skip than crash.
+SUPPORTED_ATTACHMENT_MIMES = frozenset({
+    # Images — existing upload path
+    "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp",
+    "image/heic", "image/heif", "image/avif",
+    # Binary documents — new upload path (send-button-enabled wait in webdock)
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",   # .docx
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",         # .xlsx
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation", # .pptx
+    "application/msword",           # .doc
+    "application/vnd.ms-excel",     # .xls
+    "application/vnd.ms-powerpoint",  # .ppt
+    "application/zip",              # ZIP-based Office file with no detectable subtype
+})
 RECENT_METADATA_WINDOW_SECONDS = 120.0
+# OpenClaw forwards inbound DOCUMENTS (PDF/DOCX/XLSX/PPTX…) as a <file name="…"
+# mime="…">…</file> block, NOT a media:// reference. For binary documents the block
+# body is only a placeholder ("[PDF content rendered to images; images not forwarded
+# to model]") — the real bytes live in the inbound media dir under <name>. (text/*
+# files differ: OpenClaw inlines their content in the body, so we leave those alone.)
+OPENCLAW_FILE_BLOCK_RE = re.compile(
+    r'<file\s+name="(?P<name>[^"]*)"\s+mime="(?P<mime>[^"]*)"\s*>(?P<body>.*?)</file>',
+    flags=re.DOTALL,
+)
 OPENCLAW_MEDIA_URI_RE = re.compile(r"media://inbound/([^\s\]\)\"'`]+)")
 OPENCLAW_MEDIA_ATTACHED_LINE_RE = re.compile(r"^\s*\[media attached:\s+media://inbound/[^\]]+\]\s*$", re.MULTILINE)
+# Captures the bare media ID from an explicit attachment line so we only extract
+# media that was freshly attached to THIS message, not historical references in
+# OpenClaw conversation-context blocks (<conversation>…</conversation>).
+# The real format carries a trailing type annotation, e.g.
+#   [media attached: media://inbound/<id>.jpg (image/*)]
+# so after the ID (which stops at the first space) we tolerate anything up to ].
+OPENCLAW_MEDIA_ATTACHED_CAPTURE_RE = re.compile(
+    r"\[media attached:\s+media://inbound/([^\]\s]+)[^\]]*\]",
+    re.MULTILINE,
+)
 OPENCLAW_MEDIA_NO_CAPTION_RE = re.compile(r"^\s*\[User sent media without caption\]\s*$", re.MULTILINE)
 MEDIA_INTENT_RE = re.compile(
     r"(图片|照片|这张图|图像|头像|原图|参考图|风格图|背景|修图|改图|抠图|"
@@ -102,7 +140,22 @@ def clean_user_text(text: Any) -> str:
     if not isinstance(text, str):
         return ""
     cleaned = OPENCLAW_METADATA_RE.sub("", text)
+    cleaned = replace_binary_file_blocks(cleaned)
     return strip_openclaw_media_helper_text(cleaned).strip()
+
+
+def replace_binary_file_blocks(text: str) -> str:
+    """Replace a binary-document <file>…</file> block with a short note. Its body is
+    only a placeholder ("[PDF content rendered to images…]") and the file itself is
+    uploaded separately, so the note tells the model a file was attached without the
+    noisy placeholder. text/* blocks (real inlined content) are left untouched."""
+    def _repl(match: "re.Match[str]") -> str:
+        mime = (match.group("mime") or "").strip().lower()
+        if mime.startswith("text/"):
+            return match.group(0)
+        name = (match.group("name") or "").strip()
+        return f"（已上传文件：{name}）" if name else "（已上传文件）"
+    return OPENCLAW_FILE_BLOCK_RE.sub(_repl, text)
 
 
 def strip_openclaw_media_helper_text(text: str) -> str:
@@ -191,10 +244,26 @@ def extract_image_parts(content: Any) -> list[dict[str, Any]]:
     return parts[:MAX_BRIDGE_IMAGES]
 
 
+_CONVERSATION_BLOCK_RE = re.compile(r"<conversation>.*?</conversation>", re.DOTALL)
+
+
 def extract_openclaw_media_image_parts(text: str) -> list[dict[str, Any]]:
+    """Forward freshly attached inbound media to webdock as data-URL parts.
+
+    Two sources, both scanned only OUTSIDE any <conversation> history block (so old
+    images/files from a context checkpoint are not re-attached):
+      1. [media attached: media://inbound/<id>] lines — inbound images.
+      2. <file name="..." mime="..."> blocks — binary documents (PDF/DOCX/…). The
+         block body is just a placeholder; the real file lives in the inbound media
+         dir under <name>, so we read it by name and upload the actual document.
+         text/* blocks are skipped (OpenClaw already inlines their content)."""
+    if not text:
+        return []
+    # Remove any conversation-history block before scanning for fresh attachments.
+    scan_text = _CONVERSATION_BLOCK_RE.sub("", text)
     parts: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for raw_id in OPENCLAW_MEDIA_URI_RE.findall(text or ""):
+    for raw_id in OPENCLAW_MEDIA_ATTACHED_CAPTURE_RE.findall(scan_text):
         if raw_id in seen:
             continue
         seen.add(raw_id)
@@ -203,7 +272,18 @@ def extract_openclaw_media_image_parts(text: str) -> list[dict[str, Any]]:
             parts.append({"type": "image_url", "image_url": {"url": data_url}})
         if len(parts) >= MAX_BRIDGE_IMAGES:
             break
-    return parts
+    for match in OPENCLAW_FILE_BLOCK_RE.finditer(scan_text):
+        if len(parts) >= MAX_BRIDGE_IMAGES:
+            break
+        mime = (match.group("mime") or "").strip().lower()
+        name = (match.group("name") or "").strip()
+        if not name or name in seen or mime.startswith("text/"):
+            continue  # text/* is inlined by OpenClaw; skip blanks/duplicates
+        seen.add(name)
+        data_url = resolve_openclaw_inbound_media(name)
+        if data_url:
+            parts.append({"type": "image_url", "image_url": {"url": data_url}})
+    return parts[:MAX_BRIDGE_IMAGES]
 
 
 def resolve_openclaw_inbound_media(raw_id: str) -> str | None:
@@ -221,11 +301,30 @@ def resolve_openclaw_inbound_media(raw_id: str) -> str | None:
         return None
     if not data or len(data) > MAX_BRIDGE_IMAGE_BYTES:
         return None
-    mime = mimetypes.guess_type(path)[0] or guess_image_mime(data)
+    mime = guess_file_mime(path, data)
+    if mime not in SUPPORTED_ATTACHMENT_MIMES:
+        # text/* is already inlined by OpenClaw; truly unknown binaries are skipped.
+        return None
     return "data:" + mime + ";base64," + base64.b64encode(data).decode("ascii")
 
 
-def guess_image_mime(data: bytes) -> str:
+def _sniff_zip_content_type(data: bytes) -> str:
+    """Identify OOXML subtype by scanning uncompressed filenames in ZIP local headers."""
+    chunk = data[:2048]
+    if b"word/" in chunk:
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    if b"xl/" in chunk:
+        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    if b"ppt/" in chunk:
+        return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    return "application/zip"
+
+
+def guess_file_mime(path: str, data: bytes) -> str:
+    """Determine MIME: file extension first, then magic bytes."""
+    mime = mimetypes.guess_type(path)[0]
+    if mime:
+        return mime
     if data.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png"
     if data[:3] == b"\xff\xd8\xff":
@@ -234,7 +333,11 @@ def guess_image_mime(data: bytes) -> str:
         return "image/gif"
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
-    return "image/png"
+    if data[:4] == b"%PDF":
+        return "application/pdf"
+    if data[:2] == b"PK":
+        return _sniff_zip_content_type(data)
+    return "application/octet-stream"
 
 
 def get_last_user_images(messages: Any) -> list[dict[str, Any]]:
@@ -278,7 +381,7 @@ def request_details(body: dict[str, Any]) -> dict[str, Any]:
     user_text = get_last_user_message(messages)
     images = get_last_user_images(messages)
     metadata = build_webdock_metadata(body)
-    if images and not metadata.get("peer_id"):
+    if not metadata.get("peer_id"):
         inherited_metadata = get_recent_lane_metadata()
         if inherited_metadata:
             inherited_metadata.update(metadata)
