@@ -113,6 +113,28 @@
       </form>
       <div id="bucketBoard" class="bucket-board" style="margin-top:12px"></div>
     </section>
+
+    <section id="adminCoupleSection" class="section card hidden">
+      <div class="row" style="justify-content:space-between"><h2 style="margin:0">Couple 空间管理 <span class="small muted">（管理员）</span></h2><button id="refreshSpacesBtn" type="button">刷新列表</button></div>
+      <div class="small muted" style="margin:6px 0 12px">先创建空间，再把用户名加入成员；用户缺权限时用「授予访问角色」给 couple_memory_access。</div>
+      <form id="createSpaceForm" class="grid three">
+        <div><label>空间名称</label><input id="coupleSpaceName" required placeholder="我们的空间" /></div>
+        <div><label>开始日期</label><input id="coupleStartDate" placeholder="YYYY-MM-DD 可空" /></div>
+        <div><label>主题</label><input id="coupleTheme" placeholder="可空" /></div>
+        <div class="row" style="grid-column:1/-1"><button class="primary" type="submit">创建空间</button><span id="adminHint" class="small"></span></div>
+      </form>
+      <form id="bindMemberForm" class="grid three" style="margin-top:10px">
+        <div><label>空间 ID</label><input id="bindSpaceId" required placeholder="1" /></div>
+        <div><label>用户名</label><input id="bindUsername" required placeholder="username" /></div>
+        <div><label>角色</label><select id="bindRole"><option value="member">member</option><option value="owner">owner</option></select></div>
+        <div class="row" style="grid-column:1/-1"><button type="submit">绑定成员</button></div>
+      </form>
+      <form id="grantForm" class="grid three" style="margin-top:10px">
+        <div><label>授权用户 ID</label><input id="grantCoupleUserId" required placeholder="用户ID" /></div>
+        <div class="row" style="grid-column:1/-1"><button type="submit">授予访问角色</button></div>
+      </form>
+      <div id="coupleSpacesList" class="grid three" style="margin-top:14px"></div>
+    </section>
   </main>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -234,12 +256,23 @@
       if(status === 'done'){const raw = prompt('可选：关联回忆 ID', completed_memory_id || ''); completed_memory_id = raw ? Number(raw) : null;}
       await api(`/v1/bucket-items/${id}`,{method:'PUT',body:JSON.stringify({title:item.title,description:item.description,status,target_date:item.target_date,completed_memory_id})}); await loadAll();
     }
+    const adminState={spaces:[],error:''};
+    const isAdminUser=(me)=>!!me&&(((me.roles||[]).includes('admin'))||((me.permissions||[]).includes('admin.access')));
+    function adminMsg(text,ok){const el=$('adminHint');if(el){el.textContent=text;el.style.color=ok?'var(--ok)':'var(--danger)';}}
+    async function loadCoupleSpaces(){try{const data=await api('/v1/admin/couple-spaces');adminState.spaces=data.items||[];adminState.error='';}catch(e){adminState.error=e.message;}renderCoupleSpaces();}
+    function renderCoupleSpaces(){const wrap=$('coupleSpacesList');if(!wrap)return;if(adminState.error){wrap.innerHTML=`<div class="muted">加载失败：${esc(adminState.error)}</div>`;return;}wrap.innerHTML=(adminState.spaces||[]).map((s)=>`<article class="card"><strong>#${s.id} ${esc(s.name)}</strong><div class="small">${esc(s.start_date||'未设开始日期')} · ${esc(s.theme||'无主题')}</div><div style="margin-top:8px">${(s.members||[]).map((m)=>`<span class="pill">${esc(m.username)}（${esc(m.role)}）</span> <button class="danger" type="button" data-remove-member="${s.id}:${m.user_id}">移除</button>`).join('')||'<span class="small muted">暂无成员</span>'}</div></article>`).join('')||'<div class="muted">暂无空间。</div>';}
+    async function createCoupleSpace(){const name=$('coupleSpaceName').value.trim();if(!name){adminMsg('请填写空间名称。',false);return;}await api('/v1/admin/couple-spaces',{method:'POST',body:JSON.stringify({name,start_date:$('coupleStartDate').value.trim()||null,theme:$('coupleTheme').value.trim()||null})});adminMsg('空间已创建。',true);$('coupleSpaceName').value='';$('coupleStartDate').value='';$('coupleTheme').value='';await loadCoupleSpaces();}
+    async function addCoupleMember(){const spaceId=Number($('bindSpaceId').value.trim()),username=$('bindUsername').value.trim(),role=$('bindRole').value;if(!Number.isFinite(spaceId)||spaceId<=0){adminMsg('请填写有效空间 ID。',false);return;}if(!username){adminMsg('请填写用户名。',false);return;}await api(`/v1/admin/couple-spaces/${spaceId}/members`,{method:'POST',body:JSON.stringify({username,role})});adminMsg('成员绑定成功。',true);$('bindUsername').value='';await loadCoupleSpaces();}
+    async function removeCoupleMember(spaceId,userId){if(!confirm('确认移除该成员？'))return;await api(`/v1/admin/couple-spaces/${spaceId}/members/${userId}`,{method:'DELETE'});adminMsg('成员已移除。',true);await loadCoupleSpaces();}
+    async function grantCoupleAccess(){const userId=Number($('grantCoupleUserId').value.trim());if(!Number.isFinite(userId)||userId<=0){adminMsg('请填写有效用户 ID。',false);return;}await api(`/v1/admin/users/${userId}/grant-couple-access`,{method:'POST'});adminMsg('已授予访问角色，用户重新登录后生效。',true);$('grantCoupleUserId').value='';await loadCoupleSpaces();}
+    async function initAdminCouple(){let me=null;try{me=await window.AliECSAuth.fetchMe();}catch{me=null;}if(!isAdminUser(me))return;$('adminCoupleSection').classList.remove('hidden');$('createSpaceForm').onsubmit=(e)=>{e.preventDefault();createCoupleSpace().catch((err)=>adminMsg(err.message,false));};$('bindMemberForm').onsubmit=(e)=>{e.preventDefault();addCoupleMember().catch((err)=>adminMsg(err.message,false));};$('grantForm').onsubmit=(e)=>{e.preventDefault();grantCoupleAccess().catch((err)=>adminMsg(err.message,false));};$('refreshSpacesBtn').onclick=()=>loadCoupleSpaces().catch((err)=>adminMsg(err.message,false));await loadCoupleSpaces();}
     document.addEventListener('click', async (ev) => {
       const t = ev.target;
       if (t.dataset?.annivDel && confirm('删除这个纪念日？')) {await api(`/v1/anniversaries/${t.dataset.annivDel}`,{method:'DELETE'}); await loadAll();}
       if (t.dataset?.annivEdit) await editAnniversary(Number(t.dataset.annivEdit));
       if (t.dataset?.bucketDel && confirm('删除这个愿望？')) {await api(`/v1/bucket-items/${t.dataset.bucketDel}`,{method:'DELETE'}); await loadAll();}
       if (t.dataset?.bucketStatus) {const [id,status]=t.dataset.bucketStatus.split(':'); await updateBucketStatus(Number(id),status);}
+      if (t.dataset?.removeMember) {const [sid,uid]=t.dataset.removeMember.split(':'); await removeCoupleMember(Number(sid),Number(uid));}
     });
     document.addEventListener('DOMContentLoaded', async () => {
       const route = await checkAccess(); if(!route){location.replace('/');return;}
@@ -250,7 +283,8 @@
       $('anniversaryForm').onsubmit = (e) => submitAnniversary(e).catch(err => $('anniversaryHint').textContent = err.message);
       $('bucketForm').onsubmit = (e) => submitBucket(e).catch(err => $('bucketHint').textContent = err.message);
       $('refreshGalleryBtn').onclick = () => loadAll().catch(console.error);
-      await loadAll();
+      await loadAll().catch((e)=>console.error(e));
+      await initAdminCouple().catch((e)=>console.error(e));
     });
   </script>
 </body>
