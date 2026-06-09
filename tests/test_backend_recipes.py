@@ -269,12 +269,13 @@ class BackendRecipeRouteTests(unittest.TestCase):
         self.assertEqual(1, data["recipe_count"])
         recipe = data["recipes"][0]
         self.assertEqual("V1", recipe["version"])
-        self.assertAlmostEqual(30.0, recipe["system_total"])
-        self.assertAlmostEqual(32.5, recipe["current_total"])
+        # 分价 = 比例 × 单价：C001 比例 0.8、C002 比例 0.2
+        self.assertAlmostEqual(12.0, recipe["system_total"])   # 0.8*10 + 0.2*20
+        self.assertAlmostEqual(13.0, recipe["current_total"])  # 0.8*10 + 0.2*25
         by_code = {line["child_code"]: line for line in recipe["lines"]}
         self.assertAlmostEqual(20.0, by_code["C002"]["system_price"])
         self.assertAlmostEqual(25.0, by_code["C002"]["current_price"])
-        self.assertAlmostEqual(12.5, by_code["C002"]["current_amount"])
+        self.assertAlmostEqual(5.0, by_code["C002"]["current_amount"])  # 0.2 * 25
 
     def test_recipe_cost_requires_formula_read_permission(self) -> None:
         token = self._token(permissions=["production.schedule.read"])
