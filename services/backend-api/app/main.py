@@ -1300,7 +1300,7 @@ def recipe_query(body: RecipeQueryRequest, user: dict[str, Any] = Depends(requir
         "include_disabled": result.include_disabled,
         "file_id": file_id,
         "download_url": f"/v1/recipes/download/{file_id}",
-        "preview": result.preview_rows(limit=20),
+        "preview": result.preview_rows(limit=5000),
     }
 
 
