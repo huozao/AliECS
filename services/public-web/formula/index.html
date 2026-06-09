@@ -176,7 +176,11 @@
       const recipe=selectedRecipe();
       if(!recipe)return;
       costTotals.innerHTML=`<div class="metric"><span class="muted">版本</span><strong>${recipe.version||'-'}</strong></div><div class="metric"><span class="muted">系统合价</span><strong>${money(recipe.system_total)}</strong></div><div class="metric"><span class="muted">当下合价</span><strong>${money(recipe.current_total)}</strong></div>`;
-      costBody.innerHTML=(recipe.lines||[]).map((line)=>`<tr><td>${line.child_code}</td><td>${line.child_name}</td><td>${line.unit||''}</td><td>${qty(line.quantity)}</td><td>${ratio(line.ratio)}</td><td>${money(line.system_price)}</td><td><input class="price-input" data-code="${line.child_code}" value="${line.current_price||0}" inputmode="decimal"/></td><td>${money(line.system_amount)}</td><td>${money(line.current_amount)}</td><td><button class="btn subtle" type="button" onclick="resetPrice('${line.child_code}')">重置</button></td></tr>`).join('');
+      const costLines=recipe.lines||[];
+      const costSum=(key)=>costLines.reduce((acc,line)=>acc+Number(line[key]||0),0);
+      const costRows=costLines.map((line)=>`<tr><td>${line.child_code}</td><td>${line.child_name}</td><td>${line.unit||''}</td><td>${qty(line.quantity)}</td><td>${ratio(line.ratio)}</td><td>${money(line.system_price)}</td><td><input class="price-input" data-code="${line.child_code}" value="${line.current_price||0}" inputmode="decimal"/></td><td>${money(line.system_amount)}</td><td>${money(line.current_amount)}</td><td><button class="btn subtle" type="button" onclick="resetPrice('${line.child_code}')">重置</button></td></tr>`).join('');
+      const costTotalRow=`<tr style="font-weight:800;background:#f2eadc"><td colspan="3">汇总</td><td>${qty(costSum('quantity'))}</td><td>${ratio(costSum('ratio'))}</td><td>${money(costSum('system_price'))}</td><td>${money(costSum('current_price'))}</td><td>${money(costSum('system_amount'))}</td><td>${money(costSum('current_amount'))}</td><td></td></tr>`;
+      costBody.innerHTML=costRows+costTotalRow;
       costBody.querySelectorAll('.price-input').forEach((input)=>input.addEventListener('change',onPriceChange));
     }
     function selectVersion(key){state.selectedKey=key;renderCost();}

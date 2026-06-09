@@ -427,8 +427,10 @@ def calculate_recipe_costs(
             system_price = _float_or_zero(row.get("系统单价"))
             manual_price = manual_prices.get(child_code)
             current_price = system_price if manual_price is None else float(manual_price)
-            system_amount = cost_quantity * system_price
-            current_amount = cost_quantity * current_price
+            # 分价按「比例 × 单价」计（不是数量 × 单价）。
+            ratio_value = _float_or_zero(row.get("比例"))
+            system_amount = ratio_value * system_price
+            current_amount = ratio_value * current_price
             system_total += system_amount
             current_total += current_amount
             lines.append(
