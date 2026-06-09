@@ -626,7 +626,7 @@ def healthz() -> dict[str, object]:
 
 
 @app.get("/v1/ops/status")
-def ops_status() -> dict[str, Any]:
+def ops_status(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     db_ok, db_message = _db_ping()
     status: dict[str, Any] = {
         "status": "ok" if db_ok else "degraded",

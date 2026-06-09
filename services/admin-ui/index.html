@@ -261,7 +261,6 @@
       </div>
       <div class="top-actions">
         <a class="btn" href="/">首页</a>
-        <button id="coupleEntryBtn" class="btn hidden" type="button" title="隐藏入口">💗</button>
         <a class="btn" href="/api/healthz" target="_blank" rel="noreferrer">API Health</a>
         <button id="refreshAllBtn">刷新数据</button>
         <button id="logoutBtn" class="danger hidden">退出登录</button>
@@ -473,33 +472,6 @@
         </div>
       </section>
 
-      <section class="card" style="display:none">
-        <h2>Couple 空间</h2>
-        <div class="notice">先创建空间，再把用户名加入成员；如用户缺少权限，可在这里授予 <code>couple_memory_access</code> 对应角色。</div>
-        <div class="grid three">
-          <div><label>空间名称</label><input id="coupleSpaceName" placeholder="例如 我们的回忆空间" /></div>
-          <div><label>开始日期</label><input id="coupleStartDate" placeholder="YYYY-MM-DD，可留空" /></div>
-          <div><label>主题</label><input id="coupleTheme" placeholder="例如 春分与晚风" /></div>
-        </div>
-        <div class="row" style="margin-top:12px;"><button id="createCoupleSpaceBtn" class="primary" type="button">创建 Couple 空间</button></div>
-        <div class="grid three" style="margin-top:14px;">
-          <div><label>空间 ID</label><input id="bindSpaceId" placeholder="例如 1" /></div>
-          <div><label>用户名</label><input id="bindUsername" placeholder="例如 tx" /></div>
-          <div><label>角色</label><select id="bindRole"><option value="member">member</option><option value="owner">owner</option></select></div>
-        </div>
-        <div class="row" style="margin-top:12px;"><button id="addCoupleMemberBtn" type="button">绑定成员</button><button id="refreshCoupleBtn" type="button">刷新 Couple 数据</button></div>
-        <div class="grid two" style="margin-top:14px;">
-          <div><label>用户 ID</label><input id="grantCoupleUserId" placeholder="例如 5" /></div>
-          <div style="display:flex;align-items:flex-end;"><button id="grantCoupleAccessBtn" type="button">授予 Couple 访问角色</button></div>
-        </div>
-        <div class="table-wrap" style="margin-top:14px;">
-          <table>
-            <thead><tr><th>空间ID</th><th>名称</th><th>开始日期</th><th>主题</th><th>成员</th></tr></thead>
-            <tbody id="coupleSpacesBody"></tbody>
-          </table>
-        </div>
-      </section>
-
       <section class="card">
         <h2>审计日志</h2>
         <div class="table-wrap">
@@ -531,11 +503,8 @@
       permissions: [],
       features: [],
       logs: [],
-      coupleSpaces: [],
       docSyncSources: [],
-      docSyncRequests: [],
-      coupleRoute: null,
-      coupleSpacesLoadError: ""
+      docSyncRequests: []
     };
 
     const $ = (id) => document.getElementById(id);
@@ -625,29 +594,12 @@
         .replaceAll("'", "&#039;");
     }
 
-    async function requestCoupleAccess() {
-      try {
-        const data = await api("/couple/access");
-        if (data && data.allowed === true) return data.route || "/couple/";
-      } catch {
-        return null;
-      }
-      return null;
-    }
-
-    function renderCoupleEntry() {
-      // Couple 空间已迁移到 /health/（管理员登录后可见），admin 不再展示入口。
-      const btn = $("coupleEntryBtn");
-      if (btn) btn.classList.add("hidden");
-    }
-
     function renderAuth() {
       syncTokenState();
       const loggedIn = Boolean(state.token);
       $("loginCard").classList.toggle("hidden", loggedIn);
       $("appArea").classList.toggle("hidden", !loggedIn);
       $("logoutBtn").classList.toggle("hidden", !loggedIn);
-      renderCoupleEntry();
     }
 
     function renderIdentity() {
@@ -744,29 +696,6 @@
           <td>${escapeHtml(l.action)}</td>
           <td>${escapeHtml([l.target_type, l.target_id].filter(Boolean).join(":"))}</td>
           <td>${escapeHtml(l.created_at)}</td>
-        </tr>
-      `).join("");
-    }
-
-    function renderCoupleSpaces() {
-      if (state.coupleSpacesLoadError) {
-        $("coupleSpacesBody").innerHTML = `
-          <tr>
-            <td colspan="5"><span class="tag danger">Couple 数据加载失败：${escapeHtml(state.coupleSpacesLoadError)}</span></td>
-          </tr>
-        `;
-        return;
-      }
-      $("coupleSpacesBody").innerHTML = (state.coupleSpaces || []).map((s) => `
-        <tr>
-          <td>${s.id}</td>
-          <td>${escapeHtml(s.name)}</td>
-          <td>${escapeHtml(s.start_date || "-")}</td>
-          <td>${escapeHtml(s.theme || "-")}</td>
-          <td>${(s.members || []).map((m) => `
-            <span class="tag ok">${escapeHtml(`${m.username}(${m.role})`)}</span>
-            <button class="danger small" type="button" onclick="removeCoupleMember(${s.id}, ${m.user_id})">移除</button>
-          `).join("") || '<span class="muted">暂无成员</span>'}</td>
         </tr>
       `).join("");
     }
@@ -876,14 +805,12 @@
       if (!isAdmin) {
         throw new Error("当前账号没有 admin.access 权限，无法进入管理后台。");
       }
-      const [usersResp, rolesResp, permissionsResp, featuresResp, logsResp, coupleSpacesResult, coupleRoute, docSyncSourcesResult, docSyncRequestsResult] = await Promise.all([
+      const [usersResp, rolesResp, permissionsResp, featuresResp, logsResp, docSyncSourcesResult, docSyncRequestsResult] = await Promise.all([
         api("/v1/admin/users"),
         api("/v1/admin/roles"),
         api("/v1/admin/permissions"),
         api("/v1/admin/features"),
         api("/v1/admin/audit-logs"),
-        api("/v1/admin/couple-spaces").then((data) => ({ ok: true, data })).catch((error) => ({ ok: false, error })),
-        requestCoupleAccess(),
         api("/v1/admin/doc-sync/sources").then((data) => ({ ok: true, data })).catch((error) => ({ ok: false, error })),
         api("/v1/admin/doc-sync/requests").then((data) => ({ ok: true, data })).catch((error) => ({ ok: false, error }))
       ]);
@@ -893,16 +820,8 @@
       state.permissions = permissionsResp.items || [];
       state.features = featuresResp.items || [];
       state.logs = logsResp.items || [];
-      state.coupleRoute = coupleRoute || null;
       state.docSyncSources = docSyncSourcesResult.ok ? (docSyncSourcesResult.data.items || []) : [];
       state.docSyncRequests = docSyncRequestsResult.ok ? (docSyncRequestsResult.data.items || []) : [];
-      if (coupleSpacesResult.ok) {
-        state.coupleSpaces = coupleSpacesResult.data.items || [];
-        state.coupleSpacesLoadError = "";
-      } else {
-        state.coupleSpaces = [];
-        state.coupleSpacesLoadError = coupleSpacesResult.error?.message || "未知错误";
-      }
 
       renderAuth();
       renderIdentity();
@@ -911,7 +830,6 @@
       renderPermissions();
       renderFeatures();
       renderLogs();
-      renderCoupleSpaces();
       renderDocSync();
     }
 
@@ -981,55 +899,6 @@
       if (!confirm("确认创建手动同步请求？worker 消费请求后会同步该表格。")) return;
       const data = await api(`/v1/admin/doc-sync/sources/${sourceId}/sync-requests`, { method: "POST" });
       showSuccess(`已创建手动同步请求：${data.id}`);
-      await loadAll();
-    }
-
-    async function createCoupleSpace() {
-      const name = $("coupleSpaceName").value.trim();
-      if (!name) return showError("请填写 Couple 空间名称。");
-      await api("/v1/admin/couple-spaces", {
-        method: "POST",
-        body: JSON.stringify({
-          name,
-          start_date: $("coupleStartDate").value.trim() || null,
-          theme: $("coupleTheme").value.trim() || null
-        })
-      });
-      showSuccess("Couple 空间已创建。");
-      $("coupleSpaceName").value = "";
-      $("coupleStartDate").value = "";
-      $("coupleTheme").value = "";
-      await loadAll();
-    }
-
-    async function addCoupleMember() {
-      const spaceId = Number($("bindSpaceId").value.trim());
-      const username = $("bindUsername").value.trim();
-      const role = $("bindRole").value;
-      if (!Number.isFinite(spaceId) || spaceId <= 0) return showError("请填写有效的空间 ID。");
-      if (!username) return showError("请填写要绑定的用户名。");
-      await api(`/v1/admin/couple-spaces/${spaceId}/members`, {
-        method: "POST",
-        body: JSON.stringify({ username, role })
-      });
-      showSuccess("成员绑定成功。");
-      $("bindUsername").value = "";
-      await loadAll();
-    }
-
-    async function removeCoupleMember(spaceId, userId) {
-      if (!confirm("确认移除该 Couple 成员？")) return;
-      await api(`/v1/admin/couple-spaces/${spaceId}/members/${userId}`, { method: "DELETE" });
-      showSuccess("成员已移除。");
-      await loadAll();
-    }
-
-    async function grantCoupleAccess() {
-      const userId = Number($("grantCoupleUserId").value.trim());
-      if (!Number.isFinite(userId) || userId <= 0) return showError("请填写有效的用户 ID。");
-      await api(`/v1/admin/users/${userId}/grant-couple-access`, { method: "POST" });
-      showSuccess("已授予 Couple 访问角色。用户重新登录后 token 会带上新权限。");
-      $("grantCoupleUserId").value = "";
       await loadAll();
     }
 
@@ -1217,7 +1086,6 @@
     window.viewDocSyncRecords = viewDocSyncRecords;
     window.closeDocSyncRecords = closeDocSyncRecords;
     window.requestDocSync = requestDocSync;
-    window.removeCoupleMember = removeCoupleMember;
 
     document.addEventListener("DOMContentLoaded", async () => {
       $("loginBtn").addEventListener("click", () => login().catch((e) => showError(e.message)));
@@ -1225,10 +1093,6 @@
       $("refreshAllBtn").addEventListener("click", () => loadAll().catch((e) => showError(e.message)));
       $("createUserBtn").addEventListener("click", () => createUser().catch((e) => showError(e.message)));
       $("createFeatureBtn").addEventListener("click", () => createFeature().catch((e) => showError(e.message)));
-      $("createCoupleSpaceBtn").addEventListener("click", () => createCoupleSpace().catch((e) => showError(e.message)));
-      $("addCoupleMemberBtn").addEventListener("click", () => addCoupleMember().catch((e) => showError(e.message)));
-      $("grantCoupleAccessBtn").addEventListener("click", () => grantCoupleAccess().catch((e) => showError(e.message)));
-      $("refreshCoupleBtn").addEventListener("click", () => loadAll().catch((e) => showError(e.message)));
       $("refreshDocSyncBtn").addEventListener("click", () => loadAll().catch((e) => showError(e.message)));
       $("passwordInput").addEventListener("keydown", (e) => {
         if (e.key === "Enter") login().catch((err) => showError(err.message));

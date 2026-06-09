@@ -78,16 +78,11 @@
       }
       return data;
     }
-    async function requestCoupleAccess(){try{const data=await api('/couple/access');if(data&&data.allowed===true)return data.route||'/couple/';}catch{}return null;}
-    function bindAdminEntry(){
-      adminLink.onclick=async(event)=>{event.preventDefault();const route=await requestCoupleAccess();location.assign(route||'/admin/');};
-    }
     function renderAuth(){
       const logged=Boolean(state.token&&state.user&&state.user.username!=='guest');
       topLoginBtn.classList.toggle('hidden',logged);
       topRegisterBtn.classList.toggle('hidden',logged);
       topLogoutBtn.classList.toggle('hidden',!logged);
-      bindAdminEntry();
     }
     function isInternal(url){return typeof url==='string'&&url.startsWith('/');}
     function renderFeatureAction(feature){
@@ -133,7 +128,7 @@
     }
     function logout(){clearAuthToken();syncTokenState();state.user=null;showSuccess('已退出登录。');loadFeatures().catch((error)=>showError(error.message));}
     document.addEventListener('DOMContentLoaded',()=>{
-      bindAdminEntry();syncTokenState();
+      syncTokenState();
       refreshBtn.onclick=()=>loadFeatures().catch((error)=>showError(error.message));
       topLoginBtn.onclick=()=>openModal('login');
       topRegisterBtn.onclick=()=>openModal('register');
