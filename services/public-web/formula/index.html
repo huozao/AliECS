@@ -38,14 +38,16 @@
           <select id="defaultBom">
             <option value="all">全部版本</option>
             <option value="1">默认 BOM</option>
+            <option value="disabled">停用</option>
+            <option value="enabled">非停用</option>
           </select>
         </label>
         <button id="queryBtn" class="btn primary" type="submit">查询</button>
       </form>
       <div id="resultBox" class="notice hidden"></div>
-      <div id="previewWrap" class="table-wrap hidden" style="margin-top:12px">
+      <div id="previewWrap" class="table-wrap hidden" style="margin-top:12px;max-height:720px">
         <table class="data-table">
-          <thead><tr><th>父件编码</th><th>父件名称</th><th>版本</th><th>子件编码</th><th>子件名称</th><th>单位</th><th>数量</th><th>比例</th><th>停用</th></tr></thead>
+          <thead><tr><th>父件编码</th><th>父件名称</th><th>版本</th><th>子件编码</th><th>子件名称</th><th>单位</th><th>数量</th><th>比例</th><th>默认BOM</th><th>停用</th></tr></thead>
           <tbody id="previewBody"></tbody>
         </table>
       </div>
@@ -114,15 +116,30 @@
     const money=(value)=>Number(value||0).toLocaleString('zh-CN',{minimumFractionDigits:3,maximumFractionDigits:3});
     const qty=(value)=>Number(value||0).toLocaleString('zh-CN',{maximumFractionDigits:6});
     const ratio=(value)=>Number.isFinite(Number(value))?`${(Number(value)*100).toFixed(3)}%`:'';
+    const NON_DISABLED_VALUES=new Set(['','0','否','False','false']);
+    const rowDisabled=(row)=>!NON_DISABLED_VALUES.has(String((row&&row['停用'])||'').trim());
+    function currentScope(){
+      const value=defaultBom.value;
+      if(value==='disabled')return{bom:'all',disabled:'only'};
+      if(value==='enabled')return{bom:'all',disabled:'exclude'};
+      return{bom:value,disabled:'all'};
+    }
+    function applyScopeFilter(rows){
+      const scope=currentScope();
+      if(scope.disabled==='only')return (rows||[]).filter(rowDisabled);
+      if(scope.disabled==='exclude')return (rows||[]).filter((row)=>!rowDisabled(row));
+      return rows||[];
+    }
     function renderPreview(rows){
-      const items=rows||[];
+      const items=applyScopeFilter(rows);
       previewWrap.classList.toggle('hidden',!items.length);
-      previewBody.innerHTML=items.map((row)=>`<tr><td>${row['父件编码']||''}</td><td>${row['父件名称']||''}</td><td>${row['版本号_子件']||''}</td><td>${row['子件编码']||''}</td><td>${row['子件名称']||''}</td><td>${row['计量单位_子件']||''}</td><td>${row['需用数量']||''}</td><td>${ratio(row['比例'])}</td><td>${row['停用']||''}</td></tr>`).join('');
+      previewBody.innerHTML=items.map((row)=>`<tr><td>${row['父件编码']||''}</td><td>${row['父件名称']||''}</td><td>${row['版本号_子件']||''}</td><td>${row['子件编码']||''}</td><td>${row['子件名称']||''}</td><td>${row['计量单位_子件']||''}</td><td>${row['需用数量']||''}</td><td>${ratio(row['比例'])}</td><td>${row['默认BOM']||''}</td><td>${row['停用']||''}</td></tr>`).join('');
+      return items.length;
     }
     async function fetchCost(){
       const query=queryInput.value.trim();
       if(!query)return;
-      state.cost=await api('/v1/recipes/cost',{method:'POST',body:JSON.stringify({query,default_bom:defaultBom.value,include_disabled:true,manual_prices:state.manualPrices})});
+      state.cost=await api('/v1/recipes/cost',{method:'POST',body:JSON.stringify({query,default_bom:currentScope().bom,include_disabled:true,manual_prices:state.manualPrices})});
       if(!state.selectedKey&&state.cost.recipes&&state.cost.recipes.length)state.selectedKey=state.cost.recipes[0].key;
       renderCost();
     }
@@ -134,10 +151,12 @@
       if(!query){showError('请输入编号或父件编码。');return;}
       queryBtn.disabled=true;resultBox.classList.remove('hidden');resultBox.textContent='正在查询...';
       try{
-        const data=await api('/v1/recipes/query',{method:'POST',body:JSON.stringify({query,default_bom:defaultBom.value,include_disabled:true})});
+        const data=await api('/v1/recipes/query',{method:'POST',body:JSON.stringify({query,default_bom:currentScope().bom,include_disabled:true})});
         state.fileId=data.file_id||'';
-        resultBox.textContent=`匹配 ${data.match_count||0} 条明细，配方 ${data.recipe_count||0} 个，来源：${data.source_file||'unknown'}`;
-        renderPreview(data.preview||[]);
+        const shown=renderPreview(data.preview||[]);
+        const scope=currentScope();
+        const filterNote=scope.disabled==='only'?`，停用筛选后 ${shown} 条`:scope.disabled==='exclude'?`，非停用筛选后 ${shown} 条`:'';
+        resultBox.textContent=`匹配 ${data.match_count||0} 条明细，配方 ${data.recipe_count||0} 个${filterNote}，来源：${data.source_file||'unknown'}`;
         downloadBtn.classList.toggle('hidden',!state.fileId);
         downloadHint.textContent=state.fileId?'结果已生成，可下载核对表。':'';
         await fetchCost();

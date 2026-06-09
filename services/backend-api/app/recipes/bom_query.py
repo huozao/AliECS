@@ -496,28 +496,28 @@ def _recipe_label(row: pd.Series) -> str:
 
 def _write_human_review_sheet(wb, detail: pd.DataFrame, codes: list[str]) -> None:
     ws = wb.create_sheet(HUMAN_SHEET, 0)
-    ws.merge_cells("A1:H1")
+    ws.merge_cells("A1:I1")
     ws["A1"] = "物料清单配方表"
     _style_title(ws["A1"])
-    ws.merge_cells("A2:H2")
+    ws.merge_cells("A2:I2")
     ws["A2"] = f"筛选编号：{'、'.join(codes) if codes else '全部'} | 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     ws["A2"].fill = PatternFill("solid", fgColor="FFE5E7EB")
     ws["A2"].alignment = Alignment(horizontal="center", vertical="center")
 
     current_row = 4
     if detail.empty:
-        ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=8)
+        ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=9)
         ws.cell(current_row, 1).value = "没有筛选到配方"
         ws.cell(current_row, 1).alignment = Alignment(horizontal="center")
     else:
         for _, group in detail.groupby(["版本号_子件", "父件编码"], sort=False, dropna=False):
             group = group.reset_index(drop=True)
-            ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=8)
+            ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=9)
             ws.cell(current_row, 1).value = _recipe_label(group.iloc[0])
             ws.cell(current_row, 1).fill = PatternFill("solid", fgColor="FFE5E7EB")
             ws.cell(current_row, 1).font = Font(bold=True)
             current_row += 1
-            headers = ["序号", "子件编码", "子件名称", "规格型号", "单位", "需用数量", "比例", "停用"]
+            headers = ["序号", "子件编码", "子件名称", "规格型号", "单位", "需用数量", "比例", "默认BOM", "停用"]
             for col, value in enumerate(headers, 1):
                 ws.cell(current_row, col).value = value
             _style_header(ws[current_row])
@@ -532,6 +532,7 @@ def _write_human_review_sheet(wb, detail: pd.DataFrame, codes: list[str]) -> Non
                     row["计量单位_子件"],
                     row["需用数量"],
                     row["比例"],
+                    row["默认BOM"],
                     row["停用"],
                 ]
                 for col, value in enumerate(values, 1):
@@ -541,12 +542,12 @@ def _write_human_review_sheet(wb, detail: pd.DataFrame, codes: list[str]) -> Non
             ws.cell(current_row, 1).value = "合计"
             ws.cell(current_row, 6).value = f"=SUM(F{first_data_row}:F{last_data_row})"
             ws.cell(current_row, 7).value = f"=SUM(G{first_data_row}:G{last_data_row})"
-            for col in range(1, 9):
+            for col in range(1, 10):
                 ws.cell(current_row, col).fill = PatternFill("solid", fgColor="FFFFF7ED")
                 ws.cell(current_row, col).font = Font(bold=True)
             current_row += 2
 
-    for col, width in {"A": 8, "B": 18, "C": 28, "D": 20, "E": 10, "F": 13, "G": 13, "H": 10}.items():
+    for col, width in {"A": 8, "B": 18, "C": 28, "D": 20, "E": 10, "F": 13, "G": 13, "H": 10, "I": 10}.items():
         ws.column_dimensions[col].width = width
     for row in range(1, ws.max_row + 1):
         ws.cell(row, 6).number_format = "0.0000"
