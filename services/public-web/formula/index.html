@@ -47,7 +47,7 @@
       <div id="resultBox" class="notice hidden"></div>
       <div id="previewWrap" class="table-wrap hidden" style="margin-top:12px;max-height:720px">
         <table class="data-table">
-          <thead><tr><th>父件编码</th><th>父件名称</th><th>版本</th><th>默认BOM</th><th>子件编码</th><th>子件名称</th><th>单位</th><th>数量</th><th>比例</th><th>停用</th></tr></thead>
+          <thead><tr><th>父件编码</th><th>父件名称</th><th>版本</th><th>子件编码</th><th>子件名称</th><th>单位</th><th>数量</th><th>比例</th><th>默认BOM</th><th>停用</th></tr></thead>
           <tbody id="previewBody"></tbody>
         </table>
       </div>
@@ -133,7 +133,7 @@
     function renderPreview(rows){
       const items=applyScopeFilter(rows);
       previewWrap.classList.toggle('hidden',!items.length);
-      previewBody.innerHTML=items.map((row)=>`<tr><td>${row['父件编码']||''}</td><td>${row['父件名称']||''}</td><td>${row['版本号_子件']||''}</td><td>${row['默认BOM']||''}</td><td>${row['子件编码']||''}</td><td>${row['子件名称']||''}</td><td>${row['计量单位_子件']||''}</td><td>${row['需用数量']||''}</td><td>${ratio(row['比例'])}</td><td>${row['停用']||''}</td></tr>`).join('');
+      previewBody.innerHTML=items.map((row)=>`<tr><td>${row['父件编码']||''}</td><td>${row['父件名称']||''}</td><td>${row['版本号_子件']||''}</td><td>${row['子件编码']||''}</td><td>${row['子件名称']||''}</td><td>${row['计量单位_子件']||''}</td><td>${row['需用数量']||''}</td><td>${ratio(row['比例'])}</td><td>${row['默认BOM']||''}</td><td>${row['停用']||''}</td></tr>`).join('');
       return items.length;
     }
     async function fetchCost(){
