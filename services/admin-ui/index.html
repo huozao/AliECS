@@ -473,7 +473,7 @@
         </div>
       </section>
 
-      <section class="card">
+      <section class="card" style="display:none">
         <h2>Couple 空间</h2>
         <div class="notice">先创建空间，再把用户名加入成员；如用户缺少权限，可在这里授予 <code>couple_memory_access</code> 对应角色。</div>
         <div class="grid three">
@@ -636,12 +636,9 @@
     }
 
     function renderCoupleEntry() {
+      // Couple 空间已迁移到 /health/（管理员登录后可见），admin 不再展示入口。
       const btn = $("coupleEntryBtn");
-      const route = state.coupleRoute;
-      btn.classList.toggle("hidden", !route);
-      btn.onclick = () => {
-        if (route) location.assign(route);
-      };
+      if (btn) btn.classList.add("hidden");
     }
 
     function renderAuth() {
