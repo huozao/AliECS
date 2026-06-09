@@ -13,13 +13,22 @@
   <div class="wrap">
     <header class="topbar">
       <div><h1>API Health</h1><p class="subtitle">服务器、同步任务、差异校验与需要人工关注的状态。</p></div>
-      <nav class="actions"><a class="btn" href="/">首页</a><a class="btn" href="/api/healthz" target="_blank">JSON Health</a><button id="refreshBtn" class="btn primary" type="button">刷新</button></nav>
+      <nav class="actions"><a class="btn" href="/">首页</a><a class="btn" href="/api/healthz" target="_blank">JSON Health</a><button id="loginBtn" class="btn" type="button">登录</button><button id="logoutBtn" class="btn hidden" type="button">退出登录</button><button id="refreshBtn" class="btn primary" type="button">刷新</button></nav>
     </header>
+    <div id="msg" class="attention" style="display:none;margin-bottom:14px"></div>
     <section id="summary" class="grid"></section>
     <section class="band"><h2>需要关注</h2><div id="attention" class="list muted">加载中...</div></section>
     <section class="band"><h2>T+ 同步</h2><div id="tplus"></div></section>
     <section class="band"><h2>差异校验</h2><div id="reconciliation"></div></section>
     <section class="band"><h2>外部主机</h2><div id="hosts"></div></section>
+    <section id="coupleSection" class="band hidden">
+      <h2>Couple 空间</h2>
+      <div class="muted" style="margin-bottom:10px">先创建空间，再把用户名加入成员；缺权限可授予 couple_memory_access 角色。需管理员登录。</div>
+      <div class="row"><input id="coupleSpaceName" placeholder="空间名称"/><input id="coupleStartDate" placeholder="开始日期 YYYY-MM-DD 可空"/><input id="coupleTheme" placeholder="主题 可空"/><button id="createCoupleSpaceBtn" class="btn primary" type="button">创建空间</button></div>
+      <div class="row" style="margin-top:10px"><input id="bindSpaceId" placeholder="空间ID"/><input id="bindUsername" placeholder="用户名"/><select id="bindRole"><option value="member">member</option><option value="owner">owner</option></select><button id="addCoupleMemberBtn" class="btn" type="button">绑定成员</button></div>
+      <div class="row" style="margin-top:10px"><input id="grantCoupleUserId" placeholder="授权用户ID"/><button id="grantCoupleAccessBtn" class="btn" type="button">授予访问角色</button><button id="refreshCoupleBtn" class="btn" type="button">刷新</button></div>
+      <table style="margin-top:12px"><thead><tr><th>空间ID</th><th>名称</th><th>开始日期</th><th>主题</th><th>成员</th></tr></thead><tbody id="coupleSpacesBody"></tbody></table>
+    </section>
   </div>
   <div id="detailModal" class="modal">
     <div class="modal-panel">
@@ -28,6 +37,14 @@
         <button id="closeModalBtn" class="btn" type="button">关闭</button>
       </div>
       <div id="modalBody" style="margin-top:12px"></div>
+    </div>
+  </div>
+  <div id="authModal" class="modal">
+    <div class="modal-panel" style="width:min(420px,100%)">
+      <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">管理员登录</h3><button id="closeAuthBtn" class="btn" type="button">关闭</button></div>
+      <input id="usernameInput" placeholder="用户名" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-top:10px;font:inherit"/>
+      <input id="passwordInput" type="password" placeholder="密码" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-top:8px;font:inherit"/>
+      <div style="display:flex;justify-content:flex-end;margin-top:10px"><button id="submitLoginBtn" class="btn primary" type="button">提交</button></div>
     </div>
   </div>
   <script>
@@ -47,6 +64,21 @@
       if(!response.ok)throw new Error(data.detail||`HTTP ${response.status}`);
       return data;
     }
+    const $=(id)=>document.getElementById(id);
+    const setAuthToken=(t)=>AUTH_KEYS.forEach((k)=>localStorage.setItem(k,t));
+    const clearAuthToken=()=>AUTH_KEYS.forEach((k)=>localStorage.removeItem(k));
+    const coupleState={spaces:[],error:''};
+    function showError(t){const m=$('msg');if(!m)return;m.textContent=t;m.className='attention critical';m.style.display=t?'block':'none';}
+    function showSuccess(t){const m=$('msg');if(!m)return;m.textContent=t;m.className='attention';m.style.display=t?'block':'none';}
+    function clearMessage(){const m=$('msg');if(m)m.style.display='none';}
+    function syncAuthUI(){const t=token();$('loginBtn').classList.toggle('hidden',!!t);$('logoutBtn').classList.toggle('hidden',!t);$('coupleSection').classList.toggle('hidden',!t);}
+    async function login(){clearMessage();const username=$('usernameInput').value.trim(),password=$('passwordInput').value;if(!username||!password){showError('请输入用户名和密码。');return;}const data=await api('/v1/auth/login',{method:'POST',body:JSON.stringify({username,password})});setAuthToken(data.token);syncAuthUI();$('authModal').classList.remove('show');showSuccess('登录成功。');await loadCouple();}
+    async function loadCouple(){try{const data=await api('/v1/admin/couple-spaces');coupleState.spaces=data.spaces||data||[];coupleState.error='';}catch(e){coupleState.error=e.message;}renderCoupleSpaces();}
+    function renderCoupleSpaces(){const body=$('coupleSpacesBody');if(!body)return;if(coupleState.error){body.innerHTML=`<tr><td colspan="5"><span class="chip failed">加载失败：${esc(coupleState.error)}</span></td></tr>`;return;}body.innerHTML=(coupleState.spaces||[]).map((s)=>`<tr><td>${s.id}</td><td>${esc(s.name)}</td><td>${esc(s.start_date||'-')}</td><td>${esc(s.theme||'-')}</td><td>${(s.members||[]).map((m)=>`<span class="chip ok">${esc(`${m.username}(${m.role})`)}</span> <button class="btn" type="button" onclick="removeCoupleMember(${s.id},${m.user_id})">移除</button>`).join('')||'<span class="muted">暂无成员</span>'}</td></tr>`).join('');}
+    async function createCoupleSpace(){const name=$('coupleSpaceName').value.trim();if(!name){showError('请填写空间名称。');return;}await api('/v1/admin/couple-spaces',{method:'POST',body:JSON.stringify({name,start_date:$('coupleStartDate').value.trim()||null,theme:$('coupleTheme').value.trim()||null})});showSuccess('Couple 空间已创建。');$('coupleSpaceName').value='';$('coupleStartDate').value='';$('coupleTheme').value='';await loadCouple();}
+    async function addCoupleMember(){const spaceId=Number($('bindSpaceId').value.trim()),username=$('bindUsername').value.trim(),role=$('bindRole').value;if(!Number.isFinite(spaceId)||spaceId<=0){showError('请填写有效空间ID。');return;}if(!username){showError('请填写用户名。');return;}await api(`/v1/admin/couple-spaces/${spaceId}/members`,{method:'POST',body:JSON.stringify({username,role})});showSuccess('成员绑定成功。');$('bindUsername').value='';await loadCouple();}
+    async function removeCoupleMember(spaceId,userId){if(!confirm('确认移除该成员？'))return;await api(`/v1/admin/couple-spaces/${spaceId}/members/${userId}`,{method:'DELETE'});showSuccess('成员已移除。');await loadCouple();}
+    async function grantCoupleAccess(){const userId=Number($('grantCoupleUserId').value.trim());if(!Number.isFinite(userId)||userId<=0){showError('请填写有效用户ID。');return;}await api(`/v1/admin/users/${userId}/grant-couple-access`,{method:'POST'});showSuccess('已授予 Couple 访问角色。用户重新登录后生效。');$('grantCoupleUserId').value='';await loadCouple();}
     function renderSummary(data){
       const sys=data.system||{},db=data.database||{},t=data.tplus||{},r=data.reconciliation||{},hosts=data.hosts||[];
       summary.innerHTML=[
@@ -129,7 +161,19 @@
       }catch(error){attention.innerHTML=`<div class="attention critical"><strong>health_load_failed</strong><br/>${error.message}</div>`;}
       finally{refreshBtn.disabled=false}
     }
-    refreshBtn.onclick=refresh;closeModalBtn.onclick=closeModal;detailModal.onclick=(event)=>{if(event.target===detailModal)closeModal();};refresh();
+    refreshBtn.onclick=refresh;closeModalBtn.onclick=closeModal;detailModal.onclick=(event)=>{if(event.target===detailModal)closeModal();};
+    loginBtn.onclick=()=>authModal.classList.add('show');
+    logoutBtn.onclick=()=>{clearAuthToken();syncAuthUI();showSuccess('已退出登录。');};
+    closeAuthBtn.onclick=()=>authModal.classList.remove('show');
+    submitLoginBtn.onclick=()=>login().catch((e)=>showError(e.message));
+    passwordInput.onkeydown=(e)=>{if(e.key==='Enter')login().catch((err)=>showError(err.message));};
+    authModal.onclick=(event)=>{if(event.target===authModal)authModal.classList.remove('show');};
+    createCoupleSpaceBtn.onclick=()=>createCoupleSpace().catch((e)=>showError(e.message));
+    addCoupleMemberBtn.onclick=()=>addCoupleMember().catch((e)=>showError(e.message));
+    grantCoupleAccessBtn.onclick=()=>grantCoupleAccess().catch((e)=>showError(e.message));
+    refreshCoupleBtn.onclick=()=>loadCouple().catch((e)=>showError(e.message));
+    syncAuthUI();if(token())loadCouple();
+    refresh();
   </script>
 </body>
 </html>
