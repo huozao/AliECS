@@ -23,6 +23,11 @@
       <section class="band"><h2>T+ 同步</h2><div id="tplus"></div></section>
       <section class="band"><h2>差异校验</h2><div id="reconciliation"></div></section>
       <section class="band"><h2>外部主机</h2><div id="hosts"></div></section>
+      <section class="band">
+        <h2>数据导出</h2>
+        <div id="exportTabs" class="row" style="margin-bottom:10px"></div>
+        <div id="exportList" class="muted">加载中...</div>
+      </section>
     </div>
   </div>
   <div id="detailModal" class="modal">
@@ -67,7 +72,7 @@
     function clearMessage(){const m=$('msg');if(m)m.style.display='none';}
     async function fetchMe(){if(!token())return null;try{return await api('/v1/auth/me');}catch{return null;}}
     const isAdminUser=(me)=>!!me&&(((me.roles||[]).includes('admin'))||((me.permissions||[]).includes('admin.access')));
-    function applyGate(me){const admin=isAdminUser(me);$('loginBtn').classList.toggle('hidden',admin);$('logoutBtn').classList.toggle('hidden',!token());$('adminContent').classList.toggle('hidden',!admin);$('gateHint').classList.toggle('hidden',admin);$('refreshBtn').classList.toggle('hidden',!admin);$('jsonHealthLink').classList.toggle('hidden',!admin);$('coupleEntryBtn').classList.toggle('hidden',!admin);if(admin)refresh();}
+    function applyGate(me){const admin=isAdminUser(me);$('loginBtn').classList.toggle('hidden',admin);$('logoutBtn').classList.toggle('hidden',!token());$('adminContent').classList.toggle('hidden',!admin);$('gateHint').classList.toggle('hidden',admin);$('refreshBtn').classList.toggle('hidden',!admin);$('jsonHealthLink').classList.toggle('hidden',!admin);$('coupleEntryBtn').classList.toggle('hidden',!admin);if(admin){refresh();loadExports().catch((e)=>{$('exportList').innerHTML=`<span class="chip failed">导出目录加载失败：${esc(e.message)}</span>`;});}}
     async function login(){clearMessage();const username=$('usernameInput').value.trim(),password=$('passwordInput').value;if(!username||!password){showError('请输入用户名和密码。');return;}const data=await api('/v1/auth/login',{method:'POST',body:JSON.stringify({username,password})});setAuthToken(data.token);$('authModal').classList.remove('show');const me=await fetchMe();applyGate(me);if(isAdminUser(me))showSuccess('登录成功。');else showError('当前账号不是管理员，无法查看此页面。');}
     function renderSummary(data){
       const sys=data.system||{},db=data.database||{},t=data.tplus||{},r=data.reconciliation||{},hosts=data.hosts||[];
@@ -139,6 +144,29 @@
       }catch(error){openModal(name,`<div class="attention critical"><strong>刷新失败</strong><br/>${error.message}</div>`);}
     }
     async function loadStatus(){const response=await fetch(`${API_BASE}/v1/ops/status`,{headers:authHeaders()});if(!response.ok)throw new Error(`HTTP ${response.status}`);return await response.json();}
+    let exportCatalog=null,activeExportTab='tplus';
+    async function loadExports(){exportCatalog=await api('/v1/exports/catalog');renderExports();}
+    function fmtSize(bytes){if(bytes==null)return'';if(bytes>=1048576)return `${(bytes/1048576).toFixed(1)} MB`;if(bytes>=1024)return `${(bytes/1024).toFixed(0)} KB`;return `${bytes} B`;}
+    function renderExports(){
+      const tabsData=(exportCatalog&&exportCatalog.tabs)||[];
+      $('exportTabs').innerHTML=tabsData.map((tab)=>`<button class="btn ${tab.key===activeExportTab?'primary':''}" type="button" onclick="selectExportTab('${esc(tab.key)}')">${esc(tab.title)}（${(tab.items||[]).length}）</button>`).join('');
+      const tab=tabsData.find((item)=>item.key===activeExportTab)||tabsData[0];
+      if(!tab){$('exportList').innerHTML='<span class="muted">暂无可导出数据。</span>';return;}
+      const rows=(tab.items||[]).map((item)=>`<tr><td>${esc(item.name)}</td><td>${item.rows!=null?`${item.rows} 行`:fmtSize(item.size_bytes)}</td><td>${esc(item.updated_at?String(item.updated_at).slice(0,19).replace('T',' '):'-')}</td><td><button class="btn primary" type="button" onclick="downloadExport('${esc(item.download_url)}','${esc(item.file_name||item.name)}')">下载</button></td></tr>`).join('');
+      $('exportList').innerHTML=`<table><thead><tr><th>名称</th><th>规模</th><th>更新时间</th><th>下载</th></tr></thead><tbody>${rows||'<tr><td colspan="4" class="muted">该来源暂无数据，需先配置同步源。</td></tr>'}</tbody></table>`;
+    }
+    function selectExportTab(key){activeExportTab=key;renderExports();}
+    async function downloadExport(url,name){
+      try{
+        const response=await fetch(`${API_BASE}${url}`,{headers:authHeaders()});
+        if(!response.ok){let detail=`HTTP ${response.status}`;try{detail=(await response.json()).detail||detail;}catch{}throw new Error(detail);}
+        const blob=await response.blob();
+        const disposition=response.headers.get('Content-Disposition')||'';
+        const match=disposition.match(/filename\*=UTF-8''([^;]+)/);
+        const fileName=match?decodeURIComponent(match[1]):(name&&name.endsWith('.xlsx')?name:`${name||'export'}.xlsx`);
+        const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=fileName;document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(a.href);
+      }catch(error){showError(`下载失败：${error.message}`);}
+    }
     async function refresh(){
       refreshBtn.disabled=true;
       try{
