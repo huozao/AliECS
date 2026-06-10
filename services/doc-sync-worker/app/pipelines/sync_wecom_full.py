@@ -105,6 +105,7 @@ def run_sync_wecom_full(profiles_arg: str = "") -> int:
                             sheets = client.get_sheets(source.docid)
                             if not sheets:
                                 print(f"[企业微信同步] {profile} docid={source.docid} 未返回 sheet。")
+                            document_name = client.get_doc_name(source.docid) or source.source_name
                             for sheet in sheets:
                                 sheet_id = _sheet_id(sheet)
                                 if not sheet_id:
@@ -113,12 +114,12 @@ def run_sync_wecom_full(profiles_arg: str = "") -> int:
                                 source_id = store.ensure_source(
                                     provider="wecom",
                                     env_profile=profile,
-                                    source_name=compose_source_name(source.source_name, sheet_name),
+                                    source_name=compose_source_name(document_name, sheet_name),
                                     source_type="smartsheet_sheet",
                                     external_doc_id=source.docid,
                                     external_sheet_id=sheet_id,
                                     source_url=source.source_url,
-                                    document_name=source.source_name,
+                                    document_name=document_name,
                                     sheet_name=sheet_name,
                                 )
                                 # sheet 级容错：个别表报错（如公开收集表 get_records 60111）不拖垮同文档其余表。

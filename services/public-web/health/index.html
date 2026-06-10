@@ -152,7 +152,7 @@
       $('exportTabs').innerHTML=tabsData.map((tab)=>`<button class="btn ${tab.key===activeExportTab?'primary':''}" type="button" onclick="selectExportTab('${esc(tab.key)}')">${esc(tab.title)}（${(tab.items||[]).length}）</button>`).join('');
       const tab=tabsData.find((item)=>item.key===activeExportTab)||tabsData[0];
       if(!tab){$('exportList').innerHTML='<span class="muted">暂无可导出数据。</span>';return;}
-      const rows=(tab.items||[]).map((item)=>`<tr><td>${esc(item.name)}</td><td>${item.rows!=null?`${item.rows} 行`:fmtSize(item.size_bytes)}</td><td>${esc(item.updated_at?String(item.updated_at).slice(0,19).replace('T',' '):'-')}</td><td><button class="btn primary" type="button" onclick="downloadExport('${esc(item.download_url)}','${esc(item.file_name||item.name)}')">下载</button></td></tr>`).join('');
+      const rows=(tab.items||[]).map((item)=>{const scale=item.sheets!=null?`${item.sheets} 表 / ${item.rows} 行`:(item.rows!=null?`${item.rows} 行`:fmtSize(item.size_bytes));return `<tr><td>${esc(item.name)}</td><td>${scale}</td><td>${esc(item.updated_at?String(item.updated_at).slice(0,19).replace('T',' '):'-')}</td><td><button class="btn primary" type="button" onclick="downloadExport('${esc(item.download_url)}','${esc(item.file_name||item.name)}')">下载</button></td></tr>`;}).join('');
       $('exportList').innerHTML=`<table><thead><tr><th>名称</th><th>规模</th><th>更新时间</th><th>下载</th></tr></thead><tbody>${rows||'<tr><td colspan="4" class="muted">该来源暂无数据，需先配置同步源。</td></tr>'}</tbody></table>`;
     }
     function selectExportTab(key){activeExportTab=key;renderExports();}

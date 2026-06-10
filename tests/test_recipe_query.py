@@ -136,6 +136,32 @@ class RecipeQueryTests(unittest.TestCase):
         self.assertTrue(pd.isna(skipped["比例"]))
         self.assertEqual(1.0, included["比例"])
 
+    def test_ratio_excludes_packaging_by_unit_even_when_code_not_in_skip_list(self) -> None:
+        from app.recipes.bom_query import query_recipe_workbook
+
+        source = self.tmp_path / "bom_unit_exclude.xlsx"
+        wb = Workbook()
+        material = wb.active
+        material.title = "物料清单"
+        material.append(["父件编码", "父件名称", "规格型号", "版本号", "计量单位", "生产数量", "默认BOM", "停用"])
+        material.append(["HYD-0601", "HYD-0601阻燃ABSPVC改性料", "ABS", "V1", "kg", 25, 1, 0])
+        component = wb.create_sheet("子件明细")
+        component.append(["版本号", "父件编码", "子件编码", "子件名称", "规格型号", "计量单位", "需用数量"])
+        component.append(["V1", "HYD-0601", "NEWBAG01", "新包装袋(不在排除编码里)", "P", "条", 40])
+        component.append(["V1", "HYD-0601", "NEWBOX01", "新包装件", "P", "个", 2])
+        component.append(["V1", "HYD-0601", "C100", "树脂", "A", "kg", 20])
+        component.append(["V1", "HYD-0601", "C200", "色粉", "B", "g", 5000])
+        wb.save(source)
+
+        result = query_recipe_workbook(source, query_text="HYD-0601", default_bom="1")
+
+        detail = result.detail.set_index("子件编码")
+        self.assertTrue(pd.isna(detail.loc["NEWBAG01", "比例"]))
+        self.assertTrue(pd.isna(detail.loc["NEWBOX01", "比例"]))
+        # 分母只剩 20kg + 5kg(5000g) = 25kg
+        self.assertAlmostEqual(0.8, float(detail.loc["C100", "比例"]))
+        self.assertAlmostEqual(0.2, float(detail.loc["C200", "比例"]))
+
     def test_save_recipe_workbook_creates_human_review_and_matrix_sheets(self) -> None:
         from app.recipes.bom_query import query_recipe_workbook, save_recipe_workbook
 

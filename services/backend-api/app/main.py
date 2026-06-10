@@ -1421,31 +1421,121 @@ def exports_catalog(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any
     }
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
+            # 按工作簿（文档）聚合：每个智能表格文档一条，下载时整簿多 sheet 导出。
             cur.execute(
                 """
-                SELECT s.id, s.provider, s.env_profile, s.document_name, s.sheet_name,
-                       s.last_sync_at, COUNT(r.id)
+                SELECT s.provider, s.env_profile, s.external_doc_id,
+                       MAX(s.document_name) AS document_name,
+                       MIN(s.id) AS first_source_id,
+                       COUNT(DISTINCT s.id) AS sheet_count,
+                       COUNT(r.id) AS row_count,
+                       MAX(s.last_sync_at) AS last_sync_at
                 FROM external_sources s
                 LEFT JOIN external_records r ON r.source_id = s.id
                 WHERE s.external_sheet_id <> '' AND s.status = 'active'
-                GROUP BY s.id
-                ORDER BY s.id
+                GROUP BY s.provider, s.env_profile, s.external_doc_id
+                ORDER BY MIN(s.id)
                 """
             )
             rows = cur.fetchall()
-    for source_id, provider, env_profile, document_name, sheet_name, last_sync_at, row_count in rows:
+    for provider, env_profile, _doc_id, document_name, first_source_id, sheet_count, row_count, last_sync_at in rows:
         key = _external_source_tab_key(str(provider or ""), str(env_profile or ""))
         tab = tabs.setdefault(key, {"key": key, "title": key, "items": []})
         tab["items"].append(
             {
-                "name": f"{document_name or provider} / {sheet_name or source_id}",
-                "source_id": source_id,
+                "name": document_name or f"{provider} 文档",
+                "source_id": first_source_id,
+                "sheets": sheet_count,
                 "rows": row_count,
                 "updated_at": str(last_sync_at) if last_sync_at else None,
-                "download_url": f"/v1/exports/external/{source_id}",
+                "download_url": f"/v1/exports/external-doc/{first_source_id}",
             }
         )
     return {"tabs": list(tabs.values())}
+
+
+_STOCK_COLUMNS = {
+    "WarehouseCode": "仓库编码",
+    "WarehouseName": "仓库",
+    "InventoryCode": "存货编码",
+    "InventoryName": "存货名称",
+    "InventoryClassName": "存货分类",
+    "Specification": "规格型号",
+    "UnitName": "单位",
+    "ExistingQuantity": "现存量",
+    "AvailableQuantity": "可用量",
+}
+
+
+def _latest_tplus_export_file(module: str) -> Path | None:
+    directory = _tplus_export_dir()
+    if not directory.is_dir():
+        return None
+    candidates = [item for item in directory.glob(f"{module}_*.xlsx") if _tplus_module_of(item.name) == module]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item.name)
+
+
+@app.get("/v1/inventory/current-stock")
+def inventory_current_stock(
+    q: str = Query(default=""),
+    warehouse: str = Query(default=""),
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, Any]:
+    roles = user.get("roles", [])
+    permissions = user.get("permissions", [])
+    allowed = (
+        "admin" in roles
+        or "admin.access" in permissions
+        or "inventory.raw.read" in permissions
+        or "inventory.finished.read" in permissions
+    )
+    if not allowed:
+        raise HTTPException(status_code=403, detail="permission denied")
+
+    path = _latest_tplus_export_file("current_stock")
+    if path is None:
+        raise HTTPException(status_code=404, detail="现存量数据尚未同步，请先在 T+ 同步任务跑一轮全量。")
+
+    import pandas as pd
+
+    df = pd.read_excel(path, dtype=str)
+    for column in _STOCK_COLUMNS:
+        if column not in df.columns:
+            df[column] = ""
+    df = df[list(_STOCK_COLUMNS)].fillna("")
+
+    warehouses = (
+        df[["WarehouseCode", "WarehouseName"]]
+        .drop_duplicates()
+        .sort_values("WarehouseCode")
+        .to_dict("records")
+    )
+
+    if warehouse.strip():
+        df = df[df["WarehouseCode"].str.strip() == warehouse.strip()]
+    keyword = q.strip()
+    if keyword:
+        lowered = keyword.lower()
+        mask = (
+            df["InventoryName"].str.lower().str.contains(lowered, na=False)
+            | df["InventoryCode"].str.lower().str.contains(lowered, na=False)
+            | df["Specification"].str.lower().str.contains(lowered, na=False)
+        )
+        df = df[mask]
+
+    for column in ("ExistingQuantity", "AvailableQuantity"):
+        df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0)
+
+    stat = path.stat()
+    return {
+        "items": df.to_dict("records"),
+        "total": int(len(df)),
+        "warehouses": warehouses,
+        "source_file": path.name,
+        "synced_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+    }
 
 
 @app.get("/v1/exports/tplus/{file_name}")
@@ -1507,6 +1597,78 @@ def exports_external_download(source_id: int, _: dict[str, Any] = Depends(requir
     path = export_dir / f"{provider}_{(env_profile or 'default').lower()}_{source_id}_{timestamp}.xlsx"
     workbook.save(path)
     label = f"{document_name or provider}-{sheet_name or source_id}"
+    return FileResponse(path, media_type=_XLSX_MEDIA_TYPE, filename=f"{label}_{timestamp}.xlsx")
+
+
+def _append_records_worksheet(workbook: Any, title: str, records: list[tuple]) -> None:
+    columns: list[str] = []
+    for _record_id, normalized, _ext_updated, _synced in records:
+        if isinstance(normalized, dict):
+            for column in normalized:
+                if column not in columns:
+                    columns.append(column)
+    base = (str(title or "data").strip() or "data")[:31]
+    name = base
+    suffix = 2
+    while name in workbook.sheetnames:
+        name = f"{base[:28]}_{suffix}"
+        suffix += 1
+    sheet = workbook.create_sheet(title=name)
+    sheet.append(["external_record_id", *columns, "external_updated_at", "synced_at"])
+    for record_id, normalized, ext_updated, synced in records:
+        data = normalized if isinstance(normalized, dict) else {}
+        sheet.append([record_id, *[data.get(column, "") for column in columns], ext_updated or "", str(synced or "")])
+
+
+@app.get("/v1/exports/external-doc/{source_id}")
+def exports_external_doc_download(source_id: int, _: dict[str, Any] = Depends(require_admin)) -> FileResponse:
+    """按所属工作簿导出：同文档的全部 sheet 各占一个工作表。source_id 为该文档任一 sheet 级源。"""
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT provider, env_profile, external_doc_id, document_name FROM external_sources WHERE id = %s",
+                (source_id,),
+            )
+            anchor = cur.fetchone()
+            if not anchor:
+                raise HTTPException(status_code=404, detail="external source not found")
+            provider, env_profile, external_doc_id, document_name = anchor
+            cur.execute(
+                """
+                SELECT id, sheet_name
+                FROM external_sources
+                WHERE provider = %s AND env_profile = %s AND external_doc_id = %s
+                  AND external_sheet_id <> '' AND status = 'active'
+                ORDER BY id
+                """,
+                (provider, env_profile, external_doc_id),
+            )
+            sheet_sources = cur.fetchall()
+            if not sheet_sources:
+                raise HTTPException(status_code=404, detail="document has no active sheets")
+
+            from openpyxl import Workbook
+
+            workbook = Workbook()
+            workbook.remove(workbook.active)
+            for sheet_source_id, sheet_name in sheet_sources:
+                cur.execute(
+                    """
+                    SELECT external_record_id, normalized_json, external_updated_at, synced_at
+                    FROM external_records
+                    WHERE source_id = %s
+                    ORDER BY id
+                    """,
+                    (sheet_source_id,),
+                )
+                _append_records_worksheet(workbook, str(sheet_name or sheet_source_id), cur.fetchall())
+
+    export_dir = Path(os.getenv("EXTERNAL_EXPORT_DIR", "/tmp/aliecs-external-exports"))
+    export_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
+    path = export_dir / f"{provider}_{(env_profile or 'default').lower()}_doc_{source_id}_{timestamp}.xlsx"
+    workbook.save(path)
+    label = str(document_name or provider)
     return FileResponse(path, media_type=_XLSX_MEDIA_TYPE, filename=f"{label}_{timestamp}.xlsx")
 
 

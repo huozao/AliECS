@@ -142,6 +142,33 @@ class SourceNameTests(WorkerImportTestCase):
         self.assertEqual({"document_name": "点检表", "sheet_name": "点检明细"}, names)
 
 
+class DocNameTests(WorkerImportTestCase):
+    def test_get_doc_name_reads_doc_base_info(self) -> None:
+        from app.providers.wecom import WeComSmartsheetClient
+
+        class FakeClient(WeComSmartsheetClient):
+            def __init__(self) -> None:
+                super().__init__("corp", "secret")
+
+            def _post(self, path: str, payload: dict) -> dict:
+                assert path == "/wedoc/get_doc_base_info"
+                return {"errcode": 0, "doc_base_info": {"doc_name": "产量统计", "doc_type": 10}}
+
+        self.assertEqual("产量统计", FakeClient().get_doc_name("dc-any"))
+
+    def test_get_doc_name_returns_empty_on_api_error(self) -> None:
+        from app.providers.wecom import WeComSmartsheetClient
+
+        class FakeClient(WeComSmartsheetClient):
+            def __init__(self) -> None:
+                super().__init__("corp", "secret")
+
+            def _post(self, path: str, payload: dict) -> dict:
+                raise RuntimeError("/wedoc/get_doc_base_info failed: {'errcode': 301085}")
+
+        self.assertEqual("", FakeClient().get_doc_name("dc-any"))
+
+
 class EnvProfileTests(WorkerImportTestCase):
     def test_env_profiles_can_be_inferred_from_company_variables(self) -> None:
         from app.providers.wecom import env_profiles
