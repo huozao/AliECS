@@ -121,7 +121,26 @@ def run_sync_wecom_full(profiles_arg: str = "") -> int:
                                     document_name=source.source_name,
                                     sheet_name=sheet_name,
                                 )
-                                _sync_sheet_records(store, client, source_id, source.docid, sheet_id, counts)
+                                # sheet 级容错：个别表报错（如公开收集表 get_records 60111）不拖垮同文档其余表。
+                                try:
+                                    _sync_sheet_records(store, client, source_id, source.docid, sheet_id, counts)
+                                except Exception as sheet_exc:  # noqa: BLE001
+                                    counts["error_count"] += 1
+                                    sheet_error = str(sheet_exc)
+                                    errors.append(
+                                        {
+                                            "env_profile": profile,
+                                            "docid": source.docid,
+                                            "sheet_id": sheet_id,
+                                            "sheet_name": sheet_name,
+                                            "error": sheet_error,
+                                            "summary": summarize_wecom_error(sheet_error),
+                                        }
+                                    )
+                                    print(
+                                        f"[企业微信同步] {profile} docid={source.docid} "
+                                        f"sheet={sheet_name} 同步失败（已跳过，继续其余表）：{sheet_exc}"
+                                    )
                             doc_synced = True
                             break
                         except Exception as exc:  # noqa: BLE001 - sync should keep collecting useful diagnostics.
