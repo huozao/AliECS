@@ -1427,6 +1427,7 @@ def exports_catalog(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any
                        s.last_sync_at, COUNT(r.id)
                 FROM external_sources s
                 LEFT JOIN external_records r ON r.source_id = s.id
+                WHERE s.external_sheet_id <> '' AND s.status = 'active'
                 GROUP BY s.id
                 ORDER BY s.id
                 """
