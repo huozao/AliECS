@@ -1477,20 +1477,24 @@ def _latest_tplus_export_file(module: str) -> Path | None:
     return max(candidates, key=lambda item: item.name)
 
 
+# 库存页仓库范围：原材料=原材库(001)+L-代加工库(012)；成品=除原材库外全部。
+_RAW_STOCK_WAREHOUSES = {"001", "012"}
+_FINISHED_EXCLUDED_WAREHOUSES = {"001"}
+
+
 @app.get("/v1/inventory/current-stock")
 def inventory_current_stock(
     q: str = Query(default=""),
     warehouse: str = Query(default=""),
+    scope: str = Query(default="raw"),
     user: dict[str, Any] = Depends(require_login),
 ) -> dict[str, Any]:
+    if scope not in ("raw", "finished"):
+        raise HTTPException(status_code=400, detail="scope must be raw or finished")
     roles = user.get("roles", [])
     permissions = user.get("permissions", [])
-    allowed = (
-        "admin" in roles
-        or "admin.access" in permissions
-        or "inventory.raw.read" in permissions
-        or "inventory.finished.read" in permissions
-    )
+    scope_permission = "inventory.raw.read" if scope == "raw" else "inventory.finished.read"
+    allowed = "admin" in roles or "admin.access" in permissions or scope_permission in permissions
     if not allowed:
         raise HTTPException(status_code=403, detail="permission denied")
 
@@ -1506,6 +1510,12 @@ def inventory_current_stock(
             df[column] = ""
     df = df[list(_STOCK_COLUMNS)].fillna("")
 
+    codes = df["WarehouseCode"].str.strip()
+    if scope == "raw":
+        df = df[codes.isin(_RAW_STOCK_WAREHOUSES)]
+    else:
+        df = df[~codes.isin(_FINISHED_EXCLUDED_WAREHOUSES)]
+
     warehouses = (
         df[["WarehouseCode", "WarehouseName"]]
         .drop_duplicates()
@@ -1513,8 +1523,11 @@ def inventory_current_stock(
         .to_dict("records")
     )
 
-    if warehouse.strip():
-        df = df[df["WarehouseCode"].str.strip() == warehouse.strip()]
+    requested_warehouse = warehouse.strip()
+    if requested_warehouse:
+        if requested_warehouse not in {str(item["WarehouseCode"]).strip() for item in warehouses}:
+            raise HTTPException(status_code=400, detail="warehouse not in scope")
+        df = df[df["WarehouseCode"].str.strip() == requested_warehouse]
     keyword = q.strip()
     if keyword:
         lowered = keyword.lower()
