@@ -6,7 +6,7 @@
   <title>AliECS · 系统配方</title>
   <style>
     :root{--bg:#f7f5f0;--panel:#fffdf8;--text:#25211b;--muted:#766f63;--line:#e7dfd0;--primary:#6f5e46;--good:#3f7a4c;--bad:#a6423a;--shadow:0 12px 30px rgba(69,56,38,.08)}
-    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top left,rgba(180,157,118,.16),transparent 36%),var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui}.wrap{max-width:1280px;margin:0 auto;padding:20px 18px 56px}.topbar{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;background:rgba(255,253,248,.94);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px;padding:18px 20px;margin-bottom:16px}h1{margin:0;font-size:34px}h2{margin:0 0 12px}.subtitle{margin:8px 0 0;color:var(--muted)}.actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.btn,button{border:0;border-radius:999px;padding:10px 14px;background:#e8dfcf;color:var(--text);cursor:pointer;font-weight:700;text-decoration:none}.btn.primary{background:var(--primary);color:#fff}.btn.subtle{background:#efe8dc;color:#6e6355}.btn:disabled{opacity:.58;cursor:not-allowed}.panel{background:rgba(255,253,248,.94);border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:var(--shadow);margin-bottom:16px}.form{display:grid;grid-template-columns:minmax(220px,1fr) 170px auto;gap:10px;align-items:end}.form label{display:grid;gap:6px;font-size:13px;color:var(--muted)}input,select,textarea{width:100%;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:#fff;color:var(--text);font:inherit}.notice,.error,.success{border-radius:14px;padding:12px 14px;margin-bottom:14px}.notice{background:#f2eadc;color:var(--muted)}.error{display:none;background:#f5d7d3;color:var(--bad)}.success{display:none;background:#dfeee3;color:var(--good)}.hidden{display:none!important}.muted{color:var(--muted)}.small{font-size:12px}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px;background:#fff}.data-table{width:100%;border-collapse:collapse;font-size:13px;min-width:980px}.data-table th,.data-table td{border-bottom:1px solid var(--line);padding:9px 10px;text-align:left;vertical-align:middle}.data-table th{background:#f2eadc;position:sticky;top:0}.version-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.version-tabs button{border:1px solid var(--line);background:#fff}.version-tabs button.active{background:var(--primary);color:#fff}.total-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:12px 0}.metric{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px}.metric strong{display:block;font-size:22px;margin-top:4px}.price-input{max-width:120px}.row-actions{display:flex;gap:6px;align-items:center}.modal{position:fixed;inset:0;background:rgba(30,22,12,.28);display:none;align-items:center;justify-content:center;padding:16px}.modal.show{display:flex}.auth-panel{width:min(440px,100%);background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px}@media (max-width:900px){.form{grid-template-columns:1fr}.topbar{flex-direction:column}.total-row{grid-template-columns:1fr}}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top left,rgba(180,157,118,.16),transparent 36%),var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui}.wrap{max-width:1280px;margin:0 auto;padding:20px 18px 56px}.topbar{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;background:rgba(255,253,248,.94);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px;padding:18px 20px;margin-bottom:16px}h1{margin:0;font-size:34px}h2{margin:0 0 12px}.subtitle{margin:8px 0 0;color:var(--muted)}.actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.btn,button{border:0;border-radius:999px;padding:10px 14px;background:#e8dfcf;color:var(--text);cursor:pointer;font-weight:700;text-decoration:none}.btn.primary{background:var(--primary);color:#fff}.btn.subtle{background:#efe8dc;color:#6e6355}.btn:disabled{opacity:.58;cursor:not-allowed}.panel{background:rgba(255,253,248,.94);border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:var(--shadow);margin-bottom:16px}.form{display:grid;grid-template-columns:minmax(220px,1fr) 170px auto;gap:10px;align-items:end}.form label{display:grid;gap:6px;font-size:13px;color:var(--muted)}input,select,textarea{width:100%;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:#fff;color:var(--text);font:inherit}.notice,.error,.success{border-radius:14px;padding:12px 14px;margin-bottom:14px}.notice{background:#f2eadc;color:var(--muted)}.error{display:none;background:#f5d7d3;color:var(--bad)}.success{display:none;background:#dfeee3;color:var(--good)}.hidden{display:none!important}.muted{color:var(--muted)}.small{font-size:12px}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px;background:#fff}.data-table{width:100%;border-collapse:collapse;font-size:13px;min-width:980px}.data-table th,.data-table td{border-bottom:1px solid var(--line);padding:9px 10px;text-align:left;vertical-align:middle}.data-table th{background:#f2eadc;position:sticky;top:0}.version-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.version-tabs button{border:1px solid var(--line);background:#fff}.version-tabs button.active{background:var(--primary);color:#fff}.total-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:12px 0}.metric{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px}.metric strong{display:block;font-size:22px;margin-top:4px}.price-input{width:76px;max-width:76px;text-align:right}.price-time{display:block;font-size:11px;color:#766f63;margin-top:2px;white-space:nowrap}.row-actions{display:flex;gap:6px;align-items:center}.modal{position:fixed;inset:0;background:rgba(30,22,12,.28);display:none;align-items:center;justify-content:center;padding:16px}.modal.show{display:flex}.auth-panel{width:min(440px,100%);background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px}@media (max-width:900px){.form{grid-template-columns:1fr}.topbar{flex-direction:column}.total-row{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
@@ -89,12 +89,15 @@
     const API_BASE=location.port==='8080'?'http://localhost:8000':'/api';
     const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
     const PRICE_KEY='formula_manual_prices';
-    const state={token:'',fileId:'',cost:null,selectedKey:'',manualPrices:{}};
+    const PRICE_TIME_KEY='formula_manual_price_times';
+    const state={token:'',fileId:'',cost:null,selectedKey:'',manualPrices:{},priceTimes:{},focusCode:''};
     const getAuthToken=()=>AUTH_KEYS.map((key)=>localStorage.getItem(key)||'').find(Boolean)||'';
     const setAuthToken=(token)=>AUTH_KEYS.forEach((key)=>localStorage.setItem(key,token));
     const clearAuthToken=()=>AUTH_KEYS.forEach((key)=>localStorage.removeItem(key));
     const loadManualPrices=()=>{try{return JSON.parse(localStorage.getItem(PRICE_KEY)||'{}')}catch{return {}}};
-    const saveManualPrices=()=>localStorage.setItem(PRICE_KEY,JSON.stringify(state.manualPrices));
+    const loadPriceTimes=()=>{try{return JSON.parse(localStorage.getItem(PRICE_TIME_KEY)||'{}')}catch{return {}}};
+    const saveManualPrices=()=>{localStorage.setItem(PRICE_KEY,JSON.stringify(state.manualPrices));localStorage.setItem(PRICE_TIME_KEY,JSON.stringify(state.priceTimes));};
+    const fmtPriceTime=(ts)=>{if(!ts)return'';const d=new Date(ts);const p=(n)=>String(n).padStart(2,'0');return `${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;};
     const syncAuth=()=>{state.token=getAuthToken();loginBtn.classList.toggle('hidden',Boolean(state.token));logoutBtn.classList.toggle('hidden',!state.token);};
     function showError(message){errorBox.textContent=message;errorBox.style.display='block';successBox.style.display='none'}
     function showSuccess(message){successBox.textContent=message;successBox.style.display='block';errorBox.style.display='none'}
@@ -178,10 +181,15 @@
       costTotals.innerHTML=`<div class="metric"><span class="muted">版本</span><strong>${recipe.version||'-'}</strong></div><div class="metric"><span class="muted">系统合价</span><strong>${money(recipe.system_total)}</strong></div><div class="metric"><span class="muted">当下合价</span><strong>${money(recipe.current_total)}</strong></div>`;
       const costLines=recipe.lines||[];
       const costSum=(key)=>costLines.reduce((acc,line)=>acc+Number(line[key]||0),0);
-      const costRows=costLines.map((line)=>`<tr><td>${line.child_code}</td><td>${line.child_name}</td><td>${line.unit||''}</td><td>${qty(line.quantity)}</td><td>${ratio(line.ratio)}</td><td>${money(line.system_price)}</td><td><input class="price-input" data-code="${line.child_code}" value="${line.current_price||0}" inputmode="decimal"/></td><td>${money(line.system_amount)}</td><td>${money(line.current_amount)}</td><td><button class="btn subtle" type="button" onclick="resetPrice('${line.child_code}')">重置</button></td></tr>`).join('');
+      const costRows=costLines.map((line)=>{const t=state.priceTimes[line.child_code];const timeLabel=(line.child_code in state.manualPrices)&&t?`<span class="price-time">${fmtPriceTime(t)}</span>`:'';return `<tr><td>${line.child_code}</td><td>${line.child_name}</td><td>${line.unit||''}</td><td>${qty(line.quantity)}</td><td>${ratio(line.ratio)}</td><td>${money(line.system_price)}</td><td><input class="price-input" data-code="${line.child_code}" value="${line.current_price||0}" inputmode="decimal"/>${timeLabel}</td><td>${money(line.system_amount)}</td><td>${money(line.current_amount)}</td><td><button class="btn subtle" type="button" onclick="resetPrice('${line.child_code}')">重置</button></td></tr>`;}).join('');
       const costTotalRow=`<tr style="font-weight:800;background:#f2eadc"><td colspan="3">汇总</td><td>${qty(costSum('quantity'))}</td><td>${ratio(costSum('ratio'))}</td><td>${money(costSum('system_price'))}</td><td>${money(costSum('current_price'))}</td><td>${money(costSum('system_amount'))}</td><td>${money(costSum('current_amount'))}</td><td></td></tr>`;
       costBody.innerHTML=costRows+costTotalRow;
-      costBody.querySelectorAll('.price-input').forEach((input)=>input.addEventListener('change',onPriceChange));
+      costBody.querySelectorAll('.price-input').forEach((input)=>{
+        input.addEventListener('change',onPriceChange);
+        input.addEventListener('focus',()=>setTimeout(()=>input.select(),0));
+        input.addEventListener('keydown',onPriceKeydown);
+      });
+      if(state.focusCode){const el=costBody.querySelector(`.price-input[data-code="${state.focusCode}"]`);state.focusCode='';if(el)el.focus();}
     }
     function selectVersion(key){state.selectedKey=key;renderCost();}
     async function onPriceChange(event){
@@ -190,17 +198,35 @@
       const value=Number(input.value);
       if(!Number.isFinite(value)||value<0){showError('价格必须是非负数字。');renderCost();return;}
       state.manualPrices[code]=value;
+      state.priceTimes[code]=Date.now();
+      saveManualPrices();
+      await fetchCost();
+    }
+    async function onPriceKeydown(event){
+      if(event.key!=='Enter')return;
+      event.preventDefault();
+      const input=event.target;
+      const inputs=[...costBody.querySelectorAll('.price-input')];
+      const next=inputs[inputs.indexOf(input)+1]||null;
+      const code=input.dataset.code;
+      const value=Number(input.value);
+      if(!Number.isFinite(value)||value<0){showError('价格必须是非负数字。');renderCost();return;}
+      if(value===Number(input.defaultValue)){if(next)next.focus();return;}
+      state.focusCode=next?next.dataset.code:'';
+      state.manualPrices[code]=value;
+      state.priceTimes[code]=Date.now();
       saveManualPrices();
       await fetchCost();
     }
     async function resetPrice(code){
       delete state.manualPrices[code];
+      delete state.priceTimes[code];
       saveManualPrices();
       await fetchCost();
     }
     async function resetAllPrices(){
       const recipe=selectedRecipe();
-      for(const line of (recipe&&recipe.lines)||[])delete state.manualPrices[line.child_code];
+      for(const line of (recipe&&recipe.lines)||[]){delete state.manualPrices[line.child_code];delete state.priceTimes[line.child_code];}
       saveManualPrices();
       await fetchCost();
       showSuccess('当前配方价格已重置为系统价格。');
@@ -228,7 +254,7 @@
       setAuthToken(data.token);syncAuth();authModal.classList.remove('show');showSuccess('登录成功。');
     }
     document.addEventListener('DOMContentLoaded',()=>{
-      state.manualPrices=loadManualPrices();syncAuth();
+      state.manualPrices=loadManualPrices();state.priceTimes=loadPriceTimes();syncAuth();
       queryForm.onsubmit=(event)=>queryFormula(event).catch((error)=>showError(error.message));
       syncBtn.onclick=()=>syncBom().catch((error)=>showError(error.message));
       downloadBtn.onclick=()=>downloadResult().catch((error)=>showError(error.message));
