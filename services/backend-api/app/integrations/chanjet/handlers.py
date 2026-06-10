@@ -9,7 +9,7 @@ from typing import Any
 
 from app.integrations.chanjet.crypto import decrypt_encrypt_msg
 from app.integrations.chanjet.schemas import ChanjetEvent, parse_chanjet_event
-from app.integrations.chanjet.token_service import exchange_authorization_code
+from app.integrations.chanjet.token_service import exchange_authorization_code, generate_self_built_open_token
 
 
 LOGGER = logging.getLogger(__name__)
@@ -24,6 +24,11 @@ def handle_chanjet_webhook(
         event = decode_chanjet_payload(payload)
         record = _event_to_record(event)
         spool_chanjet_record("event", record)
+        try:
+            _maybe_refresh_open_token(event)
+        except Exception as exc:
+            spool_chanjet_record("token-refresh-error", {"error": str(exc), "msg_type": event.msg_type})
+            LOGGER.warning("chanjet appTicket token refresh failed: %s", exc)
         if event_sink is not None:
             event_sink(event, record)
         LOGGER.info(
@@ -54,6 +59,85 @@ def handle_chanjet_oauth_callback(code: str | None, state: str | None, redirect_
 
     spool_chanjet_record("oauth", record)
     return {"result": "success", "code_received": bool(code)}
+
+
+def _maybe_refresh_open_token(event: ChanjetEvent) -> None:
+    app_ticket = _extract_app_ticket(event)
+    if not app_ticket:
+        return
+
+    certificate = _chanjet_certificate()
+    token_file = os.getenv("CHANJET_OPEN_TOKEN_FILE", "").strip()
+    if not certificate or not token_file:
+        LOGGER.info(
+            "chanjet appTicket received but auto refresh disabled (certificate set=%s, token file set=%s)",
+            bool(certificate),
+            bool(token_file),
+        )
+        return
+
+    response = generate_self_built_open_token(app_ticket, certificate)
+    token = _extract_open_token(response)
+    if not token:
+        spool_chanjet_record(
+            "token-refresh-error",
+            {"error": "no token in generateToken response", "response_keys": sorted(response.keys())},
+        )
+        LOGGER.warning("chanjet generateToken returned no recognizable openToken: keys=%s", sorted(response.keys()))
+        return
+
+    _atomic_write_secret(token_file, token)
+    spool_chanjet_record("token-refresh", {"token_len": len(token), "token_file": token_file})
+    LOGGER.info("chanjet openToken refreshed via appTicket: len=%s file=%s", len(token), token_file)
+
+
+def _extract_app_ticket(event: ChanjetEvent) -> str:
+    for source in (event.biz_content, event.raw):
+        if not isinstance(source, dict):
+            continue
+        for key in ("appTicket", "app_ticket", "AppTicket", "ticket"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
+def _extract_open_token(response: dict[str, Any]) -> str:
+    candidates: list[Any] = [response]
+    for key in ("result", "data", "value"):
+        nested = response.get(key)
+        if isinstance(nested, dict):
+            candidates.append(nested)
+    for source in candidates:
+        for key in ("openToken", "open_token", "token", "accessToken", "access_token"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
+def _atomic_write_secret(path: str, content: str) -> None:
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as handle:
+        handle.write(content + "\n")
+    os.chmod(tmp_path, 0o600)
+    os.replace(tmp_path, path)
+
+
+def _chanjet_certificate() -> str:
+    value = os.getenv("CHANJET_CERTIFICATE", "").strip()
+    if value:
+        return value
+    file_path = os.getenv("CHANJET_CERTIFICATE_FILE", "").strip()
+    if file_path:
+        try:
+            with open(file_path, "r", encoding="utf-8") as handle:
+                return handle.read().strip()
+        except OSError:
+            return ""
+    return ""
 
 
 def decode_chanjet_payload(payload: dict[str, Any]) -> ChanjetEvent:
