@@ -23,8 +23,8 @@
     <div id="msg" class="attention"></div>
     <section class="panel">
       <div class="row">
-        <input id="qInput" placeholder="按名称 / 编码 / 规格搜索" style="min-width:240px"/>
-        <select id="warehouseSelect"><option value="">所有仓库</option></select>
+        <input id="qInput" name="stock-keyword" autocomplete="off" placeholder="按名称 / 编码 / 规格搜索" style="min-width:240px"/>
+        <select id="warehouseSelect"><option value="" id="allOption">全部</option></select>
         <button id="searchBtn" class="primary" type="button">查询</button>
         <span id="countHint" class="muted small"></span>
       </div>
@@ -41,14 +41,16 @@
   <div id="authModal" class="modal">
     <div class="modal-panel">
       <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">登录</h3><button id="closeAuthBtn" class="btn" type="button">关闭</button></div>
-      <input id="usernameInput" placeholder="用户名" style="width:100%;margin-top:10px"/>
-      <input id="passwordInput" type="password" placeholder="密码" style="width:100%;margin-top:8px"/>
+      <input id="usernameInput" autocomplete="username" placeholder="用户名" style="width:100%;margin-top:10px"/>
+      <input id="passwordInput" type="password" autocomplete="current-password" placeholder="密码" style="width:100%;margin-top:8px"/>
       <div style="display:flex;justify-content:flex-end;margin-top:10px"><button id="submitLoginBtn" class="primary" type="button">提交</button></div>
     </div>
   </div>
   <script>
     // 本页与 finished-goods 共用同一套逻辑，仅 PAGE_TITLE/DEFAULT_WAREHOUSE 不同。
     const PAGE_TITLE='成品库存';
+    const SCOPE='finished';
+    const ALL_LABEL='全部（除原材库）';
     const DEFAULT_WAREHOUSE='002';
     const API_BASE=location.port==='8080'?'http://localhost:8000':'/api';
     const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
@@ -77,6 +79,7 @@
       $('searchBtn').disabled=true;
       try{
         const params=new URLSearchParams();
+        params.set('scope',SCOPE);
         const keyword=$('qInput').value.trim();if(keyword)params.set('q',keyword);
         const warehouse=$('warehouseSelect').value;if(warehouse)params.set('warehouse',warehouse);
         const data=await api(`/v1/inventory/current-stock?${params}`);
@@ -101,7 +104,7 @@
       setAuthToken(data.token);syncAuth();$('authModal').classList.remove('show');await search();
     }
     document.addEventListener('DOMContentLoaded',()=>{
-      document.title=`AliECS · ${PAGE_TITLE}`;$('pageTitle').textContent=PAGE_TITLE;
+      document.title=`AliECS · ${PAGE_TITLE}`;$('pageTitle').textContent=PAGE_TITLE;$('allOption').textContent=ALL_LABEL;
       $('loginBtn').onclick=()=>$('authModal').classList.add('show');
       $('logoutBtn').onclick=()=>{clearAuthToken();syncAuth();$('stockBody').innerHTML='<tr><td colspan="8" class="muted">请登录后查询。</td></tr>';};
       $('closeAuthBtn').onclick=()=>$('authModal').classList.remove('show');
