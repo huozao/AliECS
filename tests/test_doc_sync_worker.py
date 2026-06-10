@@ -126,6 +126,36 @@ class SourceUrlTests(WorkerImportTestCase):
         self.assertEqual("https://doc.weixin.qq.com/smartsheet/dcabc?sheet_id=sheet1", url)
 
 
+class ImageCellTests(WorkerImportTestCase):
+    def test_image_field_normalizes_to_urls(self) -> None:
+        from app.storage.postgres import build_record_snapshot
+
+        record = {
+            "record_id": "r1",
+            "values": {
+                "f1": [{"text": "烤全猪", "type": "text"}],
+                "f2": [
+                    {"id": "img-1", "title": "image/png", "image_url": "https://wdcdn.qpic.cn/a1?w=1"},
+                    {"id": "img-2", "title": "image/jpeg", "image_url": "https://wdcdn.qpic.cn/a2?w=1"},
+                ],
+            },
+        }
+        snapshot = build_record_snapshot(record, {"f1": "菜品", "f2": "菜品参考图"})
+
+        self.assertEqual("烤全猪", snapshot.normalized_json["菜品"])
+        self.assertEqual(
+            "https://wdcdn.qpic.cn/a1?w=1; https://wdcdn.qpic.cn/a2?w=1",
+            snapshot.normalized_json["菜品参考图"],
+        )
+
+    def test_text_cell_behavior_unchanged_for_link_fields(self) -> None:
+        from app.storage.postgres import first_text_cell
+
+        self.assertEqual("官网", first_text_cell([{"text": "官网", "url": "https://example.com"}]))
+        self.assertEqual("", first_text_cell([]))
+        self.assertEqual("plain", first_text_cell("plain"))
+
+
 class SourceNameTests(WorkerImportTestCase):
     def test_compose_source_name_keeps_document_and_sheet_names_separate(self) -> None:
         from app.storage.postgres import compose_source_name

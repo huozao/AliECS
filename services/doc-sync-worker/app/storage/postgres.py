@@ -48,15 +48,37 @@ def connect() -> psycopg.Connection:
     return psycopg.connect(url, connect_timeout=5)
 
 
+_URL_KEYS = ("image_url", "url", "file_url", "download_url")
+
+
+def _cell_urls(items: list[Any]) -> list[str]:
+    urls: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for key in _URL_KEYS:
+            value = str(item.get(key) or "").strip()
+            if value:
+                urls.append(value)
+                break
+    return urls
+
+
 def first_text_cell(value: Any) -> str:
     if value is None:
         return ""
-    if isinstance(value, list) and value:
+    if isinstance(value, list):
+        if not value:
+            return ""
         first = value[0]
         if isinstance(first, dict):
             for key in ("text", "name", "value"):
                 if key in first:
                     return str(first.get(key) or "").strip()
+            # 图片/附件类元素没有文本键：提取全部 URL（如智能表格图片字段的 image_url）。
+            urls = _cell_urls(value)
+            if urls:
+                return "; ".join(urls)
         return str(first).strip()
     if isinstance(value, dict):
         for key in ("text", "name", "value"):
