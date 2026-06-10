@@ -3,6 +3,8 @@ INVENTORY_QUERY_PAGE = "/tplus/api/v2/inventory/QueryPage"
 PARTNER_QUERY_PAGE = "/tplus/api/v2/partner/QueryPage"
 
 VERIFIED_BASE_ARCHIVE_QUERY_ENDPOINTS = {
+    # 现存量（仓库×存货粒度，含 ExistingQuantity/AvailableQuantity；2026-06-10 实测 384 行，偶尔响应 >30s 需调大 REQUEST_TIMEOUT_READ）
+    "current_stock": "/tplus/api/v2/currentStock/Query",
     "warehouse": "/tplus/api/v2/warehouse/Query",
     "unit_group": "/tplus/api/v2/UnitGroup/Query",
     "unit": "/tplus/api/v2/Unit/Query",

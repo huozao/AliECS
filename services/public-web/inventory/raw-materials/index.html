@@ -5,19 +5,115 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>AliECS · 原材料库存</title>
   <style>
-    :root{--bg:#f7f5f0;--panel:#fffdf8;--text:#25211b;--muted:#766f63;--line:#e7dfd0;--primary:#6f5e46;--shadow:0 12px 30px rgba(69,56,38,.08)}
-    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui}.wrap{max-width:980px;margin:0 auto;padding:20px 18px 56px}.topbar,.panel{background:rgba(255,253,248,.94);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px;padding:18px 20px;margin-bottom:16px}.topbar{display:flex;justify-content:space-between;gap:12px;align-items:center}h1{margin:0;font-size:32px}.muted{color:var(--muted)}.btn{border:0;border-radius:999px;padding:10px 14px;background:var(--primary);color:#fff;font-weight:700;text-decoration:none}
+    :root{--bg:#f7f5f0;--panel:#fffdf8;--text:#25211b;--muted:#766f63;--line:#e7dfd0;--good:#3f7a4c;--bad:#a6423a;--primary:#6f5e46;--shadow:0 12px 30px rgba(69,56,38,.08)}
+    *{box-sizing:border-box}.hidden{display:none!important}body{margin:0;background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui}.wrap{max-width:1180px;margin:0 auto;padding:20px 18px 56px}.topbar,.panel{background:rgba(255,253,248,.94);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px;padding:18px 20px;margin-bottom:16px}.topbar{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}h1{margin:0;font-size:30px}.muted{color:var(--muted)}.small{font-size:13px}.btn,button{border:0;border-radius:999px;padding:9px 13px;background:#e8dfcf;color:var(--text);font-weight:650;text-decoration:none;cursor:pointer}.btn.primary,button.primary{background:var(--primary);color:#fff}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    input,select{border:1px solid var(--line);border-radius:10px;padding:9px 11px;font:inherit;background:#fff}
+    table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;font-size:13px}th{background:#f2eadc;position:sticky;top:0}td.num,th.num{text-align:right}
+    .table-wrap{max-height:62vh;overflow:auto;border-radius:12px}
+    .attention{border-left:4px solid var(--bad);padding:8px 10px;background:#fff;border-radius:8px;margin-bottom:12px;display:none}
+    .modal{position:fixed;inset:0;background:rgba(30,22,12,.28);display:none;align-items:center;justify-content:center;padding:16px}.modal.show{display:flex}.modal-panel{width:min(420px,100%);background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px}
   </style>
 </head>
 <body>
   <div class="wrap">
     <header class="topbar">
-      <h1>原材料库存</h1>
-      <a class="btn" href="/">返回首页</a>
+      <div><h1 id="pageTitle">原材料库存</h1><div id="metaLine" class="muted small">数据来自 T+ 现存量同步</div></div>
+      <nav class="row"><a class="btn" href="/">首页</a><button id="loginBtn" class="btn" type="button">登录</button><button id="logoutBtn" class="btn hidden" type="button">退出登录</button></nav>
     </header>
+    <div id="msg" class="attention"></div>
     <section class="panel">
-      <p class="muted">原材料库存查询入口已预留。当前上线重点是系统配方和 BOM 成本核算，库存明细 API 接入后会在此页显示查询结果。</p>
+      <div class="row">
+        <input id="qInput" placeholder="按名称 / 编码 / 规格搜索" style="min-width:240px"/>
+        <select id="warehouseSelect"><option value="">所有仓库</option></select>
+        <button id="searchBtn" class="primary" type="button">查询</button>
+        <span id="countHint" class="muted small"></span>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>仓库</th><th>存货编码</th><th>存货名称</th><th>分类</th><th>规格型号</th><th>单位</th><th class="num">现存量</th><th class="num">可用量</th></tr></thead>
+          <tbody id="stockBody"><tr><td colspan="8" class="muted">请登录后查询。</td></tr></tbody>
+        </table>
+      </div>
     </section>
   </div>
+  <div id="authModal" class="modal">
+    <div class="modal-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">登录</h3><button id="closeAuthBtn" class="btn" type="button">关闭</button></div>
+      <input id="usernameInput" placeholder="用户名" style="width:100%;margin-top:10px"/>
+      <input id="passwordInput" type="password" placeholder="密码" style="width:100%;margin-top:8px"/>
+      <div style="display:flex;justify-content:flex-end;margin-top:10px"><button id="submitLoginBtn" class="primary" type="button">提交</button></div>
+    </div>
+  </div>
+  <script>
+    // 本页与 finished-goods 共用同一套逻辑，仅 PAGE_TITLE/DEFAULT_WAREHOUSE 不同。
+    const PAGE_TITLE='原材料库存';
+    const DEFAULT_WAREHOUSE='001';
+    const API_BASE=location.port==='8080'?'http://localhost:8000':'/api';
+    const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
+    const $=(id)=>document.getElementById(id);
+    const token=()=>AUTH_KEYS.map((k)=>localStorage.getItem(k)||'').find(Boolean)||'';
+    const setAuthToken=(t)=>AUTH_KEYS.forEach((k)=>localStorage.setItem(k,t));
+    const clearAuthToken=()=>AUTH_KEYS.forEach((k)=>localStorage.removeItem(k));
+    const esc=(v)=>String(v??'').replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const qty=(v)=>Number(v||0).toLocaleString('zh-CN',{maximumFractionDigits:4});
+    function showError(t){const m=$('msg');m.textContent=t;m.style.display=t?'block':'none';}
+    function clearMessage(){$('msg').style.display='none';}
+    async function api(path,opt={}){
+      const headers=Object.assign({'Content-Type':'application/json'},opt.headers||{});
+      const t=token();if(t)headers.Authorization=`Bearer ${t}`;
+      const response=await fetch(`${API_BASE}${path}`,{...opt,headers});
+      const text=await response.text();let data={};
+      if(text){try{data=JSON.parse(text)}catch{data={raw:text}}}
+      if(!response.ok){if(response.status===401){clearAuthToken();syncAuth();}throw new Error(data.detail||`HTTP ${response.status}`);}
+      return data;
+    }
+    function syncAuth(){const t=token();$('loginBtn').classList.toggle('hidden',!!t);$('logoutBtn').classList.toggle('hidden',!t);}
+    let warehousesLoaded=false;
+    async function search(){
+      clearMessage();
+      if(!token()){showError('请先登录。');return;}
+      $('searchBtn').disabled=true;
+      try{
+        const params=new URLSearchParams();
+        const keyword=$('qInput').value.trim();if(keyword)params.set('q',keyword);
+        const warehouse=$('warehouseSelect').value;if(warehouse)params.set('warehouse',warehouse);
+        const data=await api(`/v1/inventory/current-stock?${params}`);
+        if(!warehousesLoaded){
+          const select=$('warehouseSelect');
+          (data.warehouses||[]).forEach((w)=>{const opt=document.createElement('option');opt.value=w.WarehouseCode;opt.textContent=`${w.WarehouseName}（${w.WarehouseCode}）`;select.appendChild(opt);});
+          warehousesLoaded=true;
+          if([...select.options].some((o)=>o.value===DEFAULT_WAREHOUSE)&&!select.dataset.userTouched){select.value=DEFAULT_WAREHOUSE;await search();return;}
+        }
+        const items=data.items||[];
+        $('stockBody').innerHTML=items.map((r)=>`<tr><td>${esc(r.WarehouseName)}</td><td>${esc(r.InventoryCode)}</td><td>${esc(r.InventoryName)}</td><td>${esc(r.InventoryClassName)}</td><td>${esc(r.Specification)}</td><td>${esc(r.UnitName)}</td><td class="num">${qty(r.ExistingQuantity)}</td><td class="num">${qty(r.AvailableQuantity)}</td></tr>`).join('')||'<tr><td colspan="8" class="muted">没有匹配的库存记录。</td></tr>';
+        $('countHint').textContent=`${data.total||0} 条`;
+        $('metaLine').textContent=`数据文件 ${data.source_file||'-'} · 同步于 ${data.synced_at?String(data.synced_at).slice(0,19).replace('T',' '):'-'} (UTC)`;
+      }catch(error){showError(error.message);}
+      finally{$('searchBtn').disabled=false;}
+    }
+    async function login(){
+      clearMessage();
+      const username=$('usernameInput').value.trim(),password=$('passwordInput').value;
+      if(!username||!password){showError('请输入用户名和密码。');return;}
+      const data=await api('/v1/auth/login',{method:'POST',body:JSON.stringify({username,password})});
+      setAuthToken(data.token);syncAuth();$('authModal').classList.remove('show');await search();
+    }
+    document.addEventListener('DOMContentLoaded',()=>{
+      document.title=`AliECS · ${PAGE_TITLE}`;$('pageTitle').textContent=PAGE_TITLE;
+      $('loginBtn').onclick=()=>$('authModal').classList.add('show');
+      $('logoutBtn').onclick=()=>{clearAuthToken();syncAuth();$('stockBody').innerHTML='<tr><td colspan="8" class="muted">请登录后查询。</td></tr>';};
+      $('closeAuthBtn').onclick=()=>$('authModal').classList.remove('show');
+      $('submitLoginBtn').onclick=()=>login().catch((e)=>showError(e.message));
+      $('passwordInput').onkeydown=(e)=>{if(e.key==='Enter')login().catch((err)=>showError(err.message));};
+      $('authModal').onclick=(e)=>{if(e.target===$('authModal'))$('authModal').classList.remove('show');};
+      $('searchBtn').onclick=()=>search();
+      $('qInput').onkeydown=(e)=>{if(e.key==='Enter')search();};
+      $('warehouseSelect').onchange=()=>{$('warehouseSelect').dataset.userTouched='1';search();};
+      syncAuth();
+      if(token())search();
+    });
+  </script>
 </body>
 </html>

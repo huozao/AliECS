@@ -85,6 +85,9 @@ CUSTOM_COLUMNS_ORDER = [
 ]
 
 SKIP_CHILD_CODES = {"30008", "30004", "90011", "30009", "90024", "03000012", "3000011", "0300001"}
+# 包装类子件按单位兜底排除：新增包装袋编码不在 SKIP_CHILD_CODES 时（如 HYD-0601 的新包装袋），
+# 凡单位为"条"/"个"的子件一律不参与比例分母。
+SKIP_RATIO_UNITS = {"条", "个"}
 GRAM_UNITS = {"克", "g", "G", "gram", "grams"}
 TEXT_COLUMNS = {
     "版本号",
@@ -260,6 +263,8 @@ def compute_ratio_series(df: pd.DataFrame) -> pd.Series:
     qty_kg = qty.where(~unit.isin(GRAM_UNITS), qty / 1000)
     child = df.get("子件编码").astype(str).str.strip() if "子件编码" in df.columns else ""
     mask = qty_kg.notna() & (~child.isin(SKIP_CHILD_CODES))
+    if "计量单位_子件" in df.columns:
+        mask &= ~unit.isin(SKIP_RATIO_UNITS)
     group_key = (
         df.get("版本号_子件").astype(str).str.strip().fillna("")
         .str.cat(df.get("父件编码").astype(str).str.strip().fillna(""), sep="||")
