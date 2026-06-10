@@ -1365,6 +1365,149 @@ def recipe_download(file_id: str, user: dict[str, Any] = Depends(require_login))
     )
 
 
+_XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _tplus_export_dir() -> Path:
+    return Path(os.getenv("TPLUS_EXPORT_DIR", "/app/tplus-output/excel"))
+
+
+def _tplus_module_of(file_name: str) -> str:
+    stem = file_name[:-5] if file_name.endswith(".xlsx") else file_name
+    parts = stem.rsplit("_", 2)
+    if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
+        return parts[0]
+    return stem
+
+
+def _latest_tplus_exports() -> list[dict[str, Any]]:
+    directory = _tplus_export_dir()
+    latest: dict[str, Path] = {}
+    if directory.is_dir():
+        for item in directory.glob("*.xlsx"):
+            module = _tplus_module_of(item.name)
+            current = latest.get(module)
+            if current is None or item.name > current.name:
+                latest[module] = item
+    items: list[dict[str, Any]] = []
+    for module in sorted(latest):
+        path = latest[module]
+        stat = path.stat()
+        items.append(
+            {
+                "name": module,
+                "file_name": path.name,
+                "size_bytes": stat.st_size,
+                "updated_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                "download_url": f"/v1/exports/tplus/{path.name}",
+            }
+        )
+    return items
+
+
+def _external_source_tab_key(provider: str, env_profile: str) -> str:
+    if provider == "feishu":
+        return "feishu"
+    return f"{provider}_{env_profile.lower()}"
+
+
+@app.get("/v1/exports/catalog")
+def exports_catalog(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    tabs: dict[str, dict[str, Any]] = {
+        "tplus": {"key": "tplus", "title": "T+ ERP", "items": _latest_tplus_exports()},
+        "wecom_company_a": {"key": "wecom_company_a", "title": "企微A", "items": []},
+        "wecom_company_b": {"key": "wecom_company_b", "title": "企微B", "items": []},
+        "feishu": {"key": "feishu", "title": "飞书", "items": []},
+    }
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT s.id, s.provider, s.env_profile, s.document_name, s.sheet_name,
+                       s.last_sync_at, COUNT(r.id)
+                FROM external_sources s
+                LEFT JOIN external_records r ON r.source_id = s.id
+                GROUP BY s.id
+                ORDER BY s.id
+                """
+            )
+            rows = cur.fetchall()
+    for source_id, provider, env_profile, document_name, sheet_name, last_sync_at, row_count in rows:
+        key = _external_source_tab_key(str(provider or ""), str(env_profile or ""))
+        tab = tabs.setdefault(key, {"key": key, "title": key, "items": []})
+        tab["items"].append(
+            {
+                "name": f"{document_name or provider} / {sheet_name or source_id}",
+                "source_id": source_id,
+                "rows": row_count,
+                "updated_at": str(last_sync_at) if last_sync_at else None,
+                "download_url": f"/v1/exports/external/{source_id}",
+            }
+        )
+    return {"tabs": list(tabs.values())}
+
+
+@app.get("/v1/exports/tplus/{file_name}")
+def exports_tplus_download(file_name: str, _: dict[str, Any] = Depends(require_admin)) -> FileResponse:
+    if Path(file_name).name != file_name or not file_name.endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="invalid file name")
+    path = _tplus_export_dir() / file_name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="export file not found")
+    return FileResponse(path, media_type=_XLSX_MEDIA_TYPE, filename=file_name)
+
+
+@app.get("/v1/exports/external/{source_id}")
+def exports_external_download(source_id: int, _: dict[str, Any] = Depends(require_admin)) -> FileResponse:
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT provider, env_profile, document_name, sheet_name FROM external_sources WHERE id = %s",
+                (source_id,),
+            )
+            source = cur.fetchone()
+            if not source:
+                raise HTTPException(status_code=404, detail="external source not found")
+            cur.execute(
+                """
+                SELECT external_record_id, normalized_json, external_updated_at, synced_at
+                FROM external_records
+                WHERE source_id = %s
+                ORDER BY id
+                """,
+                (source_id,),
+            )
+            records = cur.fetchall()
+
+    provider, env_profile, document_name, sheet_name = source
+    columns: list[str] = []
+    for _record_id, normalized, _ext_updated, _synced in records:
+        if isinstance(normalized, dict):
+            for column in normalized:
+                if column not in columns:
+                    columns.append(column)
+
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = str(sheet_name or "data")[:31] or "data"
+    header = ["external_record_id", *columns, "external_updated_at", "synced_at"]
+    sheet.append(header)
+    for record_id, normalized, ext_updated, synced in records:
+        data = normalized if isinstance(normalized, dict) else {}
+        sheet.append(
+            [record_id, *[data.get(column, "") for column in columns], ext_updated or "", str(synced or "")]
+        )
+
+    export_dir = Path(os.getenv("EXTERNAL_EXPORT_DIR", "/tmp/aliecs-external-exports"))
+    export_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
+    path = export_dir / f"{provider}_{(env_profile or 'default').lower()}_{source_id}_{timestamp}.xlsx"
+    workbook.save(path)
+    label = f"{document_name or provider}-{sheet_name or source_id}"
+    return FileResponse(path, media_type=_XLSX_MEDIA_TYPE, filename=f"{label}_{timestamp}.xlsx")
+
 
 @app.get("/v1/admin/rbac-overview")
 def admin_rbac_overview(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
