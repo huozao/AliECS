@@ -59,6 +59,58 @@ class BackendExportsTests(unittest.TestCase):
         self.assertEqual({"bom": "bom_20260608_065323.xlsx", "inventory": "inventory_20260607_145038.xlsx"}, names)
         self.assertTrue(all(item["download_url"].startswith("/v1/exports/tplus/") for item in items))
 
+    def test_exports_catalog_includes_doc_rows_before_sheet_sync(self) -> None:
+        class FakeCursor:
+            def __init__(self) -> None:
+                self.rows = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args) -> None:
+                return None
+
+            def execute(self, sql: str, params=None) -> None:
+                if "WHERE s.external_sheet_id <> '' AND s.status" in sql:
+                    self.rows = []
+                else:
+                    self.rows = [("wecom", "COMPANY_A", "doc-new", "新副本", 42, 0, 0, None)]
+
+            def fetchall(self):
+                return self.rows
+
+        class FakeConn:
+            def cursor(self):
+                return FakeCursor()
+
+            def close(self) -> None:
+                return None
+
+        old_conn = self.main._conn
+        old_latest = self.main._latest_tplus_exports
+        self.main._conn = lambda: FakeConn()
+        self.main._latest_tplus_exports = lambda: []
+        try:
+            catalog = self.main.exports_catalog(_={})
+        finally:
+            self.main._conn = old_conn
+            self.main._latest_tplus_exports = old_latest
+
+        wecom_a = next(tab for tab in catalog["tabs"] if tab["key"] == "wecom_company_a")
+        self.assertEqual(
+            [
+                {
+                    "name": "新副本",
+                    "source_id": 42,
+                    "sheets": 0,
+                    "rows": 0,
+                    "updated_at": None,
+                    "download_url": None,
+                }
+            ],
+            wecom_a["items"],
+        )
+
     def test_tplus_download_rejects_traversal_and_non_xlsx(self) -> None:
         from fastapi import HTTPException
 

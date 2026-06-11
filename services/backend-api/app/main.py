@@ -1425,14 +1425,14 @@ def exports_catalog(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any
             cur.execute(
                 """
                 SELECT s.provider, s.env_profile, s.external_doc_id,
-                       MAX(s.document_name) AS document_name,
-                       MIN(s.id) AS first_source_id,
-                       COUNT(DISTINCT s.id) AS sheet_count,
-                       COUNT(r.id) AS row_count,
-                       MAX(s.last_sync_at) AS last_sync_at
+                       COALESCE(MAX(NULLIF(s.document_name, '')), MAX(NULLIF(s.source_name, ''))) AS document_name,
+                       COALESCE(MIN(s.id) FILTER (WHERE s.external_sheet_id = ''), MIN(s.id)) AS first_source_id,
+                       COUNT(DISTINCT s.id) FILTER (WHERE s.external_sheet_id <> '') AS sheet_count,
+                       COUNT(r.id) FILTER (WHERE s.external_sheet_id <> '') AS row_count,
+                       MAX(s.last_sync_at) FILTER (WHERE s.external_sheet_id <> '') AS last_sync_at
                 FROM external_sources s
-                LEFT JOIN external_records r ON r.source_id = s.id
-                WHERE s.external_sheet_id <> '' AND s.status = 'active'
+                LEFT JOIN external_records r ON r.source_id = s.id AND s.external_sheet_id <> ''
+                WHERE s.status = 'active' AND s.external_doc_id <> ''
                 GROUP BY s.provider, s.env_profile, s.external_doc_id
                 ORDER BY MIN(s.id)
                 """
@@ -1445,10 +1445,10 @@ def exports_catalog(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any
             {
                 "name": document_name or f"{provider} 文档",
                 "source_id": first_source_id,
-                "sheets": sheet_count,
-                "rows": row_count,
+                "sheets": int(sheet_count or 0),
+                "rows": int(row_count or 0),
                 "updated_at": str(last_sync_at) if last_sync_at else None,
-                "download_url": f"/v1/exports/external-doc/{first_source_id}",
+                "download_url": f"/v1/exports/external-doc/{first_source_id}" if int(sheet_count or 0) > 0 else None,
             }
         )
     return {"tabs": list(tabs.values())}
