@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import asyncio
-import sys
+import importlib.util
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SERVICE_DIR = ROOT / "services" / "mcp-coding-server"
-if str(SERVICE_DIR) not in sys.path:
-    sys.path.insert(0, str(SERVICE_DIR))
+MAIN_PATH = ROOT / "services" / "mcp-coding-server" / "app" / "main.py"
 
-from app import main as mcp_main  # noqa: E402
+# 不能用 `from app import main`：CI 与 backend-api 测试共享一次 unittest
+# discover，`app` 包名已被 backend-api 占用，必须按文件路径独立加载。
+_spec = importlib.util.spec_from_file_location("mcp_coding_server_main", MAIN_PATH)
+assert _spec and _spec.loader
+mcp_main = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(mcp_main)
 
 
 class McpCodingServerTests(unittest.TestCase):
