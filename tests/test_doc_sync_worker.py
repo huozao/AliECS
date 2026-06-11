@@ -156,6 +156,56 @@ class ImageCellTests(WorkerImportTestCase):
         self.assertEqual("plain", first_text_cell("plain"))
 
 
+class WorkerLoopTests(WorkerImportTestCase):
+    def test_loop_runs_full_then_polls_pending_requests(self) -> None:
+        import os
+        from app.pipelines.worker_loop import run_worker_loop
+
+        calls = {"full": 0, "pending": 0, "slept": []}
+        old_interval, old_poll = os.environ.get("DOC_SYNC_INTERVAL_SECONDS"), os.environ.get("DOC_SYNC_POLL_SECONDS")
+        os.environ["DOC_SYNC_INTERVAL_SECONDS"] = "90"
+        os.environ["DOC_SYNC_POLL_SECONDS"] = "30"
+        try:
+            code = run_worker_loop(
+                full_sync=lambda: calls.__setitem__("full", calls["full"] + 1) or 0,
+                consume_requests=lambda: calls.__setitem__("pending", calls["pending"] + 1) or 0,
+                sleep=lambda s: calls["slept"].append(s),
+                max_cycles=1,
+            )
+        finally:
+            for key, value in (("DOC_SYNC_INTERVAL_SECONDS", old_interval), ("DOC_SYNC_POLL_SECONDS", old_poll)):
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        self.assertEqual(0, code)
+        self.assertEqual(1, calls["full"])
+        self.assertEqual(3, calls["pending"])  # 90s / 30s = 3 次轮询
+        self.assertEqual([30, 30, 30], calls["slept"])
+
+    def test_loop_survives_exceptions(self) -> None:
+        import os
+        from app.pipelines.worker_loop import run_worker_loop
+
+        old_interval, old_poll = os.environ.get("DOC_SYNC_INTERVAL_SECONDS"), os.environ.get("DOC_SYNC_POLL_SECONDS")
+        os.environ["DOC_SYNC_INTERVAL_SECONDS"] = "30"
+        os.environ["DOC_SYNC_POLL_SECONDS"] = "30"
+
+        def boom() -> int:
+            raise RuntimeError("boom")
+
+        try:
+            code = run_worker_loop(full_sync=boom, consume_requests=boom, sleep=lambda s: None, max_cycles=2)
+        finally:
+            for key, value in (("DOC_SYNC_INTERVAL_SECONDS", old_interval), ("DOC_SYNC_POLL_SECONDS", old_poll)):
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+        self.assertEqual(0, code)
+
+
 class SourceNameTests(WorkerImportTestCase):
     def test_compose_source_name_keeps_document_and_sheet_names_separate(self) -> None:
         from app.storage.postgres import compose_source_name

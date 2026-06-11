@@ -5,6 +5,7 @@ import sys
 
 from app.pipelines.sync_feishu_full import run_sync_feishu_full
 from app.pipelines.sync_wecom_full import run_pending_sync_requests, run_sync_wecom_full, run_sync_wecom_source
+from app.pipelines.worker_loop import run_worker_loop
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -30,6 +31,8 @@ def main(argv: list[str] | None = None) -> int:
     pending_parser = subparsers.add_parser("consume-sync-requests", help="消费后台创建的手动同步请求")
     pending_parser.add_argument("--limit", type=int, default=10, help="本次最多处理多少条 pending 请求")
 
+    subparsers.add_parser("run-loop", help="常驻循环：周期全量 + 轮询消费手动同步请求")
+
     args = parser.parse_args(argv)
     if args.command == "sync-wecom-full":
         return run_sync_wecom_full(profiles_arg=args.profiles)
@@ -39,6 +42,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_sync_wecom_source(source_id=args.source_id)
     if args.command == "consume-sync-requests":
         return run_pending_sync_requests(limit=args.limit)
+    if args.command == "run-loop":
+        return run_worker_loop()
 
     parser.print_help()
     return 2

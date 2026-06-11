@@ -97,7 +97,7 @@
     const loadManualPrices=()=>{try{return JSON.parse(localStorage.getItem(PRICE_KEY)||'{}')}catch{return {}}};
     const loadPriceTimes=()=>{try{return JSON.parse(localStorage.getItem(PRICE_TIME_KEY)||'{}')}catch{return {}}};
     const saveManualPrices=()=>{localStorage.setItem(PRICE_KEY,JSON.stringify(state.manualPrices));localStorage.setItem(PRICE_TIME_KEY,JSON.stringify(state.priceTimes));};
-    const fmtPriceTime=(ts)=>{if(!ts)return'';const d=new Date(ts);const p=(n)=>String(n).padStart(2,'0');return `${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;};
+    const fmtPriceTime=(ts)=>{if(!ts)return'';const d=new Date(ts);const p=(n)=>String(n).padStart(2,'0');return `${String(d.getFullYear()).slice(2)}${p(d.getMonth()+1)}${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;};
     const syncAuth=()=>{state.token=getAuthToken();loginBtn.classList.toggle('hidden',Boolean(state.token));logoutBtn.classList.toggle('hidden',!state.token);};
     function showError(message){errorBox.textContent=message;errorBox.style.display='block';successBox.style.display='none'}
     function showSuccess(message){successBox.textContent=message;successBox.style.display='block';errorBox.style.display='none'}

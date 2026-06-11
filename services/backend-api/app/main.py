@@ -1685,6 +1685,70 @@ def exports_external_doc_download(source_id: int, _: dict[str, Any] = Depends(re
     return FileResponse(path, media_type=_XLSX_MEDIA_TYPE, filename=f"{label}_{timestamp}.xlsx")
 
 
+def _external_doc_anchor(cur: Any, source_id: int) -> tuple[str, str, str, str]:
+    cur.execute(
+        "SELECT provider, env_profile, external_doc_id, document_name FROM external_sources WHERE id = %s",
+        (source_id,),
+    )
+    anchor = cur.fetchone()
+    if not anchor:
+        raise HTTPException(status_code=404, detail="external source not found")
+    return anchor
+
+
+@app.post("/v1/exports/external-doc/{source_id}/sync-requests")
+def exports_external_doc_sync(source_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    """为该工作簿全部 sheet 创建手动同步请求，由常驻 doc-sync-worker 在轮询间隔内消费。"""
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            provider, env_profile, external_doc_id, document_name = _external_doc_anchor(cur, source_id)
+            cur.execute(
+                """
+                SELECT id FROM external_sources
+                WHERE provider = %s AND env_profile = %s AND external_doc_id = %s
+                  AND external_sheet_id <> '' AND status = 'active'
+                ORDER BY id
+                """,
+                (provider, env_profile, external_doc_id),
+            )
+            sheet_ids = [row[0] for row in cur.fetchall()]
+            if not sheet_ids:
+                raise HTTPException(status_code=404, detail="document has no active sheets")
+            for sheet_source_id in sheet_ids:
+                cur.execute(
+                    """
+                    INSERT INTO sync_requests(source_id, provider, env_profile, mode, status, requested_by)
+                    VALUES (%s, %s, %s, 'manual', 'pending', %s)
+                    """,
+                    (sheet_source_id, provider, env_profile, user.get("sub")),
+                )
+        conn.commit()
+    return {
+        "document_name": document_name,
+        "requests_created": len(sheet_ids),
+        "message": f"已为「{document_name}」的 {len(sheet_ids)} 个工作表创建同步请求，约 30 秒内开始同步。",
+    }
+
+
+@app.post("/v1/exports/external-doc/{source_id}/copy")
+def exports_external_doc_copy(source_id: int, _: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    """在企业微信中创建该智能表格的完整副本（全部工作表结构 + 全部记录）。"""
+    from app.integrations.wecom_docs import WeComDocError, copy_smartsheet_doc
+
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            provider, env_profile, external_doc_id, document_name = _external_doc_anchor(cur, source_id)
+    if provider != "wecom":
+        raise HTTPException(status_code=400, detail="仅支持企业微信智能表格创建副本")
+
+    new_name = f"{document_name or '智能表格'}-副本{datetime.now(tz=timezone.utc).strftime('%y%m%d_%H%M')}"
+    try:
+        result = copy_smartsheet_doc(env_profile=str(env_profile), source_docid=str(external_doc_id), new_doc_name=new_name)
+    except WeComDocError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"document_name": document_name, "new_doc_name": new_name, **result}
+
+
 @app.get("/v1/admin/rbac-overview")
 def admin_rbac_overview(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     with closing(_conn()) as conn:
