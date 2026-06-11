@@ -287,16 +287,22 @@ class WeComSmartsheetClient:
     def get_fields(self, docid: str, sheet_id: str) -> dict[str, Any]:
         return self._post("/wedoc/smartsheet/get_fields", {"docid": docid, "sheet_id": sheet_id})
 
-    def get_doc_name(self, docid: str) -> str:
-        """实时取文档名（权威来源）；文档可被用户改名，登记/env 里的静态名会过时。失败返回空串。"""
+    def get_doc_base(self, docid: str) -> dict[str, str]:
+        """实时取文档名与 modify_time（增量跳过依据）。失败返回空值，不影响同步本身。"""
         try:
             data = self._post("/wedoc/get_doc_base_info", {"docid": docid})
-        except Exception:  # noqa: BLE001 - 名字获取失败不应影响同步本身。
-            return ""
+        except Exception:  # noqa: BLE001
+            return {"doc_name": "", "modify_time": ""}
         info = data.get("doc_base_info")
         if not isinstance(info, dict):
             info = data
-        return str(info.get("doc_name") or "").strip()
+        return {
+            "doc_name": str(info.get("doc_name") or "").strip(),
+            "modify_time": str(info.get("modify_time") or "").strip(),
+        }
+
+    def get_doc_name(self, docid: str) -> str:
+        return self.get_doc_base(docid)["doc_name"]
 
     def get_sheets(self, docid: str) -> list[dict[str, Any]]:
         data = self._post("/wedoc/smartsheet/get_sheet", {"docid": docid})

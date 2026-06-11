@@ -236,6 +236,20 @@ class DocNameTests(WorkerImportTestCase):
 
         self.assertEqual("产量统计", FakeClient().get_doc_name("dc-any"))
 
+    def test_get_doc_base_returns_name_and_modify_time(self) -> None:
+        from app.providers.wecom import WeComSmartsheetClient
+
+        class FakeClient(WeComSmartsheetClient):
+            def __init__(self) -> None:
+                super().__init__("corp", "secret")
+
+            def _post(self, path: str, payload: dict) -> dict:
+                return {"errcode": 0, "doc_base_info": {"doc_name": "产量统计", "modify_time": 1781234567}}
+
+        base = FakeClient().get_doc_base("dc-any")
+        self.assertEqual("产量统计", base["doc_name"])
+        self.assertEqual("1781234567", base["modify_time"])
+
     def test_get_doc_name_returns_empty_on_api_error(self) -> None:
         from app.providers.wecom import WeComSmartsheetClient
 

@@ -24,8 +24,8 @@
       <section class="band"><h2>差异校验</h2><div id="reconciliation"></div></section>
       <section class="band"><h2>外部主机</h2><div id="hosts"></div></section>
       <section class="band">
-        <h2>数据导出</h2>
-        <div id="exportTabs" class="row" style="margin-bottom:10px"></div>
+        <div class="row" style="justify-content:space-between"><h2 style="margin:0">数据导出</h2><button id="syncAllBtn" class="btn" type="button" onclick="syncAllExports(this)">同步数据列表</button></div>
+        <div id="exportTabs" class="row" style="margin:10px 0"></div>
         <div id="exportList" class="muted">加载中...</div>
       </section>
     </div>
@@ -156,6 +156,12 @@
       $('exportList').innerHTML=`<table><thead><tr><th>名称</th><th>规模</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="4" class="muted">该来源暂无数据，需先配置同步源。</td></tr>'}</tbody></table>`;
     }
     function selectExportTab(key){activeExportTab=key;renderExports();}
+    async function syncAllExports(btn){
+      btn.disabled=true;btn.textContent='请求中...';
+      try{const data=await api('/v1/exports/sync-all',{method:'POST'});showSuccess(data.message||'同步请求已创建。');setTimeout(()=>loadExports().catch(()=>{}),60000);}
+      catch(error){showError(`同步请求失败：${error.message}`);}
+      finally{btn.disabled=false;btn.textContent='同步数据列表';}
+    }
     async function syncExportDoc(sourceId,btn){
       btn.disabled=true;btn.textContent='请求中...';
       try{const data=await api(`/v1/exports/external-doc/${sourceId}/sync-requests`,{method:'POST'});showSuccess(data.message||'同步请求已创建。');setTimeout(()=>loadExports().catch(()=>{}),45000);}

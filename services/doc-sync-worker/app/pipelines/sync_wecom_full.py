@@ -57,6 +57,80 @@ def _sync_sheet_records(
     store.mark_source_synced(source_id)
 
 
+def _sync_doc(
+    store: Any,
+    client: WeComSmartsheetClient,
+    *,
+    profile: str,
+    docid: str,
+    fallback_name: str,
+    source_url: str,
+    counts: dict[str, int],
+    errors: list[dict[str, Any]],
+    skip_unchanged: bool,
+) -> None:
+    """同步一个智能表格文档：实时名 + modify_time 增量跳过 + 全 sheet 发现与同步（sheet 级容错）。"""
+    doc_base = client.get_doc_base(docid)
+    document_name = doc_base["doc_name"] or fallback_name
+    modify_time = doc_base["modify_time"]
+
+    if skip_unchanged and modify_time:
+        last_seen = store.get_doc_modified("wecom", profile, docid)
+        if last_seen and last_seen == modify_time:
+            counts["skipped_doc_count"] = counts.get("skipped_doc_count", 0) + 1
+            print(f"[企业微信同步] {profile} 「{document_name}」modify_time 未变化（{modify_time}），整簿跳过。")
+            return
+
+    sheets = client.get_sheets(docid)
+    if not sheets:
+        print(f"[企业微信同步] {profile} docid={docid} 未返回 sheet。")
+    for sheet in sheets:
+        sheet_id = _sheet_id(sheet)
+        if not sheet_id:
+            continue
+        sheet_name = _sheet_name(sheet)
+        source_id = store.ensure_source(
+            provider="wecom",
+            env_profile=profile,
+            source_name=compose_source_name(document_name, sheet_name),
+            source_type="smartsheet_sheet",
+            external_doc_id=docid,
+            external_sheet_id=sheet_id,
+            source_url=source_url,
+            document_name=document_name,
+            sheet_name=sheet_name,
+        )
+        # sheet 级容错：个别表报错（如公开收集表 get_records 60111）不拖垮同文档其余表。
+        try:
+            _sync_sheet_records(store, client, source_id, docid, sheet_id, counts)
+        except Exception as sheet_exc:  # noqa: BLE001
+            counts["error_count"] += 1
+            sheet_error = str(sheet_exc)
+            errors.append(
+                {
+                    "env_profile": profile,
+                    "docid": docid,
+                    "sheet_id": sheet_id,
+                    "sheet_name": sheet_name,
+                    "error": sheet_error,
+                    "summary": summarize_wecom_error(sheet_error),
+                }
+            )
+            print(
+                f"[企业微信同步] {profile} docid={docid} "
+                f"sheet={sheet_name} 同步失败（已跳过，继续其余表）：{sheet_exc}"
+            )
+    # 全簿处理完才登记 modify_time，半途失败下轮不会被跳过。
+    store.upsert_doc_source(
+        provider="wecom",
+        env_profile=profile,
+        external_doc_id=docid,
+        document_name=document_name,
+        source_url=source_url,
+        external_modified_at=modify_time,
+    )
+
+
 def run_sync_wecom_full(profiles_arg: str = "") -> int:
     profiles = env_profiles(profiles_arg)
     if not profiles:
@@ -102,46 +176,17 @@ def run_sync_wecom_full(profiles_arg: str = "") -> int:
                     for credential in credentials:
                         client = WeComSmartsheetClient(credential.corpid, credential.secret)
                         try:
-                            sheets = client.get_sheets(source.docid)
-                            if not sheets:
-                                print(f"[企业微信同步] {profile} docid={source.docid} 未返回 sheet。")
-                            document_name = client.get_doc_name(source.docid) or source.source_name
-                            for sheet in sheets:
-                                sheet_id = _sheet_id(sheet)
-                                if not sheet_id:
-                                    continue
-                                sheet_name = _sheet_name(sheet)
-                                source_id = store.ensure_source(
-                                    provider="wecom",
-                                    env_profile=profile,
-                                    source_name=compose_source_name(document_name, sheet_name),
-                                    source_type="smartsheet_sheet",
-                                    external_doc_id=source.docid,
-                                    external_sheet_id=sheet_id,
-                                    source_url=source.source_url,
-                                    document_name=document_name,
-                                    sheet_name=sheet_name,
-                                )
-                                # sheet 级容错：个别表报错（如公开收集表 get_records 60111）不拖垮同文档其余表。
-                                try:
-                                    _sync_sheet_records(store, client, source_id, source.docid, sheet_id, counts)
-                                except Exception as sheet_exc:  # noqa: BLE001
-                                    counts["error_count"] += 1
-                                    sheet_error = str(sheet_exc)
-                                    errors.append(
-                                        {
-                                            "env_profile": profile,
-                                            "docid": source.docid,
-                                            "sheet_id": sheet_id,
-                                            "sheet_name": sheet_name,
-                                            "error": sheet_error,
-                                            "summary": summarize_wecom_error(sheet_error),
-                                        }
-                                    )
-                                    print(
-                                        f"[企业微信同步] {profile} docid={source.docid} "
-                                        f"sheet={sheet_name} 同步失败（已跳过，继续其余表）：{sheet_exc}"
-                                    )
+                            _sync_doc(
+                                store,
+                                client,
+                                profile=profile,
+                                docid=source.docid,
+                                fallback_name=source.source_name,
+                                source_url=source.source_url,
+                                counts=counts,
+                                errors=errors,
+                                skip_unchanged=True,
+                            )
                             doc_synced = True
                             break
                         except Exception as exc:  # noqa: BLE001 - sync should keep collecting useful diagnostics.
@@ -187,8 +232,9 @@ def sync_wecom_source(store: Any, source_id: int, mode: str = "manual") -> tuple
         return "failed", None, {"error": f"找不到同步源：{source_id}"}
     if source["provider"] != "wecom":
         return "failed", None, {"error": f"暂不支持该 provider：{source['provider']}"}
-    if not source["external_doc_id"] or not source["external_sheet_id"]:
-        return "failed", None, {"error": "指定同步源缺少 docid 或 sheet_id"}
+    if not source["external_doc_id"]:
+        return "failed", None, {"error": "指定同步源缺少 docid"}
+    is_doc_request = not source["external_sheet_id"]
 
     profile = str(source["env_profile"])
     run_id = store.start_run(provider="wecom", env_profile=profile, mode=mode)
@@ -211,15 +257,29 @@ def sync_wecom_source(store: Any, source_id: int, mode: str = "manual") -> tuple
         for credential in credentials:
             client = WeComSmartsheetClient(credential.corpid, credential.secret)
             try:
-                _sync_sheet_records(
-                    store,
-                    client,
-                    int(source["id"]),
-                    str(source["external_doc_id"]),
-                    str(source["external_sheet_id"]),
-                    counts,
-                )
-                status = "success"
+                if is_doc_request:
+                    # doc 级请求：整簿重扫（含新 sheet 发现），手动触发不做 modify_time 跳过。
+                    _sync_doc(
+                        store,
+                        client,
+                        profile=profile,
+                        docid=str(source["external_doc_id"]),
+                        fallback_name=str(source["source_name"] or ""),
+                        source_url=str(source["source_url"] or ""),
+                        counts=counts,
+                        errors=errors,
+                        skip_unchanged=False,
+                    )
+                else:
+                    _sync_sheet_records(
+                        store,
+                        client,
+                        int(source["id"]),
+                        str(source["external_doc_id"]),
+                        str(source["external_sheet_id"]),
+                        counts,
+                    )
+                status = "success" if counts["error_count"] == 0 else "partial_failed"
                 last_error = None
                 break
             except Exception as exc:  # noqa: BLE001
@@ -261,7 +321,8 @@ def run_pending_sync_requests(limit: int = 10) -> int:
             print(f"[企业微信同步] 开始处理手动请求 request_id={request_id} source_id={source_id}")
             store.mark_sync_request_running(request_id)
             status, run_id, detail = sync_wecom_source(store, source_id=source_id, mode="manual")
-            request_status = "success" if status == "success" else "failed"
+            # partial_failed（个别表受 API 限制）不视为请求失败。
+            request_status = "success" if status in ("success", "partial_failed") else "failed"
             store.finish_sync_request(request_id, request_status, run_id, detail)
             if request_status != "success":
                 exit_code = 1
