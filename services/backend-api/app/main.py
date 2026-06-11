@@ -1696,37 +1696,70 @@ def _external_doc_anchor(cur: Any, source_id: int) -> tuple[str, str, str, str]:
     return anchor
 
 
+def _ensure_doc_row(cur: Any, provider: str, env_profile: str, external_doc_id: str, document_name: str) -> int:
+    """确保 doc 级登记行存在并返回其 id（worker 对 doc 级请求整簿重扫，含新 sheet 发现）。"""
+    cur.execute(
+        """
+        INSERT INTO external_sources(
+            provider, env_profile, source_name, source_type,
+            external_doc_id, external_sheet_id, source_url,
+            document_name, sheet_name, status, updated_at
+        )
+        VALUES (%s, %s, %s, 'smartsheet_doc', %s, '', '', %s, '', 'active', NOW())
+        ON CONFLICT(provider, env_profile, external_doc_id, external_sheet_id)
+        DO UPDATE SET status = 'active', updated_at = NOW()
+        RETURNING id
+        """,
+        (provider, env_profile, document_name, external_doc_id, document_name),
+    )
+    return int(cur.fetchone()[0])
+
+
+def _create_doc_sync_request(cur: Any, doc_row_id: int, provider: str, env_profile: str, requested_by: str) -> None:
+    cur.execute(
+        """
+        INSERT INTO sync_requests(source_id, provider, env_profile, mode, status, requested_by)
+        VALUES (%s, %s, %s, 'manual', 'pending', %s)
+        """,
+        (doc_row_id, provider, env_profile, requested_by),
+    )
+
+
 @app.post("/v1/exports/external-doc/{source_id}/sync-requests")
 def exports_external_doc_sync(source_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    """为该工作簿全部 sheet 创建手动同步请求，由常驻 doc-sync-worker 在轮询间隔内消费。"""
+    """为该工作簿创建 doc 级同步请求（worker 整簿重扫，含新 sheet 发现），约 30 秒内开始。"""
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
             provider, env_profile, external_doc_id, document_name = _external_doc_anchor(cur, source_id)
-            cur.execute(
-                """
-                SELECT id FROM external_sources
-                WHERE provider = %s AND env_profile = %s AND external_doc_id = %s
-                  AND external_sheet_id <> '' AND status = 'active'
-                ORDER BY id
-                """,
-                (provider, env_profile, external_doc_id),
-            )
-            sheet_ids = [row[0] for row in cur.fetchall()]
-            if not sheet_ids:
-                raise HTTPException(status_code=404, detail="document has no active sheets")
-            for sheet_source_id in sheet_ids:
-                cur.execute(
-                    """
-                    INSERT INTO sync_requests(source_id, provider, env_profile, mode, status, requested_by)
-                    VALUES (%s, %s, %s, 'manual', 'pending', %s)
-                    """,
-                    (sheet_source_id, provider, env_profile, user.get("sub")),
-                )
+            doc_row_id = _ensure_doc_row(cur, str(provider), str(env_profile), str(external_doc_id), str(document_name or ""))
+            _create_doc_sync_request(cur, doc_row_id, str(provider), str(env_profile), str(user.get("sub") or ""))
         conn.commit()
     return {
         "document_name": document_name,
-        "requests_created": len(sheet_ids),
-        "message": f"已为「{document_name}」的 {len(sheet_ids)} 个工作表创建同步请求，约 30 秒内开始同步。",
+        "requests_created": 1,
+        "message": f"已为「{document_name}」创建整簿同步请求，约 30 秒内开始同步。",
+    }
+
+
+@app.post("/v1/exports/sync-all")
+def exports_sync_all(user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    """同步数据列表：为全部已登记文档各建一条 doc 级同步请求（发现新文档/新表/改名/新记录）。"""
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, provider, env_profile FROM external_sources
+                WHERE external_sheet_id = '' AND status = 'active' AND external_doc_id <> ''
+                ORDER BY id
+                """
+            )
+            doc_rows = cur.fetchall()
+            for doc_row_id, provider, env_profile in doc_rows:
+                _create_doc_sync_request(cur, int(doc_row_id), str(provider), str(env_profile), str(user.get("sub") or ""))
+        conn.commit()
+    return {
+        "requests_created": len(doc_rows),
+        "message": f"已为 {len(doc_rows)} 个文档创建同步请求，列表将在 1-2 分钟内陆续刷新。",
     }
 
 
@@ -1746,6 +1779,16 @@ def exports_external_doc_copy(source_id: int, _: dict[str, Any] = Depends(requir
         result = copy_smartsheet_doc(env_profile=str(env_profile), source_docid=str(external_doc_id), new_doc_name=new_name)
     except WeComDocError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    # 新副本自动登记为同步源并触发首次整簿同步，30 秒内出现在数据导出列表。
+    new_docid = str(result.get("new_docid") or "")
+    if new_docid:
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                doc_row_id = _ensure_doc_row(cur, str(provider), str(env_profile), new_docid, new_name)
+                _create_doc_sync_request(cur, doc_row_id, str(provider), str(env_profile), "copy-auto")
+            conn.commit()
+        result["registered"] = True
     return {"document_name": document_name, "new_doc_name": new_name, **result}
 
 

@@ -276,6 +276,52 @@ class PostgresDocSyncStore:
         self.conn.commit()
         return int(row[0])
 
+    def upsert_doc_source(
+        self,
+        provider: str,
+        env_profile: str,
+        external_doc_id: str,
+        document_name: str,
+        source_url: str = "",
+        external_modified_at: str = "",
+    ) -> int:
+        """doc 级登记行：保持实时文档名并记录 modify_time（增量跳过依据）。"""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO external_sources(
+                    provider, env_profile, source_name, source_type,
+                    external_doc_id, external_sheet_id, source_url,
+                    document_name, sheet_name, status, external_modified_at, updated_at
+                )
+                VALUES (%s, %s, %s, 'smartsheet_doc', %s, '', %s, %s, '', 'active', %s, NOW())
+                ON CONFLICT(provider, env_profile, external_doc_id, external_sheet_id)
+                DO UPDATE SET
+                    source_name = EXCLUDED.source_name,
+                    document_name = EXCLUDED.document_name,
+                    external_modified_at = EXCLUDED.external_modified_at,
+                    status = 'active',
+                    updated_at = NOW()
+                RETURNING id
+                """,
+                (provider, env_profile, document_name, external_doc_id, source_url, document_name, external_modified_at),
+            )
+            row = cur.fetchone()
+        self.conn.commit()
+        return int(row[0])
+
+    def get_doc_modified(self, provider: str, env_profile: str, external_doc_id: str) -> str:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT external_modified_at FROM external_sources
+                WHERE provider = %s AND env_profile = %s AND external_doc_id = %s AND external_sheet_id = ''
+                """,
+                (provider, env_profile, external_doc_id),
+            )
+            row = cur.fetchone()
+        return str(row[0] or "") if row else ""
+
     def list_registry_doc_sources(self, provider: str, env_profile: str) -> list[dict[str, Any]]:
         with self.conn.cursor() as cur:
             cur.execute(
