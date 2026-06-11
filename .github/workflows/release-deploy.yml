@@ -108,6 +108,8 @@ jobs:
             context: services/tplus-sync-worker
           - image: openclaw-bridge
             context: deploy/openclaw-bridge
+          - image: mcp-coding-server
+            context: services/mcp-coding-server
     steps:
       - uses: actions/checkout@v4
 
