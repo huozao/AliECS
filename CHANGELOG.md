@@ -1,5 +1,11 @@
 # 版本记录
 
+## v2.1.8：新增 coding-executor 与 mcp 编程工具（阶段二只读 dry-run）
+
+- 新增 `services/coding-executor`：开发机本地 FastAPI 服务，bearer 鉴权 + 仓库白名单 + 异步任务，仅执行只读 git 操作（git_status/git_log/git_diff/list_files/read_file），含路径越界与选项注入防护。不进 ECS、不进 compose、不进 release 矩阵。
+- `mcp-coding-server` 升级至 v0.2.0：新增 `list_coding_targets`/`start_coding_task`/`get_coding_task`，经反向 SSH 隧道调用开发机 executor；executor 离线时优雅降级。`start_coding_task` 非只读以触发 ChatGPT 写确认。
+- `compose.prod.yml`/`deploy.sh`/`runtime.env.example` 增加 `EXECUTOR_BASE_URL`/`EXECUTOR_TOKEN` 透传（默认空）；CI 增加 executor 依赖与测试。
+
 ## v2.1.7：新增 mcp-coding-server 编程桥接服务（阶段一只读 PoC）
 
 - 新增 `services/mcp-coding-server`：MCP streamable-http 服务，供 ChatGPT 开发者模式连接器接入；阶段一仅含只读工具 `ping`/`server_info` 与 `/healthz`。

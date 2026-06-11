@@ -152,6 +152,13 @@ services:
     environment:
       MCP_PORT: "8090"
       PYTHONUNBUFFERED: "1"
+      # Reaches the 开发机 executor through the reverse SSH tunnel. Both are
+      # empty until the tunnel is provisioned; tools then degrade gracefully.
+      EXECUTOR_BASE_URL: ${EXECUTOR_BASE_URL:-}
+      EXECUTOR_TOKEN: ${EXECUTOR_TOKEN:-}
+      EXECUTOR_TIMEOUT_SECONDS: ${EXECUTOR_TIMEOUT_SECONDS:-20}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "127.0.0.1:8090:8090"
     healthcheck:

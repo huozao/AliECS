@@ -1,8 +1,9 @@
 """MCP coding bridge for ChatGPT developer-mode connectors.
 
-Phase 1 (PoC): read-only connectivity tools only. Coding task tools
-(start_coding_task / get_task_status / get_task_result) arrive in later
-phases and will proxy to the dev-machine executor through a reverse tunnel.
+Phase 2: read-only connectivity tools (ping / server_info) plus dry-run coding
+tools that proxy to the 开发机 executor through a reverse SSH tunnel. The
+executor only performs read-only git actions in this phase; mutating actions
+arrive later behind explicit confirmation.
 
 The container listens on MCP_PORT (default 8090) and is published only on
 127.0.0.1; public exposure happens via an Nginx location with a secret path
@@ -22,9 +23,11 @@ from mcp.types import ToolAnnotations
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from . import executor_client
+
 SERVER_NAME = "aliecs-coding"
-SERVER_VERSION = "0.1.0"
-PHASE = "poc-1-readonly"
+SERVER_VERSION = "0.2.0"
+PHASE = "phase-2-dryrun"
 STARTED_AT = time.monotonic()
 
 
@@ -44,19 +47,28 @@ def server_info_payload() -> dict:
         "phase": PHASE,
         "uptime_seconds": round(time.monotonic() - STARTED_AT, 1),
         "python": platform.python_version(),
-        "planned_tools": [
+        "executor_configured": executor_client.is_configured(),
+        "tools": [
+            "ping",
+            "server_info",
+            "list_coding_targets",
             "start_coding_task",
-            "get_task_status",
-            "get_task_result",
+            "get_coding_task",
         ],
+        "note": "阶段二：编程任务仅支持只读 git 操作（dry-run）。",
     }
 
 
 mcp = FastMCP(
     SERVER_NAME,
     instructions=(
-        "AliECS 编程桥接服务，阶段一（连通性 PoC）。当前所有工具均为只读；"
-        "用 ping 验证往返链路，用 server_info 查看版本与后续规划。"
+        "AliECS 编程桥接服务，阶段二（dry-run）。\n"
+        "- ping / server_info：连通性与状态，只读。\n"
+        "- list_coding_targets：列出可操作的仓库白名单与允许的只读操作。\n"
+        "- start_coding_task：在开发机对某仓库发起一个只读 git 任务（git_status / "
+        "git_log / git_diff / list_files / read_file），返回任务 id。\n"
+        "- get_coding_task：用任务 id 轮询状态与结果。\n"
+        "本阶段不会修改任何文件；遇到需要写入的请求请直接拒绝并说明仍在 dry-run 阶段。"
     ),
     host=os.getenv("MCP_HOST", "0.0.0.0"),
     port=int(os.getenv("MCP_PORT", "8090")),
@@ -65,6 +77,10 @@ mcp = FastMCP(
 )
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+# start_coding_task reaches the dev machine and creates a job, so it is not a
+# read-only hint even though phase-2 actions themselves don't mutate anything.
+# This makes ChatGPT show the write-confirmation modal on task start.
+TASK_START = ToolAnnotations(readOnlyHint=False, openWorldHint=True)
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -75,8 +91,54 @@ def ping(message: str = "ping") -> str:
 
 @mcp.tool(annotations=READ_ONLY)
 def server_info() -> str:
-    """返回编程桥接服务的版本、所处阶段、运行时长与后续规划的工具列表。只读，无副作用。"""
+    """返回编程桥接服务的版本、所处阶段、运行时长与可用工具。只读，无副作用。"""
     return json.dumps(server_info_payload(), ensure_ascii=False)
+
+
+def _unavailable(detail: str) -> str:
+    return json.dumps(
+        {
+            "executor": "unavailable",
+            "detail": detail,
+            "hint": "开发机 executor 或反向隧道可能未启动；这是预期内的优雅降级，不要重试很多次。",
+        },
+        ensure_ascii=False,
+    )
+
+
+@mcp.tool(annotations=READ_ONLY)
+def list_coding_targets() -> str:
+    """列出开发机上允许操作的仓库白名单与本阶段允许的只读操作。只读。"""
+    try:
+        return json.dumps(executor_client.list_targets(), ensure_ascii=False)
+    except executor_client.ExecutorUnavailable as exc:
+        return _unavailable(str(exc))
+
+
+@mcp.tool(annotations=TASK_START)
+def start_coding_task(repo: str, action: str, params: dict | None = None) -> str:
+    """在开发机对指定仓库发起一个只读 git 任务，返回任务 id 供后续轮询。
+
+    repo：list_coding_targets 返回的仓库名。
+    action：git_status / git_log / git_diff / list_files / read_file 之一。
+    params：可选参数，如 {"count": 20}、{"ref": "HEAD~1"}、{"path": "README.md"}。
+    本阶段为 dry-run，只读取不修改。
+    """
+    try:
+        return json.dumps(
+            executor_client.create_task(repo, action, params), ensure_ascii=False
+        )
+    except executor_client.ExecutorUnavailable as exc:
+        return _unavailable(str(exc))
+
+
+@mcp.tool(annotations=READ_ONLY)
+def get_coding_task(task_id: str) -> str:
+    """用 start_coding_task 返回的 id 查询任务状态与结果。只读。"""
+    try:
+        return json.dumps(executor_client.get_task(task_id), ensure_ascii=False)
+    except executor_client.ExecutorUnavailable as exc:
+        return _unavailable(str(exc))
 
 
 @mcp.custom_route("/healthz", methods=["GET"])
