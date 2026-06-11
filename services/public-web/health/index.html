@@ -152,10 +152,26 @@
       $('exportTabs').innerHTML=tabsData.map((tab)=>`<button class="btn ${tab.key===activeExportTab?'primary':''}" type="button" onclick="selectExportTab('${esc(tab.key)}')">${esc(tab.title)}（${(tab.items||[]).length}）</button>`).join('');
       const tab=tabsData.find((item)=>item.key===activeExportTab)||tabsData[0];
       if(!tab){$('exportList').innerHTML='<span class="muted">暂无可导出数据。</span>';return;}
-      const rows=(tab.items||[]).map((item)=>{const scale=item.sheets!=null?`${item.sheets} 表 / ${item.rows} 行`:(item.rows!=null?`${item.rows} 行`:fmtSize(item.size_bytes));return `<tr><td>${esc(item.name)}</td><td>${scale}</td><td>${esc(item.updated_at?String(item.updated_at).slice(0,19).replace('T',' '):'-')}</td><td><button class="btn primary" type="button" onclick="downloadExport('${esc(item.download_url)}','${esc(item.file_name||item.name)}')">下载</button></td></tr>`;}).join('');
-      $('exportList').innerHTML=`<table><thead><tr><th>名称</th><th>规模</th><th>更新时间</th><th>下载</th></tr></thead><tbody>${rows||'<tr><td colspan="4" class="muted">该来源暂无数据，需先配置同步源。</td></tr>'}</tbody></table>`;
+      const rows=(tab.items||[]).map((item)=>{const scale=item.sheets!=null?`${item.sheets} 表 / ${item.rows} 行`:(item.rows!=null?`${item.rows} 行`:fmtSize(item.size_bytes));const actions=item.source_id!=null?` <button class="btn" type="button" onclick="syncExportDoc(${item.source_id},this)">立即同步</button> <button class="btn" type="button" onclick="copyExportDoc(${item.source_id},'${esc(item.name)}',this)">创建副本</button>`:'';return `<tr><td>${esc(item.name)}</td><td>${scale}</td><td>${esc(item.updated_at?String(item.updated_at).slice(0,19).replace('T',' '):'-')}</td><td><button class="btn primary" type="button" onclick="downloadExport('${esc(item.download_url)}','${esc(item.file_name||item.name)}')">下载</button>${actions}</td></tr>`;}).join('');
+      $('exportList').innerHTML=`<table><thead><tr><th>名称</th><th>规模</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="4" class="muted">该来源暂无数据，需先配置同步源。</td></tr>'}</tbody></table>`;
     }
     function selectExportTab(key){activeExportTab=key;renderExports();}
+    async function syncExportDoc(sourceId,btn){
+      btn.disabled=true;btn.textContent='请求中...';
+      try{const data=await api(`/v1/exports/external-doc/${sourceId}/sync-requests`,{method:'POST'});showSuccess(data.message||'同步请求已创建。');setTimeout(()=>loadExports().catch(()=>{}),45000);}
+      catch(error){showError(`同步请求失败：${error.message}`);}
+      finally{btn.disabled=false;btn.textContent='立即同步';}
+    }
+    async function copyExportDoc(sourceId,name,btn){
+      if(!confirm(`确认在企业微信中创建「${name}」的完整副本（含全部工作表结构与记录）？`))return;
+      btn.disabled=true;btn.textContent='创建中...';
+      try{
+        const data=await api(`/v1/exports/external-doc/${sourceId}/copy`,{method:'POST'});
+        const warn=(data.warnings&&data.warnings.length)?`；注意：${data.warnings.join('；')}`:'';
+        showSuccess(`副本「${data.new_doc_name}」已创建：${data.sheets_created} 表 / ${data.records_written} 行${data.records_skipped?`（${data.records_skipped} 行跳过）`:''}${warn} 链接：${data.url}`);
+      }catch(error){showError(`创建副本失败：${error.message}`);}
+      finally{btn.disabled=false;btn.textContent='创建副本';}
+    }
     async function downloadExport(url,name){
       try{
         const response=await fetch(`${API_BASE}${url}`,{headers:authHeaders()});
