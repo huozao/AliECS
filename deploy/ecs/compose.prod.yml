@@ -73,6 +73,7 @@ services:
     command: ["python", "-m", "app.main", "run-loop"]
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      PYTHONUNBUFFERED: "1"
       DOC_SYNC_INTERVAL_SECONDS: ${DOC_SYNC_INTERVAL_SECONDS:-86400}
       DOC_SYNC_POLL_SECONDS: ${DOC_SYNC_POLL_SECONDS:-30}
       WECOM_ENV_PROFILES: ${WECOM_ENV_PROFILES:-}

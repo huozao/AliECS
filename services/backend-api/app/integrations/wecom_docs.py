@@ -110,30 +110,45 @@ class WeComDocClient:
             except WeComDocError:
                 pass  # 默认表删不掉就留着，不影响副本内容。
 
-    def add_fields(self, docid: str, sheet_id: str, fields: list[dict[str, Any]]) -> list[str]:
-        """返回创建失败被跳过的字段标题。"""
+    def add_fields(self, docid: str, sheet_id: str, fields: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
+        """返回 (创建成功的字段标题, 失败被跳过的字段标题)。"""
+        created: list[str] = []
         skipped: list[str] = []
         cleaned = [_strip_field(field) for field in fields]
         cleaned = [field for field in cleaned if field.get("field_title")]
         try:
             self.post("/wedoc/smartsheet/add_fields", {"docid": docid, "sheet_id": sheet_id, "fields": cleaned})
-            return skipped
+            return [str(field["field_title"]) for field in cleaned], skipped
         except WeComDocError:
             pass
         for field in cleaned:
+            title = str(field.get("field_title"))
             try:
                 self.post("/wedoc/smartsheet/add_fields", {"docid": docid, "sheet_id": sheet_id, "fields": [field]})
+                created.append(title)
             except WeComDocError:
-                skipped.append(str(field.get("field_title")))
-        return skipped
+                skipped.append(title)
+        return created, skipped
 
-    def add_records(self, docid: str, sheet_id: str, records: list[dict[str, Any]]) -> tuple[int, int]:
-        """按批回写记录，返回 (written, skipped)。"""
+    def add_records(
+        self,
+        docid: str,
+        sheet_id: str,
+        records: list[dict[str, Any]],
+        allowed_titles: set[str] | None = None,
+    ) -> tuple[int, int]:
+        """按批回写记录，返回 (written, skipped)。values 先过滤到目标表实际存在的字段。"""
         written = 0
         skipped = 0
         for start in range(0, len(records), RECORD_BATCH_SIZE):
             batch = records[start : start + RECORD_BATCH_SIZE]
-            payload_records = [{"values": record.get("values") or {}} for record in batch]
+            payload_records = [
+                {"values": _filter_values(record.get("values") or {}, allowed_titles)} for record in batch
+            ]
+            payload_records = [record for record in payload_records if record["values"]]
+            if not payload_records:
+                skipped += len(batch)
+                continue
             try:
                 self.post(
                     "/wedoc/smartsheet/add_records",
@@ -175,6 +190,12 @@ def _write_single_record(client: WeComDocClient, docid: str, sheet_id: str, reco
 
 def _strip_field(field: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in field.items() if key != "field_id"}
+
+
+def _filter_values(values: dict[str, Any], allowed_titles: set[str] | None) -> dict[str, Any]:
+    if allowed_titles is None:
+        return dict(values)
+    return {title: value for title, value in values.items() if title in allowed_titles}
 
 
 def strip_complex_values(values: dict[str, Any]) -> dict[str, Any]:
@@ -227,7 +248,7 @@ def copy_smartsheet_doc(
         sheets_created += 1
 
         fields = client.get_fields(source_docid, sheet_id)
-        skipped_fields = client.add_fields(new_docid, new_sheet_id, fields)
+        created_fields, skipped_fields = client.add_fields(new_docid, new_sheet_id, fields)
         if skipped_fields:
             warnings.append(f"{title}: 字段跳过 {', '.join(skipped_fields)}")
 
@@ -237,7 +258,7 @@ def copy_smartsheet_doc(
             warnings.append(f"{title}: 读取记录失败 {exc}")
             continue
         if records:
-            written, skipped = client.add_records(new_docid, new_sheet_id, records)
+            written, skipped = client.add_records(new_docid, new_sheet_id, records, allowed_titles=set(created_fields))
             records_written += written
             records_skipped += skipped
             if skipped:
