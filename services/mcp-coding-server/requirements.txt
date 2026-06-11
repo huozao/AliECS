@@ -1,0 +1,5 @@
+mcp>=1.9,<2
+uvicorn>=0.30
+# CI 与 backend-api 共用一个环境：fastapi 0.116.x 要求 starlette<0.48，
+# 不加上限会被 mcp 的依赖升到 1.x 导致 backend 测试全挂。
+starlette<0.48

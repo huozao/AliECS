@@ -146,6 +146,20 @@ services:
       - tplus_sync_output:/app/output
       - tplus_sync_requests:/app/sync-requests
 
+  mcp-coding-server:
+    image: ${MCP_CODING_SERVER_IMAGE}
+    restart: always
+    environment:
+      MCP_PORT: "8090"
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "127.0.0.1:8090:8090"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8090/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
   postgres:
     image: postgres:16
     restart: always
