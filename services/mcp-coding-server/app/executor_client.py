@@ -71,3 +71,15 @@ def get_task(job_id: str) -> dict:
 
 def list_targets() -> dict:
     return _request("GET", "/repos")
+
+
+def create_worktree(repo: str, task_id: str, base_ref: str = "HEAD") -> dict:
+    return _request("POST", "/worktrees", {"repo": repo, "task_id": task_id, "base_ref": base_ref})
+
+
+def discard_worktree(repo: str, task_id: str) -> dict:
+    return _request("DELETE", f"/worktrees/{repo}/{task_id}")
+
+
+def get_worktree_diff(repo: str, task_id: str, ref: str = "HEAD") -> dict:
+    return _request("POST", "/tasks", {"repo": repo, "action": "git_diff_worktree", "params": {"task_id": task_id, "ref": ref}})
