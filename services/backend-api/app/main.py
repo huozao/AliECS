@@ -642,6 +642,18 @@ class PhotoStorage:
         return None
 
 
+def _upload_disk_usage(path: Path | str) -> dict[str, Any]:
+    usage = shutil.disk_usage(path)
+    percent = round(usage.used * 100 / usage.total, 1) if usage.total else 0.0
+    return {
+        "path": str(path),
+        "total": usage.total,
+        "used": usage.used,
+        "free": usage.free,
+        "percent": percent,
+    }
+
+
 class LocalPhotoStorage(PhotoStorage):
     driver = "local"
 
@@ -669,17 +681,22 @@ class LocalPhotoStorage(PhotoStorage):
             Path(original_storage_url).unlink(missing_ok=True)
 
     def _warn_if_disk_high(self) -> None:
+        info = _upload_disk_usage(self.base_dir)
         raw = os.getenv("UPLOAD_DISK_WARN_PCT", "").strip()
         if not raw:
             return
         try:
             threshold = float(raw)
-            usage = shutil.disk_usage(self.base_dir)
-            used_pct = usage.used * 100 / usage.total
-        except Exception:
+        except ValueError:
             return
-        if used_pct >= threshold:
-            print(f"upload disk usage high: {used_pct:.1f}% >= {threshold:.1f}%")
+        if info["percent"] >= threshold:
+            log_event(
+                _request_logger,
+                "upload disk usage high",
+                path=info["path"],
+                percent=info["percent"],
+                threshold=threshold,
+            )
 
 
 class OssPhotoStorage(PhotoStorage):
@@ -765,10 +782,12 @@ class AddCoupleMemberRequest(BaseModel):
 @app.get("/healthz")
 def healthz() -> dict[str, object]:
     db_ok, db_message = _db_ping()
+    upload_dir = os.getenv("LOCAL_UPLOAD_DIR", "/tmp/aliecs-uploads")
     return {
         "status": "ok" if db_ok else "degraded",
         "service": "backend-api",
         "database": {"ok": db_ok, "message": db_message},
+        "upload_disk": _upload_disk_usage(upload_dir),
     }
 
 
