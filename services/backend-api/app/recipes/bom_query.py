@@ -21,6 +21,27 @@ DETAIL_SHEET = "父件子件明细_提取"
 SUMMARY_SHEET = "版本父件分组合计"
 HUMAN_SHEET = "配方表_人眼版"
 MATRIX_SHEET = "横向对比_矩阵"
+COST_HEADERS = [
+    "子件编码",
+    "子件名称",
+    "单位",
+    "数量",
+    "比例",
+    "模拟数量",
+    "模拟比例",
+    "系统单价",
+    "当下价格",
+    "系统分价",
+    "当下分价",
+    "模拟分价",
+]
+COST_GROUPS = [
+    ("基础信息", 1, 3, "FFEFF7F1", "FF22733C"),
+    ("原配方", 4, 5, "FFFFF4E3", "FF8A5200"),
+    ("模拟调整", 6, 7, "FFF2EEFF", "FF5B4BDB"),
+    ("价格信息", 8, 9, "FFFFF4E3", "FF8A5200"),
+    ("成本结果", 10, 12, "FFEFF6FF", "FF2563B8"),
+]
 
 OUTPUT_COLUMNS = [
     "版本号_子件",
@@ -523,43 +544,65 @@ def _safe_sheet_title(raw: object, used: set[str]) -> str:
     return candidate
 
 
+def _safe_filename_part(value: object, *, max_len: int = 42) -> str:
+    text = normalize_cell(value)
+    text = re.sub(r'[\\/:*?"<>|\r\n\t]+', "-", text)
+    text = re.sub(r"\s+", "", text).strip(" .-_")
+    return text[:max_len] or "未命名"
+
+
+def recipe_cost_export_filename(
+    recipes: list[dict[str, object]],
+    query_text: str,
+    *,
+    now: datetime | None = None,
+) -> str:
+    stamp = (now or datetime.now()).strftime("%Y%m%d-%H%M%S")
+    if len(recipes) == 1:
+        recipe = recipes[0]
+        parts = [
+            "配方核算",
+            _safe_filename_part(recipe.get("parent_name")),
+            _safe_filename_part(recipe.get("parent_code")),
+            _safe_filename_part(recipe.get("version"), max_len=18),
+            stamp,
+        ]
+    else:
+        parts = ["配方核算", _safe_filename_part(query_text), f"{len(recipes)}个配方", stamp]
+    return "_".join(part for part in parts if part) + ".xlsx"
+
+
+def _style_cost_header(cell, fill: str, font_color: str) -> None:
+    cell.fill = PatternFill("solid", fgColor=fill)
+    cell.font = Font(bold=True, color=font_color)
+    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+
 def save_recipe_cost_workbook(output_path: Path, recipes: list[dict[str, object]]) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     wb = Workbook()
     default_sheet = wb.active
     wb.remove(default_sheet)
 
-    headers = [
-        "子件编码",
-        "子件名称",
-        "规格型号",
-        "单位",
-        "数量",
-        "模拟数量",
-        "比例",
-        "模拟比例",
-        "系统单价",
-        "当下价格",
-        "系统分价",
-        "当下分价",
-        "模拟分价",
-    ]
     used_titles: set[str] = set()
     for recipe in recipes:
         title = _safe_sheet_title(f"{recipe.get('parent_name') or recipe.get('parent_code')} {recipe.get('version')}", used_titles)
         ws = wb.create_sheet(title)
-        ws.append(headers)
-        _style_header(ws[1])
+        for group_title, start_col, end_col, fill, font_color in COST_GROUPS:
+            ws.merge_cells(start_row=1, start_column=start_col, end_row=1, end_column=end_col)
+            for col in range(start_col, end_col + 1):
+                _style_cost_header(ws.cell(1, col), fill, font_color)
+                _style_cost_header(ws.cell(2, col, COST_HEADERS[col - 1]), fill, font_color)
+            ws.cell(1, start_col, group_title)
         for line in recipe.get("lines", []):
             ws.append(
                 [
                     line.get("child_code"),
                     line.get("child_name"),
-                    line.get("spec"),
                     line.get("unit"),
                     line.get("quantity"),
-                    line.get("simulated_quantity"),
                     line.get("ratio"),
+                    line.get("simulated_quantity"),
                     line.get("simulated_ratio"),
                     line.get("system_price"),
                     line.get("current_price"),
@@ -573,10 +616,9 @@ def save_recipe_cost_workbook(output_path: Path, recipes: list[dict[str, object]
                 "汇总",
                 "",
                 "",
-                "",
                 sum(float(line.get("quantity") or 0) for line in recipe.get("lines", [])),
-                sum(float(line.get("simulated_quantity") or 0) for line in recipe.get("lines", [])),
                 sum(float(line.get("ratio") or 0) for line in recipe.get("lines", [])),
+                sum(float(line.get("simulated_quantity") or 0) for line in recipe.get("lines", [])),
                 sum(float(line.get("simulated_ratio") or 0) for line in recipe.get("lines", [])),
                 "",
                 "",
@@ -585,24 +627,32 @@ def save_recipe_cost_workbook(output_path: Path, recipes: list[dict[str, object]
                 recipe.get("simulated_total"),
             ]
         )
-        _style_header(ws[ws.max_row], fill="FF6B7280")
-        ws.freeze_panes = "A2"
-        ws.auto_filter.ref = ws.dimensions
-        for column_cells in ws.columns:
-            max_len = max(len(str(cell.value or "")) for cell in column_cells)
-            ws.column_dimensions[get_column_letter(column_cells[0].column)].width = min(max(max_len + 2, 10), 32)
-        for row in ws.iter_rows(min_row=2):
+        total_row = ws.max_row
+        for cell in ws[total_row]:
+            cell.fill = PatternFill("solid", fgColor="FFF8F2E6")
+            cell.font = Font(bold=True)
+        ws.freeze_panes = "A3"
+        ws.auto_filter.ref = f"A2:L{total_row}"
+        widths = [14, 28, 8, 10, 11, 10, 11, 10, 10, 10, 10, 10]
+        for index, width in enumerate(widths, 1):
+            ws.column_dimensions[get_column_letter(index)].width = width
+        for row in ws.iter_rows(min_row=3, max_row=total_row, min_col=1, max_col=12):
             for cell in row:
-                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        for row in range(2, ws.max_row + 1):
-            ws.cell(row, 7).number_format = "0.00%"
-            ws.cell(row, 8).number_format = "0.00%"
+                cell.alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
+            row[0].alignment = Alignment(horizontal="left", vertical="center")
+            row[1].alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+            row[2].alignment = Alignment(horizontal="left", vertical="center")
+        for row in range(3, total_row + 1):
+            ws.cell(row, 5).number_format = "0.000%"
+            ws.cell(row, 7).number_format = "0.000%"
+            for col in (8, 9, 10, 11, 12):
+                ws.cell(row, col).number_format = "0.000"
         _apply_range_border(ws)
         ws.sheet_view.showGridLines = False
 
     if not recipes:
         ws = wb.create_sheet("核算结果")
-        ws.append(headers)
+        ws.append(COST_HEADERS)
         _style_header(ws[1])
     wb.save(output_path)
 

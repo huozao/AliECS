@@ -8,7 +8,7 @@
     :root{
       --bg:#faf8f3;--panel:#fffdf9;--text:#1f2328;--muted:#766f63;--line:#e7dfd0;--line-soft:#f1eadf;
       --primary:#6f5e46;--primary-dark:#5d472d;--good:#3f7a4c;--bad:#a6423a;--shadow:0 12px 30px rgba(69,56,38,.08);
-      --cost-input-width:88px;
+      --cost-input-width:6.2ch;
     }
     *{box-sizing:border-box}
     body{margin:0;background:radial-gradient(circle at top left,rgba(180,157,118,.14),transparent 34%),var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui,"Microsoft YaHei",sans-serif;font-variant-numeric:tabular-nums}
@@ -20,10 +20,10 @@
     .table-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px;background:#fff}.data-table{width:100%;border-collapse:collapse;font-size:13px;min-width:1240px}.data-table th,.data-table td{border-bottom:1px solid var(--line);padding:9px 10px;text-align:left;vertical-align:middle}.data-table th{background:#f2eadc;position:sticky;top:0}
     .version-tabs{display:flex;gap:10px;flex-wrap:wrap;margin:2px 0 16px}.version-tabs button{border:1px solid var(--line);background:#fff;height:40px;padding:0 18px}.version-tabs button.active{background:linear-gradient(180deg,#826641,var(--primary-dark));color:#fff;border-color:transparent;box-shadow:0 8px 18px rgba(95,73,44,.2)}
     .total-row{display:grid;grid-template-columns:1.3fr repeat(3,1fr);gap:14px;margin:12px 0 18px}.metric{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px 18px;min-height:82px}.metric span{font-size:13px;font-weight:750}.metric strong{display:block;font-size:23px;margin-top:5px;line-height:1.15}
-    .cost-table{min-width:1450px;table-layout:fixed;border-collapse:separate;border-spacing:0}.cost-table col.code{width:118px}.cost-table col.name{width:225px}.cost-table col.unit{width:66px}.cost-table col.num{width:96px}.cost-table col.rate{width:112px}.cost-table col.price{width:110px}.cost-table col.result{width:116px}.cost-table col.action{width:92px}
+    .cost-table{min-width:1280px;table-layout:fixed;border-collapse:separate;border-spacing:0}.cost-table col.code{width:110px}.cost-table col.name{width:210px}.cost-table col.unit{width:56px}.cost-table col.num{width:82px}.cost-table col.rate{width:96px}.cost-table col.price{width:88px}.cost-table col.result{width:96px}.cost-table col.action{width:70px}
     .cost-table th,.cost-table td{border-right:1px solid var(--line-soft);white-space:nowrap}.cost-table th:last-child,.cost-table td:last-child{border-right:0}.cost-table thead tr.group th{height:42px;padding:0 10px;text-align:center;font-weight:850}.cost-table thead tr.columns th{height:40px;padding:0 10px;text-align:center;font-weight:780}.cost-table tbody td,.cost-table tfoot td{height:48px;background:rgba(255,255,255,.92);overflow:hidden;text-overflow:ellipsis}.cost-table tbody td.price-td{overflow:visible}.cost-table tbody tr:hover td{background:#fffaf3}.cost-table tfoot td{background:#fbf0df;font-weight:850}
     .g-basic{background:linear-gradient(180deg,#edf8ef,#f8fcf8)!important;color:#2f7742}.g-recipe{background:linear-gradient(180deg,#fff2dc,#fffbf4)!important;color:#7b5a1f}.g-sim{background:linear-gradient(180deg,#f2efff,#fbfaff)!important;color:#5b4bc4}.g-price{background:linear-gradient(180deg,#fff0df,#fffaf3)!important;color:#9a5b00}.g-result{background:linear-gradient(180deg,#eef6ff,#f8fcff)!important;color:#2769b3}.g-action{background:linear-gradient(180deg,#faf8f4,#fffdf9)!important;color:#59554d}
-    .num{text-align:right}.center{text-align:center}.price-input,.sim-qty-input{width:var(--cost-input-width);max-width:var(--cost-input-width);height:32px;padding:5px 8px;text-align:center;border-radius:8px}.sim-qty-input{border-color:#d8d2ff;background:#fbfaff}.price-input{border-color:#f0cfaa;background:#fffaf3}.price-cell{position:relative;display:inline-flex;align-items:center;justify-content:flex-end}.price-cell[data-tooltip]:hover::after,.price-cell[data-tooltip]:focus-within::after{content:attr(data-tooltip);position:absolute;z-index:20;left:50%;top:calc(100% + 8px);transform:translateX(-50%);background:rgba(34,31,28,.96);color:#fff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:650;white-space:nowrap;box-shadow:0 8px 16px rgba(0,0,0,.22)}.price-cell[data-tooltip]:hover::before,.price-cell[data-tooltip]:focus-within::before{content:"";position:absolute;z-index:21;left:50%;top:calc(100% + 2px);transform:translateX(-50%);border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:6px solid rgba(34,31,28,.96)}.reset-link{border:0;background:transparent;color:#665e52;font-weight:750;padding:4px 6px;border-radius:7px}.reset-link:hover{background:#f3ecdf;color:var(--primary-dark)}
+    .num{text-align:right}.center{text-align:center}.price-input,.sim-qty-input{width:var(--cost-input-width);max-width:var(--cost-input-width);height:32px;padding:5px 6px;text-align:center;border-radius:8px}.sim-qty-input{border-color:#d8d2ff;background:#fbfaff}.price-input{border-color:#f0cfaa;background:#fffaf3}.price-cell{position:relative;display:inline-flex;align-items:center;justify-content:flex-end}.price-cell[data-tooltip]:hover::after,.price-cell[data-tooltip]:focus-within::after{content:attr(data-tooltip);position:absolute;z-index:20;left:50%;top:calc(100% + 8px);transform:translateX(-50%);background:rgba(34,31,28,.96);color:#fff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:650;white-space:nowrap;box-shadow:0 8px 16px rgba(0,0,0,.22)}.price-cell[data-tooltip]:hover::before,.price-cell[data-tooltip]:focus-within::before{content:"";position:absolute;z-index:21;left:50%;top:calc(100% + 2px);transform:translateX(-50%);border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:6px solid rgba(34,31,28,.96)}.reset-link{border:0;background:transparent;color:#665e52;font-weight:750;padding:4px 6px;border-radius:7px}.reset-link:hover{background:#f3ecdf;color:var(--primary-dark)}
     .modal{position:fixed;inset:0;background:rgba(30,22,12,.28);display:none;align-items:center;justify-content:center;padding:16px}.modal.show{display:flex}.auth-panel{width:min(440px,100%);background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px}
     @media (max-width:900px){.form{grid-template-columns:1fr}.topbar{flex-direction:column}.total-row{grid-template-columns:1fr}.wrap{padding:18px 14px 48px}}
   </style>
@@ -367,15 +367,25 @@
       catch(error){showError(error.message);}
       finally{syncBtn.disabled=false;syncBtn.textContent='手动同步配方';}
     }
+    function downloadNameFromDisposition(header,fallback){
+      const text=header||'';
+      const encoded=text.match(/filename\*=UTF-8''([^;]+)/i);
+      if(encoded){try{return decodeURIComponent(encoded[1].replace(/"/g,''));}catch{}}
+      const plain=text.match(/filename="?([^";]+)"?/i);
+      return plain?plain[1]:fallback;
+    }
+    function saveBlob(blob,filename){
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a');
+      a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+    }
     async function downloadResult(){
       if(!state.fileId)return;
       const headers={};syncAuth();if(state.token)headers.Authorization=`Bearer ${state.token}`;
       const response=await fetch(`${API_BASE}/v1/recipes/download/${state.fileId}`,{headers});
       if(!response.ok){let message=`HTTP ${response.status}`;try{const data=await response.json();message=data.detail||message;}catch{}throw new Error(message);}
       const blob=await response.blob();
-      const url=URL.createObjectURL(blob);
-      const a=document.createElement('a');
-      a.href=url;a.download=`recipe-${state.fileId}.xlsx`;document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+      saveBlob(blob,downloadNameFromDisposition(response.headers.get('content-disposition'),`配方查询_${state.fileId}.xlsx`));
     }
     async function downloadCostResult(){
       const query=queryInput.value.trim();
@@ -384,9 +394,7 @@
       const response=await fetch(`${API_BASE}/v1/recipes/cost/export`,{method:'POST',headers,body:JSON.stringify(costPayload())});
       if(!response.ok){let message=`HTTP ${response.status}`;try{const data=await response.json();message=data.detail||message;}catch{}throw new Error(message);}
       const blob=await response.blob();
-      const url=URL.createObjectURL(blob);
-      const a=document.createElement('a');
-      a.href=url;a.download=`recipe-cost-${new Date().toISOString().slice(0,10)}.xlsx`;document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+      saveBlob(blob,downloadNameFromDisposition(response.headers.get('content-disposition'),'配方核算.xlsx'));
     }
     async function login(){
       const username=usernameInput.value.trim(),password=passwordInput.value;
