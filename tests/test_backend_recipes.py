@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from io import BytesIO
 import os
 import sys
 import tempfile
@@ -9,6 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1] / "services" / "backend-api"
@@ -251,8 +253,8 @@ class BackendRecipeRouteTests(unittest.TestCase):
 
         self.assertEqual(403, response.status_code)
 
-    def test_formula_read_user_can_calculate_recipe_cost_with_manual_prices(self) -> None:
-        token = self._token(permissions=["formula.read"])
+    def test_formula_cost_user_can_calculate_recipe_cost_with_manual_prices_and_simulation(self) -> None:
+        token = self._token(permissions=["formula.cost.calculate"])
 
         response = self.client.post(
             "/v1/recipes/cost",
@@ -261,6 +263,7 @@ class BackendRecipeRouteTests(unittest.TestCase):
                 "query": "3027",
                 "default_bom": "1",
                 "manual_prices": {"C002": 25},
+                "simulated_quantities": {"C001": 1, "C002": 1000},
             },
         )
 
@@ -276,12 +279,54 @@ class BackendRecipeRouteTests(unittest.TestCase):
         self.assertAlmostEqual(20.0, by_code["C002"]["system_price"])
         self.assertAlmostEqual(25.0, by_code["C002"]["current_price"])
         self.assertAlmostEqual(5.0, by_code["C002"]["current_amount"])  # 0.2 * 25
+        self.assertAlmostEqual(0.5, by_code["C001"]["simulated_ratio"])
+        self.assertAlmostEqual(0.5, by_code["C002"]["simulated_ratio"])
+        self.assertAlmostEqual(12.5, by_code["C002"]["simulated_amount"])  # 0.5 * 25
+        self.assertAlmostEqual(17.5, recipe["simulated_total"])
 
-    def test_recipe_cost_requires_formula_read_permission(self) -> None:
-        token = self._token(permissions=["production.schedule.read"])
+    def test_recipe_cost_requires_formula_cost_permission(self) -> None:
+        token = self._token(permissions=["formula.read"])
 
         response = self.client.post(
             "/v1/recipes/cost",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"query": "3027"},
+        )
+
+        self.assertEqual(403, response.status_code)
+
+    def test_formula_cost_user_can_export_cost_workbook_with_one_sheet_per_recipe(self) -> None:
+        token = self._token(permissions=["formula.cost.calculate"])
+
+        response = self.client.post(
+            "/v1/recipes/cost/export",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "query": "3027",
+                "manual_prices": {"C002": 25},
+                "simulated_quantities": {"C001": 1, "C002": 1000, "C003": 2},
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            response.headers["content-type"],
+        )
+        wb = load_workbook(BytesIO(response.content), data_only=True)
+        self.assertEqual(2, len(wb.sheetnames))
+        self.assertTrue(any("V1" in name for name in wb.sheetnames))
+        sheet = wb[wb.sheetnames[0]]
+        headers = [cell.value for cell in sheet[1]]
+        self.assertIn("模拟数量", headers)
+        self.assertIn("模拟比例", headers)
+        self.assertIn("模拟分价", headers)
+
+    def test_recipe_cost_export_requires_formula_cost_permission(self) -> None:
+        token = self._token(permissions=["formula.read"])
+
+        response = self.client.post(
+            "/v1/recipes/cost/export",
             headers={"Authorization": f"Bearer {token}"},
             json={"query": "3027"},
         )

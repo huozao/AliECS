@@ -7,7 +7,9 @@
 
 ## 角色权限
 - admin / manager / operator / viewer
-- 关键权限：`admin.access`、`admin.users.manage`、`admin.roles.manage`、`admin.features.manage`、`personal.access` 等。
+- 业务角色：董事长、总经理A、总经理B、销售A、销售B、技术A、技术B、财务A、财务B、库管A、库管B。
+- 关键权限：`admin.access`、`admin.users.manage`、`admin.roles.manage`、`admin.features.manage`、`formula.read`、`formula.cost.calculate`、`personal.access` 等。
+- `formula.read` 控制配方查询；`formula.cost.calculate` 单独控制成本核算和核算 Excel 导出。
 
 ## 常见管理操作
 1. 管理员登录 `http://localhost:8081`。

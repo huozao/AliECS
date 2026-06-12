@@ -32,6 +32,7 @@ from app.recipes.bom_query import (
     locate_recipe_source,
     new_export_path,
     query_recipe_workbook,
+    save_recipe_cost_workbook,
     save_recipe_workbook,
 )
 from app.routers.webhooks import router as webhooks_router
@@ -434,6 +435,7 @@ class RecipeQueryRequest(BaseModel):
 
 class RecipeCostRequest(RecipeQueryRequest):
     manual_prices: dict[str, float] = Field(default_factory=dict)
+    simulated_quantities: dict[str, float] = Field(default_factory=dict)
 
 
 class ReconciliationActionRequest(BaseModel):
@@ -1306,7 +1308,7 @@ def recipe_query(body: RecipeQueryRequest, user: dict[str, Any] = Depends(requir
 
 @app.post("/v1/recipes/cost")
 def recipe_cost(body: RecipeCostRequest, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
-    require_permission("formula.read", user)
+    require_permission("formula.cost.calculate", user)
     try:
         source_path = locate_recipe_source()
         result = query_recipe_workbook(
@@ -1315,7 +1317,11 @@ def recipe_cost(body: RecipeCostRequest, user: dict[str, Any] = Depends(require_
             default_bom=body.default_bom,
             include_disabled=body.include_disabled,
         )
-        recipes = calculate_recipe_costs(result, manual_prices=body.manual_prices)
+        recipes = calculate_recipe_costs(
+            result,
+            manual_prices=body.manual_prices,
+            simulated_quantities=body.simulated_quantities,
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="BOM 输入文件未找到") from exc
     except ValueError as exc:
@@ -1330,8 +1336,41 @@ def recipe_cost(body: RecipeCostRequest, user: dict[str, Any] = Depends(require_
         "default_bom": result.default_bom,
         "include_disabled": result.include_disabled,
         "manual_price_count": len(body.manual_prices),
+        "simulated_quantity_count": len(body.simulated_quantities),
         "recipes": recipes,
     }
+
+
+@app.post("/v1/recipes/cost/export")
+def recipe_cost_export(body: RecipeCostRequest, user: dict[str, Any] = Depends(require_login)) -> FileResponse:
+    require_permission("formula.cost.calculate", user)
+    try:
+        source_path = locate_recipe_source()
+        result = query_recipe_workbook(
+            source_path,
+            query_text=body.query,
+            default_bom=body.default_bom,
+            include_disabled=body.include_disabled,
+        )
+        recipes = calculate_recipe_costs(
+            result,
+            manual_prices=body.manual_prices,
+            simulated_quantities=body.simulated_quantities,
+        )
+        file_id, output_path = new_export_path()
+        save_recipe_cost_workbook(output_path, recipes)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="BOM 输入文件未找到") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"配方成本核算导出失败：{type(exc).__name__}") from exc
+
+    return FileResponse(
+        output_path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=f"配方核算_{file_id}.xlsx",
+    )
 
 
 @app.post("/v1/recipes/sync-bom")

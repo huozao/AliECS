@@ -104,6 +104,30 @@ class BackendOpsStatusTests(unittest.TestCase):
         self.assertEqual(["raw_inventory", "finished_inventory", "formula_query"], [item["code"] for item in active[:3]])
         self.assertEqual("系统配方", active[2]["title"])
         self.assertEqual("/formula/", active[2]["url"])
+        self.assertEqual("formula.read", active[2]["required_permission"])
+
+    def test_formula_cost_rbac_seed_includes_requested_roles_and_permission(self) -> None:
+        migration = Path(__file__).resolve().parents[1] / "db" / "migrations" / "0012_formula_cost_rbac.sql"
+        sql = migration.read_text(encoding="utf-8")
+
+        for role_code in [
+            "chairman",
+            "general_manager_a",
+            "general_manager_b",
+            "sales_a",
+            "sales_b",
+            "tech_a",
+            "tech_b",
+            "finance_a",
+            "finance_b",
+            "warehouse_a",
+            "warehouse_b",
+        ]:
+            self.assertIn(f"'{role_code}'", sql)
+
+        self.assertIn("'formula.cost.calculate'", sql)
+        self.assertIn("'配方成本核算'", sql)
+        self.assertIn("WHERE r.code = 'admin' AND p.code = 'formula.cost.calculate'", sql)
 
 
 class BackendOpsDatabaseActionTests(unittest.TestCase):

@@ -162,6 +162,41 @@ class RecipeQueryTests(unittest.TestCase):
         self.assertAlmostEqual(0.8, float(detail.loc["C100", "比例"]))
         self.assertAlmostEqual(0.2, float(detail.loc["C200", "比例"]))
 
+    def test_simulated_quantities_recompute_ratio_without_packaging_units(self) -> None:
+        from app.recipes.bom_query import calculate_recipe_costs, query_recipe_workbook
+
+        source = self.tmp_path / "bom_simulated_quantity.xlsx"
+        wb = Workbook()
+        material = wb.active
+        material.title = "物料清单"
+        material.append(["父件编码", "父件名称", "规格型号", "版本号", "计量单位", "生产数量", "默认BOM", "停用"])
+        material.append(["HYD-0601", "HYD-0601阻燃ABSPVC改性料", "ABS", "V1", "kg", 25, 1, 0])
+        component = wb.create_sheet("子件明细")
+        component.append(["版本号", "父件编码", "子件编码", "子件名称", "规格型号", "计量单位", "需用数量", "系统单价"])
+        component.append(["V1", "HYD-0601", "NEWBAG01", "新包装袋", "P", "条", 40, 1])
+        component.append(["V1", "HYD-0601", "C100", "树脂", "A", "kg", 20, 3])
+        component.append(["V1", "HYD-0601", "C200", "色粉", "B", "g", 5000, 4])
+        wb.save(source)
+
+        result = query_recipe_workbook(source, query_text="HYD-0601", default_bom="1")
+        recipes = calculate_recipe_costs(
+            result,
+            simulated_quantities={"NEWBAG01": 80, "C100": 10, "C200": 15000},
+        )
+
+        self.assertEqual(1, len(recipes))
+        recipe = recipes[0]
+        by_code = {line["child_code"]: line for line in recipe["lines"]}
+        self.assertEqual(80.0, by_code["NEWBAG01"]["simulated_quantity"])
+        self.assertEqual(0.0, by_code["NEWBAG01"]["simulated_ratio"])
+        self.assertEqual(0.0, by_code["NEWBAG01"]["simulated_amount"])
+        # 模拟分母只剩 10kg + 15kg(15000g) = 25kg。
+        self.assertAlmostEqual(0.4, by_code["C100"]["simulated_ratio"])
+        self.assertAlmostEqual(0.6, by_code["C200"]["simulated_ratio"])
+        self.assertAlmostEqual(1.2, by_code["C100"]["simulated_amount"])
+        self.assertAlmostEqual(2.4, by_code["C200"]["simulated_amount"])
+        self.assertAlmostEqual(3.6, recipe["simulated_total"])
+
     def test_save_recipe_workbook_creates_human_review_and_matrix_sheets(self) -> None:
         from app.recipes.bom_query import query_recipe_workbook, save_recipe_workbook
 

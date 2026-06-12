@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
@@ -410,11 +410,27 @@ def _float_or_zero(value: object) -> float:
     return float(numeric)
 
 
+def _normalized_float_mapping(values: dict[str, float] | None) -> dict[str, float]:
+    result: dict[str, float] = {}
+    for key, value in (values or {}).items():
+        numeric = float(value)
+        if numeric < 0:
+            raise ValueError("simulated quantities must be non-negative")
+        result[normalize_cell(key)] = numeric
+    return result
+
+
+def _ratio_excluded(child_code: str, unit: str) -> bool:
+    return child_code in SKIP_CHILD_CODES or unit in SKIP_RATIO_UNITS
+
+
 def calculate_recipe_costs(
     result: RecipeQueryResult,
     manual_prices: dict[str, float] | None = None,
+    simulated_quantities: dict[str, float] | None = None,
 ) -> list[dict[str, object]]:
     manual_prices = {normalize_cell(key): float(value) for key, value in (manual_prices or {}).items()}
+    simulated_quantities = _normalized_float_mapping(simulated_quantities)
     recipes: list[dict[str, object]] = []
     if result.detail.empty:
         return recipes
@@ -423,7 +439,17 @@ def calculate_recipe_costs(
         lines: list[dict[str, object]] = []
         system_total = 0.0
         current_total = 0.0
+        simulated_total = 0.0
         group = group.reset_index(drop=True)
+        simulated_inputs: list[tuple[str, str, float, float]] = []
+        for _, row in group.iterrows():
+            child_code = normalize_cell(row.get("子件编码"))
+            unit = normalize_cell(row.get("计量单位_子件"))
+            quantity = _float_or_zero(row.get("需用数量"))
+            simulated_quantity = simulated_quantities.get(child_code, quantity)
+            simulated_inputs.append((child_code, unit, simulated_quantity, _cost_quantity(simulated_quantity, unit)))
+        simulated_denom = sum(cost_qty for child_code, unit, _, cost_qty in simulated_inputs if not _ratio_excluded(child_code, unit))
+
         for _, row in group.iterrows():
             child_code = normalize_cell(row.get("子件编码"))
             unit = normalize_cell(row.get("计量单位_子件"))
@@ -436,8 +462,14 @@ def calculate_recipe_costs(
             ratio_value = _float_or_zero(row.get("比例"))
             system_amount = ratio_value * system_price
             current_amount = ratio_value * current_price
+            simulated_quantity = simulated_quantities.get(child_code, quantity)
+            simulated_ratio = 0.0
+            if simulated_denom > 0 and not _ratio_excluded(child_code, unit):
+                simulated_ratio = _cost_quantity(simulated_quantity, unit) / simulated_denom
+            simulated_amount = simulated_ratio * current_price
             system_total += system_amount
             current_total += current_amount
+            simulated_total += simulated_amount
             lines.append(
                 {
                     "child_code": child_code,
@@ -451,6 +483,9 @@ def calculate_recipe_costs(
                     "current_price": current_price,
                     "system_amount": system_amount,
                     "current_amount": current_amount,
+                    "simulated_quantity": simulated_quantity,
+                    "simulated_ratio": simulated_ratio,
+                    "simulated_amount": simulated_amount,
                     "manual_price_applied": manual_price is not None,
                     "disabled": normalize_cell(row.get("停用")),
                 }
@@ -466,10 +501,108 @@ def calculate_recipe_costs(
                 "disabled": normalize_cell(first.get("停用")),
                 "system_total": system_total,
                 "current_total": current_total,
+                "simulated_total": simulated_total,
                 "lines": lines,
             }
         )
     return recipes
+
+
+def _safe_sheet_title(raw: object, used: set[str]) -> str:
+    title = re.sub(r"[\[\]:*?/\\]", " ", normalize_cell(raw)).strip() or "配方"
+    title = re.sub(r"\s+", " ", title)[:31] or "配方"
+    candidate = title
+    index = 2
+    while candidate in used:
+        suffix = f"_{index}"
+        candidate = f"{title[:31 - len(suffix)]}{suffix}"
+        index += 1
+    used.add(candidate)
+    return candidate
+
+
+def save_recipe_cost_workbook(output_path: Path, recipes: list[dict[str, object]]) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    wb = Workbook()
+    default_sheet = wb.active
+    wb.remove(default_sheet)
+
+    headers = [
+        "子件编码",
+        "子件名称",
+        "规格型号",
+        "单位",
+        "数量",
+        "模拟数量",
+        "比例",
+        "模拟比例",
+        "系统单价",
+        "当下价格",
+        "系统分价",
+        "当下分价",
+        "模拟分价",
+    ]
+    used_titles: set[str] = set()
+    for recipe in recipes:
+        title = _safe_sheet_title(f"{recipe.get('parent_name') or recipe.get('parent_code')} {recipe.get('version')}", used_titles)
+        ws = wb.create_sheet(title)
+        ws.append(headers)
+        _style_header(ws[1])
+        for line in recipe.get("lines", []):
+            ws.append(
+                [
+                    line.get("child_code"),
+                    line.get("child_name"),
+                    line.get("spec"),
+                    line.get("unit"),
+                    line.get("quantity"),
+                    line.get("simulated_quantity"),
+                    line.get("ratio"),
+                    line.get("simulated_ratio"),
+                    line.get("system_price"),
+                    line.get("current_price"),
+                    line.get("system_amount"),
+                    line.get("current_amount"),
+                    line.get("simulated_amount"),
+                ]
+            )
+        ws.append(
+            [
+                "汇总",
+                "",
+                "",
+                "",
+                sum(float(line.get("quantity") or 0) for line in recipe.get("lines", [])),
+                sum(float(line.get("simulated_quantity") or 0) for line in recipe.get("lines", [])),
+                sum(float(line.get("ratio") or 0) for line in recipe.get("lines", [])),
+                sum(float(line.get("simulated_ratio") or 0) for line in recipe.get("lines", [])),
+                "",
+                "",
+                recipe.get("system_total"),
+                recipe.get("current_total"),
+                recipe.get("simulated_total"),
+            ]
+        )
+        _style_header(ws[ws.max_row], fill="FF6B7280")
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+        for column_cells in ws.columns:
+            max_len = max(len(str(cell.value or "")) for cell in column_cells)
+            ws.column_dimensions[get_column_letter(column_cells[0].column)].width = min(max(max_len + 2, 10), 32)
+        for row in ws.iter_rows(min_row=2):
+            for cell in row:
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        for row in range(2, ws.max_row + 1):
+            ws.cell(row, 7).number_format = "0.00%"
+            ws.cell(row, 8).number_format = "0.00%"
+        _apply_range_border(ws)
+        ws.sheet_view.showGridLines = False
+
+    if not recipes:
+        ws = wb.create_sheet("核算结果")
+        ws.append(headers)
+        _style_header(ws[1])
+    wb.save(output_path)
 
 
 def _style_title(cell, fill: str = "FF1F2937") -> None:
