@@ -22,9 +22,15 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertIn("resetLine(", self.html)
 
     def test_cost_inputs_have_compact_fixed_width(self) -> None:
-        self.assertIn("--cost-input-width:88px", self.html)
+        self.assertIn("--cost-input-width:6.2ch", self.html)
+        self.assertIn(".cost-table{min-width:1280px", self.html)
         self.assertIn("width:var(--cost-input-width)", self.html)
         self.assertIn("max-width:var(--cost-input-width)", self.html)
+
+    def test_cost_export_uses_server_filename(self) -> None:
+        self.assertIn("downloadNameFromDisposition", self.html)
+        self.assertIn("content-disposition", self.html)
+        self.assertNotIn("recipe-cost-${new Date().toISOString().slice(0,10)}.xlsx", self.html)
 
     def test_current_price_time_is_input_hover_tooltip(self) -> None:
         self.assertIn('class="price-cell"${priceTooltip}', self.html)

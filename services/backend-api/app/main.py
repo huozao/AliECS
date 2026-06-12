@@ -32,6 +32,7 @@ from app.recipes.bom_query import (
     locate_recipe_source,
     new_export_path,
     query_recipe_workbook,
+    recipe_cost_export_filename,
     save_recipe_cost_workbook,
     save_recipe_workbook,
 )
@@ -1357,8 +1358,9 @@ def recipe_cost_export(body: RecipeCostRequest, user: dict[str, Any] = Depends(r
             manual_prices=body.manual_prices,
             simulated_quantities=body.simulated_quantities,
         )
-        file_id, output_path = new_export_path()
+        _file_id, output_path = new_export_path()
         save_recipe_cost_workbook(output_path, recipes)
+        filename = recipe_cost_export_filename(recipes, body.query)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="BOM 输入文件未找到") from exc
     except ValueError as exc:
@@ -1369,7 +1371,7 @@ def recipe_cost_export(body: RecipeCostRequest, user: dict[str, Any] = Depends(r
     return FileResponse(
         output_path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename=f"配方核算_{file_id}.xlsx",
+        filename=filename,
     )
 
 

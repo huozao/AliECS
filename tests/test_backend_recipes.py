@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+import urllib.parse
 from pathlib import Path
 
 import pandas as pd
@@ -313,14 +314,24 @@ class BackendRecipeRouteTests(unittest.TestCase):
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             response.headers["content-type"],
         )
+        disposition = urllib.parse.unquote(response.headers["content-disposition"])
+        self.assertIn("配方核算", disposition)
+        self.assertIn("3027", disposition)
+        self.assertIn("2个配方", disposition)
         wb = load_workbook(BytesIO(response.content), data_only=True)
         self.assertEqual(2, len(wb.sheetnames))
         self.assertTrue(any("V1" in name for name in wb.sheetnames))
         sheet = wb[wb.sheetnames[0]]
-        headers = [cell.value for cell in sheet[1]]
-        self.assertIn("模拟数量", headers)
-        self.assertIn("模拟比例", headers)
-        self.assertIn("模拟分价", headers)
+        merged = {str(item) for item in sheet.merged_cells.ranges}
+        self.assertTrue({"A1:C1", "D1:E1", "F1:G1", "H1:I1", "J1:L1"}.issubset(merged))
+        headers = [sheet.cell(2, col).value for col in range(1, 13)]
+        self.assertEqual(
+            ["子件编码", "子件名称", "单位", "数量", "比例", "模拟数量", "模拟比例", "系统单价", "当下价格", "系统分价", "当下分价", "模拟分价"],
+            headers,
+        )
+        self.assertEqual("left", sheet["B3"].alignment.horizontal)
+        self.assertEqual("right", sheet["D3"].alignment.horizontal)
+        self.assertLessEqual(sheet.column_dimensions["I"].width, 12)
 
     def test_recipe_cost_export_requires_formula_cost_permission(self) -> None:
         token = self._token(permissions=["formula.read"])
