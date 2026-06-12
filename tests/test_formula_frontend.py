@@ -31,6 +31,15 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertIn('data-tooltip="更新时间：${fmtPriceTime(t)}"', self.html)
         self.assertIn(".price-cell[data-tooltip]:hover::after", self.html)
 
+    def test_bom_scope_defaults_to_default_bom_and_lists_all_versions_last(self) -> None:
+        select_start = self.html.index('<select id="defaultBom">')
+        select_end = self.html.index("</select>", select_start)
+        select_html = self.html[select_start:select_end]
+
+        self.assertIn('<option value="1" selected>默认 BOM</option>', select_html)
+        self.assertLess(select_html.index('value="1"'), select_html.index('value="disabled"'))
+        self.assertLess(select_html.index('value="enabled"'), select_html.index('value="all"'))
+
 
 if __name__ == "__main__":
     unittest.main()
