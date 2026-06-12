@@ -44,6 +44,10 @@
       <article class="card"><div class="label">愿望 / 纪念日</div><div id="planCount" class="value">-</div></article>
     </section>
 
+    <section class="card">
+      <div class="row"><strong>Immich</strong><span id="immichStatus" class="small">检查中...</span></div>
+    </section>
+
     <section class="grid modules">
       <a class="card" href="/memories/"><strong>回忆列表</strong><div class="small">筛选、分页、进入详情。</div></a>
       <a class="card" href="/map/"><strong>地图足迹</strong><div class="small">查看所有带坐标的回忆。</div></a>
@@ -142,7 +146,7 @@
   <script>
     const API_BASE = window.AliECSAuth.API_BASE;
     const token = () => window.AliECSAuth.getToken();
-    const state = {space:null, memories:[], map:[], photos:[], anniversaries:[], bucket:[]};
+    const state = {space:null, memories:[], map:[], photos:[], anniversaries:[], bucket:[], immich:null};
     let miniMap, markerLayer;
     const $ = (id) => document.getElementById(id);
     const esc = (v) => String(v ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#039;");
@@ -163,13 +167,14 @@
     }
     function numberOrNull(id){const v=$(id).value;return v === '' ? null : Number(v);}
     async function loadAll(){
-      const [space, memories, map, photos, anniversaries, bucket] = await Promise.all([
+      const [space, memories, map, photos, anniversaries, bucket, immich] = await Promise.all([
         api('/v1/couple/space'),
         api('/v1/memories?page=1&page_size=60'),
         api('/v1/map/memories'),
         api('/v1/photos?page=1&page_size=30'),
         api('/v1/anniversaries'),
-        api('/v1/bucket-items')
+        api('/v1/bucket-items'),
+        api('/v1/immich/status').catch((e)=>({enabled:false,ok:false,detail:e.message}))
       ]);
       state.space = space;
       state.memories = memories.items || [];
@@ -177,9 +182,10 @@
       state.photos = photos.items || [];
       state.anniversaries = anniversaries.items || [];
       state.bucket = bucket.items || [];
+      state.immich = immich;
       renderAll();
     }
-    function renderAll(){renderSpace();renderRecent();renderTimeline();renderMiniMap();renderGallery();renderAnniversaries();renderBucket();}
+    function renderAll(){renderSpace();renderImmichStatus();renderRecent();renderTimeline();renderMiniMap();renderGallery();renderAnniversaries();renderBucket();}
     function renderSpace(){
       const s = state.space || {};
       $('spaceTitle').textContent = s.name || '两个人的记忆地图';
@@ -188,6 +194,10 @@
       $('nextAnniversary').textContent = s.next_anniversary ? `还有 ${s.next_anniversary.days_remaining} 天` : '未设置';
       $('memoryCount').textContent = `${s.counts?.memories || 0} / ${s.counts?.photos || 0}`;
       $('planCount').textContent = `${s.counts?.bucket_items || 0} / ${s.counts?.anniversaries || 0}`;
+    }
+    function renderImmichStatus(){
+      const s=state.immich||{};
+      $('immichStatus').textContent = s.enabled ? (s.ok ? 'Immich 已连接。' : `Immich 暂不可用：${s.detail||'unknown'}`) : 'Immich 未启用，当前使用本地/旧电脑照片通道。';
     }
     function renderRecent(){
       $('recentMemories').innerHTML = state.memories.slice(0,6).map(m => `<article class="card memory-card"><h3>${esc(m.title)}</h3><div class="small">${esc(m.memory_date || '未知日期')} · ${esc(m.place_name || '未知地点')} · ${m.photo_count || 0} 张照片</div><p>${esc((m.content || '').slice(0,110))}</p><div>${(m.tags||[]).map(t=>`<span class="pill">${esc(t)}</span>`).join('')}</div><p><a class="btn" href="/memories/detail.html?id=${m.id}">详情</a></p></article>`).join('') || '<article class="card">暂无回忆，先发布第一条。</article>';

@@ -37,13 +37,21 @@
 | `COUPLE_ALLOWED_USERS` | 用户白名单 | 建议 | 授权边界不明确 |
 | `COUPLE_ALLOWED_EMAILS` | 邮箱白名单 | 可选 | 无法按邮箱维度限制 |
 | `MAX_UPLOAD_MB` | Couple 图片上传大小上限 | 建议，默认 15 | 上传限制不符合预期 |
-| `STORAGE_DRIVER` | 照片存储驱动：`local` / `oss` | 建议，默认 local | 生产照片存储策略不明确 |
+| `STORAGE_DRIVER` | 照片存储驱动：`local` / `webdock` / `oss` | 建议，生产用 webdock | 生产照片存储策略不明确 |
 | `LOCAL_UPLOAD_DIR` | local 驱动上传目录 | local 必填 | local 上传无法落盘 |
+| `WEBDOCK_PHOTO_BASE_URL` | 旧电脑 WebDock 照片存储 API 根地址 | `STORAGE_DRIVER=webdock` 时必填，默认 `http://host.docker.internal:11800` | backend-api 无法把照片写入旧电脑 |
+| `WEBDOCK_PHOTO_API_TOKEN` | 调用旧电脑 WebDock 照片存储 API 的 bearer token | `STORAGE_DRIVER=webdock` 时必填 | 上传/读取照片会失败 |
+| `WEBDOCK_PHOTO_TIMEOUT_SECONDS` | 旧电脑照片 API 超时 | 可选，默认 30 | 旧电脑慢响应时行为不明确 |
+| `IMMICH_ENABLED` | Couple -> Immich API 集成开关 | 可选，默认 `false` | 关闭时 Couple 只使用现有 local/WebDock 照片通道 |
+| `IMMICH_BASE_URL` | Immich API 根地址，不带尾随 `/` | `IMMICH_ENABLED=true` 时必填，建议 `https://immich.hydwang.xyz` | 无法查询或绑定 Immich 照片 |
+| `IMMICH_API_KEY` | Immich API key | `IMMICH_ENABLED=true` 时必填；真实值只能在运行时 `.env` 或 secret store | Immich API 调用失败；严禁提交真实值 |
+| `IMMICH_TIMEOUT_SECONDS` | Immich API 超时 | 可选，默认 20 | Immich 慢响应时行为不明确 |
+| `IMMICH_PROXY_MODE` | Immich 缩略图/内容代理模式 | 可选，默认 `backend` | 浏览器可能暴露不该暴露的 Immich 访问细节 |
 | `OSS_ENDPOINT` / `OSS_BUCKET` | OSS 目标地址与 bucket | `STORAGE_DRIVER=oss` 时必填 | OSS 上传不可用 |
 | `OSS_ACCESS_KEY_ID` / `OSS_ACCESS_KEY_SECRET` | OSS 凭据 | `STORAGE_DRIVER=oss` 时必填 | OSS 上传不可用 |
 | `SHARE_BASE_URL` | 分享链接生成根地址 | 建议 | 分享 URL 可能使用错误域名 |
 
-> 当前 backend-api 已抽象 `local` / `oss` driver；`local` 可直接使用，`oss` 仍需配置 bucket/keys 并接入对象存储实现后再切生产。
+> 当前 backend-api 已抽象 `local` / `webdock` / `oss` driver；`webdock` 通过 ECS 到旧电脑的 WebDock 隧道保存原图，`oss` 仍需配置 bucket/keys 并接入对象存储实现后再切生产。
 
 ## 4. 维护要求
 

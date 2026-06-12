@@ -5,7 +5,7 @@
 ## Runtime Topology
 
 ```text
-WeChat -> OpenClaw on ECS -> openclaw-bridge -> ECS localhost reverse tunnel -> webdock laptop -> ChatGPT browser
+WeChat / Feishu -> OpenClaw on ECS -> openclaw-bridge -> ECS localhost reverse tunnel -> webdock laptop -> ChatGPT browser
 ```
 
 Do not run the browser relay on the current small ECS instance. Chrome can exhaust memory and affect SSH, Docker, OpenClaw, and the main AliECS stack.
@@ -147,6 +147,55 @@ The OpenClaw model name may remain `wechat-bridge/echo`; the ECS bridge maps the
 Keep `requiresStringContent` disabled for image input. If it is set to `true`,
 OpenClaw flattens OpenAI completion messages to plain string content before
 calling the bridge, which drops `image_url` parts.
+
+## Feishu Channel
+
+Feishu runs as an OpenClaw channel on `服务器:/root/openclaw`. The channel should use the same default agent/model path as Weixin, so Feishu replies continue through `openclaw-bridge` and WebDock.
+
+Runtime expectations:
+
+```text
+OpenClaw image: ghcr.io/openclaw/openclaw:2026.6.5 or newer
+Feishu connection mode: websocket
+Private chats: dmPolicy=open and allowFrom includes "*"
+Group chats: groupPolicy=open
+Group mention gate: requireMention=false
+Secret storage: channels.feishu.appSecret is an env SecretRef to FEISHU_APP_SECRET
+```
+
+The Feishu App ID and secret are supplied from `服务器:/root/openclaw/.env`; do not commit or paste them into repository files. `channels.feishu.appId` remains a string in `服务器:/root/.openclaw/openclaw.json`; `channels.feishu.appSecret` should be:
+
+```json
+{
+  "source": "env",
+  "provider": "default",
+  "id": "FEISHU_APP_SECRET"
+}
+```
+
+Verify on `服务器`:
+
+```bash
+cd /root/openclaw
+docker compose ps openclaw-gateway
+curl -fsS http://127.0.0.1:18789/healthz
+docker compose run --rm -T openclaw-cli channels status --deep
+docker compose logs --since=5m openclaw-gateway | grep -Ei 'feishu|WebSocket|ready|error|warn'
+```
+
+Expected channel status includes:
+
+```text
+- Feishu default: enabled, configured, running
+```
+
+Bridge validation is still the same as Weixin. A request with model `echo` should return model `browser-chatgpt` when WebDock is configured:
+
+```bash
+curl -fsS http://127.0.0.1:18080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"echo","messages":[{"role":"user","content":"请只回复：bridge-ok"}],"stream":false}'
+```
 
 ## Failure Behavior
 

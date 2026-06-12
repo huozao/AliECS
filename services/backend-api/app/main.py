@@ -9,6 +9,8 @@ import os
 import secrets
 import shutil
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from contextlib import closing
@@ -19,7 +21,7 @@ from typing import Any
 import psycopg
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from passlib.context import CryptContext
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
@@ -400,6 +402,17 @@ class MemoryUpsertRequest(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class ImmichAssetBindRequest(BaseModel):
+    immich_asset_id: str | None = None
+    immich_album_id: str | None = None
+    original_filename: str | None = None
+    taken_at: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    thumbnail_cache_key: str | None = None
+    sort_order: int = 0
+
+
 class PatchCoupleSpaceRequest(BaseModel):
     name: str | None = None
     start_date: str | None = None
@@ -519,6 +532,86 @@ def _public_upload_url(filename: str) -> str:
     return f"{public_base}{relative_url}" if public_base else relative_url
 
 
+def _public_photo_content_url(key: str) -> str:
+    public_base = os.getenv("APP_BASE_URL", "").rstrip("/")
+    relative_url = f"/api/v1/photos/content/{urllib.parse.quote(key, safe='')}"
+    return f"{public_base}{relative_url}" if public_base else relative_url
+
+
+def _webdock_photo_base_url() -> str:
+    return os.getenv("WEBDOCK_PHOTO_BASE_URL", "http://host.docker.internal:11800").rstrip("/")
+
+
+def _webdock_photo_token() -> str:
+    token = os.getenv("WEBDOCK_PHOTO_API_TOKEN") or os.getenv("WEB_DOCK_API_TOKEN") or ""
+    if not token:
+        raise HTTPException(status_code=500, detail="WEBDOCK_PHOTO_API_TOKEN is required")
+    return token
+
+
+def _webdock_photo_timeout() -> int:
+    raw = os.getenv("WEBDOCK_PHOTO_TIMEOUT_SECONDS", "30")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 30
+
+
+def _webdock_photo_url(key: str | None = None) -> str:
+    if key is None:
+        return f"{_webdock_photo_base_url()}/storage/photos"
+    return f"{_webdock_photo_base_url()}/storage/photos/{urllib.parse.quote(key, safe='')}"
+
+
+def _multipart_photo_body(filename: str | None, content_type: str, content: bytes) -> tuple[bytes, str]:
+    boundary = f"----aliecs-{uuid.uuid4().hex}"
+    safe_name = (filename or "photo").replace("\\", "_").replace('"', "_")
+    parts = [
+        f"--{boundary}\r\n".encode("utf-8"),
+        (
+            f'Content-Disposition: form-data; name="file"; filename="{safe_name}"\r\n'
+            f"Content-Type: {content_type}\r\n\r\n"
+        ).encode("utf-8"),
+        content,
+        f"\r\n--{boundary}--\r\n".encode("utf-8"),
+    ]
+    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
+
+
+def _webdock_photo_request(
+    method: str,
+    key: str | None = None,
+    *,
+    body: bytes | None = None,
+    headers: dict[str, str] | None = None,
+) -> bytes:
+    request_headers = {"Authorization": f"Bearer {_webdock_photo_token()}"}
+    if headers:
+        request_headers.update(headers)
+    request = urllib.request.Request(
+        _webdock_photo_url(key),
+        data=body,
+        headers=request_headers,
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=_webdock_photo_timeout()) as response:
+            return response.read()
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise HTTPException(status_code=404, detail="photo not found") from exc
+        raise HTTPException(status_code=502, detail=f"webdock photo storage returned {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        raise HTTPException(status_code=502, detail="webdock photo storage unavailable") from exc
+
+
+def _webdock_photo_key(original_storage_url: str | None) -> str | None:
+    if not original_storage_url or not original_storage_url.startswith("webdock:"):
+        return None
+    key = original_storage_url.split(":", 1)[1].strip()
+    return key or None
+
+
 class PhotoStorage:
     driver = "local"
 
@@ -577,12 +670,43 @@ class OssPhotoStorage(PhotoStorage):
         raise HTTPException(status_code=501, detail="OSS storage is not configured in this build")
 
 
+class WebDockPhotoStorage(PhotoStorage):
+    driver = "webdock"
+
+    async def save(self, file: UploadFile) -> dict[str, str]:
+        content = await file.read()
+        _ext, mime = _validate_photo_upload(file.filename, file.content_type, content)
+        body, content_type = _multipart_photo_body(file.filename, mime, content)
+        raw = _webdock_photo_request("POST", body=body, headers={"Content-Type": content_type})
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="invalid webdock photo storage response") from exc
+        key = str(payload.get("key") or "").strip()
+        if not key:
+            raise HTTPException(status_code=502, detail="webdock photo storage did not return key")
+        public_url = _public_photo_content_url(key)
+        return {
+            "original_storage_url": f"webdock:{key}",
+            "display_url": public_url,
+            "thumbnail_url": public_url,
+            "storage_driver": self.driver,
+        }
+
+    def delete(self, original_storage_url: str | None) -> None:
+        key = _webdock_photo_key(original_storage_url)
+        if key:
+            _webdock_photo_request("DELETE", key)
+
+
 def photo_storage() -> PhotoStorage:
     driver = os.getenv("STORAGE_DRIVER", "local").strip().lower() or "local"
     if driver == "local":
         return LocalPhotoStorage()
     if driver == "oss":
         return OssPhotoStorage()
+    if driver == "webdock":
+        return WebDockPhotoStorage()
     raise HTTPException(status_code=500, detail="invalid STORAGE_DRIVER")
 
 
@@ -1375,6 +1499,7 @@ def recipe_cost_export(body: RecipeCostRequest, user: dict[str, Any] = Depends(r
     )
 
 
+
 @app.post("/v1/recipes/sync-bom")
 def recipe_sync_bom(user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
     require_permission("formula.read", user)
@@ -1886,6 +2011,14 @@ def couple_access(authorization: str | None = Header(default=None)) -> dict[str,
     return {"allowed": True, "route": _couple_route()}
 
 
+@app.get("/v1/immich/status")
+def immich_status(user: dict[str, Any] = Depends(require_login)) -> dict[str, object]:
+    require_permission("couple_memory_access", user)
+    from app.immich_client import ImmichClient
+
+    return ImmichClient().status()
+
+
 def _user_id_by_username(username: str) -> int | None:
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
@@ -2215,6 +2348,153 @@ def get_memory(memory_id: int, user: dict[str, Any] = Depends(require_login)) ->
     }
 
 
+def _memory_space_for_user(cur: Any, memory_id: int, user_id: int) -> int:
+    cur.execute(
+        """
+        SELECT m.couple_space_id
+        FROM memories m
+        JOIN couple_members cm ON cm.couple_space_id = m.couple_space_id
+        WHERE m.id = %s AND cm.user_id = %s
+        LIMIT 1
+        """,
+        (memory_id, user_id),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="not found")
+    return int(row[0])
+
+
+def _immich_asset_payload(row: tuple[Any, ...]) -> dict[str, Any]:
+    return {
+        "id": row[0],
+        "couple_space_id": row[1],
+        "memory_id": row[2],
+        "provider": row[3],
+        "immich_asset_id": row[4],
+        "immich_album_id": row[5],
+        "original_filename": row[6],
+        "taken_at": str(row[7]) if row[7] else None,
+        "latitude": row[8],
+        "longitude": row[9],
+        "thumbnail_cache_key": row[10],
+        "sort_order": row[11],
+        "selected_by": row[12],
+        "created_at": str(row[13]),
+        "updated_at": str(row[14]),
+    }
+
+
+@app.post("/v1/memories/{memory_id}/immich-assets")
+def bind_memory_immich_asset(
+    memory_id: int,
+    body: ImmichAssetBindRequest,
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, Any]:
+    user_id = _require_couple_user(user)
+    if not body.immich_asset_id and not body.immich_album_id:
+        raise HTTPException(status_code=400, detail="immich_asset_id or immich_album_id is required")
+
+    from app.immich_client import ImmichClient, load_immich_config
+
+    config = load_immich_config()
+    original_filename = body.original_filename
+    taken_at = body.taken_at
+    latitude = body.latitude
+    longitude = body.longitude
+
+    if config.enabled and body.immich_asset_id:
+        asset = ImmichClient(config).get_asset(body.immich_asset_id)
+        original_filename = original_filename or asset.original_filename
+        taken_at = taken_at or asset.taken_at
+        latitude = latitude if latitude is not None else asset.latitude
+        longitude = longitude if longitude is not None else asset.longitude
+    elif not original_filename:
+        raise HTTPException(status_code=503, detail="Immich integration disabled")
+
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            space_id = _memory_space_for_user(cur, memory_id, user_id)
+            cur.execute(
+                """
+                INSERT INTO couple_memory_assets(
+                    couple_space_id, memory_id, provider, immich_asset_id, immich_album_id,
+                    original_filename, taken_at, latitude, longitude, thumbnail_cache_key,
+                    sort_order, selected_by
+                )
+                VALUES (%s, %s, 'immich', %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id, couple_space_id, memory_id, provider, immich_asset_id, immich_album_id,
+                          original_filename, taken_at, latitude, longitude, thumbnail_cache_key,
+                          sort_order, selected_by, created_at, updated_at
+                """,
+                (
+                    space_id,
+                    memory_id,
+                    body.immich_asset_id,
+                    body.immich_album_id,
+                    original_filename,
+                    taken_at,
+                    latitude,
+                    longitude,
+                    body.thumbnail_cache_key,
+                    body.sort_order,
+                    user_id,
+                ),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    return _immich_asset_payload(row)
+
+
+@app.get("/v1/memories/{memory_id}/immich-assets")
+def list_memory_immich_assets(
+    memory_id: int,
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, Any]:
+    user_id = _require_couple_user(user)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            _memory_space_for_user(cur, memory_id, user_id)
+            cur.execute(
+                """
+                SELECT id, couple_space_id, memory_id, provider, immich_asset_id, immich_album_id,
+                       original_filename, taken_at, latitude, longitude, thumbnail_cache_key,
+                       sort_order, selected_by, created_at, updated_at
+                FROM couple_memory_assets
+                WHERE memory_id = %s
+                ORDER BY sort_order ASC, id ASC
+                """,
+                (memory_id,),
+            )
+            rows = cur.fetchall()
+    return {"items": [_immich_asset_payload(row) for row in rows]}
+
+
+@app.delete("/v1/memories/{memory_id}/immich-assets/{binding_id}")
+def delete_memory_immich_asset(
+    memory_id: int,
+    binding_id: int,
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, str]:
+    user_id = _require_couple_user(user)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            _memory_space_for_user(cur, memory_id, user_id)
+            cur.execute(
+                """
+                DELETE FROM couple_memory_assets
+                WHERE id = %s AND memory_id = %s
+                RETURNING id
+                """,
+                (binding_id, memory_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="not found")
+        conn.commit()
+    return {"status": "ok"}
+
+
 @app.put("/v1/memories/{memory_id}")
 def update_memory(memory_id: int, body: MemoryUpsertRequest, user: dict[str, Any] = Depends(require_login)) -> dict[str, str]:
     user_id = _require_couple_user(user)
@@ -2461,6 +2741,17 @@ def list_photos(
     }
 
 
+@app.get("/v1/photos/content/{key}")
+def get_photo_content(key: str) -> Response:
+    content = _webdock_photo_request("GET", key)
+    mime = _detect_image_mime(content) or "application/octet-stream"
+    return Response(
+        content=content,
+        media_type=mime,
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
+
+
 @app.get("/v1/photos/{photo_id}")
 def get_photo(photo_id: int, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
     user_id = _require_couple_user(user)
@@ -2515,6 +2806,8 @@ def delete_photo(photo_id: int, user: dict[str, Any] = Depends(require_login)) -
     try:
         if row[1] == "local":
             LocalPhotoStorage().delete(row[0])
+        elif row[1] == "webdock":
+            WebDockPhotoStorage().delete(row[0])
     except Exception:
         pass
     return {"status": "ok"}
@@ -2993,6 +3286,18 @@ def get_shared_memory(token: str) -> dict[str, Any]:
                 (row[0],),
             )
             photos = cur.fetchall()
+            cur.execute(
+                """
+                SELECT id, couple_space_id, memory_id, provider, immich_asset_id, immich_album_id,
+                       original_filename, taken_at, latitude, longitude, thumbnail_cache_key,
+                       sort_order, selected_by, created_at, updated_at
+                FROM couple_memory_assets
+                WHERE memory_id = %s
+                ORDER BY sort_order ASC, id ASC
+                """,
+                (row[0],),
+            )
+            immich_assets = cur.fetchall()
             cur.execute("SELECT tag FROM memory_tags WHERE memory_id = %s ORDER BY id", (row[0],))
             tags = [r[0] for r in cur.fetchall()]
     return {
@@ -3017,6 +3322,7 @@ def get_shared_memory(token: str) -> dict[str, Any]:
             }
             for p in photos
         ],
+        "immich_assets": [_immich_asset_payload(r) for r in immich_assets],
     }
 
 @app.get("/v1/admin/users")

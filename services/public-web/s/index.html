@@ -17,6 +17,7 @@
     <p id="content" style="line-height:1.85"></p>
     <div id="tags"></div>
     <div id="photos" class="photo-grid"></div>
+    <div id="immichAssets" class="photo-grid"></div>
   </article>
 </main>
 <script>
@@ -35,6 +36,7 @@ async function boot(){
   content.textContent=m.content||'';
   tags.innerHTML=(m.tags||[]).map(t=>`<span class="pill">${esc(t)}</span>`).join('');
   photos.innerHTML=(d.photos||[]).map(p=>`<a class="photo" href="${esc(p.display_url)}" target="_blank" rel="noreferrer"><img src="${esc(p.thumbnail_url||p.display_url)}" alt="${esc(p.original_filename||'photo')}" loading="lazy"></a>`).join('');
+  immichAssets.innerHTML=(d.immich_assets||[]).map(a=>`<div class="photo"><div style="padding:12px"><strong>${esc(a.original_filename||a.immich_asset_id||a.immich_album_id||'Immich')}</strong><div class="muted">${esc(a.taken_at||'未记录时间')}</div></div></div>`).join('');
 }
 boot().catch(()=>{status.textContent='链接已失效。';});
 </script>
