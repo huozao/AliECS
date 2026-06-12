@@ -36,6 +36,30 @@ def test_bridge_removes_openclaw_metadata_from_last_user_message():
     assert text == "请只回复：ok"
 
 
+def test_bridge_removes_unfenced_openclaw_metadata_from_last_user_message():
+    bridge = load_bridge()
+
+    text = bridge.get_last_user_message(
+        [
+            {
+                "role": "user",
+                "content": (
+                    "[Fri 2026-06-12 02:55 UTC] Conversation info (untrusted metadata):\n"
+                    "json\n"
+                    '{\n'
+                    '  "chat_id": "o9cq80whD47YZs0xR1Y9Ih8rdVnc@im.wechat",\n'
+                    '  "message_id": "openclaw-weixin:1781232935667-3a8642ac",\n'
+                    '  "timestamp": "Fri 2026-06-12 02:55:35 UTC"\n'
+                    "}\n"
+                    "/新对话 现在几点了？"
+                ),
+            }
+        ]
+    )
+
+    assert text == "/新对话 现在几点了？"
+
+
 def test_bridge_sends_clean_prompt_to_webdock(monkeypatch):
     bridge = load_bridge()
     monkeypatch.setenv("WEB_DOCK_MODEL", "browser-chatgpt")
@@ -88,6 +112,38 @@ def test_bridge_forwards_openclaw_metadata_to_webdock_lane(monkeypatch):
         "peer_id": "user-1",
         "message_id": "msg-1",
         "chatgpt_project": "WeChat-A",
+    }
+
+
+def test_bridge_forwards_unfenced_openclaw_metadata_to_webdock_lane(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_MODEL", "browser-chatgpt")
+
+    outbound = bridge.build_webdock_body(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "[Fri 2026-06-12 02:55 UTC] Conversation info (untrusted metadata):\n"
+                        "json\n"
+                        '{\n'
+                        '  "chat_id": "o9cq80whD47YZs0xR1Y9Ih8rdVnc@im.wechat",\n'
+                        '  "message_id": "openclaw-weixin:1781232935667-3a8642ac",\n'
+                        '  "timestamp": "Fri 2026-06-12 02:55:35 UTC"\n'
+                        "}\n"
+                        "/新对话 现在几点了？"
+                    ),
+                },
+            ],
+        }
+    )
+
+    assert outbound["messages"] == [{"role": "user", "content": "/新对话 现在几点了？"}]
+    assert outbound["metadata"] == {
+        "chat_type": "private",
+        "peer_id": "o9cq80whD47YZs0xR1Y9Ih8rdVnc@im.wechat",
+        "message_id": "openclaw-weixin:1781232935667-3a8642ac",
     }
 
 

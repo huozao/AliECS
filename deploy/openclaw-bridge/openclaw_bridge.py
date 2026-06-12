@@ -18,12 +18,8 @@ from typing import Any
 
 FALLBACK_MESSAGE = os.getenv("WEB_DOCK_FALLBACK_MESSAGE", "ChatGPT 浏览器暂不可用，请稍后再试。")
 NO_REPLY = "__OPENCLAW_BRIDGE_NO_REPLY__"
-OPENCLAW_METADATA_RE = re.compile(
-    r"^Conversation info \(untrusted metadata\):\s*```json\s*.*?```\s*",
-    flags=re.DOTALL,
-)
-OPENCLAW_METADATA_CAPTURE_RE = re.compile(
-    r"^Conversation info \(untrusted metadata\):\s*```json\s*(.*?)```\s*",
+OPENCLAW_METADATA_PREFIX_RE = re.compile(
+    r"^(?:\[[^\]\n]*UTC\]\s*)?Conversation info \(untrusted metadata\):\s*",
     flags=re.DOTALL,
 )
 MAX_BRIDGE_IMAGES = 4
@@ -139,7 +135,8 @@ class PendingBatch:
 def clean_user_text(text: Any) -> str:
     if not isinstance(text, str):
         return ""
-    cleaned = OPENCLAW_METADATA_RE.sub("", text)
+    _metadata, metadata_end = parse_openclaw_metadata_prefix(text)
+    cleaned = text[metadata_end:] if metadata_end else text
     cleaned = replace_binary_file_blocks(cleaned)
     return strip_openclaw_media_helper_text(cleaned).strip()
 
@@ -173,14 +170,44 @@ def strip_openclaw_media_helper_text(text: str) -> str:
 def extract_openclaw_metadata(text: Any) -> dict[str, Any]:
     if not isinstance(text, str):
         return {}
-    match = OPENCLAW_METADATA_CAPTURE_RE.match(text)
+    metadata, _metadata_end = parse_openclaw_metadata_prefix(text)
+    return metadata
+
+
+def parse_openclaw_metadata_prefix(text: str) -> tuple[dict[str, Any], int]:
+    match = OPENCLAW_METADATA_PREFIX_RE.match(text)
     if not match:
-        return {}
-    try:
-        payload = json.loads(match.group(1))
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
+        return {}, 0
+
+    pos = match.end()
+    payload: Any = None
+    metadata_end = 0
+
+    fence = re.match(r"```json\s*", text[pos:], flags=re.IGNORECASE)
+    if fence:
+        payload_start = pos + fence.end()
+        payload_end = text.find("```", payload_start)
+        if payload_end < 0:
+            return {}, 0
+        try:
+            payload = json.loads(text[payload_start:payload_end])
+        except Exception:
+            payload = None
+        metadata_end = payload_end + 3
+    else:
+        language = re.match(r"json(?:\s+|$)", text[pos:], flags=re.IGNORECASE)
+        if language:
+            pos += language.end()
+        while pos < len(text) and text[pos].isspace():
+            pos += 1
+        try:
+            payload, metadata_end = json.JSONDecoder().raw_decode(text, pos)
+        except json.JSONDecodeError:
+            return {}, 0
+
+    while metadata_end < len(text) and text[metadata_end].isspace():
+        metadata_end += 1
+    return (payload if isinstance(payload, dict) else {}), metadata_end
 
 
 def extract_text(content: Any) -> str:
