@@ -32,12 +32,37 @@ python -m app.main
 
 ## 反向隧道（开发机 → ECS）
 
+完整数据通路：
+
+```text
+mcp-coding-server（ECS 容器, bridge 网络）
+  -> host.docker.internal:18091  (= 172.17.0.1)
+  -> executor-tunnel-proxy        (ECS, 172.17.0.1:18091 -> 127.0.0.1:18091)
+  -> 反向 SSH 隧道                  (ECS 127.0.0.1:18091 -> 开发机 127.0.0.1:18091)
+  -> coding-executor              (开发机)
+```
+
+容器走 `host.docker.internal`（= docker 网关 172.17.0.1），而反向 SSH 隧道只绑
+`127.0.0.1`，两者够不着，所以中间需要一个代理把网关地址转到 loopback。这与 webdock
+隧道完全同构，复用同一个 `webdock-tunnel-proxy.py`。
+
+**1. ECS 端一次性安装代理（runtime ops，幂等）：**
+
+```bash
+ssh aliecs 'cd /root/AliECS/deploy/ecs && sudo bash install-executor-tunnel-proxy.sh'
+```
+
+**2. 开发机起反向隧道（用已有的 aliecs SSH 访问即可）：**
+
 ```bash
 ssh -N -R 127.0.0.1:18091:127.0.0.1:18091 aliecs
 ```
 
-ECS 端 `mcp-coding-server` 用 `EXECUTOR_BASE_URL=http://host.docker.internal:18091`
-经隧道回连。隧道或本服务未启动时，ChatGPT 侧工具会优雅降级为 `executor: unavailable`。
+**3. ECS 端 `mcp-coding-server` 配 `EXECUTOR_BASE_URL=http://host.docker.internal:18091`
+与 `EXECUTOR_TOKEN`（两端一致）。**
+
+隧道、代理或本服务任一未就绪时，ChatGPT 侧工具会优雅降级为 `executor: unavailable`，
+不阻塞、不报错。
 
 ## 接口
 
