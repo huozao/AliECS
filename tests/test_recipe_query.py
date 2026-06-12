@@ -197,6 +197,30 @@ class RecipeQueryTests(unittest.TestCase):
         self.assertAlmostEqual(2.4, by_code["C200"]["simulated_amount"])
         self.assertAlmostEqual(3.6, recipe["simulated_total"])
 
+    def test_cost_uses_fallback_price_column_as_system_price(self) -> None:
+        from app.recipes.bom_query import calculate_recipe_costs, query_recipe_workbook
+
+        source = self.tmp_path / "bom_fallback_price.xlsx"
+        wb = Workbook()
+        material = wb.active
+        material.title = "物料清单"
+        material.append(["父件编码", "父件名称", "规格型号", "版本号", "计量单位", "生产数量", "默认BOM", "停用"])
+        material.append(["HYD-0601", "HYD-0601阻燃ABSPVC改性料", "ABS", "V1", "kg", 25, 1, 0])
+        component = wb.create_sheet("子件明细")
+        component.append(["版本号", "父件编码", "子件编码", "子件名称", "规格型号", "计量单位", "需用数量", "材料单价"])
+        component.append(["V1", "HYD-0601", "C100", "树脂", "A", "kg", 4, 12.5])
+        wb.save(source)
+
+        result = query_recipe_workbook(source, query_text="HYD-0601", default_bom="1")
+        recipes = calculate_recipe_costs(result)
+
+        self.assertEqual(1, len(recipes))
+        line = recipes[0]["lines"][0]
+        self.assertAlmostEqual(12.5, line["system_price"])
+        self.assertAlmostEqual(12.5, line["current_price"])
+        self.assertAlmostEqual(12.5, recipes[0]["system_total"])
+        self.assertAlmostEqual(12.5, recipes[0]["current_total"])
+
     def test_save_recipe_workbook_creates_human_review_and_matrix_sheets(self) -> None:
         from app.recipes.bom_query import query_recipe_workbook, save_recipe_workbook
 

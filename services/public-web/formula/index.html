@@ -5,8 +5,27 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>AliECS · 系统配方</title>
   <style>
-    :root{--bg:#f7f5f0;--panel:#fffdf8;--text:#25211b;--muted:#766f63;--line:#e7dfd0;--primary:#6f5e46;--good:#3f7a4c;--bad:#a6423a;--shadow:0 12px 30px rgba(69,56,38,.08)}
-    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top left,rgba(180,157,118,.16),transparent 36%),var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui}.wrap{max-width:1280px;margin:0 auto;padding:20px 18px 56px}.topbar{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;background:rgba(255,253,248,.94);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px;padding:18px 20px;margin-bottom:16px}h1{margin:0;font-size:34px}h2{margin:0 0 12px}.subtitle{margin:8px 0 0;color:var(--muted)}.actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.btn,button{border:0;border-radius:999px;padding:10px 14px;background:#e8dfcf;color:var(--text);cursor:pointer;font-weight:700;text-decoration:none}.btn.primary{background:var(--primary);color:#fff}.btn.subtle{background:#efe8dc;color:#6e6355}.btn:disabled{opacity:.58;cursor:not-allowed}.panel{background:rgba(255,253,248,.94);border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:var(--shadow);margin-bottom:16px}.form{display:grid;grid-template-columns:minmax(220px,1fr) 170px auto;gap:10px;align-items:end}.form label{display:grid;gap:6px;font-size:13px;color:var(--muted)}input,select,textarea{width:100%;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:#fff;color:var(--text);font:inherit}.notice,.error,.success{border-radius:14px;padding:12px 14px;margin-bottom:14px}.notice{background:#f2eadc;color:var(--muted)}.error{display:none;background:#f5d7d3;color:var(--bad)}.success{display:none;background:#dfeee3;color:var(--good)}.hidden{display:none!important}.muted{color:var(--muted)}.small{font-size:12px}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px;background:#fff}.data-table{width:100%;border-collapse:collapse;font-size:13px;min-width:1240px}.data-table th,.data-table td{border-bottom:1px solid var(--line);padding:9px 10px;text-align:left;vertical-align:middle}.data-table th{background:#f2eadc;position:sticky;top:0}.version-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.version-tabs button{border:1px solid var(--line);background:#fff}.version-tabs button.active{background:var(--primary);color:#fff}.total-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:12px 0}.metric{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px}.metric strong{display:block;font-size:22px;margin-top:4px}.price-input,.sim-qty-input{width:76px;max-width:76px;text-align:right}.price-time{display:block;font-size:11px;color:#766f63;margin-top:2px;white-space:nowrap}.row-actions{display:flex;gap:6px;align-items:center}.modal{position:fixed;inset:0;background:rgba(30,22,12,.28);display:none;align-items:center;justify-content:center;padding:16px}.modal.show{display:flex}.auth-panel{width:min(440px,100%);background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px}@media (max-width:900px){.form{grid-template-columns:1fr}.topbar{flex-direction:column}.total-row{grid-template-columns:1fr}}
+    :root{
+      --bg:#faf8f3;--panel:#fffdf9;--text:#1f2328;--muted:#766f63;--line:#e7dfd0;--line-soft:#f1eadf;
+      --primary:#6f5e46;--primary-dark:#5d472d;--good:#3f7a4c;--bad:#a6423a;--shadow:0 12px 30px rgba(69,56,38,.08);
+      --cost-input-width:88px;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:radial-gradient(circle at top left,rgba(180,157,118,.14),transparent 34%),var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui,"Microsoft YaHei",sans-serif;font-variant-numeric:tabular-nums}
+    .wrap{max-width:1480px;margin:0 auto;padding:20px 18px 56px}
+    .topbar{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;background:rgba(255,253,248,.94);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px;padding:18px 20px;margin-bottom:16px}
+    h1{margin:0;font-size:34px}h2{margin:0 0 12px}.subtitle{margin:8px 0 0;color:var(--muted)}
+    .actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.btn,button{border:0;border-radius:999px;padding:10px 14px;background:#e8dfcf;color:var(--text);cursor:pointer;font-weight:700;text-decoration:none}.btn.primary{background:linear-gradient(180deg,#826641,var(--primary-dark));color:#fff}.btn.subtle{background:#f7f3eb;border:1px solid var(--line);color:#6e6355}.btn:disabled{opacity:.58;cursor:not-allowed}
+    .panel{background:rgba(255,253,248,.94);border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:var(--shadow);margin-bottom:16px}.form{display:grid;grid-template-columns:minmax(220px,1fr) 170px auto;gap:10px;align-items:end}.form label{display:grid;gap:6px;font-size:13px;color:var(--muted)}input,select,textarea{width:100%;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:#fff;color:var(--text);font:inherit}.notice,.error,.success{border-radius:14px;padding:12px 14px;margin-bottom:14px}.notice{background:#f2eadc;color:var(--muted)}.error{display:none;background:#f5d7d3;color:var(--bad)}.success{display:none;background:#dfeee3;color:var(--good)}.hidden{display:none!important}.muted{color:var(--muted)}.small{font-size:12px}
+    .table-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px;background:#fff}.data-table{width:100%;border-collapse:collapse;font-size:13px;min-width:1240px}.data-table th,.data-table td{border-bottom:1px solid var(--line);padding:9px 10px;text-align:left;vertical-align:middle}.data-table th{background:#f2eadc;position:sticky;top:0}
+    .version-tabs{display:flex;gap:10px;flex-wrap:wrap;margin:2px 0 16px}.version-tabs button{border:1px solid var(--line);background:#fff;height:40px;padding:0 18px}.version-tabs button.active{background:linear-gradient(180deg,#826641,var(--primary-dark));color:#fff;border-color:transparent;box-shadow:0 8px 18px rgba(95,73,44,.2)}
+    .total-row{display:grid;grid-template-columns:1.3fr repeat(3,1fr);gap:14px;margin:12px 0 18px}.metric{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px 18px;min-height:82px}.metric span{font-size:13px;font-weight:750}.metric strong{display:block;font-size:23px;margin-top:5px;line-height:1.15}
+    .cost-table{min-width:1450px;table-layout:fixed;border-collapse:separate;border-spacing:0}.cost-table col.code{width:118px}.cost-table col.name{width:225px}.cost-table col.unit{width:66px}.cost-table col.num{width:96px}.cost-table col.rate{width:112px}.cost-table col.price{width:110px}.cost-table col.result{width:116px}.cost-table col.action{width:92px}
+    .cost-table th,.cost-table td{border-right:1px solid var(--line-soft);white-space:nowrap}.cost-table th:last-child,.cost-table td:last-child{border-right:0}.cost-table thead tr.group th{height:42px;padding:0 10px;text-align:center;font-weight:850}.cost-table thead tr.columns th{height:40px;padding:0 10px;text-align:center;font-weight:780}.cost-table tbody td,.cost-table tfoot td{height:48px;background:rgba(255,255,255,.92);overflow:hidden;text-overflow:ellipsis}.cost-table tbody td.price-td{overflow:visible}.cost-table tbody tr:hover td{background:#fffaf3}.cost-table tfoot td{background:#fbf0df;font-weight:850}
+    .g-basic{background:linear-gradient(180deg,#edf8ef,#f8fcf8)!important;color:#2f7742}.g-recipe{background:linear-gradient(180deg,#fff2dc,#fffbf4)!important;color:#7b5a1f}.g-sim{background:linear-gradient(180deg,#f2efff,#fbfaff)!important;color:#5b4bc4}.g-price{background:linear-gradient(180deg,#fff0df,#fffaf3)!important;color:#9a5b00}.g-result{background:linear-gradient(180deg,#eef6ff,#f8fcff)!important;color:#2769b3}.g-action{background:linear-gradient(180deg,#faf8f4,#fffdf9)!important;color:#59554d}
+    .num{text-align:right}.center{text-align:center}.price-input,.sim-qty-input{width:var(--cost-input-width);max-width:var(--cost-input-width);height:32px;padding:5px 8px;text-align:center;border-radius:8px}.sim-qty-input{border-color:#d8d2ff;background:#fbfaff}.price-input{border-color:#f0cfaa;background:#fffaf3}.price-cell{position:relative;display:inline-flex;align-items:center;justify-content:flex-end}.price-cell[data-tooltip]:hover::after,.price-cell[data-tooltip]:focus-within::after{content:attr(data-tooltip);position:absolute;z-index:20;left:50%;top:calc(100% + 8px);transform:translateX(-50%);background:rgba(34,31,28,.96);color:#fff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:650;white-space:nowrap;box-shadow:0 8px 16px rgba(0,0,0,.22)}.price-cell[data-tooltip]:hover::before,.price-cell[data-tooltip]:focus-within::before{content:"";position:absolute;z-index:21;left:50%;top:calc(100% + 2px);transform:translateX(-50%);border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:6px solid rgba(34,31,28,.96)}.reset-link{border:0;background:transparent;color:#665e52;font-weight:750;padding:4px 6px;border-radius:7px}.reset-link:hover{background:#f3ecdf;color:var(--primary-dark)}
+    .modal{position:fixed;inset:0;background:rgba(30,22,12,.28);display:none;align-items:center;justify-content:center;padding:16px}.modal.show{display:flex}.auth-panel{width:min(440px,100%);background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px}
+    @media (max-width:900px){.form{grid-template-columns:1fr}.topbar{flex-direction:column}.total-row{grid-template-columns:1fr}.wrap{padding:18px 14px 48px}}
   </style>
 </head>
 <body>
@@ -61,15 +80,46 @@
         <h2>成本核算</h2>
         <div class="actions">
           <button id="exportCostBtn" class="btn primary" type="button">导出核算Excel</button>
-          <button id="resetAllSimBtn" class="btn subtle" type="button">清空模拟数量</button>
-          <button id="resetAllPricesBtn" class="btn subtle" type="button">全部重置为系统价格</button>
+          <button id="resetAllSimBtn" class="btn subtle" type="button">重置模拟数量</button>
+          <button id="resetAllPricesBtn" class="btn subtle" type="button">重置当下价格</button>
         </div>
       </div>
       <div id="versionTabs" class="version-tabs"></div>
       <div id="costTotals" class="total-row"></div>
       <div class="table-wrap">
-        <table class="data-table">
-          <thead><tr><th>子件编码</th><th>子件名称</th><th>单位</th><th>数量</th><th>模拟数量</th><th>比例</th><th>模拟比例</th><th>系统单价</th><th>当下价格</th><th>系统分价</th><th>当下分价</th><th>模拟分价</th><th>操作</th></tr></thead>
+        <table class="data-table cost-table">
+          <colgroup>
+            <col class="code"><col class="name"><col class="unit">
+            <col class="num"><col class="rate">
+            <col class="num"><col class="rate">
+            <col class="price"><col class="price">
+            <col class="result"><col class="result"><col class="result">
+            <col class="action">
+          </colgroup>
+          <thead>
+            <tr class="group">
+              <th class="g-basic" colspan="3">基础信息</th>
+              <th class="g-recipe" colspan="2">原配方</th>
+              <th class="g-sim" colspan="2">模拟调整</th>
+              <th class="g-price" colspan="2">价格信息</th>
+              <th class="g-result" colspan="3">成本结果</th>
+              <th class="g-action" rowspan="2">操作</th>
+            </tr>
+            <tr class="columns">
+              <th class="g-basic">子件编码</th>
+              <th class="g-basic">子件名称</th>
+              <th class="g-basic">单位</th>
+              <th class="g-recipe">数量</th>
+              <th class="g-recipe">比例</th>
+              <th class="g-sim">模拟数量</th>
+              <th class="g-sim">模拟比例</th>
+              <th class="g-price">系统单价</th>
+              <th class="g-price">当下价格</th>
+              <th class="g-result">系统分价</th>
+              <th class="g-result">当下分价</th>
+              <th class="g-result">模拟分价</th>
+            </tr>
+          </thead>
           <tbody id="costBody"></tbody>
         </table>
       </div>
@@ -104,7 +154,7 @@
     const loadSimulatedQuantities=()=>{try{return JSON.parse(localStorage.getItem(SIM_QTY_KEY)||'{}')}catch{return {}}};
     const saveManualPrices=()=>{localStorage.setItem(PRICE_KEY,JSON.stringify(state.manualPrices));localStorage.setItem(PRICE_TIME_KEY,JSON.stringify(state.priceTimes));};
     const saveSimulatedQuantities=()=>localStorage.setItem(SIM_QTY_KEY,JSON.stringify(state.simulatedQuantities));
-    const fmtPriceTime=(ts)=>{if(!ts)return'';const d=new Date(ts);const p=(n)=>String(n).padStart(2,'0');return `${String(d.getFullYear()).slice(2)}${p(d.getMonth()+1)}${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;};
+    const fmtPriceTime=(ts)=>{if(!ts)return'';const d=new Date(ts);const p=(n)=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;};
     const syncAuth=()=>{state.token=getAuthToken();loginBtn.classList.toggle('hidden',Boolean(state.token));logoutBtn.classList.toggle('hidden',!state.token);};
     function showError(message){errorBox.textContent=message;errorBox.style.display='block';successBox.style.display='none'}
     function showSuccess(message){successBox.textContent=message;successBox.style.display='block';errorBox.style.display='none'}
@@ -125,6 +175,7 @@
     }
     const money=(value)=>Number(value||0).toLocaleString('zh-CN',{minimumFractionDigits:3,maximumFractionDigits:3});
     const qty=(value)=>Number(value||0).toLocaleString('zh-CN',{maximumFractionDigits:6});
+    const inputValue=(value)=>Number(value||0).toLocaleString('en-US',{useGrouping:false,maximumFractionDigits:6});
     const ratio=(value)=>Number.isFinite(Number(value))?`${(Number(value)*100).toFixed(3)}%`:'';
     const NON_DISABLED_VALUES=new Set(['','0','否','False','false']);
     const rowDisabled=(row)=>!NON_DISABLED_VALUES.has(String((row&&row['停用'])||'').trim());
@@ -187,6 +238,10 @@
       const recipes=(state.cost&&state.cost.recipes)||[];
       return recipes.find((item)=>item.key===state.selectedKey)||recipes[0]||null;
     }
+    function selectedCostLine(code){
+      const recipe=selectedRecipe();
+      return ((recipe&&recipe.lines)||[]).find((line)=>line.child_code===code)||null;
+    }
     function renderCost(){
       const recipes=(state.cost&&state.cost.recipes)||[];
       costPanel.classList.toggle('hidden',!recipes.length);
@@ -194,11 +249,16 @@
       versionTabs.innerHTML=recipes.map((recipe)=>`<button type="button" class="${recipe.key===state.selectedKey?'active':''}" onclick="selectVersion('${recipe.key}')">${recipe.parent_name||recipe.parent_code} · ${recipe.version||'-'}${recipe.disabled&&recipe.disabled!=='0'?' · 停用':''}</button>`).join('');
       const recipe=selectedRecipe();
       if(!recipe)return;
-      costTotals.innerHTML=`<div class="metric"><span class="muted">版本</span><strong>${recipe.version||'-'}</strong></div><div class="metric"><span class="muted">系统合价</span><strong>${money(recipe.system_total)}</strong></div><div class="metric"><span class="muted">当下合价</span><strong>${money(recipe.current_total)}</strong></div><div class="metric"><span class="muted">模拟合价</span><strong>${money(recipe.simulated_total)}</strong></div>`;
+      costTotals.innerHTML=`<div class="metric"><span class="muted">版本</span><strong>${recipe.version||'-'}</strong></div><div class="metric"><span class="muted">当前合价</span><strong>${money(recipe.current_total)}</strong></div><div class="metric"><span class="muted">模拟合价</span><strong>${money(recipe.simulated_total)}</strong></div><div class="metric"><span class="muted">系统合价</span><strong>${money(recipe.system_total)}</strong></div>`;
       const costLines=recipe.lines||[];
       const costSum=(key)=>costLines.reduce((acc,line)=>acc+Number(line[key]||0),0);
-      const costRows=costLines.map((line)=>{const t=state.priceTimes[line.child_code];const timeLabel=(line.child_code in state.manualPrices)&&t?`<span class="price-time">${fmtPriceTime(t)}</span>`:'';return `<tr><td>${line.child_code}</td><td>${line.child_name}</td><td>${line.unit||''}</td><td>${qty(line.quantity)}</td><td><input class="sim-qty-input" data-code="${line.child_code}" value="${line.simulated_quantity??line.quantity??0}" inputmode="decimal"/></td><td>${ratio(line.ratio)}</td><td>${ratio(line.simulated_ratio)}</td><td>${money(line.system_price)}</td><td><input class="price-input" data-code="${line.child_code}" value="${line.current_price||0}" inputmode="decimal"/>${timeLabel}</td><td>${money(line.system_amount)}</td><td>${money(line.current_amount)}</td><td>${money(line.simulated_amount)}</td><td><button class="btn subtle" type="button" onclick="resetPrice('${line.child_code}')">重置</button></td></tr>`;}).join('');
-      const costTotalRow=`<tr style="font-weight:800;background:#f2eadc"><td colspan="3">汇总</td><td>${qty(costSum('quantity'))}</td><td>${qty(costSum('simulated_quantity'))}</td><td>${ratio(costSum('ratio'))}</td><td>${ratio(costSum('simulated_ratio'))}</td><td>${money(costSum('system_price'))}</td><td>${money(costSum('current_price'))}</td><td>${money(costSum('system_amount'))}</td><td>${money(costSum('current_amount'))}</td><td>${money(costSum('simulated_amount'))}</td><td></td></tr>`;
+      const costRows=costLines.map((line)=>{
+        const code=line.child_code;
+        const t=state.priceTimes[code];
+        const priceTooltip=(code in state.manualPrices)&&t?` data-tooltip="更新时间：${fmtPriceTime(t)}"`:'';
+        return `<tr><td>${code}</td><td>${line.child_name}</td><td class="center">${line.unit||''}</td><td class="num">${qty(line.quantity)}</td><td class="num">${ratio(line.ratio)}</td><td class="num"><input class="sim-qty-input" data-code="${code}" value="${inputValue(line.simulated_quantity??line.quantity??0)}" inputmode="decimal"/></td><td class="num">${ratio(line.simulated_ratio)}</td><td class="num">${money(line.system_price)}</td><td class="num price-td"><span class="price-cell"${priceTooltip}><input class="price-input" data-code="${code}" value="${inputValue(line.current_price||0)}" inputmode="decimal"/></span></td><td class="num">${money(line.system_amount)}</td><td class="num">${money(line.current_amount)}</td><td class="num">${money(line.simulated_amount)}</td><td class="center"><button class="reset-link" type="button" onclick="resetLine('${code}')">重置</button></td></tr>`;
+      }).join('');
+      const costTotalRow=`<tr><td colspan="3">汇总</td><td class="num">${qty(costSum('quantity'))}</td><td class="num">${ratio(costSum('ratio'))}</td><td class="num">${qty(costSum('simulated_quantity'))}</td><td class="num">${ratio(costSum('simulated_ratio'))}</td><td class="num">—</td><td class="num">—</td><td class="num">${money(costSum('system_amount'))}</td><td class="num">${money(costSum('current_amount'))}</td><td class="num">${money(costSum('simulated_amount'))}</td><td class="center">—</td></tr>`;
       costBody.innerHTML=costRows+costTotalRow;
       costBody.querySelectorAll('.price-input').forEach((input)=>{
         input.addEventListener('change',onPriceChange);
@@ -214,14 +274,32 @@
       if(state.focusSimCode){const el=costBody.querySelector(`.sim-qty-input[data-code="${state.focusSimCode}"]`);state.focusSimCode='';if(el)el.focus();}
     }
     function selectVersion(key){state.selectedKey=key;renderCost();}
+    function updateManualPrice(code,value){
+      const line=selectedCostLine(code);
+      if(line&&Number(value)===Number(line.system_price||0)){
+        delete state.manualPrices[code];
+        delete state.priceTimes[code];
+      }else{
+        state.manualPrices[code]=value;
+        state.priceTimes[code]=Date.now();
+      }
+      saveManualPrices();
+    }
+    function updateSimulatedQuantity(code,value){
+      const line=selectedCostLine(code);
+      if(line&&Number(value)===Number(line.quantity||0)){
+        delete state.simulatedQuantities[code];
+      }else{
+        state.simulatedQuantities[code]=value;
+      }
+      saveSimulatedQuantities();
+    }
     async function onPriceChange(event){
       const input=event.target;
       const code=input.dataset.code;
       const value=Number(input.value);
       if(!Number.isFinite(value)||value<0){showError('价格必须是非负数字。');renderCost();return;}
-      state.manualPrices[code]=value;
-      state.priceTimes[code]=Date.now();
-      saveManualPrices();
+      updateManualPrice(code,value);
       await fetchCost();
     }
     async function onPriceKeydown(event){
@@ -235,31 +313,31 @@
       if(!Number.isFinite(value)||value<0){showError('价格必须是非负数字。');renderCost();return;}
       if(value===Number(input.defaultValue)){if(next)next.focus();return;}
       state.focusCode=next?next.dataset.code:'';
-      state.manualPrices[code]=value;
-      state.priceTimes[code]=Date.now();
-      saveManualPrices();
+      updateManualPrice(code,value);
       await fetchCost();
     }
-    async function resetPrice(code){
+    async function resetLine(code){
       delete state.manualPrices[code];
       delete state.priceTimes[code];
+      delete state.simulatedQuantities[code];
       saveManualPrices();
+      saveSimulatedQuantities();
       await fetchCost();
+      showSuccess('该行模拟数量和当下价格已重置。');
     }
     async function resetAllPrices(){
       const recipe=selectedRecipe();
       for(const line of (recipe&&recipe.lines)||[]){delete state.manualPrices[line.child_code];delete state.priceTimes[line.child_code];}
       saveManualPrices();
       await fetchCost();
-      showSuccess('当前配方价格已重置为系统价格。');
+      showSuccess('当前配方当下价格已重置为系统价格。');
     }
     async function onSimQuantityChange(event){
       const input=event.target;
       const code=input.dataset.code;
       const value=Number(input.value);
       if(!Number.isFinite(value)||value<0){showError('模拟数量必须是非负数字。');renderCost();return;}
-      state.simulatedQuantities[code]=value;
-      saveSimulatedQuantities();
+      updateSimulatedQuantity(code,value);
       await fetchCost();
     }
     async function onSimQuantityKeydown(event){
@@ -273,8 +351,7 @@
       if(!Number.isFinite(value)||value<0){showError('模拟数量必须是非负数字。');renderCost();return;}
       if(value===Number(input.defaultValue)){if(next)next.focus();return;}
       state.focusSimCode=next?next.dataset.code:'';
-      state.simulatedQuantities[code]=value;
-      saveSimulatedQuantities();
+      updateSimulatedQuantity(code,value);
       await fetchCost();
     }
     async function resetAllSimulatedQuantities(){
@@ -282,7 +359,7 @@
       for(const line of (recipe&&recipe.lines)||[]){delete state.simulatedQuantities[line.child_code];}
       saveSimulatedQuantities();
       await fetchCost();
-      showSuccess('当前配方模拟数量已清空。');
+      showSuccess('当前配方模拟数量已重置为原配方数量。');
     }
     async function syncBom(){
       clearMessage();syncBtn.disabled=true;syncBtn.textContent='正在请求同步...';

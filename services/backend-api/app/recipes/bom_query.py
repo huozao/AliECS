@@ -282,7 +282,9 @@ def _dedup_items(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _detail_from_merged(merged: pd.DataFrame) -> pd.DataFrame:
-    aligned = merged.reindex(columns=[column for column in CUSTOM_COLUMNS_ORDER if column in merged.columns]).copy()
+    columns = [column for column in CUSTOM_COLUMNS_ORDER if column in merged.columns]
+    columns.extend(column for column in PRICE_COLUMNS if column in merged.columns and column not in columns)
+    aligned = merged.reindex(columns=columns).copy()
     if "比例" not in aligned.columns:
         aligned["比例"] = compute_ratio_series(aligned)
     aligned = _dedup_items(aligned)
