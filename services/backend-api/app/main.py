@@ -27,6 +27,7 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 
 from app.integrations.events import build_ops_attention_items
+from app.logging_utils import configure_logging, log_event
 from app.recipes.active_bom import copy_latest_bom_source, export_active_bom_rows
 from app.recipes.bom_query import (
     calculate_recipe_costs,
@@ -75,6 +76,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_request_logger = configure_logging("aliecs.request")
+
+
+@app.middleware("http")
+async def _log_requests(request, call_next):
+    started = time.monotonic()
+    response = await call_next(request)
+    duration_ms = round((time.monotonic() - started) * 1000, 2)
+    log_event(
+        _request_logger,
+        "request completed",
+        request_id=request.headers.get("x-request-id", uuid.uuid4().hex),
+        method=request.method,
+        path=request.url.path,
+        status_code=response.status_code,
+        duration_ms=duration_ms,
+    )
+    return response
 
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
