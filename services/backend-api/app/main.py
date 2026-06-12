@@ -144,6 +144,8 @@ def _token_secret() -> str:
     env_name = os.getenv("ENV", "dev")
     if env_name == "prod" and secret == "change-this-in-production":
         raise HTTPException(status_code=500, detail="AUTH_TOKEN_SECRET must be changed in production")
+    if env_name == "prod" and len(secret) < 32:
+        raise HTTPException(status_code=500, detail="AUTH_TOKEN_SECRET must be at least 32 characters in production")
     return secret
 
 
@@ -160,6 +162,8 @@ def _sign(payload: str) -> str:
 
 
 def _encode_token(payload: dict[str, Any]) -> str:
+    payload = dict(payload)
+    payload.setdefault("jti", uuid.uuid4().hex)
     body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
     b64 = base64.urlsafe_b64encode(body.encode("utf-8")).decode("utf-8").rstrip("=")
     return f"{b64}.{_sign(b64)}"
@@ -257,6 +261,19 @@ def _user_roles_permissions(user_id: int, is_admin: bool = False) -> tuple[list[
     return roles, permissions
 
 
+def _current_token_version(user_id: int) -> int | None:
+    try:
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT token_version FROM users WHERE id = %s", (user_id,))
+                row = cur.fetchone()
+    except Exception:
+        return None
+    if not row:
+        return None
+    return int(row[0])
+
+
 def _bootstrap_admin_if_needed() -> None:
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
@@ -303,7 +320,13 @@ def _bootstrap_admin_if_needed() -> None:
 
 def get_current_user(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     token = _extract_bearer(authorization)
-    return _decode_token(token)
+    payload = _decode_token(token)
+    uid = payload.get("uid")
+    if uid is not None and "tv" in payload:
+        current = _current_token_version(int(uid))
+        if current is not None and int(payload["tv"]) != current:
+            raise HTTPException(status_code=401, detail="token revoked")
+    return payload
 
 
 def require_login(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
@@ -1283,7 +1306,7 @@ def auth_login(body: LoginRequest) -> dict[str, Any]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, username, display_name, password_hash, status, is_admin
+                SELECT id, username, display_name, password_hash, status, is_admin, token_version
                 FROM users
                 WHERE username = %s
                 """,
@@ -1308,6 +1331,8 @@ def auth_login(body: LoginRequest) -> dict[str, Any]:
                 "display_name": row[2],
                 "roles": roles,
                 "permissions": permissions,
+                "tv": int(row[6]),
+                "jti": uuid.uuid4().hex,
                 "iat": now,
                 "exp": now + _token_ttl_seconds(),
             }
@@ -3467,6 +3492,23 @@ def admin_reset_password(
 
     _audit(actor.get("sub"), "admin.users.reset_password", "users", str(user_id))
     return {"status": "ok"}
+
+
+@app.post("/v1/admin/users/{user_id}/revoke-sessions")
+def admin_revoke_user_sessions(user_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET token_version = token_version + 1, updated_at = NOW() WHERE id = %s RETURNING token_version",
+                (user_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="user not found")
+        conn.commit()
+
+    _audit(user.get("sub"), "admin.users.revoke_sessions", "users", str(user_id))
+    return {"user_id": user_id, "token_version": int(row[0])}
 
 
 @app.post("/v1/admin/users/{user_id}/disable")
