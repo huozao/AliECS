@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from . import git_ops
+from . import git_ops, worktree_ops
 
 MAX_JOBS_RETAINED = 200
 
@@ -67,7 +67,12 @@ class JobStore:
         with self._lock:
             job.status = "running"
         try:
-            result = git_ops.run_action(repo_path, job.action, job.params)
+            if job.action in git_ops.READ_ONLY_ACTIONS:
+                result = git_ops.run_action(repo_path, job.action, job.params)
+            elif job.action in worktree_ops.WRITE_ACTIONS:
+                result = worktree_ops.run_write_action(repo_path, job.action, job.params)
+            else:
+                raise git_ops.ActionError(f"未知 action：{job.action!r}")
             with self._lock:
                 job.result = result
                 job.status = "done"
