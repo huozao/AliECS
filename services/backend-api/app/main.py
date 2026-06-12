@@ -725,9 +725,49 @@ class LocalPhotoStorage(PhotoStorage):
 class OssPhotoStorage(PhotoStorage):
     driver = "oss"
 
+    def __init__(self) -> None:
+        from app.oss_client import OssClient, config_from_env
+
+        config = config_from_env()
+        if not config.enabled:
+            self._client = None
+        else:
+            self._client = OssClient(config)
+
     async def save(self, file: UploadFile) -> dict[str, str]:
-        await file.read()
-        raise HTTPException(status_code=501, detail="OSS storage is not configured in this build")
+        content = await file.read()
+        if self._client is None:
+            raise HTTPException(status_code=501, detail="OSS storage is not configured in this build")
+
+        ext, mime = _validate_photo_upload(file.filename, file.content_type, content)
+        key = f"couple/{uuid.uuid4().hex}{ext}"
+        from app.oss_client import OssError
+
+        try:
+            self._client.put_object(key, content, mime)
+        except OssError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        public_url = self._client.object_url(key)
+        return {
+            "original_storage_url": f"oss:{key}",
+            "display_url": public_url,
+            "thumbnail_url": public_url,
+            "storage_driver": self.driver,
+        }
+
+    def delete(self, original_storage_url: str | None) -> None:
+        if not original_storage_url or not original_storage_url.startswith("oss:"):
+            return
+        if self._client is None:
+            return
+        key = original_storage_url.split(":", 1)[1]
+        from app.oss_client import OssError
+
+        try:
+            self._client.delete_object(key)
+        except OssError:
+            pass
 
 
 class WebDockPhotoStorage(PhotoStorage):
