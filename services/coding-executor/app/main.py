@@ -13,7 +13,7 @@ import os
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
-from . import config, git_ops
+from . import config, git_ops, worktree_ops
 from .jobs import JobStore
 
 app = FastAPI(title="coding-executor", version="0.1.0")
@@ -38,6 +38,12 @@ class TaskRequest(BaseModel):
     params: dict | None = None
 
 
+class WorktreeCreateRequest(BaseModel):
+    repo: str
+    task_id: str
+    base_ref: str = "HEAD"
+
+
 @app.get("/healthz")
 def healthz() -> dict:
     return {"ok": True, "service": "coding-executor", "version": "0.1.0"}
@@ -47,9 +53,34 @@ def healthz() -> dict:
 def list_repos() -> dict:
     return {
         "repos": [{"name": r.name, "path": str(r.path)} for r in _REPOS.values()],
-        "allowed_actions": list(git_ops.READ_ONLY_ACTIONS),
-        "phase": "phase-2-readonly",
+        "read_only_actions": list(git_ops.READ_ONLY_ACTIONS),
+        "write_actions": list(worktree_ops.WRITE_ACTIONS),
+        "phase": "phase-3a-worktree-writes",
     }
+
+
+@app.post("/worktrees", dependencies=[Depends(require_token)])
+def create_worktree(req: WorktreeCreateRequest) -> dict:
+    repo = _REPOS.get(req.repo)
+    if repo is None:
+        raise HTTPException(status_code=404, detail=f"仓库不在白名单：{req.repo!r}")
+    try:
+        path = worktree_ops.create_worktree(repo.name, repo.path, req.task_id, req.base_ref)
+    except git_ops.ActionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"repo": repo.name, "task_id": req.task_id, "branch": f"codex-task-{req.task_id}", "path": str(path)}
+
+
+@app.delete("/worktrees/{repo_name}/{task_id}", dependencies=[Depends(require_token)])
+def discard_worktree(repo_name: str, task_id: str) -> dict:
+    repo = _REPOS.get(repo_name)
+    if repo is None:
+        raise HTTPException(status_code=404, detail=f"仓库不在白名单：{repo_name!r}")
+    try:
+        worktree_ops.remove_worktree(repo.name, repo.path, task_id)
+    except git_ops.ActionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"repo": repo.name, "task_id": task_id, "removed": True}
 
 
 @app.post("/tasks", dependencies=[Depends(require_token)])
@@ -57,12 +88,22 @@ def create_task(req: TaskRequest) -> dict:
     repo = _REPOS.get(req.repo)
     if repo is None:
         raise HTTPException(status_code=404, detail=f"仓库不在白名单：{req.repo!r}")
-    if req.action not in git_ops.READ_ONLY_ACTIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"action 不允许（阶段二仅只读）：{req.action!r}",
-        )
-    job = _STORE.submit(repo.name, repo.path, req.action, req.params or {})
+
+    params = req.params or {}
+
+    if req.action in git_ops.READ_ONLY_ACTIONS:
+        target_path = repo.path
+    elif req.action in worktree_ops.WRITE_ACTIONS:
+        task_id = params.get("task_id")
+        if not task_id or not isinstance(task_id, str):
+            raise HTTPException(status_code=400, detail="写操作需要 params.task_id（先调用 POST /worktrees 创建）")
+        target_path = worktree_ops.get_worktree(repo.name, task_id)
+        if target_path is None:
+            raise HTTPException(status_code=404, detail=f"worktree 不存在，请先 POST /worktrees：{task_id!r}")
+    else:
+        raise HTTPException(status_code=400, detail=f"action 不允许：{req.action!r}")
+
+    job = _STORE.submit(repo.name, target_path, req.action, params)
     return {"id": job.id, "status": job.status}
 
 
