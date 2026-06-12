@@ -24,6 +24,7 @@ MATRIX_SHEET = "横向对比_矩阵"
 COST_HEADERS = [
     "子件编码",
     "子件名称",
+    "规格型号",
     "单位",
     "数量",
     "比例",
@@ -36,11 +37,11 @@ COST_HEADERS = [
     "模拟分价",
 ]
 COST_GROUPS = [
-    ("基础信息", 1, 3, "FFEFF7F1", "FF22733C"),
-    ("原配方", 4, 5, "FFFFF4E3", "FF8A5200"),
-    ("模拟调整", 6, 7, "FFF2EEFF", "FF5B4BDB"),
-    ("价格信息", 8, 9, "FFFFF4E3", "FF8A5200"),
-    ("成本结果", 10, 12, "FFEFF6FF", "FF2563B8"),
+    ("基础信息", 1, 4, "FFEFF7F1", "FF22733C"),
+    ("原配方", 5, 6, "FFFFF4E3", "FF8A5200"),
+    ("模拟调整", 7, 8, "FFF2EEFF", "FF5B4BDB"),
+    ("价格信息", 9, 10, "FFFFF4E3", "FF8A5200"),
+    ("成本结果", 11, 13, "FFEFF6FF", "FF2563B8"),
 ]
 
 OUTPUT_COLUMNS = [
@@ -599,6 +600,7 @@ def save_recipe_cost_workbook(output_path: Path, recipes: list[dict[str, object]
                 [
                     line.get("child_code"),
                     line.get("child_name"),
+                    line.get("spec"),
                     line.get("unit"),
                     line.get("quantity"),
                     line.get("ratio"),
@@ -614,6 +616,7 @@ def save_recipe_cost_workbook(output_path: Path, recipes: list[dict[str, object]
         ws.append(
             [
                 "汇总",
+                "",
                 "",
                 "",
                 sum(float(line.get("quantity") or 0) for line in recipe.get("lines", [])),
@@ -632,20 +635,21 @@ def save_recipe_cost_workbook(output_path: Path, recipes: list[dict[str, object]
             cell.fill = PatternFill("solid", fgColor="FFF8F2E6")
             cell.font = Font(bold=True)
         ws.freeze_panes = "A3"
-        ws.auto_filter.ref = f"A2:L{total_row}"
-        widths = [14, 28, 8, 10, 11, 10, 11, 10, 10, 10, 10, 10]
+        ws.auto_filter.ref = f"A2:M{total_row}"
+        widths = [14, 24, 16, 8, 10, 11, 10, 11, 10, 10, 10, 10, 10]
         for index, width in enumerate(widths, 1):
             ws.column_dimensions[get_column_letter(index)].width = width
-        for row in ws.iter_rows(min_row=3, max_row=total_row, min_col=1, max_col=12):
+        for row in ws.iter_rows(min_row=3, max_row=total_row, min_col=1, max_col=13):
             for cell in row:
                 cell.alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
             row[0].alignment = Alignment(horizontal="left", vertical="center")
             row[1].alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
-            row[2].alignment = Alignment(horizontal="left", vertical="center")
+            row[2].alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+            row[3].alignment = Alignment(horizontal="left", vertical="center")
         for row in range(3, total_row + 1):
-            ws.cell(row, 5).number_format = "0.000%"
-            ws.cell(row, 7).number_format = "0.000%"
-            for col in (8, 9, 10, 11, 12):
+            ws.cell(row, 6).number_format = "0.000%"
+            ws.cell(row, 8).number_format = "0.000%"
+            for col in (9, 10, 11, 12, 13):
                 ws.cell(row, col).number_format = "0.000"
         _apply_range_border(ws)
         ws.sheet_view.showGridLines = False
