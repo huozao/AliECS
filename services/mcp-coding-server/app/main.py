@@ -1,9 +1,8 @@
 """MCP coding bridge for ChatGPT developer-mode connectors.
 
-Phase 2: read-only connectivity tools (ping / server_info) plus dry-run coding
-tools that proxy to the 开发机 executor through a reverse SSH tunnel. The
-executor only performs read-only git actions in this phase; mutating actions
-arrive later behind explicit confirmation.
+Phase 3a: connectivity tools plus git worktree-isolated write tools that proxy
+to the 开发机 executor through a reverse SSH tunnel. Mutating actions must run
+inside a dedicated codex-task-<task_id> worktree branch.
 
 The container listens on MCP_PORT (default 8090) and is published only on
 127.0.0.1; public exposure happens via an Nginx location with a secret path
@@ -27,7 +26,7 @@ from . import executor_client
 
 SERVER_NAME = "aliecs-coding"
 SERVER_VERSION = "0.2.0"
-PHASE = "phase-2-dryrun"
+PHASE = "phase-3a-worktree-writes"
 STARTED_AT = time.monotonic()
 
 
@@ -54,21 +53,34 @@ def server_info_payload() -> dict:
             "list_coding_targets",
             "start_coding_task",
             "get_coding_task",
+            "create_coding_worktree",
+            "discard_coding_worktree",
+            "get_coding_worktree_diff",
         ],
-        "note": "阶段二：编程任务仅支持只读 git 操作（dry-run）。",
+        "note": (
+            "阶段三 a：只读 git 操作仍是 dry-run；写操作（write_file / apply_patch / "
+            "git_commit）必须先用 create_coding_worktree 创建隔离 worktree，"
+            "在该 worktree 分支上进行，绝不直接修改主工作区，也不会自动 push/merge。"
+        ),
     }
 
 
 mcp = FastMCP(
     SERVER_NAME,
     instructions=(
-        "AliECS 编程桥接服务，阶段二（dry-run）。\n"
+        "AliECS 编程桥接服务，阶段三 a（worktree 隔离写入）。\n"
         "- ping / server_info：连通性与状态，只读。\n"
-        "- list_coding_targets：列出可操作的仓库白名单与允许的只读操作。\n"
-        "- start_coding_task：在开发机对某仓库发起一个只读 git 任务（git_status / "
-        "git_log / git_diff / list_files / read_file），返回任务 id。\n"
-        "- get_coding_task：用任务 id 轮询状态与结果。\n"
-        "本阶段不会修改任何文件；遇到需要写入的请求请直接拒绝并说明仍在 dry-run 阶段。"
+        "- list_coding_targets：列出可操作的仓库白名单、只读操作与写操作。\n"
+        "- start_coding_task：发起只读 git 任务（git_status / git_log / git_diff / "
+        "list_files / read_file），返回任务 id，用 get_coding_task 查询结果。\n"
+        "- create_coding_worktree：为某仓库创建一个隔离的 git worktree（分支名 "
+        "codex-task-<task_id>），写操作必须先调用本工具。\n"
+        "- 写操作（write_file / apply_patch / git_commit）通过 start_coding_task 发起，"
+        "params 必须包含上一步返回的 task_id，且只作用于该 worktree。\n"
+        "- get_coding_worktree_diff：查看某 worktree 相对 base ref 的 diff，供人工审阅。\n"
+        "- discard_coding_worktree：丢弃某 worktree 及其分支，不可恢复。\n"
+        "本阶段绝不直接修改用户当前签出的分支，也绝不自动 push 或 merge；"
+        "所有写入只发生在 codex-task-<task_id> 分支的独立 worktree 中。"
     ),
     host=os.getenv("MCP_HOST", "0.0.0.0"),
     port=int(os.getenv("MCP_PORT", "8090")),
@@ -77,9 +89,8 @@ mcp = FastMCP(
 )
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
-# start_coding_task reaches the dev machine and creates a job, so it is not a
-# read-only hint even though phase-2 actions themselves don't mutate anything.
-# This makes ChatGPT show the write-confirmation modal on task start.
+# Task-start tools reach the dev machine or mutate an isolated worktree, so they
+# should surface ChatGPT's confirmation modal.
 TASK_START = ToolAnnotations(readOnlyHint=False, openWorldHint=True)
 
 
@@ -108,7 +119,7 @@ def _unavailable(detail: str) -> str:
 
 @mcp.tool(annotations=READ_ONLY)
 def list_coding_targets() -> str:
-    """列出开发机上允许操作的仓库白名单与本阶段允许的只读操作。只读。"""
+    """列出开发机上允许操作的仓库白名单、本阶段允许的只读操作与写操作。只读。"""
     try:
         return json.dumps(executor_client.list_targets(), ensure_ascii=False)
     except executor_client.ExecutorUnavailable as exc:
@@ -117,12 +128,18 @@ def list_coding_targets() -> str:
 
 @mcp.tool(annotations=TASK_START)
 def start_coding_task(repo: str, action: str, params: dict | None = None) -> str:
-    """在开发机对指定仓库发起一个只读 git 任务，返回任务 id 供后续轮询。
+    """在开发机对指定仓库发起一个任务，返回任务 id 供后续轮询。
 
     repo：list_coding_targets 返回的仓库名。
-    action：git_status / git_log / git_diff / list_files / read_file 之一。
-    params：可选参数，如 {"count": 20}、{"ref": "HEAD~1"}、{"path": "README.md"}。
-    本阶段为 dry-run，只读取不修改。
+    action：
+      - 只读：git_status / git_log / git_diff / list_files / read_file。
+      - 写入（必须先用 create_coding_worktree 创建 worktree）：write_file /
+        apply_patch / git_commit / git_diff_worktree。写操作的 params 必须包含
+        create_coding_worktree 返回的 task_id，且只作用于该 worktree 分支。
+    params：例如 {"count": 20}、{"ref": "HEAD~1"}、{"path": "README.md"}，
+      或写操作的 {"task_id": "...", "path": "...", "content": "..."}。
+    只读操作不修改任何文件；写操作只修改 codex-task-<task_id> 分支的隔离 worktree，
+    绝不修改用户当前签出的分支，也不会自动 push 或 merge。
     """
     try:
         return json.dumps(
@@ -137,6 +154,46 @@ def get_coding_task(task_id: str) -> str:
     """用 start_coding_task 返回的 id 查询任务状态与结果。只读。"""
     try:
         return json.dumps(executor_client.get_task(task_id), ensure_ascii=False)
+    except executor_client.ExecutorUnavailable as exc:
+        return _unavailable(str(exc))
+
+
+@mcp.tool(annotations=TASK_START)
+def create_coding_worktree(repo: str, task_id: str, base_ref: str = "HEAD") -> str:
+    """为指定仓库创建一个隔离的 git worktree，分支名为 codex-task-<task_id>。
+
+    repo：list_coding_targets 返回的仓库名。
+    task_id：自定义任务标识（仅允许字母数字、-、_，1..64 字符），同一仓库内必须唯一。
+    base_ref：worktree 的起点引用，默认 HEAD。
+    创建后，写操作（write_file / apply_patch / git_commit）通过 start_coding_task
+    发起，params 必须带上这里的 task_id。本操作不影响用户当前签出的分支。
+    """
+    try:
+        return json.dumps(executor_client.create_worktree(repo, task_id, base_ref), ensure_ascii=False)
+    except executor_client.ExecutorUnavailable as exc:
+        return _unavailable(str(exc))
+
+
+@mcp.tool(annotations=READ_ONLY)
+def get_coding_worktree_diff(repo: str, task_id: str, ref: str = "HEAD") -> str:
+    """查看某个 worktree 相对 ref（默认 HEAD，即该 worktree 分支的起点）的 diff。
+
+    用于在丢弃或合并前人工审阅 codex-task-<task_id> 分支上的改动。只读，无副作用。
+    """
+    try:
+        return json.dumps(executor_client.get_worktree_diff(repo, task_id, ref), ensure_ascii=False)
+    except executor_client.ExecutorUnavailable as exc:
+        return _unavailable(str(exc))
+
+
+@mcp.tool(annotations=TASK_START)
+def discard_coding_worktree(repo: str, task_id: str) -> str:
+    """丢弃某个 worktree 及其 codex-task-<task_id> 分支，不可恢复。
+
+    在确认改动不需要保留，或已经通过其他方式（人工 cherry-pick 等）合并之后调用。
+    """
+    try:
+        return json.dumps(executor_client.discard_worktree(repo, task_id), ensure_ascii=False)
     except executor_client.ExecutorUnavailable as exc:
         return _unavailable(str(exc))
 

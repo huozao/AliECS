@@ -1,12 +1,31 @@
-# coding-executor（开发机本地服务，阶段二 dry-run）
+# coding-executor（开发机本地服务，阶段三 a：worktree 隔离写入）
 
 ChatGPT 连接器 → ECS `mcp-coding-server` → **反向 SSH 隧道** → 本服务（开发机）。
-本服务只对白名单仓库执行**只读** git 操作，绝不修改文件。
+
+本服务对白名单仓库支持两类操作：
+
+- **只读**（直接在仓库工作区执行）：`git_status` / `git_log` / `git_diff` /
+  `list_files` / `read_file`。
+- **写入**（仅在隔离 worktree 中执行，分支名 `codex-task-<task_id>`）：
+  `write_file` / `apply_patch` / `git_commit` / `git_diff_worktree`。
+
+写操作绝不直接修改用户当前签出的分支，也绝不自动 `push` 或 `merge`。调用顺序：
+
+1. `POST /worktrees {"repo", "task_id", "base_ref"}` 创建隔离 worktree。
+2. `POST /tasks {"repo", "action": "write_file"|..., "params": {"task_id": ..., ...}}`
+   在该 worktree 中执行写操作。
+3. `POST /tasks {"repo", "action": "git_diff_worktree", "params": {"task_id": ...}}`
+   或 `GET /tasks/{id}` 查看结果，供人工审阅。
+4. `DELETE /worktrees/{repo}/{task_id}` 丢弃 worktree 和分支（不可恢复），或保留
+   分支供人工 `git fetch`/`cherry-pick`。
 
 ## 它不是什么
 
 - 不进 ECS、不进 `compose.prod.yml`、不进 release 构建矩阵。它只跑在开发机。
-- 阶段二只读：`git_status` / `git_log` / `git_diff` / `list_files` / `read_file`。
+- 不是自动编程 agent：每次写操作都是 ChatGPT 显式发起的单步操作，由人工通过
+  `git_diff_worktree` 审阅；本阶段不包含无人值守的多步编辑循环（见项目计划中的
+  "Phase 3b" 备注）。
+- 不会修改用户当前签出的分支，不会 `push`，不会 `merge`。
 
 ## 本地运行
 
@@ -69,6 +88,8 @@ ssh -N -R 127.0.0.1:18091:127.0.0.1:18091 aliecs
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/healthz` | 健康检查（免鉴权） |
-| GET | `/repos` | 仓库白名单 + 允许的操作 |
-| POST | `/tasks` | 发起任务 `{repo, action, params}` → `{id, status}` |
+| GET | `/repos` | 仓库白名单 + 只读/写操作列表 |
+| POST | `/worktrees` | 创建隔离 worktree `{repo, task_id, base_ref}` → `{repo, task_id, branch, path}` |
+| DELETE | `/worktrees/{repo}/{task_id}` | 丢弃 worktree 及分支（不可恢复） |
+| POST | `/tasks` | 发起任务 `{repo, action, params}` → `{id, status}`；写操作的 `params` 必须含 `task_id` |
 | GET | `/tasks/{id}` | 查询任务状态与结果 |
