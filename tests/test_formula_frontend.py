@@ -124,6 +124,14 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertGreater(head_status, head_code)
         self.assertIn(".col-name{width:1%;white-space:nowrap", self.html)
 
+    def test_compare_code_and_unit_columns_auto_width(self) -> None:
+        self.assertIn(".col-code{width:1%;white-space:nowrap", self.html)
+        self.assertIn(".col-unit{width:1%;white-space:nowrap}", self.html)
+
+    def test_compare_header_shows_parent_name_with_version(self) -> None:
+        self.assertIn('<th class="version-col"><div title="${escapeHtml(version.parentName)}">${escapeHtml(version.parentName)}</div>', self.html)
+        self.assertIn("${escapeHtml(shortVersion(version.version))}", self.html)
+
     def test_base_badge_only_in_header_not_in_each_cell(self) -> None:
         self.assertIn("if(base&&version.key===base.key)flag='';", self.html)
         self.assertNotIn('<span class="flag base">基准</span>', self.html)
