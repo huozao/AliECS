@@ -129,13 +129,24 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertIn(".col-unit{width:1%;white-space:nowrap}", self.html)
 
     def test_compare_header_shows_parent_name_with_version(self) -> None:
-        self.assertIn('<th class="version-col"><div title="${escapeHtml(version.parentName)}">${escapeHtml(version.parentName)}</div>', self.html)
+        self.assertIn('<div title="${escapeHtml(version.parentName)}">${escapeHtml(version.parentName)}</div>', self.html)
         self.assertIn("${escapeHtml(shortVersion(version.version))}", self.html)
+
+    def test_compare_header_tags_sit_above_name_and_are_subtle(self) -> None:
+        # tags row precedes the parent-name div within each version header cell
+        tags_row = self.html.index('<th class="version-col"><div class="vh-tags">')
+        name_div = self.html.index('<div title="${escapeHtml(version.parentName)}">', tags_row)
+        self.assertLess(tags_row, name_div)
+        # status (停用) added to header; long "当前目标" shortened to "目标"
+        self.assertIn('<span class="vh-tag off">停用</span>', self.html)
+        self.assertIn('<span class="vh-tag target">目标</span>', self.html)
+        # subtle styling: small font, muted
+        self.assertIn(".vh-tag{display:inline-flex;align-items:center;height:16px;padding:0 6px;border-radius:999px;font-size:10px", self.html)
 
     def test_base_badge_only_in_header_not_in_each_cell(self) -> None:
         self.assertIn("if(base&&version.key===base.key)flag='';", self.html)
         self.assertNotIn('<span class="flag base">基准</span>', self.html)
-        self.assertIn('style="margin-top:5px">基准</span>', self.html)
+        self.assertIn('<span class="vh-tag base">基准</span>', self.html)
 
     def test_raw_download_still_uses_server_workbook_and_compare_download_is_client_table(self) -> None:
         self.assertIn("function downloadRawResult()", self.html)
