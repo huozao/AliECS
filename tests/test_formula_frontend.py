@@ -26,20 +26,30 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertIn('<th class="g-basic">子件名称</th>', self.html)
         self.assertIn('<th class="g-basic">规格型号</th>', self.html)
         self.assertIn('colspan="4">基础信息</th>', self.html)
-        self.assertIn("line.spec||''", self.html)
-        self.assertIn('<td colspan="4">汇总</td>', self.html)
+        self.assertIn("line.spec?escapeHtml(line.spec):'—'", self.html)
+        self.assertIn('sum-basic basic-end" colspan="4">汇总</td>', self.html)
         self.assertIn(".cost-table tbody td{text-align:center", self.html)
         self.assertIn(".cost-table td.text-left{text-align:left", self.html)
 
     def test_cost_reset_button_has_visible_button_border(self) -> None:
-        self.assertIn(".reset-link{border:1px solid", self.html)
-        self.assertIn("background:#fffdf9", self.html)
+        self.assertIn("border:1px solid #dacdbd", self.html)
+        self.assertIn("background:#fffdf8", self.html)
 
-    def test_cost_inputs_have_compact_fixed_width(self) -> None:
-        self.assertIn("--cost-input-width:6.2ch", self.html)
-        self.assertIn(".cost-table{min-width:1280px", self.html)
-        self.assertIn("width:var(--cost-input-width)", self.html)
-        self.assertIn("max-width:var(--cost-input-width)", self.html)
+    def test_cost_inputs_use_restyled_fixed_width(self) -> None:
+        self.assertIn(".cost-table{width:100%;min-width:1480px", self.html)
+        self.assertIn(".price-input,.sim-qty-input{width:76px;max-width:76px;height:34px", self.html)
+
+    def test_cost_table_restyle_module_borders_and_colored_results(self) -> None:
+        # group/sub module-end colored separators
+        self.assertIn(".cost-table .basic-end{border-right:2px solid", self.html)
+        self.assertIn(".cost-table .cost-end{border-right:2px solid", self.html)
+        # colored price/cost result text + zero muting + footer sums
+        self.assertIn(".cost-table td.sys-cost{color:#a86a10}", self.html)
+        self.assertIn(".cost-table td.cur-cost{color:#c84a1b}", self.html)
+        self.assertIn(".cost-table td.sim-cost{color:#5b4ac9}", self.html)
+        self.assertIn(".cost-table td.zero{color:#9ca3af}", self.html)
+        self.assertIn('<tfoot id="costFoot"></tfoot>', self.html)
+        self.assertIn(".cost-table .sum-cost{background:", self.html)
 
     def test_cost_export_uses_server_filename(self) -> None:
         self.assertIn("downloadNameFromDisposition", self.html)
@@ -88,8 +98,9 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertIn('<span class="ratio-main">${formatQty(cell.qty)}</span>', self.html)
         self.assertIn('<div class="qty-line">${ratio(cell.ratio)}</div>', self.html)
 
-    def test_compare_cell_bar_is_full_width_flush_bottom(self) -> None:
-        self.assertIn(".barLine{position:absolute;left:0;right:0;bottom:0;height:4px;margin:0", self.html)
+    def test_compare_cell_bar_is_rounded_near_bottom(self) -> None:
+        self.assertIn(".barLine{position:absolute;left:6px;right:6px;bottom:3px;height:4px;margin:0", self.html)
+        self.assertIn("border-radius:999px;overflow:hidden}.barLine i{display:block;height:100%;border-radius:999px", self.html)
         self.assertIn(".cell-value{position:relative;text-align:center}", self.html)
 
     def test_compare_cell_quantity_heat_fill_removed(self) -> None:
@@ -100,8 +111,9 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertNotIn(".cell-value.current{box-shadow", self.html)
         self.assertNotIn(".cell-value.base{outline", self.html)
 
-    def test_version_columns_have_gap_between_recipes(self) -> None:
-        self.assertIn(".version-col{width:155px;text-align:center;border-left:8px solid #f0e9db}", self.html)
+    def test_version_columns_use_consistent_border_no_gap(self) -> None:
+        self.assertIn(".version-col{width:155px;text-align:center}", self.html)
+        self.assertNotIn("border-left:8px solid #f0e9db", self.html)
 
     def test_target_version_is_switchable_like_base(self) -> None:
         self.assertIn('name="targetVersion"', self.html)
