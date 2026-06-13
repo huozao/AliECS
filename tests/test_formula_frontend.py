@@ -81,6 +81,9 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertIn("仅差异", self.html)
         self.assertIn("仅替换", self.html)
 
+    def test_compare_card_checkbox_radio_not_stretched_by_global_input_rule(self) -> None:
+        self.assertIn('input[type="checkbox"],input[type="radio"]{width:16px', self.html)
+
     def test_raw_download_still_uses_server_workbook_and_compare_download_is_client_table(self) -> None:
         self.assertIn("function downloadRawResult()", self.html)
         self.assertIn("/v1/recipes/download/${state.fileId}", self.html)
