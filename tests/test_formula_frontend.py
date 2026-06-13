@@ -110,6 +110,25 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertIn("${state.showSpec?'<th class=\"col-spec\">规格型号</th>':''}", self.html)
         self.assertIn("state.showSpec=!state.showSpec", self.html)
 
+    def test_version_card_shows_parent_name_on_top_without_label(self) -> None:
+        self.assertIn('<div class="v-name" title="${escapeHtml(version.parentName)}">', self.html)
+        self.assertNotIn('<div class="m-key">父件名称</div>', self.html)
+
+    def test_default_bom_tag_moved_into_status_row(self) -> None:
+        # 默认BOM no longer sits in the code line; it is appended to the 状态 row
+        self.assertIn("${disabled?'停用':'启用'}${version.defaultBOM==='1'?'<span class=\"tag default\" style=\"margin-left:6px\">默认BOM</span>':''}", self.html)
+
+    def test_compare_table_status_column_is_last_and_name_auto_width(self) -> None:
+        head_status = self.html.index('<th class="col-status">状态</th>')
+        head_code = self.html.index('<th class="col-code">子件编码</th>')
+        self.assertGreater(head_status, head_code)
+        self.assertIn(".col-name{width:1%;white-space:nowrap", self.html)
+
+    def test_base_badge_only_in_header_not_in_each_cell(self) -> None:
+        self.assertIn("if(base&&version.key===base.key)flag='';", self.html)
+        self.assertNotIn('<span class="flag base">基准</span>', self.html)
+        self.assertIn('style="margin-top:5px">基准</span>', self.html)
+
     def test_raw_download_still_uses_server_workbook_and_compare_download_is_client_table(self) -> None:
         self.assertIn("function downloadRawResult()", self.html)
         self.assertIn("/v1/recipes/download/${state.fileId}", self.html)
