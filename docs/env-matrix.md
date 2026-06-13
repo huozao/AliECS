@@ -49,9 +49,10 @@
 | `IMMICH_PROXY_MODE` | Immich 缩略图/内容代理模式 | 可选，默认 `backend` | 浏览器可能暴露不该暴露的 Immich 访问细节 |
 | `OSS_ENDPOINT` / `OSS_BUCKET` | OSS 目标地址与 bucket | `STORAGE_DRIVER=oss` 时必填 | OSS 上传不可用 |
 | `OSS_ACCESS_KEY_ID` / `OSS_ACCESS_KEY_SECRET` | OSS 凭据 | `STORAGE_DRIVER=oss` 时必填 | OSS 上传不可用 |
+| `OSS_TIMEOUT_SECONDS` | OSS 请求超时（秒） | 可选，默认 30 | 网络异常时请求可能挂起更久 |
 | `SHARE_BASE_URL` | 分享链接生成根地址 | 建议 | 分享 URL 可能使用错误域名 |
 
-> 当前 backend-api 已抽象 `local` / `webdock` / `oss` driver；`webdock` 通过 ECS 到旧电脑的 WebDock 隧道保存原图，`oss` 仍需配置 bucket/keys 并接入对象存储实现后再切生产。
+> 当前 backend-api 已抽象 `local` / `webdock` / `oss` driver；`webdock` 通过 ECS 到旧电脑的 WebDock 隧道保存原图，`oss` 通过 Aliyun OSS V1 签名客户端保存原图。
 
 ## 4. 维护要求
 

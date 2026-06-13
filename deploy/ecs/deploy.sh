@@ -7,6 +7,12 @@ if [[ $# -ne 1 ]]; then
 fi
 
 IMAGE_TAG="$1"
+
+if [[ ! "$IMAGE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+  echo "[部署] 镜像标签格式错误：$IMAGE_TAG（必须是 vX.Y.Z 或 vX.Y.Z-rc.N）" >&2
+  exit 1
+fi
+
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 META_FILE="$ROOT_DIR/release-meta.env"
 

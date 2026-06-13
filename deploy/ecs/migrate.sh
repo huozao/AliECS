@@ -28,6 +28,10 @@ if [[ ! -d "$MIGRATIONS_DIR" ]]; then
   exit 1
 fi
 
+db_host="${DATABASE_URL#*@}"
+db_host="${db_host%%/*}"
+echo "[迁移] 目标：host=${db_host} db=${POSTGRES_DB} 镜像tag=${IMAGE_TAG:-unset}"
+
 echo "[迁移] 先确保 postgres 已启动"
 docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" up -d postgres
 

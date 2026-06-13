@@ -27,6 +27,7 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 
 from app.integrations.events import build_ops_attention_items
+from app.logging_utils import configure_logging, log_event
 from app.recipes.active_bom import copy_latest_bom_source, export_active_bom_rows
 from app.recipes.bom_query import (
     calculate_recipe_costs,
@@ -76,6 +77,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_request_logger = configure_logging("aliecs.request")
+
+
+@app.middleware("http")
+async def _log_requests(request, call_next):
+    started = time.monotonic()
+    response = await call_next(request)
+    duration_ms = round((time.monotonic() - started) * 1000, 2)
+    log_event(
+        _request_logger,
+        "request completed",
+        request_id=request.headers.get("x-request-id", uuid.uuid4().hex),
+        method=request.method,
+        path=request.url.path,
+        status_code=response.status_code,
+        duration_ms=duration_ms,
+    )
+    return response
+
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 DEFAULT_FEATURES: list[dict[str, Any]] = [
@@ -124,6 +144,8 @@ def _token_secret() -> str:
     env_name = os.getenv("ENV", "dev")
     if env_name == "prod" and secret == "change-this-in-production":
         raise HTTPException(status_code=500, detail="AUTH_TOKEN_SECRET must be changed in production")
+    if env_name == "prod" and len(secret) < 32:
+        raise HTTPException(status_code=500, detail="AUTH_TOKEN_SECRET must be at least 32 characters in production")
     return secret
 
 
@@ -140,6 +162,8 @@ def _sign(payload: str) -> str:
 
 
 def _encode_token(payload: dict[str, Any]) -> str:
+    payload = dict(payload)
+    payload.setdefault("jti", uuid.uuid4().hex)
     body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
     b64 = base64.urlsafe_b64encode(body.encode("utf-8")).decode("utf-8").rstrip("=")
     return f"{b64}.{_sign(b64)}"
@@ -237,6 +261,19 @@ def _user_roles_permissions(user_id: int, is_admin: bool = False) -> tuple[list[
     return roles, permissions
 
 
+def _current_token_version(user_id: int) -> int | None:
+    try:
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT token_version FROM users WHERE id = %s", (user_id,))
+                row = cur.fetchone()
+    except Exception:
+        return None
+    if not row:
+        return None
+    return int(row[0])
+
+
 def _bootstrap_admin_if_needed() -> None:
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
@@ -283,7 +320,13 @@ def _bootstrap_admin_if_needed() -> None:
 
 def get_current_user(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     token = _extract_bearer(authorization)
-    return _decode_token(token)
+    payload = _decode_token(token)
+    uid = payload.get("uid")
+    if uid is not None and "tv" in payload:
+        current = _current_token_version(int(uid))
+        if current is not None and int(payload["tv"]) != current:
+            raise HTTPException(status_code=401, detail="token revoked")
+    return payload
 
 
 def require_login(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
@@ -622,6 +665,18 @@ class PhotoStorage:
         return None
 
 
+def _upload_disk_usage(path: Path | str) -> dict[str, Any]:
+    usage = shutil.disk_usage(path)
+    percent = round(usage.used * 100 / usage.total, 1) if usage.total else 0.0
+    return {
+        "path": str(path),
+        "total": usage.total,
+        "used": usage.used,
+        "free": usage.free,
+        "percent": percent,
+    }
+
+
 class LocalPhotoStorage(PhotoStorage):
     driver = "local"
 
@@ -649,25 +704,70 @@ class LocalPhotoStorage(PhotoStorage):
             Path(original_storage_url).unlink(missing_ok=True)
 
     def _warn_if_disk_high(self) -> None:
+        info = _upload_disk_usage(self.base_dir)
         raw = os.getenv("UPLOAD_DISK_WARN_PCT", "").strip()
         if not raw:
             return
         try:
             threshold = float(raw)
-            usage = shutil.disk_usage(self.base_dir)
-            used_pct = usage.used * 100 / usage.total
-        except Exception:
+        except ValueError:
             return
-        if used_pct >= threshold:
-            print(f"upload disk usage high: {used_pct:.1f}% >= {threshold:.1f}%")
+        if info["percent"] >= threshold:
+            log_event(
+                _request_logger,
+                "upload disk usage high",
+                path=info["path"],
+                percent=info["percent"],
+                threshold=threshold,
+            )
 
 
 class OssPhotoStorage(PhotoStorage):
     driver = "oss"
 
+    def __init__(self) -> None:
+        from app.oss_client import OssClient, config_from_env
+
+        config = config_from_env()
+        if not config.enabled:
+            self._client = None
+        else:
+            self._client = OssClient(config)
+
     async def save(self, file: UploadFile) -> dict[str, str]:
-        await file.read()
-        raise HTTPException(status_code=501, detail="OSS storage is not configured in this build")
+        content = await file.read()
+        if self._client is None:
+            raise HTTPException(status_code=501, detail="OSS storage is not configured in this build")
+
+        ext, mime = _validate_photo_upload(file.filename, file.content_type, content)
+        key = f"couple/{uuid.uuid4().hex}{ext}"
+        from app.oss_client import OssError
+
+        try:
+            self._client.put_object(key, content, mime)
+        except OssError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        public_url = self._client.object_url(key)
+        return {
+            "original_storage_url": f"oss:{key}",
+            "display_url": public_url,
+            "thumbnail_url": public_url,
+            "storage_driver": self.driver,
+        }
+
+    def delete(self, original_storage_url: str | None) -> None:
+        if not original_storage_url or not original_storage_url.startswith("oss:"):
+            return
+        if self._client is None:
+            return
+        key = original_storage_url.split(":", 1)[1]
+        from app.oss_client import OssError
+
+        try:
+            self._client.delete_object(key)
+        except OssError:
+            pass
 
 
 class WebDockPhotoStorage(PhotoStorage):
@@ -745,10 +845,12 @@ class AddCoupleMemberRequest(BaseModel):
 @app.get("/healthz")
 def healthz() -> dict[str, object]:
     db_ok, db_message = _db_ping()
+    upload_dir = os.getenv("LOCAL_UPLOAD_DIR", "/tmp/aliecs-uploads")
     return {
         "status": "ok" if db_ok else "degraded",
         "service": "backend-api",
         "database": {"ok": db_ok, "message": db_message},
+        "upload_disk": _upload_disk_usage(upload_dir),
     }
 
 
@@ -1244,7 +1346,7 @@ def auth_login(body: LoginRequest) -> dict[str, Any]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, username, display_name, password_hash, status, is_admin
+                SELECT id, username, display_name, password_hash, status, is_admin, token_version
                 FROM users
                 WHERE username = %s
                 """,
@@ -1269,6 +1371,8 @@ def auth_login(body: LoginRequest) -> dict[str, Any]:
                 "display_name": row[2],
                 "roles": roles,
                 "permissions": permissions,
+                "tv": int(row[6]),
+                "jti": uuid.uuid4().hex,
                 "iat": now,
                 "exp": now + _token_ttl_seconds(),
             }
@@ -3428,6 +3532,23 @@ def admin_reset_password(
 
     _audit(actor.get("sub"), "admin.users.reset_password", "users", str(user_id))
     return {"status": "ok"}
+
+
+@app.post("/v1/admin/users/{user_id}/revoke-sessions")
+def admin_revoke_user_sessions(user_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET token_version = token_version + 1, updated_at = NOW() WHERE id = %s RETURNING token_version",
+                (user_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="user not found")
+        conn.commit()
+
+    _audit(user.get("sub"), "admin.users.revoke_sessions", "users", str(user_id))
+    return {"user_id": user_id, "token_version": int(row[0])}
 
 
 @app.post("/v1/admin/users/{user_id}/disable")
