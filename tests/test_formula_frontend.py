@@ -84,8 +84,8 @@ class FormulaFrontendTests(unittest.TestCase):
     def test_compare_card_checkbox_radio_not_stretched_by_global_input_rule(self) -> None:
         self.assertIn('input[type="checkbox"],input[type="radio"]{width:16px', self.html)
 
-    def test_compare_cell_shows_qty_primary_and_ratio_secondary(self) -> None:
-        self.assertIn('<span class="ratio-main">${formatQty(cell.qty)} ${escapeHtml(cell.unit)}</span>', self.html)
+    def test_compare_cell_shows_qty_primary_without_unit_and_ratio_secondary(self) -> None:
+        self.assertIn('<span class="ratio-main">${formatQty(cell.qty)}</span>', self.html)
         self.assertIn('<div class="qty-line">${ratio(cell.ratio)}</div>', self.html)
 
     def test_compare_cell_heat_bar_is_thin(self) -> None:
@@ -93,9 +93,22 @@ class FormulaFrontendTests(unittest.TestCase):
 
     def test_target_version_is_switchable_like_base(self) -> None:
         self.assertIn('name="targetVersion"', self.html)
-        self.assertIn("设为目标版本", self.html)
+        self.assertIn("设为目标", self.html)
         self.assertIn("input[name=\"targetVersion\"]", self.html)
         self.assertIn("state.targetKey=event.target.dataset.key", self.html)
+
+    def test_version_card_set_row_is_compact_single_row_without_max_ratio(self) -> None:
+        self.assertIn('<div class="set-row">', self.html)
+        self.assertIn("设为基准", self.html)
+        self.assertNotIn("设为基准版本", self.html)
+        self.assertNotIn("设为目标版本", self.html)
+        self.assertNotIn("最大占比", self.html)
+
+    def test_spec_column_can_be_toggled(self) -> None:
+        self.assertIn('id="toggleSpecBtn"', self.html)
+        self.assertIn("showSpec:true", self.html)
+        self.assertIn("${state.showSpec?'<th class=\"col-spec\">规格型号</th>':''}", self.html)
+        self.assertIn("state.showSpec=!state.showSpec", self.html)
 
     def test_raw_download_still_uses_server_workbook_and_compare_download_is_client_table(self) -> None:
         self.assertIn("function downloadRawResult()", self.html)
