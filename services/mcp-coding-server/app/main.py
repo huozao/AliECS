@@ -23,10 +23,14 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from . import executor_client
+from .oauth.config import config_from_env as _oauth_config_from_env
+from .oauth.consent import make_consent_handler as _make_consent_handler
+from .oauth.provider import AliecsOAuthProvider as _AliecsOAuthProvider
+from .oauth.store import OAuthStore as _OAuthStore
 
 SERVER_NAME = "aliecs-coding"
-SERVER_VERSION = "0.2.0"
-PHASE = "phase-3a-worktree-writes"
+SERVER_VERSION = "0.3.0"
+PHASE = "phase-4-oauth"
 STARTED_AT = time.monotonic()
 
 
@@ -58,17 +62,50 @@ def server_info_payload() -> dict:
             "get_coding_worktree_diff",
         ],
         "note": (
-            "阶段三 a：只读 git 操作仍是 dry-run；写操作（write_file / apply_patch / "
+            "阶段四：连接器需 OAuth 鉴权；阶段三 a：只读 git 操作仍是 dry-run；"
+            "写操作（write_file / apply_patch / "
             "git_commit）必须先用 create_coding_worktree 创建隔离 worktree，"
             "在该 worktree 分支上进行，绝不直接修改主工作区，也不会自动 push/merge。"
         ),
     }
 
 
+_OAUTH_CONFIG = _oauth_config_from_env()
+_oauth_kwargs: dict = {}
+_oauth_provider = None
+if _OAUTH_CONFIG.enabled:
+    if not _OAUTH_CONFIG.fully_configured:
+        raise RuntimeError(
+            "MCP_OAUTH_ENABLED=true 但缺少 MCP_OAUTH_ISSUER/PASSPHRASE/SIGNING_SECRET/STORE_PATH"
+        )
+    from mcp.server.auth.settings import (
+        AuthSettings,
+        ClientRegistrationOptions,
+        RevocationOptions,
+    )
+
+    _oauth_store = _OAuthStore(_OAUTH_CONFIG.store_path, _OAUTH_CONFIG.pepper)
+    _oauth_provider = _AliecsOAuthProvider(_OAUTH_CONFIG, _oauth_store)
+    _oauth_kwargs = dict(
+        auth_server_provider=_oauth_provider,
+        auth=AuthSettings(
+            issuer_url=_OAUTH_CONFIG.issuer_url,
+            resource_server_url=_OAUTH_CONFIG.issuer_url,
+            required_scopes=[_OAUTH_CONFIG.scope],
+            client_registration_options=ClientRegistrationOptions(
+                enabled=True,
+                valid_scopes=[_OAUTH_CONFIG.scope],
+                default_scopes=[_OAUTH_CONFIG.scope],
+            ),
+            revocation_options=RevocationOptions(enabled=True),
+        ),
+    )
+
+
 mcp = FastMCP(
     SERVER_NAME,
     instructions=(
-        "AliECS 编程桥接服务，阶段三 a（worktree 隔离写入）。\n"
+        "AliECS 编程桥接服务，阶段四（OAuth 鉴权 + worktree 隔离写入）。\n"
         "- ping / server_info：连通性与状态，只读。\n"
         "- list_coding_targets：列出可操作的仓库白名单、只读操作与写操作。\n"
         "- start_coding_task：发起只读 git 任务（git_status / git_log / git_diff / "
@@ -86,7 +123,13 @@ mcp = FastMCP(
     port=int(os.getenv("MCP_PORT", "8090")),
     stateless_http=True,
     json_response=True,
+    **_oauth_kwargs,
 )
+
+if _oauth_provider is not None:
+    mcp.custom_route("/oauth/consent", methods=["GET", "POST"])(
+        _make_consent_handler(_oauth_provider, _OAUTH_CONFIG)
+    )
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
 # Task-start tools reach the dev machine or mutate an isolated worktree, so they
