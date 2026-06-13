@@ -947,12 +947,24 @@ git commit -m "feat(mcp-oauth): wire OAuth AS/RS into FastMCP behind MCP_OAUTH_E
 - [ ] **Step 2: 写「人工上线步骤」清单（运维红线）**
 
 ```
-1. ECS runtime.env 填入：MCP_OAUTH_PASSPHRASE / MCP_OAUTH_SIGNING_SECRET（你已生成）
-   / MCP_OAUTH_ISSUER（=秘密路径 URL）/ MCP_OAUTH_STORE_PATH=/data/oauth/oauth.db；先保持 MCP_OAUTH_ENABLED=false 部署一次（确认无回归）。
-2. compose.prod.yml 给 mcp-coding-server 挂 /data/oauth 卷；Nginx 增补上述路由代理；reload。
-3. 置 MCP_OAUTH_ENABLED=true 部署；浏览器访问 issuer + /.well-known/oauth-authorization-server 应见 JSON。
-4. ChatGPT 连接器：当前 auth=无，可能需「取消关联」后用同一 URL 重新添加，使其走 OAuth；浏览器弹同意页时输入口令。
-5. 验证 server_info / ping 仍可用（已带 token）。再考虑接入写工具。
+环境已勘查确认（2026-06-13）：
+- runtime.env 路径 = /root/AliECS/deploy/ecs/runtime.env（root 600，STORAGE_DRIVER=local，尚无 MCP_OAUTH_*）。
+- Nginx = 前缀代理 `location /mcp-<secret>/ → proxy_pass http://127.0.0.1:8090/;`
+  → /authorize、/token、/register、/revoke、/.well-known/*、/oauth/consent 全部自动转发，**无需改 Nginx**。
+- MCP_OAUTH_ISSUER = 连接器 URL 去掉结尾 /mcp（即 https://hydwang.xyz/mcp-<secret>）。
+- mcp 容器 ecs-mcp-coding-server-1，绑 127.0.0.1:8090。
+
+步骤：
+1. runtime.env 追加（先 ENABLED=false）：MCP_OAUTH_ENABLED=false / MCP_OAUTH_ISSUER=<上述> /
+   MCP_OAUTH_PASSPHRASE / MCP_OAUTH_SIGNING_SECRET（已生成）/ MCP_OAUTH_STORE_PATH=/data/oauth/oauth.db。
+2. 合并含 Task 1 compose 改动（卷 mcp_oauth_data + 环境透传）的 PR → push main 触发 release-deploy 重建。
+   确认站点健康（OAuth 仍关闭、行为不变）。
+3. 把 runtime.env 的 MCP_OAUTH_ENABLED 改 true → 重新部署/重启 mcp-coding-server。
+   浏览器访问 https://hydwang.xyz/mcp-<secret>/.well-known/oauth-authorization-server 应见 JSON。
+4. ChatGPT 连接器（**人工 GUI，唯一必须用户做的**）：当前 auth=无，「取消关联」后用同一 URL 重新添加使其走 OAuth；
+   弹同意页时输入口令。若 ChatGPT 在域根找 /.well-known/oauth-protected-resource 而非前缀下，则需在 Nginx
+   于域根加一条该路径回代到 8090（激活时验证；前缀代理已在，多半不需要）。
+5. 验证 ping/server_info 带 token 可用，再接入写工具。
 ```
 
 - [ ] **Step 3: Commit**
