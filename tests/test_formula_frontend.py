@@ -132,6 +132,7 @@ class FormulaFrontendTests(unittest.TestCase):
     def test_compare_code_and_unit_columns_auto_width(self) -> None:
         self.assertIn(".col-code{width:1%;white-space:nowrap", self.html)
         self.assertIn(".col-unit{width:1%;white-space:nowrap}", self.html)
+        self.assertIn(".col-spec{width:1%;white-space:nowrap", self.html)
 
     def test_compare_header_shows_parent_name_with_version(self) -> None:
         self.assertIn('<div title="${escapeHtml(version.parentName)}">${escapeHtml(version.parentName)}</div>', self.html)
