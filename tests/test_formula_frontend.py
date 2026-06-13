@@ -96,6 +96,13 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertNotIn("--heat", self.html)
         self.assertNotIn("rgba(159,116,62,var(--heat))", self.html)
 
+    def test_base_target_columns_have_no_cell_outline_or_fill(self) -> None:
+        self.assertNotIn(".cell-value.current{box-shadow", self.html)
+        self.assertNotIn(".cell-value.base{outline", self.html)
+
+    def test_version_columns_have_gap_between_recipes(self) -> None:
+        self.assertIn(".version-col{width:155px;text-align:center;border-left:8px solid #f0e9db}", self.html)
+
     def test_target_version_is_switchable_like_base(self) -> None:
         self.assertIn('name="targetVersion"', self.html)
         self.assertIn("设为目标", self.html)
