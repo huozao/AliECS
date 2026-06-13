@@ -88,8 +88,13 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertIn('<span class="ratio-main">${formatQty(cell.qty)}</span>', self.html)
         self.assertIn('<div class="qty-line">${ratio(cell.ratio)}</div>', self.html)
 
-    def test_compare_cell_heat_bar_is_thin(self) -> None:
-        self.assertIn(".barLine{height:3px", self.html)
+    def test_compare_cell_bar_is_full_width_flush_bottom(self) -> None:
+        self.assertIn(".barLine{position:absolute;left:0;right:0;bottom:0;height:4px;margin:0", self.html)
+        self.assertIn(".cell-value{position:relative;text-align:center}", self.html)
+
+    def test_compare_cell_quantity_heat_fill_removed(self) -> None:
+        self.assertNotIn("--heat", self.html)
+        self.assertNotIn("rgba(159,116,62,var(--heat))", self.html)
 
     def test_target_version_is_switchable_like_base(self) -> None:
         self.assertIn('name="targetVersion"', self.html)
