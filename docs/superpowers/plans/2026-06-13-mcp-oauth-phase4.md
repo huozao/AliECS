@@ -75,11 +75,14 @@ def load_oauth():
 
 ---
 
-## Task 1: 依赖与环境占位
+## Task 1: 依赖、环境占位与 compose 接线
 
 **Files:**
 - Modify: `services/mcp-coding-server/requirements.txt`
 - Modify: `deploy/ecs/runtime.env.example`
+- Modify: `deploy/ecs/compose.prod.yml`
+
+> 注：`compose.prod.yml` 里 `mcp-coding-server` 用的是**显式 `environment:` 列表**（非 `env_file`），所以 `MCP_OAUTH_*` 必须显式透传；持久化用命名卷 `mcp_oauth_data`（仿现有 `tplus_sync_data`）。Nginx 在 ECS 主机上、不在仓库，属激活期人工步骤（Task 7）。
 
 - [ ] **Step 1: pin mcp 到含 OAuth 的版本**
 
@@ -112,11 +115,45 @@ MCP_OAUTH_REFRESH_TTL=2592000
 MCP_OAUTH_CODE_TTL=600
 ```
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: compose 透传 OAuth 环境变量 + 挂持久化卷**
+
+在 `deploy/ecs/compose.prod.yml` 的 `mcp-coding-server:` 服务：
+(1) `environment:` 块内（紧随 `EXECUTOR_TIMEOUT_SECONDS` 之后）追加：
+
+```yaml
+      MCP_OAUTH_ENABLED: ${MCP_OAUTH_ENABLED:-false}
+      MCP_OAUTH_ISSUER: ${MCP_OAUTH_ISSUER:-}
+      MCP_OAUTH_PASSPHRASE: ${MCP_OAUTH_PASSPHRASE:-}
+      MCP_OAUTH_SIGNING_SECRET: ${MCP_OAUTH_SIGNING_SECRET:-}
+      MCP_OAUTH_STORE_PATH: ${MCP_OAUTH_STORE_PATH:-/data/oauth/oauth.db}
+      MCP_OAUTH_ACCESS_TTL: ${MCP_OAUTH_ACCESS_TTL:-3600}
+      MCP_OAUTH_REFRESH_TTL: ${MCP_OAUTH_REFRESH_TTL:-2592000}
+      MCP_OAUTH_CODE_TTL: ${MCP_OAUTH_CODE_TTL:-600}
+```
+
+(2) 给该服务追加 `volumes:`（与其 `extra_hosts:` 同级缩进）：
+
+```yaml
+    volumes:
+      - mcp_oauth_data:/data/oauth
+```
+
+(3) 在文件顶层 `volumes:` 段登记命名卷（仿现有条目）：
+
+```yaml
+  mcp_oauth_data:
+```
+
+- [ ] **Step 5: 校验 compose 语法**
+
+Run（本机有 docker 时）：`docker compose --env-file deploy/ecs/runtime.env.example -f deploy/ecs/compose.prod.yml config > $null`
+Expected: 无报错。本机无 docker 则跳过——CI 的 `validate` job 会跑同样的 prod compose 校验兜底。
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add services/mcp-coding-server/requirements.txt deploy/ecs/runtime.env.example
-git commit -m "chore(mcp-oauth): pin mcp>=1.27 and add MCP_OAUTH_* env placeholders"
+git add services/mcp-coding-server/requirements.txt deploy/ecs/runtime.env.example deploy/ecs/compose.prod.yml
+git commit -m "chore(mcp-oauth): pin mcp>=1.27, add MCP_OAUTH_* env + compose passthrough/volume"
 ```
 
 ## Task 2: `oauth/config.py`
