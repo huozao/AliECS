@@ -184,6 +184,16 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertNotIn('<span class="flag base">基准</span>', self.html)
         self.assertIn('<span class="vh-tag base">基准</span>', self.html)
 
+    def test_compare_blank_cells_and_unchanged_flags_render_empty(self) -> None:
+        self.assertIn("if(!cell)return '<td class=\"version-col\"></td>';", self.html)
+        self.assertIn("let flag='';", self.html)
+        self.assertNotIn('<span class="empty">—</span>', self.html)
+        self.assertNotIn('let flag=\'<span class="flag neutral">—</span>\';', self.html)
+
+    def test_single_recipe_still_renders_compare_detail(self) -> None:
+        self.assertNotIn("请至少选择 2 个配方参与对比", self.html)
+        self.assertNotIn("if(selected.length<2)", self.html)
+
     def test_raw_download_still_uses_server_workbook_and_compare_download_is_client_table(self) -> None:
         self.assertIn("function downloadRawResult()", self.html)
         self.assertIn("/v1/recipes/download/${state.fileId}", self.html)

@@ -460,10 +460,10 @@
     }
     function renderCompareCell(row,version){
       const cell=row.cells[version.key], base=baseVersion(), baseCell=base?row.cells[base.key]:null, target=targetVersion();
-      if(!cell)return '<td class="version-col"><span class="empty">—</span></td>';
+      if(!cell)return '<td class="version-col"></td>';
       const max=versionMaxRatio(version.key);
       const pct=max>0?Math.max(0,Math.min(1,cell.ratio/max)):0;
-      let flag='<span class="flag neutral">—</span>';
+      let flag='';
       if(base&&version.key===base.key)flag='';
       else if(!baseCell)flag='<span class="flag new">新增</span>';
       else{
@@ -479,8 +479,8 @@
     }
     function renderCompareTable(){
       const selected=selectedVersions();
-      if(selected.length<2){
-        compareTable.innerHTML='<tbody><tr><td style="padding:30px;text-align:center;color:#81786c">请至少选择 2 个配方参与对比</td></tr></tbody>';
+      if(!selected.length){
+        compareTable.innerHTML='<tbody><tr><td style="padding:30px;text-align:center;color:#81786c">请选择配方查看详情</td></tr></tbody>';
         return;
       }
       const allRows=buildCompareMatrix();
@@ -782,7 +782,7 @@
     }
     function downloadCompareResult(){
       const selected=selectedVersions();
-      if(selected.length<2){showError('请至少选择 2 个配方参与对比。');return;}
+      if(!selected.length){showError('请选择配方查看详情。');return;}
       const rowsAll=buildCompareMatrix();
       const rows=rowsAll.map((row)=>({...row,st:rowStatus(row,rowsAll)})).filter((row)=>passCompareFilter(row.st));
       const base=baseVersion(), target=targetVersion();
@@ -796,11 +796,11 @@
         <td>${escapeHtml(row.unit)}</td>
         ${selected.map((version)=>{
           const cell=row.cells[version.key], baseCell=row.cells[base.key];
-          if(!cell)return '<td class="muted">—</td>';
+          if(!cell)return '<td></td>';
           const max=versionMaxRatio(version.key);
           const pct=max>0?Math.max(0,Math.min(1,cell.ratio/max)):0;
-          let flag='—';
-          if(version.key===base.key)flag='基准';
+          let flag='';
+          if(version.key===base.key)flag='';
           else if(!baseCell)flag='新增';
           else{
             const delta=cell.ratio-baseCell.ratio;
