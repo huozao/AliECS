@@ -84,6 +84,19 @@ class FormulaFrontendTests(unittest.TestCase):
     def test_compare_card_checkbox_radio_not_stretched_by_global_input_rule(self) -> None:
         self.assertIn('input[type="checkbox"],input[type="radio"]{width:16px', self.html)
 
+    def test_compare_cell_shows_qty_primary_and_ratio_secondary(self) -> None:
+        self.assertIn('<span class="ratio-main">${formatQty(cell.qty)} ${escapeHtml(cell.unit)}</span>', self.html)
+        self.assertIn('<div class="qty-line">${ratio(cell.ratio)}</div>', self.html)
+
+    def test_compare_cell_heat_bar_is_thin(self) -> None:
+        self.assertIn(".barLine{height:3px", self.html)
+
+    def test_target_version_is_switchable_like_base(self) -> None:
+        self.assertIn('name="targetVersion"', self.html)
+        self.assertIn("设为目标版本", self.html)
+        self.assertIn("input[name=\"targetVersion\"]", self.html)
+        self.assertIn("state.targetKey=event.target.dataset.key", self.html)
+
     def test_raw_download_still_uses_server_workbook_and_compare_download_is_client_table(self) -> None:
         self.assertIn("function downloadRawResult()", self.html)
         self.assertIn("/v1/recipes/download/${state.fileId}", self.html)
