@@ -39,6 +39,17 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertIn(".cost-table{width:100%;min-width:1480px", self.html)
         self.assertIn(".price-input,.sim-qty-input{width:76px;max-width:76px;height:34px", self.html)
 
+    def test_cost_price_cost_subheaders_not_pushed_down_by_relative_offset(self) -> None:
+        # the relative+top:54px combo that shifted the 5 price/cost headers down is removed
+        self.assertNotIn(".src-line{position:relative}", self.html)
+        # the 3px accent bars are kept (anchored to the sticky header cell)
+        self.assertIn(".cost-table .src-line::before{content:\"\";position:absolute", self.html)
+
+    def test_cost_spec_column_narrow_with_ellipsis_and_hover_title(self) -> None:
+        self.assertIn(".cost-table col.spec{width:96px}", self.html)
+        self.assertIn(".cost-table td.spec-cell>span{display:block;max-width:90px;overflow:hidden;text-overflow:ellipsis", self.html)
+        self.assertIn('<td class="text-left spec-cell${line.spec?\'\':\' muted\'}" title="${escapeHtml(line.spec||\'\')}"><span>', self.html)
+
     def test_cost_table_restyle_module_borders_and_colored_results(self) -> None:
         # group/sub module-end colored separators
         self.assertIn(".cost-table .basic-end{border-right:2px solid", self.html)
