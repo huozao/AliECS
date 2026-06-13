@@ -29,7 +29,11 @@ assert_accepts_format() {
 assert_rejects "latest"
 assert_rejects "v1.2"
 assert_rejects "1.2.3"
+assert_rejects "V2026061314"
+assert_rejects "V202606131400"
+assert_rejects "v20260613140"
 assert_accepts_format "v1.2.3"
 assert_accepts_format "v1.2.3-rc.1"
+assert_accepts_format "V20260613140"
 
 echo "OK"
