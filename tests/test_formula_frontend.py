@@ -109,9 +109,9 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertIn('<span class="ratio-main">${formatQty(cell.qty)}</span>', self.html)
         self.assertIn('<div class="qty-line">${ratio(cell.ratio)}</div>', self.html)
 
-    def test_compare_cell_bar_is_rounded_near_bottom(self) -> None:
-        self.assertIn(".barLine{position:absolute;left:6px;right:6px;bottom:3px;height:4px;margin:0", self.html)
-        self.assertIn("border-radius:999px;overflow:hidden}.barLine i{display:block;height:100%;border-radius:999px", self.html)
+    def test_compare_cell_bar_is_flush_to_cell_edges(self) -> None:
+        self.assertIn(".barLine{position:absolute;left:0;right:0;bottom:0;height:4px;margin:0", self.html)
+        self.assertIn("border-radius:0;overflow:hidden}.barLine i{display:block;height:100%;border-radius:0", self.html)
         self.assertIn(".cell-value{position:relative;text-align:center}", self.html)
 
     def test_compare_cell_quantity_heat_fill_removed(self) -> None:
@@ -128,9 +128,20 @@ class FormulaFrontendTests(unittest.TestCase):
 
     def test_target_version_is_switchable_like_base(self) -> None:
         self.assertIn('name="targetVersion"', self.html)
+        self.assertIn('type="checkbox" name="targetVersion"', self.html)
         self.assertIn("设为目标", self.html)
         self.assertIn("input[name=\"targetVersion\"]", self.html)
-        self.assertIn("state.targetKey=event.target.dataset.key", self.html)
+        self.assertIn("targetVersions()", self.html)
+        self.assertIn("state.targetKeys.add(key)", self.html)
+        self.assertIn("state.targetKeys.delete(key)", self.html)
+        self.assertNotIn("state.targetKey=event.target.dataset.key", self.html)
+
+    def test_multi_target_compare_uses_single_base(self) -> None:
+        self.assertIn("targetVersions().some((target)=>target.key===version.key)", self.html)
+        self.assertIn("function normalizeTargets()", self.html)
+        self.assertIn("function rowStatusForTarget(row,rows,target)", self.html)
+        self.assertIn("const priority=['replace','add','del','change','same','history'];", self.html)
+        self.assertIn("targets.map((target)=>targetLabel(target)).join('、')", self.html)
 
     def test_version_card_set_row_is_compact_single_row_without_max_ratio(self) -> None:
         self.assertIn('<div class="set-row">', self.html)
