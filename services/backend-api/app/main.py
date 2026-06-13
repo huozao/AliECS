@@ -666,10 +666,17 @@ class PhotoStorage:
 
 
 def _upload_disk_usage(path: Path | str) -> dict[str, Any]:
-    usage = shutil.disk_usage(path)
+    try:
+        usage = shutil.disk_usage(path)
+    except OSError as exc:
+        # The upload dir is created lazily by LocalPhotoStorage, so it may not
+        # exist yet at healthcheck time. A missing/unstat-able path must not make
+        # /healthz fail — report it as unavailable instead of raising.
+        return {"path": str(path), "available": False, "percent": None, "error": str(exc)}
     percent = round(usage.used * 100 / usage.total, 1) if usage.total else 0.0
     return {
         "path": str(path),
+        "available": True,
         "total": usage.total,
         "used": usage.used,
         "free": usage.free,
@@ -705,6 +712,8 @@ class LocalPhotoStorage(PhotoStorage):
 
     def _warn_if_disk_high(self) -> None:
         info = _upload_disk_usage(self.base_dir)
+        if info.get("percent") is None:
+            return
         raw = os.getenv("UPLOAD_DISK_WARN_PCT", "").strip()
         if not raw:
             return
