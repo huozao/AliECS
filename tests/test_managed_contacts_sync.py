@@ -9,6 +9,12 @@ WORKER_ROOT = Path(__file__).resolve().parents[1] / "services" / "doc-sync-worke
 sys.path.insert(0, str(WORKER_ROOT))
 
 
+def _clear_app_modules() -> None:
+    for name in list(sys.modules):
+        if name == "app" or name.startswith("app."):
+            del sys.modules[name]
+
+
 class FakeContactStore:
     def __init__(self) -> None:
         self.contacts: dict[tuple[str, str], dict] = {}
@@ -18,6 +24,17 @@ class FakeContactStore:
 
 
 class ManagedContactsSyncTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._old_sys_path = list(sys.path)
+        _clear_app_modules()
+        worker_root = str(WORKER_ROOT)
+        sys.path[:] = [item for item in sys.path if item != worker_root]
+        sys.path.insert(0, worker_root)
+
+    def tearDown(self) -> None:
+        _clear_app_modules()
+        sys.path[:] = self._old_sys_path
+
     def test_wechat_sheet_upserts_contact_and_applies_sheet_changes(self) -> None:
         from app.pipelines.managed_contacts import sync_managed_contacts_from_sheet
 
