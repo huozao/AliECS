@@ -3821,16 +3821,26 @@ def admin_patch_feature(
 
 
 @app.get("/v1/admin/audit-logs")
-def admin_audit_logs(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+def admin_audit_logs(
+    page: int = Query(default=1),
+    page_size: int = Query(default=50),
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    page = max(1, page)
+    page_size = min(max(1, page_size), 200)
+    offset = (page - 1) * page_size
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM audit_logs")
+            total = int(cur.fetchone()[0])
             cur.execute(
                 """
                 SELECT id, actor_username, action, target_type, target_id, detail, created_at
                 FROM audit_logs
                 ORDER BY id DESC
-                LIMIT 200
-                """
+                LIMIT %s OFFSET %s
+                """,
+                (page_size, offset),
             )
             rows = cur.fetchall()
 
@@ -3846,7 +3856,10 @@ def admin_audit_logs(_: dict[str, Any] = Depends(require_admin)) -> dict[str, An
                 "created_at": str(row[6]),
             }
             for row in rows
-        ]
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
     }
 
 

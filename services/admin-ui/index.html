@@ -440,8 +440,8 @@
         </div>
       </section>
 
-      <section class="card">
-        <h2>审计日志</h2>
+      <details id="auditLogPanel" class="card">
+        <summary><h2>审计日志</h2></summary>
         <div class="table-wrap">
           <table>
             <thead>
@@ -456,7 +456,12 @@
             <tbody id="logsBody"></tbody>
           </table>
         </div>
-      </section>
+        <div class="row" style="justify-content:space-between;margin-top:12px;">
+          <button id="auditPrevBtn" type="button">上一页</button>
+          <span id="auditPageInfo" class="muted small">第 1 / 1 页</span>
+          <button id="auditNextBtn" type="button">下一页</button>
+        </div>
+      </details>
     </section>
   </div>
 
@@ -470,7 +475,8 @@
       roles: [],
       permissions: [],
       features: [],
-      logs: []
+      logs: [],
+      auditLogs:{items:[],page:1,page_size:50,total:0}
     };
 
     const $ = (id) => document.getElementById(id);
@@ -655,6 +661,7 @@
     }
 
     function renderLogs() {
+      const totalPages = Math.max(1, Math.ceil(state.auditLogs.total / state.auditLogs.page_size));
       $("logsBody").innerHTML = state.logs.map((l) => `
         <tr>
           <td>${l.id}</td>
@@ -663,7 +670,22 @@
           <td>${escapeHtml([l.target_type, l.target_id].filter(Boolean).join(":"))}</td>
           <td>${escapeHtml(l.created_at)}</td>
         </tr>
-      `).join("");
+      `).join("") || '<tr><td colspan="5" class="muted">暂无审计日志。</td></tr>';
+      $("auditPageInfo").textContent = `第 ${state.auditLogs.page} / ${totalPages} 页 · 共 ${state.auditLogs.total} 条`;
+      $("auditPrevBtn").disabled = state.auditLogs.page <= 1;
+      $("auditNextBtn").disabled = state.auditLogs.page >= totalPages;
+    }
+
+    async function loadAuditLogs(page = state.auditLogs.page) {
+      const logsResp = await api(`/v1/admin/audit-logs?page=${page}&page_size=${state.auditLogs.page_size}`);
+      state.auditLogs = {
+        items: logsResp.items || [],
+        page: logsResp.page || page,
+        page_size: logsResp.page_size || state.auditLogs.page_size,
+        total: logsResp.total || 0
+      };
+      state.logs = state.auditLogs.items;
+      renderLogs();
     }
 
     async function loadAll() {
@@ -675,19 +697,17 @@
       if (!isAdmin) {
         throw new Error("当前账号没有 admin.access 权限，无法进入管理后台。");
       }
-      const [usersResp, rolesResp, permissionsResp, featuresResp, logsResp] = await Promise.all([
+      const [usersResp, rolesResp, permissionsResp, featuresResp] = await Promise.all([
         api("/v1/admin/users"),
         api("/v1/admin/roles"),
         api("/v1/admin/permissions"),
-        api("/v1/admin/features"),
-        api("/v1/admin/audit-logs")
+        api("/v1/admin/features")
       ]);
 
       state.users = usersResp.items || [];
       state.roles = rolesResp.items || [];
       state.permissions = permissionsResp.items || [];
       state.features = featuresResp.items || [];
-      state.logs = logsResp.items || [];
 
       renderAuth();
       renderIdentity();
@@ -695,7 +715,7 @@
       renderRoles();
       renderPermissions();
       renderFeatures();
-      renderLogs();
+      await loadAuditLogs(1);
     }
 
     async function login() {
@@ -884,6 +904,8 @@
       $("loginBtn").addEventListener("click", () => login().catch((e) => showError(e.message)));
       $("logoutBtn").addEventListener("click", logout);
       $("refreshAllBtn").addEventListener("click", () => loadAll().catch((e) => showError(e.message)));
+      $("auditPrevBtn").addEventListener("click", () => loadAuditLogs(state.auditLogs.page - 1).catch((e) => showError(e.message)));
+      $("auditNextBtn").addEventListener("click", () => loadAuditLogs(state.auditLogs.page + 1).catch((e) => showError(e.message)));
       $("createUserBtn").addEventListener("click", () => createUser().catch((e) => showError(e.message)));
       $("createFeatureBtn").addEventListener("click", () => createFeature().catch((e) => showError(e.message)));
       $("passwordInput").addEventListener("keydown", (e) => {
