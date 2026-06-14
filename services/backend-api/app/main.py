@@ -1415,6 +1415,63 @@ def ops_wechat_login_qr(_: dict[str, Any] = Depends(require_admin)) -> dict[str,
     )
 
 
+def _extract_wecom_b_message(payload: dict[str, Any]) -> dict[str, Any]:
+    body = payload.get("body") if isinstance(payload.get("body"), dict) else payload
+    sender = body.get("from") if isinstance(body.get("from"), dict) else {}
+    msg_type = str(body.get("msgtype") or body.get("msg_type") or "")
+    content = ""
+    if msg_type == "text" and isinstance(body.get("text"), dict):
+        content = str(body["text"].get("content") or "")
+    elif msg_type and isinstance(body.get(msg_type), dict):
+        content = json.dumps(body[msg_type], ensure_ascii=False, sort_keys=True)
+    msg_id = str(body.get("msgid") or body.get("msg_id") or payload.get("msgid") or "").strip()
+    if not msg_id:
+        raise HTTPException(status_code=400, detail="missing msgid")
+    return {
+        "msg_id": msg_id,
+        "bot_id": str(body.get("aibotid") or body.get("bot_id") or ""),
+        "chat_id": str(body.get("chatid") or body.get("chat_id") or ""),
+        "chat_type": str(body.get("chattype") or body.get("chat_type") or ""),
+        "sender_id": str(sender.get("userid") or sender.get("user_id") or body.get("from_user_id") or ""),
+        "msg_type": msg_type,
+        "content": content,
+    }
+
+
+@app.post("/v1/webhooks/wecom-b/messages")
+def wecom_b_capture_message(
+    payload: dict[str, Any],
+    x_wecom_capture_token: str | None = Header(default=None),
+) -> dict[str, str]:
+    expected = os.getenv("WECOM_B_CAPTURE_TOKEN", "").strip()
+    if expected and x_wecom_capture_token != expected:
+        raise HTTPException(status_code=403, detail="invalid capture token")
+    message = _extract_wecom_b_message(payload)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO wecom_b_messages(
+                    msg_id, bot_id, chat_id, chat_type, sender_id, msg_type, content, raw_json, received_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT(msg_id) DO NOTHING
+                """,
+                (
+                    message["msg_id"],
+                    message["bot_id"],
+                    message["chat_id"],
+                    message["chat_type"],
+                    message["sender_id"],
+                    message["msg_type"],
+                    message["content"],
+                    Jsonb(payload),
+                ),
+            )
+        conn.commit()
+    return {"status": "received", "msg_id": message["msg_id"]}
+
+
 @app.get("/readyz")
 def readyz() -> dict[str, object]:
     db_ok, db_message = _db_ping()
