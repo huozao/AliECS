@@ -1365,6 +1365,56 @@ def _probe_http_target(item: dict[str, Any]) -> dict[str, Any]:
         }
 
 
+def _wechat_login_qr_from_gateway() -> dict[str, Any] | None:
+    url = os.getenv("OPENCLAW_WECHAT_LOGIN_QR_URL", "").strip()
+    if not url:
+        return None
+    request = urllib.request.Request(url, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"openclaw qr gateway failed: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=502, detail="openclaw qr gateway returned non-object json")
+    if not (payload.get("qr_image_base64") or payload.get("qr_url")):
+        raise HTTPException(status_code=502, detail="openclaw qr gateway response missing qr_image_base64/qr_url")
+    payload = dict(payload)
+    payload.setdefault("source", "gateway")
+    return payload
+
+
+def _wechat_login_qr_from_file() -> dict[str, Any] | None:
+    raw_path = os.getenv("OPENCLAW_WECHAT_LOGIN_QR_FILE", "").strip()
+    if not raw_path:
+        return None
+    path = Path(raw_path)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="wechat login qr file not found")
+    data = path.read_bytes()
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return {"qr_image_base64": "data:image/png;base64," + base64.b64encode(data).decode("ascii"), "source": "file"}
+    text = data.decode("utf-8", errors="replace").strip()
+    if text.startswith(("http://", "https://")):
+        return {"qr_url": text, "source": "file"}
+    if text.startswith("data:image/"):
+        return {"qr_image_base64": text, "source": "file"}
+    return {"qr_image_base64": "data:image/png;base64," + base64.b64encode(data).decode("ascii"), "source": "file"}
+
+
+@app.get("/v1/ops/wechat/login-qr")
+def ops_wechat_login_qr(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    payload = _wechat_login_qr_from_gateway() or _wechat_login_qr_from_file()
+    if payload:
+        payload.setdefault("expires_at", None)
+        payload.setdefault("message", "等待新用户扫码加入微信 clawbot。")
+        return payload
+    raise HTTPException(
+        status_code=503,
+        detail="未配置稳定二维码来源。请在 OpenClaw 主机运行 openclaw channels login --channel openclaw-weixin，或配置 OPENCLAW_WECHAT_LOGIN_QR_URL/FILE。",
+    )
+
+
 @app.get("/readyz")
 def readyz() -> dict[str, object]:
     db_ok, db_message = _db_ping()
