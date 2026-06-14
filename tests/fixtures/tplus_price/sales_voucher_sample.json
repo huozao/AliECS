@@ -1,0 +1,38 @@
+{
+  "code": "0",
+  "message": "ok",
+  "data": {
+    "ID": "sales-voucher-1",
+    "Code": "SA-2026-001",
+    "VoucherDate": "2026-06-11",
+    "Partner": {
+      "Code": "CUS001",
+      "Name": "脱敏客户"
+    },
+    "Department": {
+      "Name": "销售部"
+    },
+    "Clerk": {
+      "Name": "销售员A"
+    },
+    "Details": [
+      {
+        "Inventory": {
+          "Code": "FG-001",
+          "Name": "脱敏成品",
+          "Specification": "500g"
+        },
+        "Unit": {
+          "Name": "盒"
+        },
+        "Quantity": 8,
+        "Discount": 95,
+        "OrigDiscountPrice": 28.3,
+        "OrigDiscountAmount": 226.4,
+        "OrigTaxPrice": 32.0,
+        "OrigTaxAmount": 256.0,
+        "TaxAmount": 29.6
+      }
+    ]
+  }
+}

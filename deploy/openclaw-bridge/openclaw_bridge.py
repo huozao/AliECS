@@ -451,21 +451,31 @@ def build_webdock_metadata(body: dict[str, Any]) -> dict[str, Any]:
     metadata.update(get_last_user_metadata(body.get("messages")))
 
     normalized: dict[str, Any] = {}
+    channel = normalize_channel(_first_metadata_value(metadata, "channel", "platform", "source", "adapter"))
+    if not channel and _looks_like_feishu(metadata):
+        channel = "feishu"
+    channel = channel or "wechat"
     wechat_account = _first_metadata_value(metadata, "wechat_account", "account", "channel_id", "channel_name")
     chat_type = _first_metadata_value(metadata, "chat_type", "conversation_type", "room_type") or "private"
-    peer_id = _first_metadata_value(
-        metadata,
-        "peer_id",
-        "chat_id",
-        "conversation_id",
-        "from_user_id",
-        "user_id",
-        "sender_id",
-    )
+    if channel == "feishu":
+        peer_id = _first_metadata_value(metadata, "peer_id", "open_id", "openId", "sender_id", "user_id", "chat_id")
+    else:
+        peer_id = _first_metadata_value(
+            metadata,
+            "peer_id",
+            "chat_id",
+            "conversation_id",
+            "from_user_id",
+            "user_id",
+            "sender_id",
+        )
 
     has_lane_identity = bool(wechat_account or peer_id)
 
-    if wechat_account:
+    if channel != "wechat":
+        normalized["channel"] = channel
+        normalized["chatgpt_project"] = str(_first_metadata_value(metadata, "chatgpt_project", "project") or "Feishu")
+    elif wechat_account:
         normalized["wechat_account"] = str(wechat_account)
         normalized["chatgpt_project"] = str(
             _first_metadata_value(metadata, "chatgpt_project", "project") or f"WeChat-{wechat_account}"
@@ -479,11 +489,25 @@ def build_webdock_metadata(body: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def normalize_channel(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"feishu", "lark"}:
+        return "feishu"
+    if text in {"wechat", "wecom", "weixin"}:
+        return "wechat"
+    return ""
+
+
+def _looks_like_feishu(metadata: dict[str, Any]) -> bool:
+    message_id = str(metadata.get("message_id") or "").lower()
+    return bool(metadata.get("open_id") or message_id.startswith(("openclaw-feishu:", "openclaw-lark:")))
+
+
 def remember_lane_metadata(metadata: dict[str, Any]) -> None:
     global _recent_lane_metadata_at
     lane_metadata = {
         key: metadata[key]
-        for key in ("wechat_account", "chat_type", "peer_id", "chatgpt_project")
+        for key in ("channel", "wechat_account", "chat_type", "peer_id", "chatgpt_project")
         if metadata.get(key)
     }
     if "peer_id" not in lane_metadata:
@@ -585,6 +609,8 @@ def lane_batch_key(metadata: dict[str, Any]) -> str:
     peer_id = metadata.get("peer_id")
     if not peer_id:
         return ""
+    if metadata.get("channel") == "feishu":
+        return "feishu:" + str(peer_id)
     return "|".join(
         [
             str(metadata.get("wechat_account") or "default"),

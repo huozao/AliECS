@@ -34,6 +34,7 @@ services:
       APP_BASE_URL: ${APP_BASE_URL:-}
       SHARE_BASE_URL: ${SHARE_BASE_URL:-}
       STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
+      LOCAL_UPLOAD_DIR: ${LOCAL_UPLOAD_DIR:-/app/uploads}
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-15}
       WEBDOCK_PHOTO_BASE_URL: ${WEBDOCK_PHOTO_BASE_URL:-http://host.docker.internal:11800}
       WEBDOCK_PHOTO_API_TOKEN: ${WEBDOCK_PHOTO_API_TOKEN:-}
@@ -70,6 +71,7 @@ services:
       - tplus_sync_output:/app/tplus-output:ro
       - recipe_active_bom:/app/recipe-active-bom
       - tplus_sync_requests:/app/tplus-sync-requests
+      - uploads:/app/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -211,3 +213,4 @@ volumes:
   recipe_active_bom:
   tplus_sync_requests:
   mcp_oauth_data:
+  uploads:

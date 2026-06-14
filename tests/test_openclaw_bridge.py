@@ -147,6 +147,38 @@ def test_bridge_forwards_unfenced_openclaw_metadata_to_webdock_lane(monkeypatch)
     }
 
 
+def test_bridge_forwards_feishu_open_id_as_isolated_lane(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_MODEL", "browser-chatgpt")
+
+    outbound = bridge.build_webdock_body(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Conversation info (untrusted metadata):\n"
+                        "```json\n"
+                        '{"channel":"feishu","chat_type":"private","open_id":"ou_abc","message_id":"m-feishu-1"}\n'
+                        "```\n\n"
+                        "飞书私聊消息"
+                    ),
+                },
+            ],
+        }
+    )
+
+    assert outbound["messages"] == [{"role": "user", "content": "飞书私聊消息"}]
+    assert outbound["metadata"] == {
+        "channel": "feishu",
+        "chat_type": "private",
+        "peer_id": "ou_abc",
+        "message_id": "m-feishu-1",
+        "chatgpt_project": "Feishu",
+    }
+    assert bridge.lane_batch_key(outbound["metadata"]) == "feishu:ou_abc"
+
+
 def test_bridge_forwards_inbound_image_as_vision_parts(monkeypatch):
     bridge = load_bridge()
     monkeypatch.setenv("WEB_DOCK_MODEL", "browser-chatgpt")

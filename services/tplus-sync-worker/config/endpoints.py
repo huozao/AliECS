@@ -41,11 +41,24 @@ VERIFIED_VOUCHER_LIST_ENDPOINTS = {
     },
 }
 
+VERIFIED_PRICE_ENDPOINTS = {
+    "purchase_price": {
+        "list_endpoint": "/tplus/api/v2/PurchaseArrivalOpenApi/FindVoucherList",
+        "detail_endpoint": "/tplus/api/v2/PurchaseArrivalOpenApi/GetVoucherDTO",
+        "select_fields": ["PurchaseArrival.ID", "PurchaseArrival.VoucherDate", "PurchaseArrival.Code"],
+        "note": "到货单明细价字段需按当前 T+ 版本文档和实时验证结果复核。",
+    },
+    "sales_price": {
+        "list_endpoint": "/tplus/api/v2/SaleDeliveryOpenApi/FindVoucherList",
+        "detail_endpoint": "/tplus/api/v2/SaleDeliveryOpenApi/GetVoucherDTO",
+        "select_fields": ["SaleDelivery.ID", "SaleDelivery.VoucherDate", "SaleDelivery.Code"],
+        "note": "销货单明细价字段需按当前 T+ 版本文档和实时验证结果复核。",
+    },
+}
+
 PENDING_ENDPOINTS = {
     "material": "pending",
     "product": "pending",
-    "purchase_price": "pending",
-    "sales_price": "pending",
     "cost": "pending",
     "department": "returned_999_on_empty_query",
     "person": "returned_999_on_empty_query",

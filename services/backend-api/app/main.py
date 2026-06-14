@@ -432,6 +432,20 @@ class PutPermissionIdsRequest(BaseModel):
     permission_ids: list[int]
 
 
+class ManagedContactUpsertRequest(BaseModel):
+    channel: str
+    peer_id: str
+    display_name: str | None = None
+    remark: str | None = None
+    enabled: bool = True
+    project_url: str | None = None
+    project_name: str | None = None
+    tags: str | None = None
+    daily_quota: int | None = None
+    notes: str | None = None
+    source_sheet: str | None = None
+
+
 class MemoryUpsertRequest(BaseModel):
     couple_space_id: int | None = None
     title: str
@@ -688,12 +702,15 @@ class LocalPhotoStorage(PhotoStorage):
     driver = "local"
 
     def __init__(self) -> None:
-        self.base_dir = Path(os.getenv("LOCAL_UPLOAD_DIR", "/tmp/aliecs-uploads"))
+        self.base_dir = Path(os.getenv("LOCAL_UPLOAD_DIR", "/app/uploads"))
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
     async def save(self, file: UploadFile) -> dict[str, str]:
         content = await file.read()
-        ext, _mime = _validate_photo_upload(file.filename, file.content_type, content)
+        return self.save_content(file.filename, file.content_type, content)
+
+    def save_content(self, filename: str | None, content_type: str | None, content: bytes) -> dict[str, str]:
+        ext, _mime = _validate_photo_upload(filename, content_type, content)
         filename = f"{uuid.uuid4().hex}{ext}"
         full_path = self.base_dir / filename
         full_path.write_bytes(content)
@@ -786,7 +803,12 @@ class WebDockPhotoStorage(PhotoStorage):
         content = await file.read()
         _ext, mime = _validate_photo_upload(file.filename, file.content_type, content)
         body, content_type = _multipart_photo_body(file.filename, mime, content)
-        raw = _webdock_photo_request("POST", body=body, headers={"Content-Type": content_type})
+        try:
+            raw = _webdock_photo_request("POST", body=body, headers={"Content-Type": content_type})
+        except HTTPException as exc:
+            if exc.status_code == 502:
+                return LocalPhotoStorage().save_content(file.filename, mime, content)
+            raise
         try:
             payload = json.loads(raw.decode("utf-8"))
         except Exception as exc:
@@ -817,6 +839,15 @@ def photo_storage() -> PhotoStorage:
     if driver == "webdock":
         return WebDockPhotoStorage()
     raise HTTPException(status_code=500, detail="invalid STORAGE_DRIVER")
+
+
+@app.get("/uploads/{name}")
+def serve_upload(name: str) -> FileResponse:
+    base = Path(os.getenv("LOCAL_UPLOAD_DIR", "/app/uploads")).resolve()
+    target = (base / name).resolve()
+    if base not in target.parents or not target.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(target)
 
 
 class CreateFeatureRequest(BaseModel):
@@ -1332,6 +1363,113 @@ def _probe_http_target(item: dict[str, Any]) -> dict[str, Any]:
             "latency_ms": elapsed_ms,
             "last_checked_at": checked_at,
         }
+
+
+def _wechat_login_qr_from_gateway() -> dict[str, Any] | None:
+    url = os.getenv("OPENCLAW_WECHAT_LOGIN_QR_URL", "").strip()
+    if not url:
+        return None
+    request = urllib.request.Request(url, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"openclaw qr gateway failed: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=502, detail="openclaw qr gateway returned non-object json")
+    if not (payload.get("qr_image_base64") or payload.get("qr_url")):
+        raise HTTPException(status_code=502, detail="openclaw qr gateway response missing qr_image_base64/qr_url")
+    payload = dict(payload)
+    payload.setdefault("source", "gateway")
+    return payload
+
+
+def _wechat_login_qr_from_file() -> dict[str, Any] | None:
+    raw_path = os.getenv("OPENCLAW_WECHAT_LOGIN_QR_FILE", "").strip()
+    if not raw_path:
+        return None
+    path = Path(raw_path)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="wechat login qr file not found")
+    data = path.read_bytes()
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return {"qr_image_base64": "data:image/png;base64," + base64.b64encode(data).decode("ascii"), "source": "file"}
+    text = data.decode("utf-8", errors="replace").strip()
+    if text.startswith(("http://", "https://")):
+        return {"qr_url": text, "source": "file"}
+    if text.startswith("data:image/"):
+        return {"qr_image_base64": text, "source": "file"}
+    return {"qr_image_base64": "data:image/png;base64," + base64.b64encode(data).decode("ascii"), "source": "file"}
+
+
+@app.get("/v1/ops/wechat/login-qr")
+def ops_wechat_login_qr(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    payload = _wechat_login_qr_from_gateway() or _wechat_login_qr_from_file()
+    if payload:
+        payload.setdefault("expires_at", None)
+        payload.setdefault("message", "等待新用户扫码加入微信 clawbot。")
+        return payload
+    raise HTTPException(
+        status_code=503,
+        detail="未配置稳定二维码来源。请在 OpenClaw 主机运行 openclaw channels login --channel openclaw-weixin，或配置 OPENCLAW_WECHAT_LOGIN_QR_URL/FILE。",
+    )
+
+
+def _extract_wecom_b_message(payload: dict[str, Any]) -> dict[str, Any]:
+    body = payload.get("body") if isinstance(payload.get("body"), dict) else payload
+    sender = body.get("from") if isinstance(body.get("from"), dict) else {}
+    msg_type = str(body.get("msgtype") or body.get("msg_type") or "")
+    content = ""
+    if msg_type == "text" and isinstance(body.get("text"), dict):
+        content = str(body["text"].get("content") or "")
+    elif msg_type and isinstance(body.get(msg_type), dict):
+        content = json.dumps(body[msg_type], ensure_ascii=False, sort_keys=True)
+    msg_id = str(body.get("msgid") or body.get("msg_id") or payload.get("msgid") or "").strip()
+    if not msg_id:
+        raise HTTPException(status_code=400, detail="missing msgid")
+    return {
+        "msg_id": msg_id,
+        "bot_id": str(body.get("aibotid") or body.get("bot_id") or ""),
+        "chat_id": str(body.get("chatid") or body.get("chat_id") or ""),
+        "chat_type": str(body.get("chattype") or body.get("chat_type") or ""),
+        "sender_id": str(sender.get("userid") or sender.get("user_id") or body.get("from_user_id") or ""),
+        "msg_type": msg_type,
+        "content": content,
+    }
+
+
+@app.post("/v1/webhooks/wecom-b/messages")
+def wecom_b_capture_message(
+    payload: dict[str, Any],
+    x_wecom_capture_token: str | None = Header(default=None),
+) -> dict[str, str]:
+    expected = os.getenv("WECOM_B_CAPTURE_TOKEN", "").strip()
+    if expected and x_wecom_capture_token != expected:
+        raise HTTPException(status_code=403, detail="invalid capture token")
+    message = _extract_wecom_b_message(payload)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO wecom_b_messages(
+                    msg_id, bot_id, chat_id, chat_type, sender_id, msg_type, content, raw_json, received_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT(msg_id) DO NOTHING
+                """,
+                (
+                    message["msg_id"],
+                    message["bot_id"],
+                    message["chat_id"],
+                    message["chat_type"],
+                    message["sender_id"],
+                    message["msg_type"],
+                    message["content"],
+                    Jsonb(payload),
+                ),
+            )
+        conn.commit()
+    return {"status": "received", "msg_id": message["msg_id"]}
 
 
 @app.get("/readyz")
@@ -1866,6 +2004,42 @@ def exports_tplus_download(file_name: str, _: dict[str, Any] = Depends(require_a
     if not path.is_file():
         raise HTTPException(status_code=404, detail="export file not found")
     return FileResponse(path, media_type=_XLSX_MEDIA_TYPE, filename=file_name)
+
+
+def _routing_projects(channel: str) -> dict[str, Any]:
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT peer_id, display_name, project_url, project_name
+                FROM managed_contacts
+                WHERE channel = %s
+                  AND enabled = true
+                  AND COALESCE(project_url, '') <> ''
+                ORDER BY peer_id
+                """,
+                (channel,),
+            )
+            rows = cur.fetchall()
+    lanes: dict[str, dict[str, str]] = {}
+    for peer_id, display_name, project_url, project_name in rows:
+        if not peer_id or not project_url:
+            continue
+        lanes[str(peer_id)] = {
+            "name": str(display_name or project_name or peer_id),
+            "project_url": str(project_url),
+        }
+    return {"lanes": lanes}
+
+
+@app.get("/v1/routing/wechat-projects.json")
+def routing_wechat_projects() -> dict[str, Any]:
+    return _routing_projects("wechat")
+
+
+@app.get("/v1/routing/feishu-projects.json")
+def routing_feishu_projects() -> dict[str, Any]:
+    return _routing_projects("feishu")
 
 
 @app.get("/v1/exports/external/{source_id}")
@@ -3510,6 +3684,95 @@ def admin_users(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     }
 
 
+@app.get("/v1/admin/contacts")
+def admin_contacts(channel: str | None = Query(default=None), _: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    where = ""
+    params: tuple[Any, ...] = ()
+    if channel:
+        where = "WHERE channel = %s"
+        params = (channel,)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT id, channel, peer_id, display_name, remark, enabled, project_url,
+                       project_name, tags, daily_quota, notes, source_sheet, updated_at
+                FROM managed_contacts
+                {where}
+                ORDER BY channel, peer_id
+                """,
+                params,
+            )
+            rows = cur.fetchall()
+    return {
+        "items": [
+            {
+                "id": row[0],
+                "channel": row[1],
+                "peer_id": row[2],
+                "display_name": row[3],
+                "remark": row[4],
+                "enabled": row[5],
+                "project_url": row[6],
+                "project_name": row[7],
+                "tags": row[8],
+                "daily_quota": row[9],
+                "notes": row[10],
+                "source_sheet": row[11],
+                "updated_at": str(row[12]),
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.post("/v1/admin/contacts")
+def admin_upsert_contact(body: ManagedContactUpsertRequest, actor: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    if body.channel not in {"wechat", "feishu"}:
+        raise HTTPException(status_code=400, detail="invalid channel")
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO managed_contacts(
+                    channel, peer_id, display_name, remark, enabled, project_url,
+                    project_name, tags, daily_quota, notes, source_sheet, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT(channel, peer_id)
+                DO UPDATE SET
+                    display_name = EXCLUDED.display_name,
+                    remark = EXCLUDED.remark,
+                    enabled = EXCLUDED.enabled,
+                    project_url = EXCLUDED.project_url,
+                    project_name = EXCLUDED.project_name,
+                    tags = EXCLUDED.tags,
+                    daily_quota = EXCLUDED.daily_quota,
+                    notes = EXCLUDED.notes,
+                    source_sheet = EXCLUDED.source_sheet,
+                    updated_at = NOW()
+                RETURNING id
+                """,
+                (
+                    body.channel,
+                    body.peer_id,
+                    body.display_name,
+                    body.remark,
+                    body.enabled,
+                    body.project_url,
+                    body.project_name,
+                    body.tags,
+                    body.daily_quota,
+                    body.notes,
+                    body.source_sheet,
+                ),
+            )
+            contact_id = cur.fetchone()[0]
+        conn.commit()
+    _audit(actor.get("sub"), "admin.contacts.upsert", "managed_contacts", str(contact_id), body.model_dump())
+    return {"id": contact_id}
+
+
 @app.post("/v1/admin/users")
 def admin_create_user(body: CreateUserRequest, actor: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     with closing(_conn()) as conn:
@@ -3821,16 +4084,26 @@ def admin_patch_feature(
 
 
 @app.get("/v1/admin/audit-logs")
-def admin_audit_logs(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+def admin_audit_logs(
+    page: int = Query(default=1),
+    page_size: int = Query(default=50),
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    page = max(1, page)
+    page_size = min(max(1, page_size), 200)
+    offset = (page - 1) * page_size
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM audit_logs")
+            total = int(cur.fetchone()[0])
             cur.execute(
                 """
                 SELECT id, actor_username, action, target_type, target_id, detail, created_at
                 FROM audit_logs
                 ORDER BY id DESC
-                LIMIT 200
-                """
+                LIMIT %s OFFSET %s
+                """,
+                (page_size, offset),
             )
             rows = cur.fetchall()
 
@@ -3846,7 +4119,10 @@ def admin_audit_logs(_: dict[str, Any] = Depends(require_admin)) -> dict[str, An
                 "created_at": str(row[6]),
             }
             for row in rows
-        ]
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
     }
 
 

@@ -14,6 +14,10 @@ from tplus_datahub.modules.inventory.export_stock import export_inventory
 from tplus_datahub.modules.inventory.sync_stock import sync_inventory
 from tplus_datahub.modules.partner.export_partner import export_partner
 from tplus_datahub.modules.partner.sync_partner import sync_partner
+from tplus_datahub.modules.purchase_price.export_purchase_price import export_purchase_price
+from tplus_datahub.modules.purchase_price.sync_purchase_price import sync_purchase_price
+from tplus_datahub.modules.sales_price.export_sales_price import export_sales_price
+from tplus_datahub.modules.sales_price.sync_sales_price import sync_sales_price
 from tplus_datahub.modules.voucher.export_voucher_list import export_voucher_list
 from tplus_datahub.modules.voucher.sync_voucher_list import sync_voucher_list
 
@@ -21,8 +25,6 @@ from tplus_datahub.modules.voucher.sync_voucher_list import sync_voucher_list
 PENDING_MODULES = [
     "material",
     "product",
-    "purchase_price",
-    "sales_price",
     "cost",
     "department",
     "person",
@@ -77,6 +79,14 @@ def main() -> int:
             )
             voucher_path = export_voucher_list(module_name, voucher_rows, settings=settings, timestamp=timestamp)
             logger.info("%s Excel exported: %s", module_name, voucher_path)
+
+        purchase_price_rows = sync_purchase_price(settings=settings, timestamp=timestamp)
+        purchase_price_path = export_purchase_price(purchase_price_rows, settings=settings, timestamp=timestamp)
+        logger.info("purchase_price Excel exported: %s", purchase_price_path)
+
+        sales_price_rows = sync_sales_price(settings=settings, timestamp=timestamp)
+        sales_price_path = export_sales_price(sales_price_rows, settings=settings, timestamp=timestamp)
+        logger.info("sales_price Excel exported: %s", sales_price_path)
 
         for module_name in PENDING_MODULES:
             logger.info("%s module endpoint is not confirmed; skipped", module_name)

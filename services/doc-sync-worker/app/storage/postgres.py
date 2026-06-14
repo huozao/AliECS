@@ -354,7 +354,7 @@ class PostgresDocSyncStore:
                 """
                 SELECT
                     id, provider, env_profile, source_name, source_type,
-                    external_doc_id, external_sheet_id, source_url, status
+                    external_doc_id, external_sheet_id, source_url, status, sheet_name
                 FROM external_sources
                 WHERE id = %s
                 """,
@@ -373,6 +373,7 @@ class PostgresDocSyncStore:
             "external_sheet_id": row[6],
             "source_url": row[7] or "",
             "status": row[8],
+            "sheet_name": row[9] or "",
         }
 
     def pending_sync_requests(self, limit: int) -> list[dict[str, Any]]:
@@ -513,6 +514,44 @@ class PostgresDocSyncStore:
                 )
         self.conn.commit()
         return decision
+
+    def upsert_managed_contact(self, contact: dict[str, Any]) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO managed_contacts(
+                    channel, peer_id, display_name, remark, enabled, project_url,
+                    project_name, tags, daily_quota, notes, source_sheet, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT(channel, peer_id)
+                DO UPDATE SET
+                    display_name = EXCLUDED.display_name,
+                    remark = EXCLUDED.remark,
+                    enabled = EXCLUDED.enabled,
+                    project_url = EXCLUDED.project_url,
+                    project_name = EXCLUDED.project_name,
+                    tags = EXCLUDED.tags,
+                    daily_quota = EXCLUDED.daily_quota,
+                    notes = EXCLUDED.notes,
+                    source_sheet = EXCLUDED.source_sheet,
+                    updated_at = NOW()
+                """,
+                (
+                    contact.get("channel"),
+                    contact.get("peer_id"),
+                    contact.get("display_name"),
+                    contact.get("remark"),
+                    bool(contact.get("enabled", True)),
+                    contact.get("project_url"),
+                    contact.get("project_name"),
+                    contact.get("tags"),
+                    contact.get("daily_quota"),
+                    contact.get("notes"),
+                    contact.get("source_sheet"),
+                ),
+            )
+        self.conn.commit()
 
     def mark_source_synced(self, source_id: int) -> None:
         with self.conn.cursor() as cur:

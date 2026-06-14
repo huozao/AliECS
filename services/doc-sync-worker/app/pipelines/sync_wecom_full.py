@@ -10,6 +10,7 @@ from app.providers.wecom import (
     env_profiles,
     summarize_wecom_error,
 )
+from app.pipelines.managed_contacts import sync_managed_contact_from_row
 from app.storage.postgres import build_record_snapshot, compose_source_name, open_store
 
 
@@ -35,6 +36,7 @@ def _sync_sheet_records(
     docid: str,
     sheet_id: str,
     counts: dict[str, int],
+    sheet_name: str = "",
 ) -> None:
     fields_response = client.get_fields(docid, sheet_id)
     field_titles = store.replace_fields(source_id, _fields_from_response(fields_response))
@@ -49,7 +51,10 @@ def _sync_sheet_records(
     for record in records:
         if not isinstance(record, dict):
             continue
-        decision = store.upsert_record(source_id, build_record_snapshot(record, field_titles))
+        snapshot = build_record_snapshot(record, field_titles)
+        decision = store.upsert_record(source_id, snapshot)
+        if sync_managed_contact_from_row(store, sheet_name, snapshot.normalized_json):
+            counts["managed_contact_count"] = counts.get("managed_contact_count", 0) + 1
         if decision.action == "create":
             counts["created_count"] += 1
         elif decision.action == "update":
@@ -102,7 +107,7 @@ def _sync_doc(
         )
         # sheet 级容错：个别表报错（如公开收集表 get_records 60111）不拖垮同文档其余表。
         try:
-            _sync_sheet_records(store, client, source_id, docid, sheet_id, counts)
+            _sync_sheet_records(store, client, source_id, docid, sheet_id, counts, sheet_name)
         except Exception as sheet_exc:  # noqa: BLE001
             counts["error_count"] += 1
             sheet_error = str(sheet_exc)
@@ -278,6 +283,7 @@ def sync_wecom_source(store: Any, source_id: int, mode: str = "manual") -> tuple
                         str(source["external_doc_id"]),
                         str(source["external_sheet_id"]),
                         counts,
+                        str(source.get("sheet_name") or source.get("source_name") or ""),
                     )
                 status = "success" if counts["error_count"] == 0 else "partial_failed"
                 last_error = None
