@@ -452,9 +452,14 @@ def calculate_recipe_costs(
     result: RecipeQueryResult,
     manual_prices: dict[str, float] | None = None,
     simulated_quantities: dict[str, float] | None = None,
+    purchase_prices: dict[str, dict[str, object]] | None = None,
+    sales_prices: dict[str, dict[str, object]] | None = None,
 ) -> list[dict[str, object]]:
     manual_prices = {normalize_cell(key): float(value) for key, value in (manual_prices or {}).items()}
     simulated_quantities = _normalized_float_mapping(simulated_quantities)
+    # 子件编码 -> 最新采购价 / 父件成品编码 -> 最新销售价（含税单价 + 单据日期）
+    purchase_prices = {normalize_cell(key): value for key, value in (purchase_prices or {}).items()}
+    sales_prices = {normalize_cell(key): value for key, value in (sales_prices or {}).items()}
     recipes: list[dict[str, object]] = []
     if result.detail.empty:
         return recipes
@@ -479,7 +484,13 @@ def calculate_recipe_costs(
             unit = normalize_cell(row.get("计量单位_子件"))
             quantity = _float_or_zero(row.get("需用数量"))
             cost_quantity = _cost_quantity(row.get("需用数量"), unit)
+            # 系统单价优先取该子件的最新采购含税单价；无采购记录才回退 BOM 自带系统单价。
             system_price = _float_or_zero(row.get("系统单价"))
+            system_price_date = None
+            purchase_record = purchase_prices.get(child_code)
+            if purchase_record and purchase_record.get("price"):
+                system_price = float(purchase_record["price"])
+                system_price_date = purchase_record.get("date") or None
             manual_price = manual_prices.get(child_code)
             current_price = system_price if manual_price is None else float(manual_price)
             # 分价按「比例 × 单价」计（不是数量 × 单价）。
@@ -504,6 +515,7 @@ def calculate_recipe_costs(
                     "cost_quantity": cost_quantity,
                     "ratio": _float_or_zero(row.get("比例")),
                     "system_price": system_price,
+                    "system_price_date": system_price_date,
                     "current_price": current_price,
                     "system_amount": system_amount,
                     "current_amount": current_amount,
@@ -516,6 +528,10 @@ def calculate_recipe_costs(
             )
 
         first = group.iloc[0]
+        # 成品（父件编码）的最新销售含税单价 + 单据日期，用于对比表展示。
+        sales_record = sales_prices.get(normalize_cell(parent_code))
+        sales_price = float(sales_record["price"]) if sales_record and sales_record.get("price") else None
+        sales_price_date = (sales_record.get("date") or None) if sales_record else None
         recipes.append(
             {
                 "key": f"{normalize_cell(parent_code)}::{normalize_cell(version)}",
@@ -526,6 +542,8 @@ def calculate_recipe_costs(
                 "system_total": system_total,
                 "current_total": current_total,
                 "simulated_total": simulated_total,
+                "sales_price": sales_price,
+                "sales_price_date": sales_price_date,
                 "lines": lines,
             }
         )

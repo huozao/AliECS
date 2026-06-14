@@ -39,6 +39,7 @@ from app.recipes.bom_query import (
     save_recipe_cost_workbook,
     save_recipe_workbook,
 )
+from app.recipes.price_lookup import latest_purchase_prices, latest_sales_prices
 from app.routers.webhooks import router as webhooks_router
 
 
@@ -1682,6 +1683,14 @@ def recipe_query(body: RecipeQueryRequest, user: dict[str, Any] = Depends(requir
     }
 
 
+def _recipe_price_maps() -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]]]:
+    """最新采购/销售价格映射；任何读取异常都降级为空，不影响成本核算。"""
+    try:
+        return latest_purchase_prices(), latest_sales_prices()
+    except Exception:
+        return {}, {}
+
+
 @app.post("/v1/recipes/cost")
 def recipe_cost(body: RecipeCostRequest, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
     require_permission("formula.cost.calculate", user)
@@ -1693,10 +1702,13 @@ def recipe_cost(body: RecipeCostRequest, user: dict[str, Any] = Depends(require_
             default_bom=body.default_bom,
             include_disabled=body.include_disabled,
         )
+        purchase_prices, sales_prices = _recipe_price_maps()
         recipes = calculate_recipe_costs(
             result,
             manual_prices=body.manual_prices,
             simulated_quantities=body.simulated_quantities,
+            purchase_prices=purchase_prices,
+            sales_prices=sales_prices,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="BOM 输入文件未找到") from exc
@@ -1728,10 +1740,13 @@ def recipe_cost_export(body: RecipeCostRequest, user: dict[str, Any] = Depends(r
             default_bom=body.default_bom,
             include_disabled=body.include_disabled,
         )
+        purchase_prices, sales_prices = _recipe_price_maps()
         recipes = calculate_recipe_costs(
             result,
             manual_prices=body.manual_prices,
             simulated_quantities=body.simulated_quantities,
+            purchase_prices=purchase_prices,
+            sales_prices=sales_prices,
         )
         _file_id, output_path = new_export_path()
         save_recipe_cost_workbook(output_path, recipes)
@@ -1803,8 +1818,8 @@ _TPLUS_EXPORT_DESCRIPTIONS = {
     "purchase_arrival_list": "采购到货单列表，仅单据ID/日期/单号；不含明细单价金额。",
     "purchase_receive_list": "采购入库单列表，仅单据ID/日期/单号；不含明细单价金额。",
     "material_dispatch_list": "材料出库/领料单列表，仅单据ID/日期/单号；不含价格。",
-    "purchase_price": "采购价格表；原材料采购价优先看这里（若已同步）。",
-    "sales_price": "销售价格表；商品销售价优先看这里（若已同步）。",
+    "purchase_price": "采购价格表（采购到货明细，来自 T+ 报表）；原材料采购单价/含税单价优先看这里，成本核算系统单价取此最新价。",
+    "sales_price": "销售价格表（销货单明细，来自 T+ 报表）；商品销售单价/含税单价优先看这里。",
 }
 
 

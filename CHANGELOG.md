@@ -1,5 +1,12 @@
 # 版本记录
 
+## v2.1.10：成本核算系统单价自动取最新采购价 + 对比表展示销售价格
+
+- 成本核算「价格信息」的「系统单价」自动取该子件的**最新采购含税单价**（按最新单据日期、含税单价>0），悬浮显示该价格单据的**单据日期**（标“录入日期”）；无采购记录才回退 BOM 自带系统单价。
+- 对比表上方指标的「版本」替换为「销售价格」（取该配方成品父件的最新销售含税单价），位置仍在「当前合价」前，标注价格更新日期（单据日期）。
+- 新增 `app/recipes/price_lookup.py`：读取共享卷最新 `purchase_price_*.xlsx` / `sales_price_*.xlsx`，按存货编码取最新含税单价+单据日期；`/v1/recipes/cost(/export)` 注入，读取异常优雅降级。
+- 数据导出文案：去掉采购/销售价格表的“（若已同步）”，注明来源与系统单价用途。
+
 ## v2.1.9：T+ 采购/销售价格改走官方报表通用查询 + 修复基础档案全量同步截断
 
 - 采购/销售价格改用官方 `reportQuery/GetReportData`（报表 `PU_PurchaseArrivalDetailRpt`＝采购价格查询、`SA_SaleDeliveryDetailRpt`＝销售价格查询），一次分页查询出整表，分页经 `TaskSessionID/SolutionID`，取代原先逐单 `GetVoucherDTO` 扇出；生产实拉与网页导出逐字段一致（采购 529 行 / 销售 1151 行），导出落 `purchase_price_*.xlsx` / `sales_price_*.xlsx` 进 health 数据导出。
