@@ -41,20 +41,67 @@ VERIFIED_VOUCHER_LIST_ENDPOINTS = {
     },
 }
 
-VERIFIED_PRICE_ENDPOINTS = {
+# 报表通用查询（reportQuery/GetReportData）：价格明细直接取自 T+ 标准报表，
+# 一次分页查询即出整表，省去“列表 + 逐单连查”的扇出。请求体须包成 {"request": {...}}；
+# 翻页回传 TaskSessionID/SolutionID；data 在 DataSource.Rows（rowType=="D" 为明细行）。
+# ReportName/字段映射已对租户逐字段对账确认（见 docs/ops/tplus-price-verify-2026-06-14.md）。
+REPORT_QUERY_ENDPOINT = "/tplus/api/v2/reportQuery/GetReportData"
+
+VERIFIED_PRICE_REPORTS = {
     "purchase_price": {
-        "list_endpoint": "/tplus/api/v2/PurchaseArrivalOpenApi/FindVoucherList",
-        "detail_endpoint": "/tplus/api/v2/PurchaseArrivalOpenApi/GetVoucherDTO",
-        "select_fields": ["PurchaseArrival.ID", "PurchaseArrival.VoucherDate", "PurchaseArrival.Code"],
-        "note": "到货单明细价字段需按当前 T+ 版本文档和实时验证结果复核。",
+        # 采购到货明细表 == 网页版“采购价格查询”（单据号 PS-，含仓库/供应商/含税单价）
+        "report_name": "PU_PurchaseArrivalDetailRpt",
+        "date_column": "VoucherDate",
+        "columns": [
+            ("单据日期", "voucherdate"),
+            ("单据编号", "PurchaseArrivalDTOCode"),
+            ("供应商编码", "partnerCode"),
+            ("供应商", "partnerName"),
+            ("部门", "departmentName"),
+            ("业务员", "personName"),
+            ("仓库", "warehouseName"),
+            ("存货编码", "inventoryCode"),
+            ("存货", "inventoryName"),
+            ("规格型号", "specification"),
+            ("计量单位", "unit1Name"),
+            ("数量", "quantity"),
+            ("报价", "origPrice"),
+            ("折扣%", "discountRate"),
+            ("单价", "origDiscountPrice"),
+            ("金额", "origDiscountAmount"),
+            ("含税单价", "origTaxPrice"),
+            ("含税金额", "origTaxAmount"),
+            ("税额", "origTax"),
+        ],
     },
     "sales_price": {
-        "list_endpoint": "/tplus/api/v2/SaleDeliveryOpenApi/FindVoucherList",
-        "detail_endpoint": "/tplus/api/v2/SaleDeliveryOpenApi/GetVoucherDTO",
-        "select_fields": ["SaleDelivery.ID", "SaleDelivery.VoucherDate", "SaleDelivery.Code"],
-        "note": "销货单明细价字段需按当前 T+ 版本文档和实时验证结果复核。",
+        # 销货单明细表 == 网页版“销售价格查询”（单据号 SA-，含客户/含税单价）
+        "report_name": "SA_SaleDeliveryDetailRpt",
+        "date_column": "VoucherDate",
+        "columns": [
+            ("单据日期", "voucherdate"),
+            ("单据编号", "saleDeliveryCode"),
+            ("客户", "partnerName"),
+            ("部门", "departmentName"),
+            ("存货编码", "inventoryCode"),
+            ("存货", "inventoryName"),
+            ("规格型号", "specification"),
+            ("计量单位", "unit1Name"),
+            ("数量", "quantity"),
+            ("报价", "origPrice"),
+            ("折扣%", "discountRate"),
+            ("单价", "origDiscountPrice"),
+            ("金额", "origDiscountAmount"),
+            ("含税单价", "origTaxPrice"),
+            ("含税金额", "origTaxAmount"),
+            ("税额", "origTax"),
+        ],
     },
 }
+
+# 价格类数值列（字符串→数值）与百分比列（小数→百分数：1.0000→100）
+PRICE_NUMERIC_COLUMNS = {"数量", "报价", "单价", "金额", "含税单价", "含税金额", "税额"}
+PRICE_PERCENT_COLUMNS = {"折扣%"}
 
 PENDING_ENDPOINTS = {
     "material": "pending",

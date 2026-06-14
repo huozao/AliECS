@@ -1,97 +1,25 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+import os
+from datetime import date, timedelta
+from typing import Any
 
+from config.endpoints import (
+    PRICE_NUMERIC_COLUMNS,
+    PRICE_PERCENT_COLUMNS,
+    REPORT_QUERY_ENDPOINT,
+    VERIFIED_PRICE_REPORTS,
+)
 from config.settings import Settings, load_settings
 from tplus_datahub.chanjet.client import ChanjetClient
 from tplus_datahub.core.logger import get_logger
 from tplus_datahub.core.utils import now_timestamp
-from tplus_datahub.modules.voucher.sync_voucher_list import _extract_success_data, _rows_to_dicts, _to_int
 from tplus_datahub.storage.raw_writer import save_raw_response
 
-
-PURCHASE_PRICE_COLUMNS = [
-    "单据日期",
-    "单据编号",
-    "供应商编码",
-    "供应商",
-    "供应商简称",
-    "部门",
-    "业务员",
-    "仓库",
-    "项目",
-    "存货编码",
-    "存货",
-    "规格型号",
-    "计量单位",
-    "数量",
-    "折扣%",
-    "单价",
-    "金额",
-    "税率%",
-    "含税单价",
-    "含税金额",
-    "税额",
-]
-
-SALES_PRICE_COLUMNS = [
-    "单据日期",
-    "单据编号",
-    "客户",
-    "部门",
-    "业务员",
-    "存货编码",
-    "存货",
-    "规格型号",
-    "计量单位",
-    "数量",
-    "折扣%",
-    "单价",
-    "金额",
-    "含税单价",
-    "含税金额",
-    "税额",
-]
-
-
-def unwrap_dto(dto: Any) -> dict[str, Any]:
-    if isinstance(dto, dict) and isinstance(dto.get("data"), dict):
-        return dto["data"]
-    return dto if isinstance(dto, dict) else {}
-
-
-def iter_details(document: dict[str, Any]) -> list[dict[str, Any]]:
-    details = pick(document, "Details", "details", "Detail", "detail")
-    if not isinstance(details, list):
-        return []
-    return [item for item in details if isinstance(item, dict)]
-
-
-def pick(source: Any, *paths: str) -> Any:
-    for path in paths:
-        current = source
-        for key in path.split("."):
-            if not isinstance(current, dict):
-                current = None
-                break
-            current = _get_case_insensitive(current, key)
-            if current in (None, ""):
-                break
-        if current not in (None, ""):
-            return current
-    return None
-
-
-def display(value: Any) -> Any:
-    if isinstance(value, dict):
-        return pick(value, "Name", "name", "FullName", "fullName", "ShortName", "shortName")
-    return value
-
-
-def code(value: Any) -> Any:
-    if isinstance(value, dict):
-        return pick(value, "Code", "code", "ID", "id")
-    return value
+# 全量起始日：取足够早的下限（T+ Cloud 不存在更早账套数据），等价于“无下限/全量”。
+# 实测 GetReportData 接受 1990/2000 起始且结果不变；可用 env PRICE_SYNC_BEGIN_DATE 覆盖。
+DEFAULT_BEGIN_DATE = "2000-01-01"
+DETAIL_ROW_TYPE = "D"
 
 
 def number(value: Any) -> Any:
@@ -101,6 +29,8 @@ def number(value: Any) -> Any:
         return value
     if isinstance(value, str):
         text = value.strip().replace(",", "")
+        if not text:
+            return None
         try:
             parsed = float(text)
         except ValueError:
@@ -109,62 +39,145 @@ def number(value: Any) -> Any:
     return value
 
 
-def row_for_columns(columns: list[str], values: dict[str, Any]) -> dict[str, Any]:
-    return {column: values.get(column) for column in columns}
+def percent(value: Any) -> Any:
+    """T+ 返回折扣为小数（1.0000=100%）；转成百分数显示。"""
+    parsed = number(value)
+    if isinstance(parsed, (int, float)):
+        result = round(parsed * 100, 4)
+        return int(result) if float(result).is_integer() else result
+    return parsed
 
 
-def sync_price_rows(
+def _detail_rows(response: Any) -> list[dict[str, Any]]:
+    if not isinstance(response, dict):
+        return []
+    data_source = response.get("DataSource") or response.get("dataSource") or {}
+    rows = data_source.get("Rows") if isinstance(data_source, dict) else None
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict) and row.get("rowType") == DETAIL_ROW_TYPE]
+
+
+def map_report_rows(responses: list[Any], columns: list[tuple[str, str]]) -> list[dict[str, Any]]:
+    """把 GetReportData 的明细行按 (中文表头, 接口字段) 映射成有序导出行。"""
+    rows: list[dict[str, Any]] = []
+    for response in responses:
+        for source in _detail_rows(response):
+            row: dict[str, Any] = {}
+            for header, field in columns:
+                value = source.get(field)
+                if header in PRICE_PERCENT_COLUMNS:
+                    value = percent(value)
+                elif header in PRICE_NUMERIC_COLUMNS:
+                    value = number(value)
+                elif value == "":
+                    value = None
+                row[header] = value
+            rows.append(row)
+    return rows
+
+
+def fetch_report_responses(
     *,
     module_name: str,
-    endpoint_config: dict[str, Any],
-    transform: Callable[[list[Any]], list[dict[str, Any]]],
-    settings: Settings | None = None,
-    client: Any | None = None,
-    timestamp: str | None = None,
-    param_dic: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
-    runtime_settings = settings or load_settings()
-    runtime_client = client or ChanjetClient(runtime_settings)
+    report_config: dict[str, Any],
+    settings: Settings,
+    client: Any,
+    timestamp: str,
+    begin_date: str,
+    end_date: str,
+) -> list[Any]:
     logger = get_logger(f"tplus_datahub.{module_name}")
-    run_timestamp = timestamp or now_timestamp()
-    page_size = runtime_settings.default_page_size
-    page_index = 0
-    voucher_rows: list[dict[str, Any]] = []
+    column_names = ",".join(field for _, field in report_config["columns"])
+    page_size = settings.default_page_size
+    page_index = 1
+    task_session_id: Any = None
+    solution_id: Any = None
+    responses: list[Any] = []
 
-    logger.info("Start syncing %s voucher ids", module_name)
+    logger.info(
+        "Start report sync %s report=%s range=%s..%s",
+        module_name,
+        report_config["report_name"],
+        begin_date,
+        end_date,
+    )
     while True:
-        payload = {
-            "pageSize": page_size,
-            "pageIndex": page_index,
-            "selectFields": list(endpoint_config["select_fields"]),
-            "paramDic": dict(param_dic or {}),
+        request: dict[str, Any] = {
+            "ReportName": report_config["report_name"],
+            "PageIndex": page_index,
+            "PageSize": page_size,
+            "SearchItems": [
+                {
+                    "ColumnName": report_config["date_column"],
+                    "BeginDefault": begin_date,
+                    "BeginDefaultText": begin_date,
+                    "EndDefault": end_date,
+                    "EndDefaultText": end_date,
+                }
+            ],
+            "ReportTableColNames": column_names,
         }
-        response = _post_with_retries(runtime_client, endpoint_config["list_endpoint"], payload, logger)
-        save_raw_response(f"{module_name}_voucher_list", page_index + 1, response, runtime_settings.data_root, run_timestamp)
-        data = _extract_success_data(response, module_name)
-        page_rows = _rows_to_dicts(data)
-        voucher_rows.extend(page_rows)
+        if task_session_id:
+            request["TaskSessionID"] = task_session_id
+        if solution_id:
+            request["SolutionID"] = solution_id
 
-        total_pages = _to_int(data.get("TotalPageNum"), default=0)
-        if not page_rows or page_index + 1 >= total_pages:
+        response = _post_with_retries(client, REPORT_QUERY_ENDPOINT, {"request": request}, logger)
+        save_raw_response(f"{module_name}_report", page_index, response, settings.data_root, timestamp)
+        responses.append(response)
+
+        total_pages = 0
+        if isinstance(response, dict):
+            error_message = response.get("ErrorMessage")
+            if error_message:
+                logger.warning("%s report ErrorMessage on page %s: %s", module_name, page_index, error_message)
+            task_session_id = response.get("TaskSessionID") or task_session_id
+            solution_id = response.get("SolutionID") or solution_id
+            total_pages = _to_int(response.get("Pages"))
+
+        if not _detail_rows(response) or page_index >= total_pages:
             break
         page_index += 1
 
-    detail_responses: list[Any] = []
-    for index, voucher_row in enumerate(voucher_rows, start=1):
-        voucher_id = _voucher_id(voucher_row)
-        if not voucher_id:
-            logger.warning("%s voucher row missing ID; skipped: %s", module_name, voucher_row)
-            continue
-        # Implementation note: GetVoucherDTO payload shape is based on prior local research.
-        # Verify against the exact Chanjet T+ tenant/version during the realtime validation step.
-        response = _post_with_retries(runtime_client, endpoint_config["detail_endpoint"], {"id": voucher_id}, logger)
-        save_raw_response(f"{module_name}_dto", index, response, runtime_settings.data_root, run_timestamp)
-        detail_responses.append(response)
+    return responses
 
-    rows = transform(detail_responses)
-    logger.info("%s price sync finished: vouchers=%s rows=%s", module_name, len(voucher_rows), len(rows))
+
+def sync_price_report(
+    *,
+    module_name: str,
+    settings: Settings | None = None,
+    client: Any | None = None,
+    timestamp: str | None = None,
+    begin_date: str | None = None,
+    end_date: str | None = None,
+) -> list[dict[str, Any]]:
+    runtime_settings = settings or load_settings()
+    runtime_client = client or ChanjetClient(runtime_settings)
+    run_timestamp = timestamp or now_timestamp()
+    report_config = VERIFIED_PRICE_REPORTS[module_name]
+
+    responses = fetch_report_responses(
+        module_name=module_name,
+        report_config=report_config,
+        settings=runtime_settings,
+        client=runtime_client,
+        timestamp=run_timestamp,
+        begin_date=begin_date or _default_begin_date(),
+        end_date=end_date or _default_end_date(),
+    )
+    rows = map_report_rows(responses, report_config["columns"])
+    get_logger(f"tplus_datahub.{module_name}").info("%s report sync finished: rows=%s", module_name, len(rows))
     return rows
+
+
+def _default_begin_date() -> str:
+    return os.getenv("PRICE_SYNC_BEGIN_DATE", DEFAULT_BEGIN_DATE).strip() or DEFAULT_BEGIN_DATE
+
+
+def _default_end_date() -> str:
+    # +1 天缓冲，避免 ECS(美西)与业务(东八区)跨天导致当天单据漏取。
+    return (date.today() + timedelta(days=1)).isoformat()
 
 
 def _post_with_retries(client: Any, endpoint: str, payload: dict[str, Any], logger: Any, *, attempts: int = 3) -> Any:
@@ -179,19 +192,8 @@ def _post_with_retries(client: Any, endpoint: str, payload: dict[str, Any], logg
     raise last_exc
 
 
-def _voucher_id(row: dict[str, Any]) -> Any:
-    for key, value in row.items():
-        normalized = key.lower()
-        if normalized == "id" or normalized.endswith(".id"):
-            return value
-    return pick(row, "ID", "id")
-
-
-def _get_case_insensitive(mapping: dict[str, Any], key: str) -> Any:
-    if key in mapping:
-        return mapping[key]
-    lowered = key.lower()
-    for candidate, value in mapping.items():
-        if candidate.lower() == lowered:
-            return value
-    return None
+def _to_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default

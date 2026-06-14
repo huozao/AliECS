@@ -1,0 +1,50 @@
+{
+  "Status": 0,
+  "TotalRecords": 1,
+  "Pages": 1,
+  "PageIndex": 1,
+  "PageSize": 500,
+  "TaskSessionID": "test-session",
+  "SolutionID": "test-solution",
+  "ColumnSource": {
+    "Rows": [
+      {"FieldName": "voucherdate", "Title": "单据日期"},
+      {"FieldName": "PurchaseArrivalDTOCode", "Title": "单据编号"}
+    ]
+  },
+  "DataSource": {
+    "Rows": [
+      {
+        "voucherdate": "2026-05-31",
+        "PurchaseArrivalDTOCode": "PS-2026-001",
+        "partnerCode": "SUP001",
+        "partnerName": "脱敏供应商",
+        "departmentName": "采购部",
+        "personName": "采购员A",
+        "warehouseName": "原材库",
+        "inventoryCode": "RM-001",
+        "inventoryName": "脱敏原料",
+        "specification": "",
+        "unit1Name": "kg",
+        "quantity": "34000",
+        "origPrice": "",
+        "discountRate": "1.0000",
+        "origDiscountPrice": "14.34",
+        "origDiscountAmount": "487433.63",
+        "origTaxPrice": "16.20",
+        "origTaxAmount": "550800.00",
+        "origTax": "63366.37",
+        "GroupLevel": "0",
+        "rowType": "D",
+        "reportRowType": null
+      },
+      {
+        "voucherdate": "",
+        "PurchaseArrivalDTOCode": "合计",
+        "quantity": "34000",
+        "origTaxAmount": "550800.00",
+        "rowType": "T"
+      }
+    ]
+  }
+}

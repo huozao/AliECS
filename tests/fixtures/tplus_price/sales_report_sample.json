@@ -1,0 +1,47 @@
+{
+  "Status": 0,
+  "TotalRecords": 1,
+  "Pages": 1,
+  "PageIndex": 1,
+  "PageSize": 500,
+  "TaskSessionID": "test-session",
+  "SolutionID": "test-solution",
+  "ColumnSource": {
+    "Rows": [
+      {"FieldName": "voucherdate", "Title": "单据日期"},
+      {"FieldName": "saleDeliveryCode", "Title": "单据编号"}
+    ]
+  },
+  "DataSource": {
+    "Rows": [
+      {
+        "voucherdate": "2026-05-31",
+        "saleDeliveryCode": "SA-2026-001",
+        "partnerName": "脱敏客户",
+        "departmentName": "",
+        "inventoryCode": "FG-001",
+        "inventoryName": "脱敏成品",
+        "specification": "",
+        "unit1Name": "kg",
+        "quantity": "400",
+        "origPrice": "",
+        "discountRate": "1.0000",
+        "origDiscountPrice": "28.30",
+        "origDiscountAmount": "11320.00",
+        "origTaxPrice": "32.00",
+        "origTaxAmount": "12800.00",
+        "origTax": "1480.00",
+        "GroupLevel": "0",
+        "rowType": "D",
+        "reportRowType": null
+      },
+      {
+        "voucherdate": "",
+        "saleDeliveryCode": "合计",
+        "quantity": "400",
+        "origTaxAmount": "12800.00",
+        "rowType": "T"
+      }
+    ]
+  }
+}

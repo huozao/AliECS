@@ -4,10 +4,8 @@ from typing import Any
 
 from config.settings import Settings, load_settings
 from tplus_datahub.chanjet.client import ChanjetClient
-from tplus_datahub.chanjet.response_parser import extract_rows
+from tplus_datahub.chanjet.pagination import paginate_query
 from tplus_datahub.core.logger import get_logger
-from tplus_datahub.core.utils import now_timestamp
-from tplus_datahub.storage.raw_writer import save_raw_response
 
 
 def sync_base_archive(
@@ -22,12 +20,17 @@ def sync_base_archive(
     runtime_settings = settings or load_settings()
     runtime_client = client or ChanjetClient(runtime_settings)
     logger = get_logger(f"tplus_datahub.{module_name}")
-    run_timestamp = timestamp or now_timestamp()
 
-    payload = {"param": dict(query_params or {})}
     logger.info("Start syncing %s base archive", module_name)
-    response = runtime_client.post(endpoint, payload)
-    save_raw_response(module_name, 1, response, runtime_settings.data_root, run_timestamp)
-    rows = extract_rows(response)
+    # /Query(V3.0) 实测完全支持 PageIndex/PageSize（PageSize=200→200、PageIndex=2→剩余189）。
+    # 必须显式翻页，否则不传 PageSize 时只拿到服务端默认上限，数据增长后会静默截断（违反全量同步）。
+    rows = paginate_query(
+        client=runtime_client,
+        endpoint=endpoint,
+        module_name=module_name,
+        settings=runtime_settings,
+        base_payload=query_params,
+        timestamp=timestamp,
+    )
     logger.info("%s base archive sync finished: rows=%s", module_name, len(rows))
     return rows
