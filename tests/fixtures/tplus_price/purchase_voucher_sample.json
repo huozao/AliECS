@@ -1,0 +1,44 @@
+{
+  "code": "0",
+  "message": "ok",
+  "data": {
+    "ID": "purchase-voucher-1",
+    "Code": "PS-2026-001",
+    "VoucherDate": "2026-06-10",
+    "Partner": {
+      "Code": "SUP001",
+      "Name": "脱敏供应商",
+      "ShortName": "脱敏供"
+    },
+    "Department": {
+      "Name": "采购部"
+    },
+    "Clerk": {
+      "Name": "采购员A"
+    },
+    "Warehouse": {
+      "Name": "原材库"
+    },
+    "Project": {
+      "Name": "默认项目"
+    },
+    "Details": [
+      {
+        "InventoryCode": "RM-001",
+        "InventoryName": "脱敏原料",
+        "Specification": "10kg",
+        "Unit": {
+          "Name": "箱"
+        },
+        "Quantity": 12,
+        "Discount": 100,
+        "OrigDiscountPrice": 14.34,
+        "OrigDiscountAmount": 172.08,
+        "TaxRate": 13,
+        "OrigTaxPrice": 16.2,
+        "OrigTaxAmount": 194.4,
+        "TaxAmount": 22.32
+      }
+    ]
+  }
+}
