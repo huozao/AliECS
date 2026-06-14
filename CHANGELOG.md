@@ -1,5 +1,12 @@
 # 版本记录
 
+## v2.1.9：T+ 采购/销售价格改走官方报表通用查询 + 修复基础档案全量同步截断
+
+- 采购/销售价格改用官方 `reportQuery/GetReportData`（报表 `PU_PurchaseArrivalDetailRpt`＝采购价格查询、`SA_SaleDeliveryDetailRpt`＝销售价格查询），一次分页查询出整表，分页经 `TaskSessionID/SolutionID`，取代原先逐单 `GetVoucherDTO` 扇出；生产实拉与网页导出逐字段一致（采购 529 行 / 销售 1151 行），导出落 `purchase_price_*.xlsx` / `sales_price_*.xlsx` 进 health 数据导出。
+- 修复 `base_archive` 同步：原为单次调用、不传 `PageIndex/PageSize`，数据超服务端默认上限会静默截断；改为走 `paginate_query` 显式翻页保证全量（current_stock/warehouse/unit/project/brand/district 等）。实测 `/Query`(V3.0) 完全支持翻页。
+- 价格全量起始日下限放宽到 `2000-01-01`（可经环境变量 `PRICE_SYNC_BEGIN_DATE` 覆盖）。
+- 测试：重写 `tests/test_tplus_price.py`（reportQuery 响应样本），新增 `tests/test_tplus_base_archive.py`（翻页全量红→绿用例）。
+
 ## v2.1.8：新增 coding-executor 与 mcp 编程工具（阶段二只读 dry-run）
 
 - 新增 `services/coding-executor`：开发机本地 FastAPI 服务，bearer 鉴权 + 仓库白名单 + 异步任务，仅执行只读 git 操作（git_status/git_log/git_diff/list_files/read_file），含路径越界与选项注入防护。不进 ECS、不进 compose、不进 release 矩阵。
