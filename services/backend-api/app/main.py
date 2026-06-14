@@ -1647,6 +1647,33 @@ def recipe_download(file_id: str, user: dict[str, Any] = Depends(require_login))
 _XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
+_TPLUS_EXPORT_DESCRIPTIONS = {
+    "bom": "BOM 父件和子件用量；看成品由哪些原材料组成，不含价格。",
+    "inventory": "存货基础档案；含分类、采购/销售/材料标记、税率、RetailPriceNew/InvUnitPriceDTOs。销售价格先看这里；采购价未接入。",
+    "current_stock": "仓库×存货现存量/可用量；看原材库库存数量，不含价格。",
+    "partner": "往来单位档案；客户/供应商及价格等级，不是商品价格。",
+    "warehouse": "仓库档案；用于识别原材库、成品库等仓库编码。",
+    "unit_group": "计量单位组档案；辅助理解单位换算关系。",
+    "unit": "计量单位档案；含主单位、换算率等单位信息。",
+    "project": "项目档案；当前可能为空，主要用于项目辅助核算。",
+    "project_class": "项目分类档案；用于识别项目类别。",
+    "brand": "品牌档案；当前可能为空。",
+    "district": "地区档案；当前可能为空。",
+    "sale_order_list": "销售订单列表，仅单据ID/日期/单号；不含明细售价金额。",
+    "sale_delivery_list": "销货单列表，仅单据ID/日期/单号；不含明细售价金额。",
+    "purchase_order_list": "采购订单列表，仅单据ID/日期/单号；不含明细单价金额，不能核对原材料采购价。",
+    "purchase_arrival_list": "采购到货单列表，仅单据ID/日期/单号；不含明细单价金额。",
+    "purchase_receive_list": "采购入库单列表，仅单据ID/日期/单号；不含明细单价金额。",
+    "material_dispatch_list": "材料出库/领料单列表，仅单据ID/日期/单号；不含价格。",
+    "purchase_price": "采购价格表；原材料采购价优先看这里（若已同步）。",
+    "sales_price": "销售价格表；商品销售价优先看这里（若已同步）。",
+}
+
+
+def _tplus_export_description(module: str) -> str:
+    return _TPLUS_EXPORT_DESCRIPTIONS.get(module, "暂未配置说明；请按表头人工判断内容。")
+
+
 def _tplus_export_dir() -> Path:
     return Path(os.getenv("TPLUS_EXPORT_DIR", "/app/tplus-output/excel"))
 
@@ -1676,6 +1703,7 @@ def _latest_tplus_exports() -> list[dict[str, Any]]:
             {
                 "name": module,
                 "file_name": path.name,
+                "description": _tplus_export_description(module),
                 "size_bytes": stat.st_size,
                 "updated_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
                 "download_url": f"/v1/exports/tplus/{path.name}",

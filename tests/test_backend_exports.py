@@ -59,6 +59,22 @@ class BackendExportsTests(unittest.TestCase):
         self.assertEqual({"bom": "bom_20260608_065323.xlsx", "inventory": "inventory_20260607_145038.xlsx"}, names)
         self.assertTrue(all(item["download_url"].startswith("/v1/exports/tplus/") for item in items))
 
+    def test_latest_tplus_exports_includes_short_descriptions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in (
+                "inventory_20260607_145038.xlsx",
+                "purchase_order_list_20260607_145038.xlsx",
+                "unknown_module_20260607_145038.xlsx",
+            ):
+                (Path(tmp) / name).write_bytes(b"x")
+            os.environ["TPLUS_EXPORT_DIR"] = tmp
+
+            items = {item["name"]: item for item in self.main._latest_tplus_exports()}
+
+        self.assertIn("销售价格", items["inventory"]["description"])
+        self.assertIn("不含明细单价金额", items["purchase_order_list"]["description"])
+        self.assertIn("暂未配置说明", items["unknown_module"]["description"])
+
     def test_exports_catalog_includes_doc_rows_before_sheet_sync(self) -> None:
         class FakeCursor:
             def __init__(self) -> None:
