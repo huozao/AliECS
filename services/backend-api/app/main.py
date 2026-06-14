@@ -688,12 +688,15 @@ class LocalPhotoStorage(PhotoStorage):
     driver = "local"
 
     def __init__(self) -> None:
-        self.base_dir = Path(os.getenv("LOCAL_UPLOAD_DIR", "/tmp/aliecs-uploads"))
+        self.base_dir = Path(os.getenv("LOCAL_UPLOAD_DIR", "/app/uploads"))
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
     async def save(self, file: UploadFile) -> dict[str, str]:
         content = await file.read()
-        ext, _mime = _validate_photo_upload(file.filename, file.content_type, content)
+        return self.save_content(file.filename, file.content_type, content)
+
+    def save_content(self, filename: str | None, content_type: str | None, content: bytes) -> dict[str, str]:
+        ext, _mime = _validate_photo_upload(filename, content_type, content)
         filename = f"{uuid.uuid4().hex}{ext}"
         full_path = self.base_dir / filename
         full_path.write_bytes(content)
@@ -786,7 +789,12 @@ class WebDockPhotoStorage(PhotoStorage):
         content = await file.read()
         _ext, mime = _validate_photo_upload(file.filename, file.content_type, content)
         body, content_type = _multipart_photo_body(file.filename, mime, content)
-        raw = _webdock_photo_request("POST", body=body, headers={"Content-Type": content_type})
+        try:
+            raw = _webdock_photo_request("POST", body=body, headers={"Content-Type": content_type})
+        except HTTPException as exc:
+            if exc.status_code == 502:
+                return LocalPhotoStorage().save_content(file.filename, mime, content)
+            raise
         try:
             payload = json.loads(raw.decode("utf-8"))
         except Exception as exc:
@@ -817,6 +825,15 @@ def photo_storage() -> PhotoStorage:
     if driver == "webdock":
         return WebDockPhotoStorage()
     raise HTTPException(status_code=500, detail="invalid STORAGE_DRIVER")
+
+
+@app.get("/uploads/{name}")
+def serve_upload(name: str) -> FileResponse:
+    base = Path(os.getenv("LOCAL_UPLOAD_DIR", "/app/uploads")).resolve()
+    target = (base / name).resolve()
+    if base not in target.parents or not target.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(target)
 
 
 class CreateFeatureRequest(BaseModel):
