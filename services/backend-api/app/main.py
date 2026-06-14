@@ -432,6 +432,20 @@ class PutPermissionIdsRequest(BaseModel):
     permission_ids: list[int]
 
 
+class ManagedContactUpsertRequest(BaseModel):
+    channel: str
+    peer_id: str
+    display_name: str | None = None
+    remark: str | None = None
+    enabled: bool = True
+    project_url: str | None = None
+    project_name: str | None = None
+    tags: str | None = None
+    daily_quota: int | None = None
+    notes: str | None = None
+    source_sheet: str | None = None
+
+
 class MemoryUpsertRequest(BaseModel):
     couple_space_id: int | None = None
     title: str
@@ -1883,6 +1897,42 @@ def exports_tplus_download(file_name: str, _: dict[str, Any] = Depends(require_a
     if not path.is_file():
         raise HTTPException(status_code=404, detail="export file not found")
     return FileResponse(path, media_type=_XLSX_MEDIA_TYPE, filename=file_name)
+
+
+def _routing_projects(channel: str) -> dict[str, Any]:
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT peer_id, display_name, project_url, project_name
+                FROM managed_contacts
+                WHERE channel = %s
+                  AND enabled = true
+                  AND COALESCE(project_url, '') <> ''
+                ORDER BY peer_id
+                """,
+                (channel,),
+            )
+            rows = cur.fetchall()
+    lanes: dict[str, dict[str, str]] = {}
+    for peer_id, display_name, project_url, project_name in rows:
+        if not peer_id or not project_url:
+            continue
+        lanes[str(peer_id)] = {
+            "name": str(display_name or project_name or peer_id),
+            "project_url": str(project_url),
+        }
+    return {"lanes": lanes}
+
+
+@app.get("/v1/routing/wechat-projects.json")
+def routing_wechat_projects() -> dict[str, Any]:
+    return _routing_projects("wechat")
+
+
+@app.get("/v1/routing/feishu-projects.json")
+def routing_feishu_projects() -> dict[str, Any]:
+    return _routing_projects("feishu")
 
 
 @app.get("/v1/exports/external/{source_id}")
@@ -3525,6 +3575,95 @@ def admin_users(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
             for row in users
         ]
     }
+
+
+@app.get("/v1/admin/contacts")
+def admin_contacts(channel: str | None = Query(default=None), _: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    where = ""
+    params: tuple[Any, ...] = ()
+    if channel:
+        where = "WHERE channel = %s"
+        params = (channel,)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT id, channel, peer_id, display_name, remark, enabled, project_url,
+                       project_name, tags, daily_quota, notes, source_sheet, updated_at
+                FROM managed_contacts
+                {where}
+                ORDER BY channel, peer_id
+                """,
+                params,
+            )
+            rows = cur.fetchall()
+    return {
+        "items": [
+            {
+                "id": row[0],
+                "channel": row[1],
+                "peer_id": row[2],
+                "display_name": row[3],
+                "remark": row[4],
+                "enabled": row[5],
+                "project_url": row[6],
+                "project_name": row[7],
+                "tags": row[8],
+                "daily_quota": row[9],
+                "notes": row[10],
+                "source_sheet": row[11],
+                "updated_at": str(row[12]),
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.post("/v1/admin/contacts")
+def admin_upsert_contact(body: ManagedContactUpsertRequest, actor: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    if body.channel not in {"wechat", "feishu"}:
+        raise HTTPException(status_code=400, detail="invalid channel")
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO managed_contacts(
+                    channel, peer_id, display_name, remark, enabled, project_url,
+                    project_name, tags, daily_quota, notes, source_sheet, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT(channel, peer_id)
+                DO UPDATE SET
+                    display_name = EXCLUDED.display_name,
+                    remark = EXCLUDED.remark,
+                    enabled = EXCLUDED.enabled,
+                    project_url = EXCLUDED.project_url,
+                    project_name = EXCLUDED.project_name,
+                    tags = EXCLUDED.tags,
+                    daily_quota = EXCLUDED.daily_quota,
+                    notes = EXCLUDED.notes,
+                    source_sheet = EXCLUDED.source_sheet,
+                    updated_at = NOW()
+                RETURNING id
+                """,
+                (
+                    body.channel,
+                    body.peer_id,
+                    body.display_name,
+                    body.remark,
+                    body.enabled,
+                    body.project_url,
+                    body.project_name,
+                    body.tags,
+                    body.daily_quota,
+                    body.notes,
+                    body.source_sheet,
+                ),
+            )
+            contact_id = cur.fetchone()[0]
+        conn.commit()
+    _audit(actor.get("sub"), "admin.contacts.upsert", "managed_contacts", str(contact_id), body.model_dump())
+    return {"id": contact_id}
 
 
 @app.post("/v1/admin/users")
