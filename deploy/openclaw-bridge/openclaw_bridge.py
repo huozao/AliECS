@@ -22,7 +22,7 @@ OPENCLAW_METADATA_PREFIX_RE = re.compile(
     r"^(?:\[[^\]\n]*UTC\]\s*)?(?:Conversation info|Sender) \(untrusted metadata\):\s*",
     flags=re.DOTALL,
 )
-OPENCLAW_MESSAGE_ID_LINE_RE = re.compile(r"^\s*\[message_id:[^\]\n]*\]\s*\n?", re.IGNORECASE)
+OPENCLAW_MESSAGE_ID_LINE_RE = re.compile(r"^[ \t]*\[message_id:[^\]\n]*\][ \t]*\n?", re.IGNORECASE | re.MULTILINE)
 MAX_BRIDGE_IMAGES = 4
 MAX_BRIDGE_IMAGE_BYTES = 20 * 1024 * 1024
 FEISHU_PEER_PREFIXES = ("ou_", "oc_")
@@ -56,7 +56,7 @@ OPENCLAW_FILE_BLOCK_RE = re.compile(
     flags=re.DOTALL,
 )
 OPENCLAW_MEDIA_URI_RE = re.compile(r"media://inbound/([^\s\]\)\"'`]+)")
-OPENCLAW_MEDIA_ATTACHED_LINE_RE = re.compile(r"^\s*\[media attached:\s+media://inbound/[^\]]+\]\s*$", re.MULTILINE)
+OPENCLAW_MEDIA_ATTACHED_LINE_RE = re.compile(r"^[ \t]*\[media attached[^\]\n]*\][ \t]*$", re.MULTILINE)
 # Captures the bare media ID from an explicit attachment line so we only extract
 # media that was freshly attached to THIS message, not historical references in
 # OpenClaw conversation-context blocks (<conversation>…</conversation>).
@@ -68,6 +68,10 @@ OPENCLAW_MEDIA_ATTACHED_CAPTURE_RE = re.compile(
     re.MULTILINE,
 )
 OPENCLAW_MEDIA_NO_CAPTION_RE = re.compile(r"^\s*\[User sent media without caption\]\s*$", re.MULTILINE)
+# Inline image placeholder OpenClaw appends to the text for each attached image,
+# e.g. "![image]" or "![image](media://…)". The real image is forwarded as an
+# image_url part, so the placeholder is noise in the ChatGPT prompt.
+OPENCLAW_IMAGE_PLACEHOLDER_RE = re.compile(r"!\[[^\]\n]*\](\([^)\n]*\))?")
 MEDIA_INTENT_RE = re.compile(
     r"(图片|照片|这张图|图像|头像|原图|参考图|风格图|背景|修图|改图|抠图|"
     r"第一张|第二张|第三张|两张|多张|image|photo|picture|avatar|reference)",
@@ -139,7 +143,7 @@ def clean_user_text(text: Any) -> str:
         return ""
     _metadata, metadata_end = parse_openclaw_metadata_prefix(text)
     cleaned = text[metadata_end:] if metadata_end else text
-    cleaned = OPENCLAW_MESSAGE_ID_LINE_RE.sub("", cleaned, count=1)
+    cleaned = OPENCLAW_MESSAGE_ID_LINE_RE.sub("", cleaned)
     cleaned = replace_binary_file_blocks(cleaned)
     return strip_openclaw_media_helper_text(cleaned).strip()
 
@@ -161,6 +165,7 @@ def replace_binary_file_blocks(text: str) -> str:
 def strip_openclaw_media_helper_text(text: str) -> str:
     text = OPENCLAW_MEDIA_ATTACHED_LINE_RE.sub("", text)
     text = OPENCLAW_MEDIA_NO_CAPTION_RE.sub("", text)
+    text = OPENCLAW_IMAGE_PLACEHOLDER_RE.sub("", text)
     lines = []
     for line in text.splitlines():
         stripped = line.strip()

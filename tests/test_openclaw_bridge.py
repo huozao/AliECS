@@ -885,6 +885,34 @@ def test_bridge_keeps_wechat_text_untouched():
     assert outbound["messages"][0]["content"] == "能P图嘛"
 
 
+def test_bridge_cleans_feishu_multi_image_prompt_noise():
+    # OpenClaw multi-image format: media-attached summary + numbered lines, a
+    # message_id line (not leading), the sender prefix, and one ![image] per image.
+    # The prompt forwarded to ChatGPT must contain only the user's words.
+    bridge = load_bridge()
+    body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Sender (untrusted metadata):\n```json\n"
+                    '{"label":"hao (ou_28d4)","id":"ou_28d4","name":"hao"}\n```\n\n'
+                    "[media attached: 2 files]\n"
+                    "[media attached 1/2: media://inbound/x.png (image/png)]\n"
+                    "[media attached 2/2: media://inbound/y.png (image/png)]\n"
+                    "[message_id: om_q]\n"
+                    "hao: /新对话 帮我把2个图片中的人放一起\n![image]\n![image]"
+                ),
+            }
+        ],
+        "metadata": {"peer_id": "user:ou_28d4", "message_id": "om_q", "chat_type": "private"},
+    }
+    outbound = bridge.build_webdock_body(body)
+    content = outbound["messages"][0]["content"]
+    text = content if isinstance(content, str) else content[0]["text"]
+    assert text == "/新对话 帮我把2个图片中的人放一起"
+
+
 def test_bridge_dedups_single_inbound_image_to_one_part(monkeypatch, tmp_path):
     # One inbound image annotated BOTH as a text media-ref and an image_url part
     # (Feishu) must yield exactly ONE forwarded image part, not two.
