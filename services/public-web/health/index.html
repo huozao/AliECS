@@ -100,8 +100,8 @@
       attention.innerHTML=items.map((item)=>`<div class="attention ${item.level||'warning'}"><strong>${item.code}</strong><br/><span>${item.message||''}</span></div>`).join('');
     }
     function renderTplus(t){
-      const rows=(t.recent_requests||[]).map((item)=>`<tr><td>${item.id}</td><td>${item.module}</td><td>${item.mode}</td><td>${item.status}</td><td>${fmtTime(item.requested_at)}</td><td>${fmtTime(item.finished_at)}</td><td>${item.reason_event_id||''}</td></tr>`).join('');
-      tplus.innerHTML=`<p class="muted">pending ${t.pending_requests||0} · running ${t.running_requests||0} · failed ${t.failed_requests||0}</p><table><thead><tr><th>ID</th><th>模块</th><th>模式</th><th>状态</th><th>请求时间</th><th>完成时间</th><th>事件</th></tr></thead><tbody>${rows||'<tr><td colspan="7" class="muted">暂无请求</td></tr>'}</tbody></table>`;
+      const rows=(t.recent_requests||[]).map((item,index)=>`<tr><td>${esc(item.id)}</td><td>${esc(item.module)}</td><td>${esc(item.mode)}</td><td>${esc(item.status)}</td><td>${fmtTime(item.requested_at)}</td><td>${fmtTime(item.finished_at)}</td><td>${esc(item.reason_event_id||'')}</td><td><button class="btn primary" type="button" onclick="openTplusRequestDetail(${index})">详情</button></td></tr>`).join('');
+      tplus.innerHTML=`<p class="muted">pending ${t.pending_requests||0} · running ${t.running_requests||0} · failed ${t.failed_requests||0}</p><table><thead><tr><th>ID</th><th>模块</th><th>模式</th><th>状态</th><th>请求时间</th><th>完成时间</th><th>事件</th><th>详情</th></tr></thead><tbody>${rows||'<tr><td colspan="8" class="muted">暂无请求</td></tr>'}</tbody></table>`;
     }
     function renderRecon(r){
       const rows=(r.recent||[]).map((item)=>`<tr><td>${item.id}</td><td>${item.module}</td><td>${item.severity}</td><td>${item.summary}</td><td>${fmtTime(item.created_at)}</td><td><button class="btn primary" type="button" onclick="openRecon(${item.id})">打开详情</button></td></tr>`).join('');
@@ -114,6 +114,13 @@
     function scrollToHosts(){hosts.scrollIntoView({behavior:'smooth',block:'start'});}
     function openModal(title,html){modalTitle.textContent=title;modalBody.innerHTML=html;detailModal.classList.add('show');}
     function closeModal(){detailModal.classList.remove('show');modalBody.innerHTML='';}
+    function jsonDetailBlock(title,value){return `<h4>${title}</h4><pre>${esc(JSON.stringify(value??{},null,2))}</pre>`;}
+    function openTplusRequestDetail(index){
+      const item=latestStatus&&latestStatus.tplus&&(latestStatus.tplus.recent_requests||[])[index];
+      if(!item)return;
+      const summary=`<p class="muted">请求 ${esc(item.id)} · run ${esc(item.sync_run_id||'-')} · 行数 ${esc(item.row_count??'-')} · exit ${esc(item.exit_code??'-')}</p><table><tbody><tr><th>模块</th><td>${esc(item.module)}</td><th>模式</th><td>${esc(item.mode)}</td></tr><tr><th>状态</th><td>${esc(item.status)}</td><th>事件</th><td>${esc(item.reason_event_id||'-')}</td></tr><tr><th>请求时间</th><td>${fmtTime(item.requested_at)}</td><th>完成时间</th><td>${fmtTime(item.finished_at)}</td></tr></tbody></table>`;
+      openModal(`T+ 同步详情 #${item.id}`,`${summary}${jsonDetailBlock('请求目标',item.target_json)}${jsonDetailBlock('执行结果',item.detail_json)}${jsonDetailBlock('请求错误',item.request_error_json)}${jsonDetailBlock('执行错误',item.error_json)}`);
+    }
     function renderDiffItemRows(title,items){
       const rows=(items||[]).map((item)=>`<tr><td>${esc(item.parent_code)}</td><td>${esc(item.parent_name)}</td><td>${esc(item.version)}</td><td>${esc(item.child_code)}</td><td>${esc(item.child_name)}</td><td>${esc(item.unit)}</td><td>${esc(item.quantity)}</td><td>${esc(item.disabled)}</td></tr>`).join('');
       return `<h4>${title}（${(items||[]).length}）</h4><table><thead><tr><th>父件编码</th><th>父件名称</th><th>版本</th><th>子件编码</th><th>子件名称</th><th>单位</th><th>数量</th><th>停用</th></tr></thead><tbody>${rows||'<tr><td colspan="8" class="muted">无</td></tr>'}</tbody></table>`;
