@@ -252,25 +252,41 @@ def extract_image_parts(content: Any) -> list[dict[str, Any]]:
     """Normalize any image parts in an OpenClaw message content to the OpenAI
     vision shape WebDock expects: {"type": "image_url", "image_url": {"url": ...}}.
     Accepts both {"image_url": {"url": ...}} and {"image_url": "<url>"}; URLs may
-    be http(s) or base64 data URLs. Text-only content yields nothing."""
+    be http(s) or base64 data URLs. Text-only content yields nothing.
+
+    A single inbound image must yield exactly ONE part. OpenClaw (Feishu) may
+    annotate the same attachment BOTH as a `[media attached: …]` text ref AND a
+    separate image_url part, which previously produced two copies. Inbound
+    text-refs resolve to data URLs from the mounted inbound dir and are always
+    fetchable by WebDock, so when both sources are present we keep the text-ref
+    parts and drop the image_url parts; when no text-ref resolves we fall back to
+    the image_url parts (e.g. channels that only ever send image_url)."""
     if isinstance(content, str):
         return extract_openclaw_media_image_parts(content)
     if not isinstance(content, list):
         return []
-    parts: list[dict[str, Any]] = []
+    text_ref_parts: list[dict[str, Any]] = []
+    image_url_parts: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
     for item in content:
         if not isinstance(item, dict):
             continue
         for key in ("text", "content"):
             value = item.get(key)
             if isinstance(value, str):
-                parts.extend(extract_openclaw_media_image_parts(value))
+                for part in extract_openclaw_media_image_parts(value):
+                    url = part["image_url"]["url"]
+                    if url not in seen_urls:
+                        seen_urls.add(url)
+                        text_ref_parts.append(part)
         image_url = item.get("image_url")
         if image_url is None:
             continue
         url = image_url.get("url") if isinstance(image_url, dict) else image_url
-        if isinstance(url, str) and url.strip():
-            parts.append({"type": "image_url", "image_url": {"url": url.strip()}})
+        if isinstance(url, str) and url.strip() and url.strip() not in seen_urls:
+            seen_urls.add(url.strip())
+            image_url_parts.append({"type": "image_url", "image_url": {"url": url.strip()}})
+    parts = text_ref_parts if text_ref_parts else image_url_parts
     return parts[:MAX_BRIDGE_IMAGES]
 
 
@@ -411,6 +427,8 @@ def request_details(body: dict[str, Any]) -> dict[str, Any]:
     user_text = get_last_user_message(messages)
     images = get_last_user_images(messages)
     metadata = build_webdock_metadata(body)
+    if metadata.get("channel") == "feishu":
+        user_text = _strip_feishu_sender_prefix(user_text, get_last_user_metadata(messages))
     if not metadata.get("peer_id"):
         inherited_metadata = get_recent_lane_metadata()
         if inherited_metadata:
@@ -511,6 +529,27 @@ def _strip_lane_peer_prefix(value: Any) -> str:
     for prefix in ("user:", "chat:", "open_id:", "openid:"):
         if lowered.startswith(prefix):
             return text[len(prefix):]
+    return text
+
+
+def _strip_feishu_sender_prefix(text: str, raw_metadata: dict[str, Any]) -> str:
+    """OpenClaw prefixes Feishu DM text with '<sender name>: '. Strip it (only when
+    it matches the known sender) so leading triggers like '/新对话' work and the
+    prompt isn't polluted. Never strips an arbitrary 'word: '."""
+    if not isinstance(text, str) or not text:
+        return text
+    names: list[str] = []
+    for key in ("name", "label"):
+        raw = str(raw_metadata.get(key) or "").strip()
+        if raw:
+            names.append(raw)
+            names.append(raw.split(" (")[0].strip())  # "hao (ou_…)" -> "hao"
+    for name in names:
+        if not name:
+            continue
+        prefix = f"{name}: "
+        if text.startswith(prefix):
+            return text[len(prefix):].lstrip()
     return text
 
 

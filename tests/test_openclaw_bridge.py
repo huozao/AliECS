@@ -849,3 +849,60 @@ def test_keepalive_interval_well_under_openclaw_idle(monkeypatch):
     bridge = load_bridge()
     monkeypatch.delenv("OPENCLAW_BRIDGE_KEEPALIVE_SECONDS", raising=False)
     assert 0 < bridge.keepalive_interval() <= 30
+
+
+def test_bridge_strips_feishu_sender_prefix_for_new_chat_trigger():
+    # OpenClaw prefixes Feishu DM text with "<sender name>: ", which broke the
+    # webdock "/新对话" trigger (it only matches text starting with /新对话).
+    bridge = load_bridge()
+    body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Sender (untrusted metadata):\n```json\n"
+                    '{"label":"hao (ou_28d4)","id":"ou_28d4","name":"hao"}\n```\n\n'
+                    "[message_id: om_z]\nhao: /新对话 你好"
+                ),
+            }
+        ],
+        "metadata": {"peer_id": "user:ou_28d4", "message_id": "om_z", "chat_type": "private"},
+    }
+    outbound = bridge.build_webdock_body(body)
+    content = outbound["messages"][0]["content"]
+    text = content if isinstance(content, str) else content[0]["text"]
+    assert text.startswith("/新对话")
+    assert "hao:" not in text
+
+
+def test_bridge_keeps_wechat_text_untouched():
+    bridge = load_bridge()
+    body = {
+        "messages": [{"role": "user", "content": "能P图嘛"}],
+        "metadata": {"wechat_account": "default", "peer_id": "o9cq80@im.wechat", "chat_type": "private"},
+    }
+    outbound = bridge.build_webdock_body(body)
+    assert outbound["messages"][0]["content"] == "能P图嘛"
+
+
+def test_bridge_dedups_single_inbound_image_to_one_part(monkeypatch, tmp_path):
+    # One inbound image annotated BOTH as a text media-ref and an image_url part
+    # (Feishu) must yield exactly ONE forwarded image part, not two.
+    bridge = load_bridge()
+    inbound = tmp_path / "abc.png"
+    inbound.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 2048)
+    monkeypatch.setenv("OPENCLAW_INBOUND_MEDIA_DIR", str(tmp_path))
+    body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "改成卡通 [media attached: media://inbound/abc.png]"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,aaaa"}},
+                ],
+            }
+        ],
+        "metadata": {"peer_id": "user:ou_28d4", "message_id": "om_a", "chat_type": "private"},
+    }
+    images = bridge.get_last_user_images(body["messages"])
+    assert len(images) == 1
