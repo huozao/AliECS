@@ -515,6 +515,23 @@ class PostgresDocSyncStore:
         self.conn.commit()
         return decision
 
+    def delete_missing_records(self, source_id: int, external_record_ids: list[str]) -> int:
+        with self.conn.cursor() as cur:
+            if external_record_ids:
+                cur.execute(
+                    """
+                    DELETE FROM external_records
+                    WHERE source_id = %s
+                      AND NOT (external_record_id = ANY(%s))
+                    """,
+                    (source_id, external_record_ids),
+                )
+            else:
+                cur.execute("DELETE FROM external_records WHERE source_id = %s", (source_id,))
+            deleted_count = int(cur.rowcount or 0)
+        self.conn.commit()
+        return deleted_count
+
     def upsert_managed_contact(self, contact: dict[str, Any]) -> None:
         with self.conn.cursor() as cur:
             cur.execute(
