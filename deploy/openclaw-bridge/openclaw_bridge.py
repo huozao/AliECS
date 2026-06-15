@@ -19,11 +19,13 @@ from typing import Any
 FALLBACK_MESSAGE = os.getenv("WEB_DOCK_FALLBACK_MESSAGE", "ChatGPT 浏览器暂不可用，请稍后再试。")
 NO_REPLY = "__OPENCLAW_BRIDGE_NO_REPLY__"
 OPENCLAW_METADATA_PREFIX_RE = re.compile(
-    r"^(?:\[[^\]\n]*UTC\]\s*)?Conversation info \(untrusted metadata\):\s*",
+    r"^(?:\[[^\]\n]*UTC\]\s*)?(?:Conversation info|Sender) \(untrusted metadata\):\s*",
     flags=re.DOTALL,
 )
+OPENCLAW_MESSAGE_ID_LINE_RE = re.compile(r"^\s*\[message_id:[^\]\n]*\]\s*\n?", re.IGNORECASE)
 MAX_BRIDGE_IMAGES = 4
 MAX_BRIDGE_IMAGE_BYTES = 20 * 1024 * 1024
+FEISHU_PEER_PREFIXES = ("ou_", "oc_")
 
 # MIME types forwarded to webdock as file attachments.
 # text/* is already inlined by OpenClaw as <file ...> blocks in the message text,
@@ -137,6 +139,7 @@ def clean_user_text(text: Any) -> str:
         return ""
     _metadata, metadata_end = parse_openclaw_metadata_prefix(text)
     cleaned = text[metadata_end:] if metadata_end else text
+    cleaned = OPENCLAW_MESSAGE_ID_LINE_RE.sub("", cleaned, count=1)
     cleaned = replace_binary_file_blocks(cleaned)
     return strip_openclaw_media_helper_text(cleaned).strip()
 
@@ -458,7 +461,11 @@ def build_webdock_metadata(body: dict[str, Any]) -> dict[str, Any]:
     wechat_account = _first_metadata_value(metadata, "wechat_account", "account", "channel_id", "channel_name")
     chat_type = _first_metadata_value(metadata, "chat_type", "conversation_type", "room_type") or "private"
     if channel == "feishu":
-        peer_id = _first_metadata_value(metadata, "peer_id", "open_id", "openId", "sender_id", "user_id", "chat_id")
+        peer_id = _strip_lane_peer_prefix(
+            _first_metadata_value(
+                metadata, "peer_id", "open_id", "openId", "sender_id", "user_id", "chat_id", "id"
+            )
+        )
     else:
         peer_id = _first_metadata_value(
             metadata,
@@ -498,9 +505,37 @@ def normalize_channel(value: Any) -> str:
     return ""
 
 
+def _strip_lane_peer_prefix(value: Any) -> str:
+    text = str(value or "").strip()
+    lowered = text.lower()
+    for prefix in ("user:", "chat:", "open_id:", "openid:"):
+        if lowered.startswith(prefix):
+            return text[len(prefix):]
+    return text
+
+
 def _looks_like_feishu(metadata: dict[str, Any]) -> bool:
+    if metadata.get("open_id"):
+        return True
     message_id = str(metadata.get("message_id") or "").lower()
-    return bool(metadata.get("open_id") or message_id.startswith(("openclaw-feishu:", "openclaw-lark:")))
+    if message_id.startswith(("openclaw-feishu:", "openclaw-lark:", "om_")):
+        return True
+    for key in (
+        "peer_id",
+        "open_id",
+        "openId",
+        "sender_id",
+        "user_id",
+        "chat_id",
+        "from_user_id",
+        "conversation_id",
+        "id",
+    ):
+        candidate = _strip_lane_peer_prefix(metadata.get(key)).lower()
+        if candidate.startswith(FEISHU_PEER_PREFIXES):
+            return True
+    return False
+
 
 
 def remember_lane_metadata(metadata: dict[str, Any]) -> None:

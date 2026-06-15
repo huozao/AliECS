@@ -179,6 +179,75 @@ def test_bridge_forwards_feishu_open_id_as_isolated_lane(monkeypatch):
     assert bridge.lane_batch_key(outbound["metadata"]) == "feishu:ou_abc"
 
 
+def test_bridge_detects_feishu_from_real_openclaw_metadata():
+    bridge = load_bridge()
+
+    body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Sender (untrusted metadata):\n```json\n"
+                    '{"label":"hao (ou_28d4)","id":"ou_28d4","name":"hao"}\n```\n\n'
+                    "[message_id: om_x100]\nhao: 状态测试：请回复 feishu-dm-ok"
+                ),
+            }
+        ],
+        "metadata": {
+            "peer_id": "user:ou_28d4",
+            "message_id": "om_x100",
+            "chat_type": "private",
+        },
+    }
+
+    outbound = bridge.build_webdock_body(body)
+    md = outbound["metadata"]
+
+    assert md["channel"] == "feishu"
+    assert md["peer_id"] == "ou_28d4"
+    assert md["chatgpt_project"] == "Feishu"
+    assert bridge.lane_batch_key(md) == "feishu:ou_28d4"
+    content = outbound["messages"][0]["content"]
+    assert "untrusted metadata" not in content
+    assert "message_id" not in content
+    assert "状态测试：请回复 feishu-dm-ok" in content
+
+
+def test_bridge_detects_feishu_group_chat_id():
+    bridge = load_bridge()
+
+    body = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {"peer_id": "chat:oc_6510eb", "message_id": "om_y", "chat_type": "group"},
+    }
+
+    md = bridge.build_webdock_body(body)["metadata"]
+
+    assert md["channel"] == "feishu"
+    assert md["peer_id"] == "oc_6510eb"
+
+
+def test_bridge_keeps_wechat_lane_for_real_wechat_metadata():
+    bridge = load_bridge()
+
+    body = {
+        "messages": [{"role": "user", "content": "能P图嘛"}],
+        "metadata": {
+            "wechat_account": "default",
+            "peer_id": "o9cq80whD47YZs0xR1Y9Ih8rdVnc@im.wechat",
+            "chat_type": "private",
+            "message_id": "123",
+        },
+    }
+
+    md = bridge.build_webdock_body(body)["metadata"]
+
+    assert "channel" not in md
+    assert md["wechat_account"] == "default"
+    assert md["peer_id"] == "o9cq80whD47YZs0xR1Y9Ih8rdVnc@im.wechat"
+    assert bridge.lane_batch_key(md).startswith("default|")
+
+
 def test_bridge_forwards_inbound_image_as_vision_parts(monkeypatch):
     bridge = load_bridge()
     monkeypatch.setenv("WEB_DOCK_MODEL", "browser-chatgpt")
