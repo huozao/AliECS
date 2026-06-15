@@ -1023,10 +1023,13 @@ def _tplus_status_from_db() -> dict[str, Any]:
                     status["last_success_at"] = str(last_success[0])
                 cur.execute(
                     """
-                    SELECT id, module, mode, status, requested_at, started_at, finished_at, reason_event_id
-                    FROM integration_sync_requests
-                    WHERE provider = 'chanjet'
-                    ORDER BY requested_at DESC, id DESC
+                    SELECT r.id, r.module, r.mode, r.status, r.requested_at, r.started_at,
+                           r.finished_at, r.reason_event_id, r.target_json, r.sync_run_id,
+                           r.error_json, sr.detail_json, sr.error_json, sr.row_count, sr.exit_code
+                    FROM integration_sync_requests r
+                    LEFT JOIN integration_sync_runs sr ON sr.id = r.sync_run_id
+                    WHERE r.provider = 'chanjet'
+                    ORDER BY r.requested_at DESC, r.id DESC
                     LIMIT 10
                     """
                 )
@@ -1040,6 +1043,13 @@ def _tplus_status_from_db() -> dict[str, Any]:
                         "started_at": str(row[5]) if row[5] else None,
                         "finished_at": str(row[6]) if row[6] else None,
                         "reason_event_id": row[7],
+                        "target_json": _json_value(row[8]),
+                        "sync_run_id": row[9],
+                        "request_error_json": _json_value(row[10]),
+                        "detail_json": _json_value(row[11]),
+                        "error_json": _json_value(row[12]),
+                        "row_count": row[13],
+                        "exit_code": row[14],
                     }
                     for row in cur.fetchall()
                 ]
@@ -1279,7 +1289,7 @@ def _sync_run_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
         "finished_at": str(row[5]) if row[5] else None,
         "row_count": row[6],
         "exit_code": row[7],
-        "detail_json": row[8],
+        "detail_json": _json_value(row[8]),
     }
 
 

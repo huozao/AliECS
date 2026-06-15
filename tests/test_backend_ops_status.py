@@ -106,6 +106,23 @@ class BackendOpsStatusTests(unittest.TestCase):
         self.assertEqual("/formula/", active[2]["url"])
         self.assertEqual("formula.read", active[2]["required_permission"])
 
+    def test_tplus_recent_requests_include_detail_payload_for_manual_check(self) -> None:
+        from app import main as main_module
+
+        old_conn = main_module._conn
+        main_module._conn = lambda: _FakeTplusStatusConn()
+        try:
+            status = main_module._tplus_status_from_db()
+        finally:
+            main_module._conn = old_conn
+
+        request = status["recent_requests"][0]
+        self.assertEqual({"code": "6830"}, request["target_json"])
+        self.assertEqual({"mode": "incremental", "target_json": {"code": "6830"}}, request["detail_json"])
+        self.assertEqual({}, request["error_json"])
+        self.assertEqual(501, request["row_count"])
+        self.assertEqual(88, request["sync_run_id"])
+
     def test_formula_cost_rbac_seed_includes_requested_roles_and_permission(self) -> None:
         migration = Path(__file__).resolve().parents[1] / "db" / "migrations" / "0012_formula_cost_rbac.sql"
         sql = migration.read_text(encoding="utf-8")
@@ -128,6 +145,68 @@ class BackendOpsStatusTests(unittest.TestCase):
         self.assertIn("'formula.cost.calculate'", sql)
         self.assertIn("'配方成本核算'", sql)
         self.assertIn("WHERE r.code = 'admin' AND p.code = 'formula.cost.calculate'", sql)
+
+
+class _FakeTplusStatusConn:
+    def cursor(self) -> "_FakeTplusStatusCursor":
+        return _FakeTplusStatusCursor()
+
+    def close(self) -> None:
+        pass
+
+
+class _FakeTplusStatusCursor:
+    def __init__(self) -> None:
+        self._rows: list[tuple[Any, ...]] = []
+        self._one: tuple[Any, ...] | None = None
+
+    def __enter__(self) -> "_FakeTplusStatusCursor":
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        pass
+
+    def execute(self, sql: str, params: tuple[Any, ...] | list[Any] | None = None) -> None:
+        normalized = " ".join(sql.lower().split())
+        self._rows = []
+        self._one = None
+        if normalized.startswith("select status, count(*)"):
+            self._rows = [("pending", 0), ("failed", 0)]
+            return
+        if normalized.startswith("select id, module, mode, status, started_at, finished_at, row_count"):
+            self._one = (88, "bom", "incremental", "success", "2026-06-15 15:55:32+08", "2026-06-15 15:56:13+08", 501, 0, {"run": 1})
+            return
+        if normalized.startswith("select finished_at"):
+            self._one = ("2026-06-15 15:56:13+08",)
+            return
+        if normalized.startswith("select r.id, r.module, r.mode, r.status"):
+            self._rows = [
+                (
+                    58,
+                    "bom",
+                    "incremental",
+                    "success",
+                    "2026-06-15 15:55:32+08",
+                    "2026-06-15 15:55:33+08",
+                    "2026-06-15 15:56:13+08",
+                    "10728331-569a-443f-89ad-b8b22df7a591",
+                    {"code": "6830"},
+                    88,
+                    {},
+                    {"mode": "incremental", "target_json": {"code": "6830"}},
+                    {},
+                    501,
+                    0,
+                )
+            ]
+            return
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return self._rows
+
+    def fetchone(self) -> tuple[Any, ...] | None:
+        return self._one
 
 
 class BackendOpsDatabaseActionTests(unittest.TestCase):
