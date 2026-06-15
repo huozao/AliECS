@@ -10,11 +10,11 @@ CONTACT_SHEET_CHANNELS = {
 
 FIELD_ALIASES = {
     "peer_id": ("peer_id", "Peer ID", "用户ID", "渠道用户ID", "微信ID", "微信peer", "飞书open_id", "open_id"),
-    "display_name": ("display_name", "昵称", "显示名", "用户名", "姓名"),
+    "display_name": ("display_name", "昵称", "显示名", "用户名", "姓名", "微信名称", "飞书名称"),
     "remark": ("remark", "备注", "真名"),
     "enabled": ("enabled", "启用", "是否启用", "权限开关", "权限"),
-    "project_url": ("project_url", "ChatGPT项目地址", "项目地址", "project"),
-    "project_name": ("project_name", "项目名称", "ChatGPT项目名"),
+    "project_url": ("project_url", "ChatGPT项目地址", "项目地址", "project", "新对话链接"),
+    "project_name": ("project_name", "项目名称", "ChatGPT项目名", "所属项目名称"),
     "tags": ("tags", "标签", "分组"),
     "daily_quota": ("daily_quota", "每日配额", "配额"),
     "notes": ("notes", "说明", "备注说明"),

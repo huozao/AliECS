@@ -78,6 +78,28 @@ class ManagedContactsSyncTests(unittest.TestCase):
 
         self.assertEqual("李四", store.contacts[("feishu", "ou_x")]["display_name"])
 
+    def test_control_panel_sheet_aliases_match_runtime_columns(self) -> None:
+        from app.pipelines.managed_contacts import sync_managed_contacts_from_sheet
+
+        store = FakeContactStore()
+        sync_managed_contacts_from_sheet(
+            store,
+            "微信用户清单",
+            [
+                {
+                    "peer_id": "o9cq80whD47YZs0xR1Y9Ih8rdVnc_im.wechat",
+                    "微信名称": "微信A",
+                    "新对话链接": "https://chatgpt.com/g/g-p-weixin-a/project",
+                    "所属项目名称": "weixin-a",
+                }
+            ],
+        )
+
+        row = store.contacts[("wechat", "o9cq80whD47YZs0xR1Y9Ih8rdVnc_im.wechat")]
+        self.assertEqual("微信A", row["display_name"])
+        self.assertEqual("https://chatgpt.com/g/g-p-weixin-a/project", row["project_url"])
+        self.assertEqual("weixin-a", row["project_name"])
+
     def test_unknown_sheet_is_ignored(self) -> None:
         from app.pipelines.managed_contacts import sync_managed_contacts_from_sheet
 

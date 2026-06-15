@@ -48,10 +48,12 @@ def _sync_sheet_records(
         f"[企业微信同步] docid={docid} sheet_id={sheet_id} "
         f"完整拉取 {len(records)} 条，分页 {records_response.get('page_count', 1)} 页。"
     )
+    seen_record_ids: list[str] = []
     for record in records:
         if not isinstance(record, dict):
             continue
         snapshot = build_record_snapshot(record, field_titles)
+        seen_record_ids.append(snapshot.external_record_id)
         decision = store.upsert_record(source_id, snapshot)
         if sync_managed_contact_from_row(store, sheet_name, snapshot.normalized_json):
             counts["managed_contact_count"] = counts.get("managed_contact_count", 0) + 1
@@ -59,6 +61,9 @@ def _sync_sheet_records(
             counts["created_count"] += 1
         elif decision.action == "update":
             counts["updated_count"] += 1
+    if hasattr(store, "delete_missing_records"):
+        deleted_count = store.delete_missing_records(source_id, seen_record_ids)
+        counts["deleted_count"] = counts.get("deleted_count", 0) + int(deleted_count or 0)
     store.mark_source_synced(source_id)
 
 
