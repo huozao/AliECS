@@ -85,6 +85,47 @@ class ImmichClientTests(unittest.TestCase):
         self.assertEqual(30.1, asset.latitude)
         self.assertEqual(120.2, asset.longitude)
 
+    def test_search_assets_posts_metadata_query_and_normalizes_results(self) -> None:
+        ImmichAsset, ImmichClient, ImmichConfig = load_immich_client()
+        payload = {
+            "assets": {
+                "items": [
+                    {
+                        "id": "asset-2",
+                        "originalFileName": "b.jpg",
+                        "fileCreatedAt": "2026-04-01T08:00:00Z",
+                        "exifInfo": {"latitude": 31.2, "longitude": 121.4},
+                    }
+                ]
+            }
+        }
+        response = Mock()
+        response.status = 200
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=None)
+        response.read.return_value = json.dumps(payload).encode("utf-8")
+
+        with patch("app.immich_client.urllib.request.urlopen", return_value=response) as urlopen:
+            client = ImmichClient(
+                ImmichConfig(
+                    enabled=True,
+                    base_url="https://immich.example/",
+                    api_key="secret",
+                    timeout_seconds=5,
+                )
+            )
+            assets = client.search_assets(query="春分", taken_after="2026-03-01", taken_before="2026-04-30", page=2)
+
+        request = urlopen.call_args.args[0]
+        body = json.loads(request.data.decode("utf-8"))
+        self.assertEqual("https://immich.example/api/search/metadata", request.full_url)
+        self.assertEqual("POST", request.get_method())
+        self.assertEqual("春分", body["query"])
+        self.assertEqual("2026-03-01", body["takenAfter"])
+        self.assertEqual("2026-04-30", body["takenBefore"])
+        self.assertEqual(2, body["page"])
+        self.assertEqual([ImmichAsset("asset-2", "b.jpg", "2026-04-01T08:00:00Z", 31.2, 121.4)], assets)
+
 
 if __name__ == "__main__":
     unittest.main()

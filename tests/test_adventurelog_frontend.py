@@ -8,18 +8,21 @@ COUPLE_PAGE = ROOT / "services" / "public-web" / "couple" / "index.html"
 MAP_PAGE = ROOT / "services" / "public-web" / "map" / "index.html"
 
 
-def test_couple_dashboard_links_map_and_album_to_adventurelog():
+def test_couple_dashboard_keeps_map_and_album_in_app():
     html = COUPLE_PAGE.read_text(encoding="utf-8")
 
-    assert "https://adventure.hydwang.xyz" in html
-    assert "window.open('https://adventure.hydwang.xyz','_blank','noopener')" in html
-    assert "前往 旅行足迹/相册（AdventureLog）" in html
+    assert "https://adventure.hydwang.xyz" not in html
+    assert "data-adventure-label" not in html
+    assert 'href="/map/"' in html
+    assert 'href="#gallery"' in html
+    assert "/v1/photos?page=1&page_size=30" in html
 
 
-def test_map_page_is_retired_with_adventurelog_redirect():
+def test_map_page_uses_in_app_leaflet_memories():
     html = MAP_PAGE.read_text(encoding="utf-8")
 
-    assert "地图足迹已迁移至 AdventureLog" in html
-    assert "setTimeout(()=>location.href='https://adventure.hydwang.xyz',1500)" in html
-    assert "L.map(" not in html
-    assert "/v1/map/memories" not in html
+    assert "https://adventure.hydwang.xyz" not in html
+    assert "http-equiv=\"refresh\"" not in html
+    assert "L.map(" in html
+    assert "/v1/map/memories" in html
+    assert "/memories/detail.html?id=" in html
