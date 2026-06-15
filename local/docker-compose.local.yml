@@ -33,6 +33,18 @@ services:
       COUPLE_ROUTE: ${COUPLE_ROUTE:-/couple/}
       COUPLE_ALLOWED_USERS: ${COUPLE_ALLOWED_USERS:-admin}
       COUPLE_ALLOWED_EMAILS: ${COUPLE_ALLOWED_EMAILS:-}
+      SHARE_BASE_URL: ${SHARE_BASE_URL:-http://localhost:8080}
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
+      LOCAL_UPLOAD_DIR: ${LOCAL_UPLOAD_DIR:-/app/uploads}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-15}
+      WEBDOCK_PHOTO_BASE_URL: ${WEBDOCK_PHOTO_BASE_URL:-http://host.docker.internal:11800}
+      WEBDOCK_PHOTO_API_TOKEN: ${WEBDOCK_PHOTO_API_TOKEN:-}
+      WEBDOCK_PHOTO_TIMEOUT_SECONDS: ${WEBDOCK_PHOTO_TIMEOUT_SECONDS:-30}
+      IMMICH_ENABLED: ${IMMICH_ENABLED:-false}
+      IMMICH_BASE_URL: ${IMMICH_BASE_URL:-https://immich.hydwang.xyz}
+      IMMICH_API_KEY: ${IMMICH_API_KEY:-}
+      IMMICH_TIMEOUT_SECONDS: ${IMMICH_TIMEOUT_SECONDS:-20}
+      IMMICH_PROXY_MODE: ${IMMICH_PROXY_MODE:-backend}
       CHANJET_APP_KEY: ${CHANJET_APP_KEY:-}
       CHANJET_APP_SECRET: ${CHANJET_APP_SECRET:-}
       CHANJET_WEBHOOK_AES_KEY: ${CHANJET_WEBHOOK_AES_KEY:-}
@@ -52,6 +64,7 @@ services:
       - ../services/tplus-sync-worker/output:/app/tplus-output:ro
       - recipe_active_bom:/app/recipe-active-bom
       - tplus_sync_requests:/app/tplus-sync-requests
+      - uploads:/app/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -161,3 +174,4 @@ volumes:
   pgdata:
   recipe_active_bom:
   tplus_sync_requests:
+  uploads:

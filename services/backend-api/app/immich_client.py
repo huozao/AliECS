@@ -23,6 +23,7 @@ class ImmichAsset:
     taken_at: str | None
     latitude: float | None
     longitude: float | None
+    thumbnail_url: str | None = None
 
 
 def load_immich_config() -> ImmichConfig:
@@ -64,29 +65,79 @@ class ImmichClient:
 
     def get_asset(self, asset_id: str) -> ImmichAsset:
         payload = self._request_json(f"/api/assets/{urllib.parse.quote(asset_id, safe='')}")
+        return self._asset_from_payload(payload, fallback_id=asset_id)
+
+    def search_assets(
+        self,
+        query: str | None = None,
+        taken_after: str | None = None,
+        taken_before: str | None = None,
+        page: int = 1,
+    ) -> list[ImmichAsset]:
+        payload: dict[str, object] = {"page": max(1, int(page)), "size": 30}
+        if query:
+            payload["query"] = query
+        if taken_after:
+            payload["takenAfter"] = taken_after
+        if taken_before:
+            payload["takenBefore"] = taken_before
+        data = self._request_json("/api/search/metadata", method="POST", payload=payload)
+        raw_items = data.get("items")
+        assets = data.get("assets")
+        if raw_items is None and isinstance(assets, dict):
+            raw_items = assets.get("items")
+        if raw_items is None:
+            raw_items = data.get("results") or []
+        return [self._asset_from_payload(item) for item in raw_items if isinstance(item, dict)]
+
+    def get_thumbnail(self, asset_id: str) -> tuple[bytes, str]:
+        return self._request_bytes(f"/api/assets/{urllib.parse.quote(asset_id, safe='')}/thumbnail?size=thumbnail")
+
+    def _asset_from_payload(self, payload: dict, fallback_id: str | None = None) -> ImmichAsset:
         exif = payload.get("exifInfo") or {}
         return ImmichAsset(
-            asset_id=str(payload.get("id") or asset_id),
-            original_filename=payload.get("originalFileName"),
-            taken_at=payload.get("fileCreatedAt") or payload.get("localDateTime"),
-            latitude=exif.get("latitude"),
-            longitude=exif.get("longitude"),
+            asset_id=str(payload.get("id") or payload.get("assetId") or fallback_id or ""),
+            original_filename=payload.get("originalFileName") or payload.get("originalPath"),
+            taken_at=payload.get("fileCreatedAt") or payload.get("localDateTime") or payload.get("createdAt"),
+            latitude=exif.get("latitude") or payload.get("latitude"),
+            longitude=exif.get("longitude") or payload.get("longitude"),
         )
 
-    def _request_json(self, path: str) -> dict:
+    def _request_json(self, path: str, method: str = "GET", payload: dict[str, object] | None = None) -> dict:
+        raw, _content_type = self._request(path, method=method, payload=payload, accept="application/json")
+        if not raw:
+            return {}
+        return json.loads(raw.decode("utf-8"))
+
+    def _request_bytes(self, path: str) -> tuple[bytes, str]:
+        return self._request(path, method="GET", payload=None, accept="*/*")
+
+    def _request(
+        self,
+        path: str,
+        method: str,
+        payload: dict[str, object] | None,
+        accept: str,
+    ) -> tuple[bytes, str]:
         if not self.config.enabled:
             raise ValueError("Immich integration disabled")
         if not self.config.base_url:
             raise ValueError("IMMICH_BASE_URL is required")
         if not self.config.api_key:
             raise ValueError("IMMICH_API_KEY is required")
+        data = None
+        headers = {"x-api-key": self.config.api_key, "accept": accept}
+        if payload is not None:
+            data = json.dumps(payload).encode("utf-8")
+            headers["content-type"] = "application/json"
+        base_url = self.config.base_url.rstrip("/")
         request = urllib.request.Request(
-            f"{self.config.base_url}{path}",
-            headers={"x-api-key": self.config.api_key, "accept": "application/json"},
-            method="GET",
+            f"{base_url}{path}",
+            data=data,
+            headers=headers,
+            method=method,
         )
         with urllib.request.urlopen(request, timeout=self.config.timeout_seconds) as response:
             raw = response.read()
-        if not raw:
-            return {}
-        return json.loads(raw.decode("utf-8"))
+            content_type = response.headers.get("content-type", "application/octet-stream")
+        return raw, content_type

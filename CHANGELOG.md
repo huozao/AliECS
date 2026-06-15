@@ -1,5 +1,12 @@
 # 版本记录
 
+## v2.1.11：Couple Memory 重建为 App 内闭环
+
+- Couple Dashboard 的地图足迹与相册入口从 AdventureLog 外链收回 App 内，`/map/` 恢复 Leaflet + `/v1/map/memories` 打点，并支持年份/标签筛选。
+- 新增 `0016_couple_memory_rebuild.sql`：补齐 Couple 重建所需幂等迁移、Immich 选片字段、分享/照片/成员索引与资产绑定唯一索引。
+- Immich 集成补齐搜索代理与缩略图代理；详情页在 `IMMICH_ENABLED=false` 时隐藏选片入口，开启后可搜索并绑定资产。
+- 生产/本地配置示例统一 `LOCAL_UPLOAD_DIR=/app/uploads`，本地 compose 增加 Couple 照片存储、WebDock 与 Immich 环境变量及 uploads 持久卷。
+
 ## v2.1.10：成本核算系统单价自动取最新采购价 + 对比表展示销售价格
 
 - 成本核算「价格信息」的「系统单价」自动取该子件的**最新采购含税单价**（按最新单据日期、含税单价>0），悬浮显示该价格单据的**单据日期**（标“录入日期”）；无采购记录才回退 BOM 自带系统单价。

@@ -3,31 +3,51 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta http-equiv="refresh" content="3;url=https://adventure.hydwang.xyz" />
-  <title>地图足迹已迁移</title>
+  <title>回忆地图</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     :root{--bg:#f8f4ec;--card:#fffdfa;--text:#2f2721;--muted:#7c6b5d;--line:#ecdfd2;--primary:#8c5f6a;--shadow:0 10px 28px rgba(93,71,52,.08)}
-    *{box-sizing:border-box}
-    body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
-    main{width:min(520px,calc(100% - 32px));background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:16px;padding:24px}
-    h1{margin:0 0 10px;font-size:24px}
-    p{margin:0 0 18px;line-height:1.7;color:var(--muted)}
-    .row{display:flex;gap:10px;flex-wrap:wrap}
-    .btn{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:9px 14px;background:#e9dfd0;color:var(--text);text-decoration:none;font-weight:700}
-    .btn.primary{background:var(--primary);color:#fff}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}.wrap{max-width:1180px;margin:0 auto;padding:20px 16px 48px}.row{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}.btn,button{border:0;border-radius:999px;padding:8px 12px;background:#e9dfd0;color:var(--text);font-weight:700;text-decoration:none;cursor:pointer}.primary{background:var(--primary);color:#fff}.card{background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:16px;padding:14px}.muted,.small{color:var(--muted)}.small{font-size:13px}.filters{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end;margin:12px 0}label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}select{width:100%;border:1px solid var(--line);border-radius:12px;padding:9px 10px;background:white}#map{height:min(70vh,680px);min-height:420px;border:1px solid var(--line);border-radius:16px;overflow:hidden}@media(max-width:760px){.filters{grid-template-columns:1fr}#map{min-height:360px}}
   </style>
 </head>
 <body>
-<main>
-  <h1>地图足迹已迁移至 AdventureLog</h1>
-  <p>旧地图页面保留用于兼容书签，将自动跳转到新的旅行足迹与相册入口。</p>
-  <div class="row">
-    <a class="btn primary" href="https://adventure.hydwang.xyz">前往 AdventureLog</a>
-    <a class="btn" href="/couple/">返回 Couple Memory</a>
-  </div>
+<main class="wrap">
+  <div id="userBadge" class="small" style="margin-bottom:8px"></div>
+  <header class="row">
+    <div>
+      <h1 style="margin:0 0 6px">回忆地图</h1>
+      <div id="hint" class="muted">把带坐标的回忆收回 App 内查看。</div>
+    </div>
+    <nav class="row">
+      <a class="btn" href="/couple/">Dashboard</a>
+      <a class="btn" href="/memories/">回忆</a>
+    </nav>
+  </header>
+  <section class="card">
+    <form id="filterForm" class="filters">
+      <div><label>年份</label><select id="yearFilter"><option value="">全部年份</option></select></div>
+      <div><label>标签</label><select id="tagFilter"><option value="">全部标签</option></select></div>
+      <button class="primary" type="submit">筛选</button>
+    </form>
+    <div id="map"></div>
+  </section>
 </main>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/common/user-badge.js"></script>
 <script>
-setTimeout(()=>location.href='https://adventure.hydwang.xyz',1500);
+const API_BASE=window.AliECSAuth.API_BASE;
+const $=(id)=>document.getElementById(id);
+const esc=(v)=>String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#039;");
+const headers=()=>{const tk=window.AliECSAuth.getToken();return tk?{Authorization:`Bearer ${tk}`}:{};};
+async function api(path){const r=await fetch(`${API_BASE}${path}`,{headers:headers()});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.detail||`HTTP ${r.status}`);return d;}
+let allItems=[],map,layer;
+function initMap(){if(map)return;map=L.map('map').setView([30.27,120.15],5);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap'}).addTo(map);layer=L.layerGroup().addTo(map);}
+function populateFilters(){const years=[...new Set(allItems.map(x=>(x.memory_date||'').slice(0,4)).filter(Boolean))].sort().reverse();$('yearFilter').innerHTML='<option value="">全部年份</option>'+years.map(y=>`<option value="${esc(y)}">${esc(y)}</option>`).join('');}
+async function loadTags(){const d=await api('/v1/tags');$('tagFilter').innerHTML='<option value="">全部标签</option>'+(d.items||[]).map(x=>`<option value="${esc(x.tag)}">${esc(x.tag)} (${x.count})</option>`).join('');}
+function render(){initMap();layer.clearLayers();const year=$('yearFilter').value;const tag=$('tagFilter').value;const items=allItems.filter(x=>(!year||(x.memory_date||'').startsWith(year))&&(!tag||(x.tags||[]).includes(tag)));if(!items.length){$('hint').textContent='暂无符合条件的坐标回忆。';map.setView([30.27,120.15],5);return;}$('hint').textContent=`${items.length} 个回忆点`;const bounds=[];items.forEach(m=>{const p=[m.latitude,m.longitude];bounds.push(p);L.marker(p).addTo(layer).bindPopup(`<strong>${esc(m.title)}</strong><br>${esc(m.memory_date||'')} · ${esc(m.place_name||'')}<br><a href="/memories/detail.html?id=${m.id}">查看详情</a>`);});map.fitBounds(bounds,{padding:[24,24],maxZoom:12});}
+async function boot(){try{await window.AliECSAuth.renderUserBadge();const data=await api('/v1/map/memories');allItems=data.items||[];populateFilters();await loadTags();render();}catch(e){$('hint').textContent='加载失败：'+e.message;}}
+$('filterForm').onsubmit=(e)=>{e.preventDefault();render();};
+boot();
 </script>
 </body>
 </html>

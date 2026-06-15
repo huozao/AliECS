@@ -461,6 +461,7 @@ class MemoryUpsertRequest(BaseModel):
 
 
 class ImmichAssetBindRequest(BaseModel):
+    asset_ids: list[str] = Field(default_factory=list)
     immich_asset_id: str | None = None
     immich_album_id: str | None = None
     original_filename: str | None = None
@@ -2359,6 +2360,64 @@ def immich_status(user: dict[str, Any] = Depends(require_login)) -> dict[str, ob
     return ImmichClient().status()
 
 
+def _public_immich_thumbnail_url(asset_id: str) -> str:
+    public_base = os.getenv("APP_BASE_URL", "").rstrip("/")
+    relative_url = f"/api/v1/immich/assets/{urllib.parse.quote(asset_id, safe='')}/thumbnail"
+    return f"{public_base}{relative_url}" if public_base else relative_url
+
+
+@app.get("/v1/immich/assets")
+def immich_assets(
+    query: str | None = Query(default=None),
+    taken_after: str | None = Query(default=None),
+    taken_before: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, Any]:
+    require_permission("couple_memory_access", user)
+    from app.immich_client import ImmichClient, load_immich_config
+
+    config = load_immich_config()
+    if not config.enabled:
+        return {"enabled": False, "items": []}
+    try:
+        assets = ImmichClient(config).search_assets(
+            query=query,
+            taken_after=taken_after,
+            taken_before=taken_before,
+            page=page,
+        )
+    except Exception as exc:
+        return {"enabled": True, "items": [], "detail": str(exc)}
+    return {
+        "enabled": True,
+        "items": [
+            {
+                "asset_id": asset.asset_id,
+                "original_filename": asset.original_filename,
+                "taken_at": asset.taken_at,
+                "latitude": asset.latitude,
+                "longitude": asset.longitude,
+                "thumbnail_url": _public_immich_thumbnail_url(asset.asset_id),
+            }
+            for asset in assets
+            if asset.asset_id
+        ],
+    }
+
+
+@app.get("/v1/immich/assets/{asset_id}/thumbnail")
+def immich_asset_thumbnail(asset_id: str, user: dict[str, Any] = Depends(require_login)) -> Response:
+    require_permission("couple_memory_access", user)
+    from app.immich_client import ImmichClient
+
+    try:
+        content, content_type = ImmichClient().get_thumbnail(asset_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return Response(content=content, media_type=content_type, headers={"Cache-Control": "private, max-age=3600"})
+
+
 def _user_id_by_username(username: str) -> int | None:
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
@@ -2731,6 +2790,25 @@ def bind_memory_immich_asset(
     body: ImmichAssetBindRequest,
     user: dict[str, Any] = Depends(require_login),
 ) -> dict[str, Any]:
+    asset_ids = [asset_id.strip() for asset_id in body.asset_ids if asset_id and asset_id.strip()]
+    if asset_ids:
+        items = [
+            _bind_memory_immich_asset(
+                memory_id,
+                body.model_copy(update={"asset_ids": [], "immich_asset_id": asset_id}),
+                user,
+            )
+            for asset_id in dict.fromkeys(asset_ids)
+        ]
+        return {"items": items}
+    return _bind_memory_immich_asset(memory_id, body, user)
+
+
+def _bind_memory_immich_asset(
+    memory_id: int,
+    body: ImmichAssetBindRequest,
+    user: dict[str, Any],
+) -> dict[str, Any]:
     user_id = _require_couple_user(user)
     if not body.immich_asset_id and not body.immich_album_id:
         raise HTTPException(status_code=400, detail="immich_asset_id or immich_album_id is required")
@@ -2763,6 +2841,16 @@ def bind_memory_immich_asset(
                     sort_order, selected_by
                 )
                 VALUES (%s, %s, 'immich', %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (memory_id, provider, immich_asset_id) WHERE immich_asset_id IS NOT NULL
+                DO UPDATE SET
+                    original_filename = COALESCE(EXCLUDED.original_filename, couple_memory_assets.original_filename),
+                    taken_at = COALESCE(EXCLUDED.taken_at, couple_memory_assets.taken_at),
+                    latitude = COALESCE(EXCLUDED.latitude, couple_memory_assets.latitude),
+                    longitude = COALESCE(EXCLUDED.longitude, couple_memory_assets.longitude),
+                    thumbnail_cache_key = COALESCE(EXCLUDED.thumbnail_cache_key, couple_memory_assets.thumbnail_cache_key),
+                    sort_order = EXCLUDED.sort_order,
+                    selected_by = EXCLUDED.selected_by,
+                    updated_at = NOW()
                 RETURNING id, couple_space_id, memory_id, provider, immich_asset_id, immich_album_id,
                           original_filename, taken_at, latitude, longitude, thumbnail_cache_key,
                           sort_order, selected_by, created_at, updated_at
@@ -2953,6 +3041,15 @@ def map_memories(
                 (space_id,),
             )
             rows = cur.fetchall()
+            memory_ids = [row[0] for row in rows]
+            tags_map: dict[int, list[str]] = {mid: [] for mid in memory_ids}
+            if memory_ids:
+                cur.execute(
+                    "SELECT memory_id, tag FROM memory_tags WHERE memory_id = ANY(%s::bigint[]) ORDER BY id",
+                    (memory_ids,),
+                )
+                for mid, tag_value in cur.fetchall():
+                    tags_map.setdefault(mid, []).append(tag_value)
     return {
         "items": [
             {
@@ -2963,6 +3060,7 @@ def map_memories(
                 "latitude": row[4],
                 "longitude": row[5],
                 "cover_photo_url": row[6],
+                "tags": tags_map.get(row[0], []),
             }
             for row in rows
         ]

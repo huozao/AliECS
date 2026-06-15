@@ -38,7 +38,7 @@
 | `COUPLE_ALLOWED_EMAILS` | 邮箱白名单 | 可选 | 无法按邮箱维度限制 |
 | `MAX_UPLOAD_MB` | Couple 图片上传大小上限 | 建议，默认 15 | 上传限制不符合预期 |
 | `STORAGE_DRIVER` | 照片存储驱动：`local` / `webdock` / `oss` | 建议，生产用 webdock | 生产照片存储策略不明确 |
-| `LOCAL_UPLOAD_DIR` | local 驱动上传目录 | local 必填 | local 上传无法落盘 |
+| `LOCAL_UPLOAD_DIR` | local 驱动上传目录，容器内默认 `/app/uploads` 持久卷 | local 必填 | local 上传无法落盘或落到易失目录 |
 | `WEBDOCK_PHOTO_BASE_URL` | 旧电脑 WebDock 照片存储 API 根地址 | `STORAGE_DRIVER=webdock` 时必填，默认 `http://host.docker.internal:11800` | backend-api 无法把照片写入旧电脑 |
 | `WEBDOCK_PHOTO_API_TOKEN` | 调用旧电脑 WebDock 照片存储 API 的 bearer token | `STORAGE_DRIVER=webdock` 时必填 | 上传/读取照片会失败 |
 | `WEBDOCK_PHOTO_TIMEOUT_SECONDS` | 旧电脑照片 API 超时 | 可选，默认 30 | 旧电脑慢响应时行为不明确 |
