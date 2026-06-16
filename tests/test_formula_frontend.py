@@ -14,20 +14,18 @@ class FormulaFrontendTests(unittest.TestCase):
     def test_cost_panel_matches_reset_and_grouped_table_contract(self) -> None:
         self.assertIn("重置模拟数量", self.html)
         self.assertIn("重置当下价格", self.html)
-        self.assertIn("基础信息", self.html)
         self.assertIn("原配方", self.html)
-        self.assertIn("模拟调整", self.html)
-        self.assertIn("价格信息", self.html)
-        self.assertIn("成本结果", self.html)
+        self.assertIn("当下成本", self.html)
+        self.assertIn("模拟与结果", self.html)
         self.assertIn("resetLine(", self.html)
 
     def test_cost_table_includes_spec_column_and_clear_alignment_contract(self) -> None:
         self.assertIn('<col class="spec">', self.html)
-        self.assertIn('<th class="g-basic">子件名称</th>', self.html)
-        self.assertIn('<th class="g-basic">规格型号</th>', self.html)
-        self.assertIn('colspan="4">基础信息</th>', self.html)
+        self.assertIn('<th class="g-recipe">子件名称</th>', self.html)
+        self.assertIn('<th class="g-recipe">规格型号</th>', self.html)
+        self.assertIn('colspan="8">原配方</th>', self.html)
         self.assertIn("line.spec?escapeHtml(line.spec):'—'", self.html)
-        self.assertIn('sum-basic basic-end" colspan="4">汇总</td>', self.html)
+        self.assertIn('sum-basic" colspan="4">汇总</td>', self.html)
         self.assertIn(".cost-table tbody td{text-align:center", self.html)
         self.assertIn(".cost-table td.text-left{text-align:left", self.html)
 
@@ -39,11 +37,13 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertIn(".cost-table{width:100%;min-width:1480px", self.html)
         self.assertIn(".price-input,.sim-qty-input{width:76px;max-width:76px;height:34px", self.html)
 
-    def test_cost_price_cost_subheaders_not_pushed_down_by_relative_offset(self) -> None:
-        # the relative+top:54px combo that shifted the 5 price/cost headers down is removed
-        self.assertNotIn(".src-line{position:relative}", self.html)
-        # the 3px accent bars are kept (anchored to the sticky header cell)
-        self.assertIn(".cost-table .src-line::before{content:\"\";position:absolute", self.html)
+    def test_cost_source_shown_by_column_color_and_simulated_subtitle(self) -> None:
+        # the colored top accent bars (src-line) are removed; source is conveyed by column color
+        self.assertNotIn(".src-line", self.html)
+        # 模拟分价 carries the "按当下价" subtitle with a small dot, per the mockup
+        self.assertIn('模拟分价<span class="subtle-source">按当下价<span class="source-dot"></span></span>', self.html)
+        self.assertIn(".cost-table .subtle-source{display:block", self.html)
+        self.assertIn(".cost-table .source-dot{display:inline-block", self.html)
 
     def test_cost_spec_column_narrow_with_ellipsis_and_hover_title(self) -> None:
         self.assertIn(".cost-table col.spec{width:96px}", self.html)
@@ -52,13 +52,14 @@ class FormulaFrontendTests(unittest.TestCase):
 
     def test_cost_table_restyle_module_borders_and_colored_results(self) -> None:
         # group/sub module-end colored separators
-        self.assertIn(".cost-table .basic-end{border-right:2px solid", self.html)
+        self.assertIn(".cost-table .formula-end{border-right:2px solid", self.html)
+        self.assertIn(".cost-table .price-end{border-right:2px solid", self.html)
         self.assertIn(".cost-table .cost-end{border-right:2px solid", self.html)
-        # colored price/cost result text + zero muting + footer sums
-        self.assertIn(".cost-table td.sys-cost{color:#a86a10}", self.html)
-        self.assertIn(".cost-table td.cur-cost{color:#c84a1b}", self.html)
-        self.assertIn(".cost-table td.sim-cost{color:#5b4ac9}", self.html)
-        self.assertIn(".cost-table td.zero{color:#9ca3af}", self.html)
+        # colored price/cost result text (mockup palette) + zero muting + footer sums
+        self.assertIn(".cost-table td.sys-price,.cost-table td.sys-cost{color:#a76700}", self.html)
+        self.assertIn(".cost-table td.cur-cost{color:#e63716", self.html)
+        self.assertIn(".cost-table td.sim-cost{color:#4b45bf", self.html)
+        self.assertIn(".cost-table td.zero{color:#8b94a3}", self.html)
         self.assertIn('<tfoot id="costFoot"></tfoot>', self.html)
         self.assertIn(".cost-table .sum-cost{background:", self.html)
 
