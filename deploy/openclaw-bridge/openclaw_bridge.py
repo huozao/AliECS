@@ -684,6 +684,55 @@ def trace_batch_event(
     print("bridge_request_trace " + json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
 
 
+def chain_result_kind(
+    reply: str | None,
+    *,
+    http_code: int | None = None,
+    error: BaseException | None = None,
+) -> str:
+    """Classify the WebDock/ChatGPT round-trip outcome for chain_result tracing."""
+    if http_code is not None:
+        return f"http_{http_code}"
+    if isinstance(error, TimeoutError):
+        return "timeout"
+    if error is not None:
+        return "unreachable"
+    if not reply:
+        return "empty"
+    if reply.startswith(FALLBACK_MESSAGE):
+        return "fallback"
+    return "ok"
+
+
+def trace_chain_result(
+    details: dict[str, Any],
+    started: float,
+    *,
+    reply: str | None = None,
+    http_code: int | None = None,
+    error: BaseException | None = None,
+) -> None:
+    """Emit the WebDock/ChatGPT round-trip result so chain-logger can show 'did the
+    downstream answer, how slow, and where it broke' — the scope-B hop that was
+    missing from the timeline. Channel-tagged so Feishu and WeChat are both visible."""
+    if not trace_enabled():
+        return
+    metadata = details.get("metadata") or {}
+    payload = {
+        "event": "chain_result",
+        "request_id": details.get("request_id"),
+        "channel": metadata.get("channel") or "wechat",
+        "wechat_account": metadata.get("wechat_account"),
+        "chat_type": metadata.get("chat_type"),
+        "peer_id": metadata.get("peer_id"),
+        "message_id": metadata.get("message_id"),
+        "result": chain_result_kind(reply, http_code=http_code, error=error),
+        "webdock_ms": int((time.monotonic() - started) * 1000),
+        "reply_len": len(reply or ""),
+    }
+    print("bridge_request_trace " + json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
+
+
 def lane_batch_key(metadata: dict[str, Any]) -> str:
     peer_id = metadata.get("peer_id")
     if not peer_id:
@@ -826,42 +875,52 @@ def build_reply(body: dict[str, Any]) -> str:
     user_text = get_last_user_message(body.get("messages"))
     if not webdock_configured():
         return f"已收到你的微信消息：{user_text}" if user_text else "已收到你的微信消息。"
+    details = request_details(body)  # peer_id/channel for chain_result tracing
+    started = time.monotonic()
     try:
         batched_body = maybe_batch_request(body)
         if batched_body == NO_REPLY:
-            return NO_REPLY
-        return call_webdock(batched_body)
+            return NO_REPLY  # merged into a batch leader; the leader emits chain_result
+        reply = call_webdock(batched_body)
+        trace_chain_result(details, started, reply=reply)
+        return reply
     except urllib.error.HTTPError as exc:
         if exc.code == 429:
-            return diagnostic_message(
+            reply = diagnostic_message(
                 "bridge -> WebDock 已联通；WebDock 返回 429 BUSY，浏览器正在处理另一条请求。",
                 "WebDock browser lock",
             )
-        if exc.code in {401, 403}:
-            return diagnostic_message(
+        elif exc.code in {401, 403}:
+            reply = diagnostic_message(
                 f"bridge -> WebDock 已联通；WebDock 拒绝鉴权（HTTP {exc.code}）。",
                 "WebDock API token",
             )
-        return diagnostic_message(
-            f"bridge -> WebDock 已联通；WebDock 返回 HTTP {exc.code}: {parse_http_error_message(exc)}",
-            "WebDock API",
-        )
+        else:
+            reply = diagnostic_message(
+                f"bridge -> WebDock 已联通；WebDock 返回 HTTP {exc.code}: {parse_http_error_message(exc)}",
+                "WebDock API",
+            )
+        trace_chain_result(details, started, http_code=exc.code)
+        return reply
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
         print(f"webdock unavailable: {exc}")
         if isinstance(exc, TimeoutError):
-            return diagnostic_message(
+            reply = diagnostic_message(
                 "bridge -> WebDock 请求超时，ChatGPT 可能仍在生成或页面未完成响应。",
                 "WebDock/ChatGPT timeout",
             )
-        if isinstance(exc, json.JSONDecodeError):
-            return diagnostic_message(
+        elif isinstance(exc, json.JSONDecodeError):
+            reply = diagnostic_message(
                 "bridge -> WebDock 已联通，但返回内容不是有效 JSON。",
                 "WebDock API response",
             )
-        return diagnostic_message(
-            f"bridge -> WebDock 未联通或连接失败：{exc}",
-            "ECS tunnel or WebDock API",
-        )
+        else:
+            reply = diagnostic_message(
+                f"bridge -> WebDock 未联通或连接失败：{exc}",
+                "ECS tunnel or WebDock API",
+            )
+        trace_chain_result(details, started, error=exc)
+        return reply
 
 
 def keepalive_interval() -> float:

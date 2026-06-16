@@ -705,6 +705,59 @@ def test_bridge_emits_redacted_request_trace_for_batch(monkeypatch, capsys):
     assert "把一张头像" not in lines[-1]
 
 
+def test_bridge_emits_chain_result_for_feishu_roundtrip(monkeypatch, capsys):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_TRACE", "1")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "0")  # passthrough, no batch wait
+    monkeypatch.setattr(bridge, "call_webdock", lambda body: "已完成")
+
+    body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Sender (untrusted metadata):\n```json\n"
+                    '{"name":"hao","open_id":"ou_abc","peer_id":"ou_abc"}\n```\n\n好的'
+                ),
+            }
+        ],
+        "metadata": {"channel": "feishu"},
+    }
+
+    assert bridge.build_reply(body) == "已完成"
+
+    traces = [json.loads(l.split(" ", 1)[1]) for l in capsys.readouterr().out.splitlines() if "bridge_request_trace" in l]
+    chain = [e for e in traces if e.get("event") == "chain_result"]
+    assert chain, "expected a chain_result trace for the round-trip"
+    ev = chain[-1]
+    assert ev["result"] == "ok"
+    assert ev["channel"] == "feishu"
+    assert ev["peer_id"] == "ou_abc"
+    assert ev["reply_len"] == len("已完成")
+
+
+def test_bridge_emits_chain_result_on_http_error(monkeypatch, capsys):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "0")
+
+    def raise_busy(*args, **kwargs):
+        raise urllib.error.HTTPError(
+            "http://127.0.0.1:11800/v1/chat/completions", 429, "Too Many Requests", {}, io.BytesIO(b"{}")
+        )
+
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", raise_busy)
+
+    bridge.build_reply({"messages": [{"role": "user", "content": "hello"}]})
+
+    traces = [json.loads(l.split(" ", 1)[1]) for l in capsys.readouterr().out.splitlines() if "bridge_request_trace" in l]
+    chain = [e for e in traces if e.get("event") == "chain_result"]
+    assert chain and chain[-1]["result"] == "http_429"
+
+
 def test_bridge_normalizes_english_timeout_errors_to_fallback():
     bridge = load_bridge()
 
