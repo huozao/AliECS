@@ -323,10 +323,10 @@ class BackendRecipeRouteTests(unittest.TestCase):
         self.assertTrue(any("V1" in name for name in wb.sheetnames))
         sheet = wb[wb.sheetnames[0]]
         merged = {str(item) for item in sheet.merged_cells.ranges}
-        self.assertTrue({"A1:D1", "E1:F1", "G1:H1", "I1:J1", "K1:M1"}.issubset(merged))
+        self.assertTrue({"A1:H1", "I1:J1", "K1:M1"}.issubset(merged))
         headers = [sheet.cell(2, col).value for col in range(1, 14)]
         self.assertEqual(
-            ["子件编码", "子件名称", "规格型号", "单位", "数量", "比例", "模拟数量", "模拟比例", "系统单价", "当下价格", "系统分价", "当下分价", "模拟分价"],
+            ["子件编码", "子件名称", "规格型号", "单位", "数量", "比例", "系统单价", "系统分价", "当下价格", "当下分价", "模拟数量", "模拟比例", "模拟分价"],
             headers,
         )
         self.assertEqual("left", sheet["B3"].alignment.horizontal)

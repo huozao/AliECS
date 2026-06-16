@@ -28,20 +28,18 @@ COST_HEADERS = [
     "单位",
     "数量",
     "比例",
+    "系统单价",
+    "系统分价",
+    "当下价格",
+    "当下分价",
     "模拟数量",
     "模拟比例",
-    "系统单价",
-    "当下价格",
-    "系统分价",
-    "当下分价",
     "模拟分价",
 ]
 COST_GROUPS = [
-    ("基础信息", 1, 4, "FFEFF7F1", "FF22733C"),
-    ("原配方", 5, 6, "FFFFF4E3", "FF8A5200"),
-    ("模拟调整", 7, 8, "FFF2EEFF", "FF5B4BDB"),
-    ("价格信息", 9, 10, "FFFFF4E3", "FF8A5200"),
-    ("成本结果", 11, 13, "FFEFF6FF", "FF2563B8"),
+    ("原配方", 1, 8, "FFEAF7F0", "FF00674E"),
+    ("当下成本", 9, 10, "FFFFEBE0", "FFD83B12"),
+    ("模拟与结果", 11, 13, "FFF1EEFF", "FF4030A8"),
 ]
 
 OUTPUT_COLUMNS = [
@@ -513,6 +511,8 @@ def calculate_recipe_costs(
                     "unit": unit,
                     "quantity": quantity,
                     "cost_quantity": cost_quantity,
+                    "excluded": _ratio_excluded(child_code, unit),
+                    "cost_unit_factor": (1.0 / 1000 if unit in GRAM_UNITS else 1.0),
                     "ratio": _float_or_zero(row.get("比例")),
                     "system_price": system_price,
                     "system_price_date": system_price_date,
@@ -622,12 +622,12 @@ def save_recipe_cost_workbook(output_path: Path, recipes: list[dict[str, object]
                     line.get("unit"),
                     line.get("quantity"),
                     line.get("ratio"),
+                    line.get("system_price"),
+                    line.get("system_amount"),
+                    line.get("current_price"),
+                    line.get("current_amount"),
                     line.get("simulated_quantity"),
                     line.get("simulated_ratio"),
-                    line.get("system_price"),
-                    line.get("current_price"),
-                    line.get("system_amount"),
-                    line.get("current_amount"),
                     line.get("simulated_amount"),
                 ]
             )
@@ -639,12 +639,12 @@ def save_recipe_cost_workbook(output_path: Path, recipes: list[dict[str, object]
                 "",
                 sum(float(line.get("quantity") or 0) for line in recipe.get("lines", [])),
                 sum(float(line.get("ratio") or 0) for line in recipe.get("lines", [])),
+                "—",
+                recipe.get("system_total"),
+                "—",
+                recipe.get("current_total"),
                 sum(float(line.get("simulated_quantity") or 0) for line in recipe.get("lines", [])),
                 sum(float(line.get("simulated_ratio") or 0) for line in recipe.get("lines", [])),
-                "",
-                "",
-                recipe.get("system_total"),
-                recipe.get("current_total"),
                 recipe.get("simulated_total"),
             ]
         )
@@ -654,7 +654,7 @@ def save_recipe_cost_workbook(output_path: Path, recipes: list[dict[str, object]
             cell.font = Font(bold=True)
         ws.freeze_panes = "A3"
         ws.auto_filter.ref = f"A2:M{total_row}"
-        widths = [14, 24, 16, 8, 10, 11, 10, 11, 10, 10, 10, 10, 10]
+        widths = [14, 24, 16, 8, 10, 11, 10, 10, 10, 10, 10, 11, 10]
         for index, width in enumerate(widths, 1):
             ws.column_dimensions[get_column_letter(index)].width = width
         for row in ws.iter_rows(min_row=3, max_row=total_row, min_col=1, max_col=13):
@@ -664,11 +664,17 @@ def save_recipe_cost_workbook(output_path: Path, recipes: list[dict[str, object]
             row[1].alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
             row[2].alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
             row[3].alignment = Alignment(horizontal="left", vertical="center")
+        # 0 / 0.000 / 0.000% 一律显示为「—」（保留数值，仅显示），与页面一致
+        money_fmt = '0.000;-0.000;"—"'
+        ratio_fmt = '0.000%;-0.000%;"—"'
+        qty_fmt = '0.######;-0.######;"—"'
         for row in range(3, total_row + 1):
-            ws.cell(row, 6).number_format = "0.000%"
-            ws.cell(row, 8).number_format = "0.000%"
-            for col in (9, 10, 11, 12, 13):
-                ws.cell(row, col).number_format = "0.000"
+            ws.cell(row, 5).number_format = qty_fmt
+            ws.cell(row, 6).number_format = ratio_fmt
+            ws.cell(row, 11).number_format = qty_fmt
+            ws.cell(row, 12).number_format = ratio_fmt
+            for col in (7, 8, 9, 10, 13):
+                ws.cell(row, col).number_format = money_fmt
         _apply_range_border(ws)
         ws.sheet_view.showGridLines = False
 

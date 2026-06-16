@@ -20,7 +20,6 @@
         <a class="btn primary" href="/">首页</a>
         <a class="btn" href="/health/">API Health</a>
         <a id="adminLink" class="btn" href="/admin/">Admin UI</a>
-        <a class="btn" href="https://github.com/huozao/AliECS" target="_blank" rel="noreferrer">GitHub</a>
         <button id="refreshBtn" class="btn subtle" type="button">刷新数据</button>
         <button id="topLoginBtn" class="btn" type="button">登录</button>
         <button id="topRegisterBtn" class="btn" type="button">注册</button>
@@ -33,10 +32,6 @@
       <h2>主要功能</h2>
       <p class="muted">首页展示全部功能。第一行固定为原材料库存、成品库存、系统配方。</p>
       <div id="featuresGrid" class="grid"></div>
-    </section>
-    <section id="rbacCard" class="card hidden">
-      <h2>角色与权限总览</h2>
-      <div id="rbacGrid" class="grid" style="grid-template-columns:1fr;"></div>
     </section>
   </div>
   <div id="authModal" class="modal">
@@ -104,14 +99,6 @@
       syncTokenState();
       renderAuth();
       renderFeatures();
-      const isAdmin=(state.user.roles||[]).includes('admin')||(state.user.permissions||[]).includes('admin.access');
-      rbacCard.classList.toggle('hidden',!isAdmin);
-      if(isAdmin){
-        try{
-          const rbac=await api('/v1/admin/rbac-overview');
-          rbacGrid.innerHTML=(rbac.roles||[]).map((role)=>`<article class="card"><h3 style="margin:0 0 6px;">${role.name}（${role.code}）</h3><p class="muted">${role.description||'无说明'}</p><div class="small">权限：${(role.permissions||[]).join(', ')||'无'}</div></article>`).join('');
-        }catch{rbacGrid.innerHTML='<div class="muted">角色权限数据加载失败。</div>';}
-      }
     }
     function openModal(mode){state.mode=mode;modalTitle.textContent=mode==='login'?'登录':'注册';modalHint.textContent=mode==='login'?'请输入账号密码。':'请输入新账号信息（注册请求）。';authModal.classList.add('show');}
     function closeAuthModal(){authModal.classList.remove('show');modalUsername.value='';modalPassword.value='';}
