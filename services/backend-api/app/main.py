@@ -1661,6 +1661,22 @@ def features(
     }
 
 
+# 查询结果导出文件延迟生成：查询时只记录上下文，用户真正点「下载原始明细」时才写 xlsx
+# （save_recipe_workbook 约 2.3s，绝大多数查询并不会下载，没必要每次都写）。
+_RECIPE_QUERY_CONTEXT: dict[str, dict[str, object]] = {}
+_RECIPE_QUERY_CONTEXT_MAX = 256
+
+
+def _remember_recipe_query(file_id: str, query: str, default_bom: str | None, include_disabled: bool) -> None:
+    _RECIPE_QUERY_CONTEXT[file_id] = {
+        "query": query,
+        "default_bom": default_bom,
+        "include_disabled": include_disabled,
+    }
+    while len(_RECIPE_QUERY_CONTEXT) > _RECIPE_QUERY_CONTEXT_MAX:
+        _RECIPE_QUERY_CONTEXT.pop(next(iter(_RECIPE_QUERY_CONTEXT)))
+
+
 @app.post("/v1/recipes/query")
 def recipe_query(body: RecipeQueryRequest, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
     require_permission("formula.read", user)
@@ -1672,8 +1688,8 @@ def recipe_query(body: RecipeQueryRequest, user: dict[str, Any] = Depends(requir
             default_bom=body.default_bom,
             include_disabled=body.include_disabled,
         )
-        file_id, output_path = new_export_path()
-        save_recipe_workbook(output_path, result)
+        file_id, _output_path = new_export_path()
+        _remember_recipe_query(file_id, body.query, body.default_bom, body.include_disabled)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="BOM 输入文件未找到") from exc
     except ValueError as exc:
@@ -1800,7 +1816,20 @@ def recipe_download(file_id: str, user: dict[str, Any] = Depends(require_login))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not path.is_file():
-        raise HTTPException(status_code=404, detail="download file not found")
+        # 延迟生成：用查询时记录的上下文按需写出导出文件
+        context = _RECIPE_QUERY_CONTEXT.get(file_id)
+        if context is None:
+            raise HTTPException(status_code=404, detail="下载文件已过期，请重新查询后再下载。")
+        try:
+            result = query_recipe_workbook(
+                locate_recipe_source(),
+                query_text=str(context["query"]),
+                default_bom=context["default_bom"],
+                include_disabled=bool(context["include_disabled"]),
+            )
+            save_recipe_workbook(path, result)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"导出文件生成失败：{type(exc).__name__}") from exc
     return FileResponse(
         path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

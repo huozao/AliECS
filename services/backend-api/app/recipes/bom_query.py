@@ -379,20 +379,27 @@ def _extract_recipe_identifier(parent_name: str, parent_code: str) -> str:
     return ""
 
 
-def _matches_query(row: pd.Series, keywords: list[str]) -> bool:
-    parent_code = normalize_cell(row.get("父件编码"))
-    parent_name = normalize_cell(row.get("父件名称"))
-    identifier = _extract_recipe_identifier(parent_name, parent_code)
+def _query_match_mask(detail: pd.DataFrame, keywords: list[str]) -> pd.Series:
+    """向量化的配方匹配掩码，替代逐行 apply（1956 行约 1.3s → 几十 ms）。"""
+    if detail.empty:
+        return pd.Series([], dtype=bool)
+    parent_code = detail["父件编码"].map(normalize_cell)
+    parent_name = detail["父件名称"].map(normalize_cell)
+    identifier = pd.Series(
+        [_extract_recipe_identifier(name, code) for name, code in zip(parent_name, parent_code)],
+        index=detail.index,
+    )
+    mask = pd.Series(False, index=detail.index)
     for keyword in keywords:
         text = normalize_cell(keyword)
         if not text:
             continue
         normalized_number = text.lstrip("0")
-        if text in parent_code or text in parent_name:
-            return True
-        if normalized_number and identifier == normalized_number:
-            return True
-    return False
+        hit = parent_code.str.contains(text, regex=False, na=False) | parent_name.str.contains(text, regex=False, na=False)
+        if normalized_number:
+            hit = hit | (identifier == normalized_number)
+        mask = mask | hit
+    return mask
 
 
 def build_group_summary(detail: pd.DataFrame) -> pd.DataFrame:
@@ -428,7 +435,7 @@ def query_recipe_workbook(
 
     codes = parse_codes_text(query_text)
     keywords = codes or [query_text]
-    detail = detail[detail.apply(lambda row: _matches_query(row, keywords), axis=1)].copy()
+    detail = detail[_query_match_mask(detail, keywords)].copy()
     summary = build_group_summary(detail)
     return RecipeQueryResult(
         source_path=input_path,
