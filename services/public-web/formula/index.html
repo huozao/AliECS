@@ -627,7 +627,9 @@
         const shown=renderPreview(data.preview||[]);
         const scope=currentScope();
         const filterNote=scope.disabled==='only'?`，停用筛选后 ${shown} 条`:scope.disabled==='exclude'?`，非停用筛选后 ${shown} 条`:'';
-        resultBox.textContent=`匹配 ${data.match_count||0} 条明细，配方 ${data.recipe_count||0} 个${filterNote}，来源：${data.source_file||'unknown'}`;
+        const ss=data.source_sync;
+        const syncNote=ss?` · 同步 #${ss.id}（${String(ss.finished_at||'').replace('T',' ').slice(0,16)} · ${ss.status}）`:'';
+        resultBox.textContent=`匹配 ${data.match_count||0} 条明细，配方 ${data.recipe_count||0} 个${filterNote}，来源：${data.source_file||'unknown'}${syncNote}`;
         downloadRawBtn.classList.toggle('hidden',!state.fileId);
         downloadHint.textContent=state.fileId?'原始明细 Excel 沿用原下载程序；对比表 Excel 按当前筛选和基准版本导出。':'';
         try{await fetchCost();}

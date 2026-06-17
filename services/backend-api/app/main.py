@@ -896,6 +896,48 @@ def healthz() -> dict[str, object]:
     }
 
 
+@app.get("/v1/ops/tplus/runs")
+def ops_tplus_runs(
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    """全部 T+ 同步执行记录（含每小时 scheduled_full 与手动 bom），分页。
+    数据源 integration_sync_runs，比 ops_status 里只取 10 条的 recent_requests 完整。"""
+    items: list[dict[str, Any]] = []
+    total = 0
+    try:
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM integration_sync_runs WHERE provider = 'chanjet'")
+                total = int(cur.fetchone()[0])
+                cur.execute(
+                    """
+                    SELECT id, module, mode, status, finished_at, exit_code, row_count
+                    FROM integration_sync_runs
+                    WHERE provider = 'chanjet'
+                    ORDER BY finished_at DESC NULLS LAST, id DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (limit, offset),
+                )
+                items = [
+                    {
+                        "id": row[0],
+                        "module": row[1],
+                        "mode": row[2],
+                        "status": row[3],
+                        "finished_at": str(row[4]) if row[4] else None,
+                        "exit_code": row[5],
+                        "row_count": row[6],
+                    }
+                    for row in cur.fetchall()
+                ]
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"读取 T+ 同步记录失败：{type(exc).__name__}") from exc
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
 @app.get("/v1/ops/status")
 def ops_status(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     db_ok, db_message = _db_ping()
@@ -1677,6 +1719,35 @@ def _remember_recipe_query(file_id: str, query: str, default_bom: str | None, in
         _RECIPE_QUERY_CONTEXT.pop(next(iter(_RECIPE_QUERY_CONTEXT)))
 
 
+def _latest_bom_sync_run() -> dict[str, Any] | None:
+    """产出当前 BOM 文件的那次同步：最近一次成功且会导出 bom 的 run（scheduled_full 或手动 bom）。
+    locate_recipe_source 取 mtime 最新文件 ⇔ 最近一次成功 bom 同步，故二者对应。任何异常降级为 None。"""
+    try:
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, module, mode, status, finished_at
+                    FROM integration_sync_runs
+                    WHERE provider = 'chanjet' AND status = 'success' AND module IN ('all', 'bom')
+                    ORDER BY finished_at DESC NULLS LAST, id DESC
+                    LIMIT 1
+                    """
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                return {
+                    "id": row[0],
+                    "module": row[1],
+                    "mode": row[2],
+                    "status": row[3],
+                    "finished_at": str(row[4]) if row[4] else None,
+                }
+    except Exception:
+        return None
+
+
 @app.post("/v1/recipes/query")
 def recipe_query(body: RecipeQueryRequest, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
     require_permission("formula.read", user)
@@ -1700,6 +1771,7 @@ def recipe_query(body: RecipeQueryRequest, user: dict[str, Any] = Depends(requir
     return {
         "query": body.query,
         "source_file": source_path.name,
+        "source_sync": _latest_bom_sync_run(),
         "match_count": result.match_count,
         "recipe_count": result.recipe_count,
         "default_bom": result.default_bom,
