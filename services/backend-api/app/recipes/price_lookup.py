@@ -6,6 +6,7 @@ purchase_price_*.xlsx / sales_price_*.xlsx。找不到文件/列时优雅降级�
 """
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 
@@ -34,7 +35,31 @@ def _latest_file(directory: Path, prefix: str) -> Path | None:
     return max(files, key=lambda p: p.stat().st_mtime)
 
 
+# 按文件内容签名缓存解析结果：sales/purchase 价格 xlsx 解析约 0.6~3s，避免每次 /cost 重复解析。
+_PRICE_CACHE: dict[str, dict[str, dict[str, object]]] = {}
+
+
+def _file_content_signature(path: Path) -> str:
+    digest = hashlib.md5()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _read_latest_prices(path: Path) -> dict[str, dict[str, object]]:
+    signature = _file_content_signature(path)
+    cached = _PRICE_CACHE.get(signature)
+    if cached is not None:
+        return cached
+    result = _read_latest_prices_uncached(path)
+    if len(_PRICE_CACHE) >= 6:  # 采购+销售各一份，留些余量后整体清空限制内存
+        _PRICE_CACHE.clear()
+    _PRICE_CACHE[signature] = result
+    return result
+
+
+def _read_latest_prices_uncached(path: Path) -> dict[str, dict[str, object]]:
     df = pd.read_excel(path, dtype={_CODE_COL: str})
     if _CODE_COL not in df.columns or _PRICE_COL not in df.columns:
         return {}

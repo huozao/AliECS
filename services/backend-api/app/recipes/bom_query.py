@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import uuid
@@ -328,7 +329,32 @@ def _first_numeric_column(df: pd.DataFrame, columns: list[str]) -> pd.Series:
     return pd.to_numeric(values, errors="coerce")
 
 
+def file_content_signature(path: Path) -> str:
+    """文件内容 md5；解析很慢的 xlsx 用它做缓存 key，内容不变即复用。"""
+    digest = hashlib.md5()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+# 按文件内容签名缓存已解析的 BOM 明细。openpyxl 解析整本 xlsx 约 3s，且
+# /query 与 /cost 会各解析一次、T+ 每小时产出的文件常逐字节相同，故缓存收益很大。
+_DETAIL_CACHE: dict[str, pd.DataFrame] = {}
+
+
 def load_detail_from_workbook(input_path: Path) -> pd.DataFrame:
+    signature = file_content_signature(input_path)
+    cached = _DETAIL_CACHE.get(signature)
+    if cached is not None:
+        return cached
+    detail = _load_detail_from_workbook_uncached(input_path)
+    _DETAIL_CACHE.clear()  # 只保留最新一份，限制内存
+    _DETAIL_CACHE[signature] = detail
+    return detail
+
+
+def _load_detail_from_workbook_uncached(input_path: Path) -> pd.DataFrame:
     with pd.ExcelFile(input_path) as workbook:
         sheet_names = set(workbook.sheet_names)
         if SHEET_DETAIL in sheet_names:

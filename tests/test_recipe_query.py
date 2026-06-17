@@ -91,6 +91,27 @@ class RecipeQueryTests(unittest.TestCase):
             pd.DataFrame(child_rows).to_excel(writer, sheet_name="子件明细", index=False)
         return source
 
+    def test_detail_parse_is_cached_by_content_and_invalidated_on_change(self) -> None:
+        from app.recipes.bom_query import file_content_signature, load_detail_from_workbook
+
+        source = self._write_source_workbook()
+        first = load_detail_from_workbook(source)
+        second = load_detail_from_workbook(source)
+        self.assertIs(first, second)  # 同内容命中缓存，不重复解析
+
+        sig_before = file_content_signature(source)
+        extra = self.tmp_path / "bom_changed.xlsx"
+        with pd.ExcelWriter(extra, engine="openpyxl") as writer:
+            pd.DataFrame(
+                [{"父件编码": "X-1", "父件名称": "新件", "规格型号": "PP", "版本号": "V1", "计量单位": "kg", "生产数量": 1, "默认BOM": 1, "停用": 0}]
+            ).to_excel(writer, sheet_name="物料清单", index=False)
+            pd.DataFrame(
+                [{"版本号": "V1", "父件编码": "X-1", "子件编码": "C9", "子件名称": "料", "规格型号": "A", "计量单位": "kg", "需用数量": 1}]
+            ).to_excel(writer, sheet_name="子件明细", index=False)
+        self.assertNotEqual(sig_before, file_content_signature(extra))  # 内容不同签名不同
+        third = load_detail_from_workbook(extra)
+        self.assertIsNot(third, first)  # 内容变化触发重新解析
+
     def test_query_merges_tplus_bom_workbook_and_keeps_disabled_versions(self) -> None:
         from app.recipes.bom_query import query_recipe_workbook
 
