@@ -172,11 +172,11 @@ def test_bridge_forwards_feishu_open_id_as_isolated_lane(monkeypatch):
     assert outbound["metadata"] == {
         "channel": "feishu",
         "chat_type": "private",
-        "peer_id": "ou_abc",
+        "peer_id": "user:ou_abc",
         "message_id": "m-feishu-1",
         "chatgpt_project": "Feishu",
     }
-    assert bridge.lane_batch_key(outbound["metadata"]) == "feishu:ou_abc"
+    assert bridge.lane_batch_key(outbound["metadata"]) == "feishu:user:ou_abc"
 
 
 def test_bridge_detects_feishu_from_real_openclaw_metadata():
@@ -204,9 +204,9 @@ def test_bridge_detects_feishu_from_real_openclaw_metadata():
     md = outbound["metadata"]
 
     assert md["channel"] == "feishu"
-    assert md["peer_id"] == "ou_28d4"
+    assert md["peer_id"] == "user:ou_28d4"
     assert md["chatgpt_project"] == "Feishu"
-    assert bridge.lane_batch_key(md) == "feishu:ou_28d4"
+    assert bridge.lane_batch_key(md) == "feishu:user:ou_28d4"
     content = outbound["messages"][0]["content"]
     assert "untrusted metadata" not in content
     assert "message_id" not in content
@@ -224,7 +224,53 @@ def test_bridge_detects_feishu_group_chat_id():
     md = bridge.build_webdock_body(body)["metadata"]
 
     assert md["channel"] == "feishu"
-    assert md["peer_id"] == "oc_6510eb"
+    assert md["peer_id"] == "group:oc_6510eb"
+
+
+def test_bridge_uses_one_feishu_group_lane_for_all_group_members():
+    bridge = load_bridge()
+
+    first = bridge.build_webdock_body(
+        {
+            "messages": [{"role": "user", "content": "A 在群里说话"}],
+            "metadata": {
+                "channel": "feishu",
+                "chat_type": "group",
+                "chat_id": "oc_group1",
+                "open_id": "ou_a",
+                "message_id": "om_a",
+            },
+        }
+    )["metadata"]
+    second = bridge.build_webdock_body(
+        {
+            "messages": [{"role": "user", "content": "B 在同一个群里说话"}],
+            "metadata": {
+                "channel": "feishu",
+                "chat_type": "group",
+                "chat_id": "oc_group1",
+                "open_id": "ou_b",
+                "message_id": "om_b",
+            },
+        }
+    )["metadata"]
+    private = bridge.build_webdock_body(
+        {
+            "messages": [{"role": "user", "content": "A 私聊"}],
+            "metadata": {
+                "channel": "feishu",
+                "chat_type": "private",
+                "open_id": "ou_a",
+                "message_id": "om_c",
+            },
+        }
+    )["metadata"]
+
+    assert first["peer_id"] == "group:oc_group1"
+    assert second["peer_id"] == "group:oc_group1"
+    assert private["peer_id"] == "user:ou_a"
+    assert bridge.lane_batch_key(first) == bridge.lane_batch_key(second)
+    assert bridge.lane_batch_key(first) != bridge.lane_batch_key(private)
 
 
 def test_bridge_keeps_wechat_lane_for_real_wechat_metadata():
@@ -734,7 +780,7 @@ def test_bridge_emits_chain_result_for_feishu_roundtrip(monkeypatch, capsys):
     ev = chain[-1]
     assert ev["result"] == "ok"
     assert ev["channel"] == "feishu"
-    assert ev["peer_id"] == "ou_abc"
+    assert ev["peer_id"] == "user:ou_abc"
     assert ev["reply_len"] == len("已完成")
 
 

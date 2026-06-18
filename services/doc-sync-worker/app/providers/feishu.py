@@ -35,6 +35,27 @@ class FeishuBitableSource:
     view_id: str = ""
     wiki_node_token: str = ""
     source_url: str = ""
+    document_name: str = ""
+    sheet_name: str = ""
+
+
+@dataclass(frozen=True)
+class FeishuBitableApp:
+    app_token: str
+    url: str = ""
+
+
+@dataclass(frozen=True)
+class FeishuBitableTable:
+    table_id: str
+    name: str = ""
+
+
+@dataclass(frozen=True)
+class FeishuSessionConsoleBootstrapConfig:
+    enabled: bool
+    folder_token: str = ""
+    app_name: str = "飞书 ChatGPT 会话管理台"
 
 
 def normalize_env_profile(profile: str | None) -> str:
@@ -88,6 +109,10 @@ def get_profiled_env(
     return default
 
 
+def _env_truthy(value: str) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on", "enable", "enabled"}
+
+
 def profiled_env_values(
     key: str,
     namespace: str | None,
@@ -131,6 +156,19 @@ def credentials_for_profile(profile: str) -> list[FeishuCredential]:
     if not app_id or not app_secret:
         return []
     return [FeishuCredential(env_profile=normalized, app_id=app_id, app_secret=app_secret, api_base=api_base)]
+
+
+def session_console_bootstrap_config(profile: str) -> FeishuSessionConsoleBootstrapConfig:
+    normalized = normalize_env_profile(profile)
+    enabled = _env_truthy(get_profiled_env("SESSION_CONSOLE_BOOTSTRAP", "FEISHU", normalized))
+    folder_token = get_profiled_env("SESSION_CONSOLE_FOLDER_TOKEN", "FEISHU", normalized)
+    app_name = get_profiled_env(
+        "SESSION_CONSOLE_NAME",
+        "FEISHU",
+        normalized,
+        default=FeishuSessionConsoleBootstrapConfig.app_name,
+    )
+    return FeishuSessionConsoleBootstrapConfig(enabled=enabled, folder_token=folder_token, app_name=app_name)
 
 
 def discover_profile_sources(profile: str) -> list[FeishuBitableSource]:
@@ -256,6 +294,45 @@ class FeishuBitableClient:
         if obj_type not in {"bitable", "docx", "sheet"} or not obj_token:
             raise RuntimeError(f"wiki node is not a usable bitable node: obj_type={obj_type}")
         return str(obj_token)
+
+    def create_app(self, name: str, folder_token: str = "") -> FeishuBitableApp:
+        payload = {"name": name}
+        if folder_token:
+            payload["folder_token"] = folder_token
+        data = self._request_json("POST", "/bitable/v1/apps", headers=self._headers(), json=payload)
+        block = data.get("data") or {}
+        app = block.get("app") or block
+        app_token = str(app.get("app_token") or app.get("token") or block.get("app_token") or "")
+        if not app_token:
+            raise RuntimeError("飞书创建多维表格成功响应缺少 app_token。")
+        return FeishuBitableApp(app_token=app_token, url=str(app.get("url") or block.get("url") or ""))
+
+    def list_tables(self, app_token: str) -> list[dict[str, Any]]:
+        data = self._request_json("GET", f"/bitable/v1/apps/{app_token}/tables", headers=self._headers())
+        block = data.get("data") or {}
+        return block.get("items") or block.get("tables") or []
+
+    def create_table(
+        self,
+        app_token: str,
+        name: str,
+        fields: list[dict[str, Any]] | None = None,
+    ) -> FeishuBitableTable:
+        table_payload: dict[str, Any] = {"name": name}
+        if fields is not None:
+            table_payload["fields"] = fields
+        data = self._request_json(
+            "POST",
+            f"/bitable/v1/apps/{app_token}/tables",
+            headers=self._headers(),
+            json={"table": table_payload},
+        )
+        block = data.get("data") or {}
+        table = block.get("table") or block
+        table_id = str(table.get("table_id") or block.get("table_id") or "")
+        if not table_id:
+            raise RuntimeError(f"飞书创建数据表成功响应缺少 table_id：{name}")
+        return FeishuBitableTable(table_id=table_id, name=str(table.get("name") or name))
 
     def list_fields(self, app_token: str, table_id: str) -> list[dict[str, Any]]:
         data = self._request_json(

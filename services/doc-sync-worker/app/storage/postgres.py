@@ -348,6 +348,38 @@ class PostgresDocSyncStore:
             for row in rows
         ]
 
+    def list_bitable_sources(self, provider: str, env_profile: str) -> list[dict[str, Any]]:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    source_name, source_type, external_doc_id, external_sheet_id,
+                    source_url, document_name, sheet_name
+                FROM external_sources
+                WHERE provider = %s
+                  AND env_profile = %s
+                  AND status = 'active'
+                  AND source_type = 'bitable_table'
+                  AND external_doc_id <> ''
+                  AND external_sheet_id <> ''
+                ORDER BY id
+                """,
+                (provider, env_profile),
+            )
+            rows = cur.fetchall()
+        return [
+            {
+                "source_name": row[0],
+                "source_type": row[1],
+                "external_doc_id": row[2],
+                "external_sheet_id": row[3],
+                "source_url": row[4] or "",
+                "document_name": row[5] or "",
+                "sheet_name": row[6] or "",
+            }
+            for row in rows
+        ]
+
     def get_source(self, source_id: int) -> dict[str, Any] | None:
         with self.conn.cursor() as cur:
             cur.execute(

@@ -351,8 +351,58 @@ class FeishuProviderEnvTests(WorkerImportTestCase):
         self.assertEqual("tbl_test_table", sources[0].table_id)
         self.assertEqual("生产任务", sources[0].source_name)
 
+    def test_feishu_session_console_bootstrap_env_is_optional_source_discovery(self) -> None:
+        from app.providers.feishu import session_console_bootstrap_config
+
+        with patch.dict(
+            "os.environ",
+            {
+                "FEISHU_COMPANY_A_SESSION_CONSOLE_BOOTSTRAP": "true",
+                "FEISHU_COMPANY_A_SESSION_CONSOLE_FOLDER_TOKEN": "fldcn_folder",
+                "FEISHU_COMPANY_A_SESSION_CONSOLE_NAME": "飞书 ChatGPT 会话管理台",
+            },
+            clear=True,
+        ):
+            config = session_console_bootstrap_config("COMPANY_A")
+
+        self.assertTrue(config.enabled)
+        self.assertEqual("fldcn_folder", config.folder_token)
+        self.assertEqual("飞书 ChatGPT 会话管理台", config.app_name)
+
 
 class FeishuBitablePaginationTests(WorkerImportTestCase):
+    def test_create_app_and_table_extracts_tokens_and_sends_schema(self) -> None:
+        from app.providers.feishu import FeishuBitableClient
+
+        class FakeClient(FeishuBitableClient):
+            def __init__(self) -> None:
+                super().__init__("cli_a", "secret-a")
+                self._tenant_token = "tenant-token"
+                self.calls: list[dict] = []
+
+            def _request_json(self, method: str, path: str, **kwargs: object) -> dict:
+                self.calls.append({"method": method, "path": path, "kwargs": kwargs})
+                if path == "/bitable/v1/apps":
+                    return {"code": 0, "data": {"app": {"app_token": "bascn_console", "url": "https://x/base/bascn_console"}}}
+                return {"code": 0, "data": {"table": {"table_id": "tbl_sessions", "name": "会话索引表"}}}
+
+        client = FakeClient()
+
+        app = client.create_app("飞书 ChatGPT 会话管理台", folder_token="fldcn_folder")
+        table = client.create_table(
+            app.app_token,
+            "会话索引表",
+            fields=[{"field_name": "session_key", "type": 1}],
+        )
+
+        self.assertEqual("bascn_console", app.app_token)
+        self.assertEqual("tbl_sessions", table.table_id)
+        self.assertEqual("/bitable/v1/apps", client.calls[0]["path"])
+        self.assertEqual({"name": "飞书 ChatGPT 会话管理台", "folder_token": "fldcn_folder"}, client.calls[0]["kwargs"]["json"])
+        self.assertEqual("/bitable/v1/apps/bascn_console/tables", client.calls[1]["path"])
+        self.assertEqual("会话索引表", client.calls[1]["kwargs"]["json"]["table"]["name"])
+        self.assertEqual([{"field_name": "session_key", "type": 1}], client.calls[1]["kwargs"]["json"]["table"]["fields"])
+
     def test_get_records_merges_two_pages(self) -> None:
         from app.providers.feishu import FeishuBitableClient
 
@@ -417,6 +467,155 @@ class FeishuBitablePaginationTests(WorkerImportTestCase):
 
         self.assertEqual("/bitable/v1/apps/***/tables/tbl_test_table/records", safe_path)
         self.assertNotIn("bascn_secret_token", safe_path)
+
+
+class FeishuBitableSyncTests(WorkerImportTestCase):
+    def test_bootstrap_session_console_creates_tables_and_registers_sources(self) -> None:
+        from app.pipelines.sync_feishu_full import bootstrap_session_console_sources
+
+        class FakeClient:
+            def __init__(self) -> None:
+                self.created_tables: list[dict] = []
+
+            def create_app(self, name: str, folder_token: str = "") -> object:
+                self.app_name = name
+                self.folder_token = folder_token
+
+                class App:
+                    app_token = "bascn_console"
+                    url = "https://feishu.cn/base/bascn_console"
+
+                return App()
+
+            def list_tables(self, app_token: str) -> list[dict]:
+                return []
+
+            def create_table(self, app_token: str, name: str, fields: list[dict] | None = None) -> object:
+                self.created_tables.append({"app_token": app_token, "name": name, "fields": fields or []})
+
+                class Table:
+                    table_id = "tbl_" + str(len(self.created_tables))
+
+                return Table()
+
+        class FakeStore:
+            def __init__(self) -> None:
+                self.sources: list[dict] = []
+
+            def ensure_source(self, **kwargs: object) -> int:
+                self.sources.append(dict(kwargs))
+                return len(self.sources)
+
+        store = FakeStore()
+        client = FakeClient()
+
+        sources = bootstrap_session_console_sources(
+            store,
+            client,  # type: ignore[arg-type]
+            "COMPANY_A",
+            app_name="飞书 ChatGPT 会话管理台",
+            folder_token="fldcn_folder",
+        )
+
+        self.assertEqual("fldcn_folder", client.folder_token)
+        self.assertEqual(6, len(sources))
+        self.assertEqual(6, len(client.created_tables))
+        self.assertEqual("会话索引表", client.created_tables[0]["name"])
+        self.assertIn({"field_name": "session_key", "type": 1}, client.created_tables[0]["fields"])
+        self.assertEqual("会话索引表", store.sources[0]["sheet_name"])
+        self.assertEqual("bascn_console", sources[0].app_token)
+
+    def test_persisted_feishu_bitable_sources_are_used_without_env_table_ids(self) -> None:
+        from app.pipelines.sync_feishu_full import _persisted_feishu_sources
+
+        class FakeStore:
+            def list_bitable_sources(self, provider: str, env_profile: str) -> list[dict]:
+                self.provider = provider
+                self.env_profile = env_profile
+                return [
+                    {
+                        "external_doc_id": "bascn_console",
+                        "external_sheet_id": "tbl_sessions",
+                        "document_name": "飞书 ChatGPT 会话管理台",
+                        "sheet_name": "会话索引表",
+                        "source_url": "https://feishu.cn/base/bascn_console",
+                    }
+                ]
+
+        sources = _persisted_feishu_sources(FakeStore(), "COMPANY_A")
+
+        self.assertEqual(1, len(sources))
+        self.assertEqual("bascn_console", sources[0].app_token)
+        self.assertEqual("tbl_sessions", sources[0].table_id)
+        self.assertEqual("会话索引表", sources[0].source_name)
+
+    def test_sync_bitable_records_upserts_managed_contact_from_session_index(self) -> None:
+        from app.pipelines.sync_feishu_full import _sync_bitable_records
+        from app.storage.postgres import UpsertDecision
+
+        class FakeClient:
+            def list_fields(self, app_token: str, table_id: str) -> list[dict]:
+                return [
+                    {"field_id": "f_session_key", "field_title": "session_key"},
+                    {"field_id": "f_name", "field_title": "飞书用户名"},
+                    {"field_id": "f_project", "field_title": "ChatGPT 对话链接"},
+                    {"field_id": "f_project_name", "field_title": "ChatGPT 项目名"},
+                    {"field_id": "f_status", "field_title": "会话状态"},
+                    {"field_id": "f_current", "field_title": "是否当前会话"},
+                ]
+
+            def get_records(self, app_token: str, table_id: str, view_id: str = "") -> dict:
+                return {
+                    "records": [
+                        {
+                            "record_id": "rec_1",
+                            "fields": {
+                                "f_session_key": "tenant-a:user:ou_28d4",
+                                "f_name": "hao",
+                                "f_project": "https://chatgpt.com/g/g-p-lark/project",
+                                "f_project_name": "飞书 AI 会话台",
+                                "f_status": "活跃",
+                                "f_current": True,
+                            },
+                        }
+                    ],
+                    "page_count": 1,
+                }
+
+        class FakeStore:
+            def __init__(self) -> None:
+                self.contacts: list[dict] = []
+
+            def replace_fields(self, source_id: int, fields: list[dict]) -> dict[str, str]:
+                return {str(field["field_id"]): str(field["field_title"]) for field in fields}
+
+            def upsert_record(self, source_id: int, snapshot: object) -> UpsertDecision:
+                return UpsertDecision(action="create", should_write=True)
+
+            def upsert_managed_contact(self, contact: dict) -> None:
+                self.contacts.append(dict(contact))
+
+            def mark_source_synced(self, source_id: int) -> None:
+                return None
+
+        counts = {"sheet_count": 0, "record_count": 0, "created_count": 0, "updated_count": 0}
+        store = FakeStore()
+
+        _sync_bitable_records(
+            store,
+            FakeClient(),  # type: ignore[arg-type]
+            1,
+            "bascn_test_token",
+            "tbl_test_table",
+            "",
+            counts,
+            source_name="会话索引表",
+        )
+
+        self.assertEqual(1, len(store.contacts))
+        self.assertEqual("feishu", store.contacts[0]["channel"])
+        self.assertEqual("user:ou_28d4", store.contacts[0]["peer_id"])
+        self.assertEqual(1, counts["managed_contact_count"])
 
 
 class FeishuBitableErrorTests(WorkerImportTestCase):

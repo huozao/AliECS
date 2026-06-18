@@ -76,7 +76,106 @@ class ManagedContactsSyncTests(unittest.TestCase):
             [{"peer_id": "ou_x", "display_name": "李四", "enabled": "true"}],
         )
 
-        self.assertEqual("李四", store.contacts[("feishu", "ou_x")]["display_name"])
+        self.assertEqual("李四", store.contacts[("feishu", "user:ou_x")]["display_name"])
+
+    def test_feishu_session_index_upserts_current_active_session_route(self) -> None:
+        from app.pipelines.managed_contacts import sync_managed_contacts_from_sheet
+
+        store = FakeContactStore()
+        changed = sync_managed_contacts_from_sheet(
+            store,
+            "会话索引表",
+            [
+                {
+                    "session_key": "tenant-a:user:ou_28d4",
+                    "会话类型": "私聊",
+                    "飞书用户名": "hao",
+                    "ChatGPT 项目名": "飞书 AI 会话台",
+                    "ChatGPT 对话链接": "https://chatgpt.com/g/g-p-lark/project",
+                    "会话状态": "活跃",
+                    "是否当前会话": True,
+                }
+            ],
+        )
+
+        self.assertEqual(1, changed)
+        row = store.contacts[("feishu", "user:ou_28d4")]
+        self.assertEqual("hao", row["display_name"])
+        self.assertEqual("https://chatgpt.com/g/g-p-lark/project", row["project_url"])
+        self.assertEqual("飞书 AI 会话台", row["project_name"])
+
+    def test_feishu_session_index_keeps_private_and_group_routes_separate(self) -> None:
+        from app.pipelines.managed_contacts import sync_managed_contacts_from_sheet
+
+        store = FakeContactStore()
+        changed = sync_managed_contacts_from_sheet(
+            store,
+            "会话索引表",
+            [
+                {
+                    "session_key": "tenant-a:user:ou_28d4",
+                    "会话类型": "私聊",
+                    "飞书用户名": "hao",
+                    "ChatGPT 对话链接": "https://chatgpt.com/g/g-p-lark-dm/project",
+                    "会话状态": "活跃",
+                    "是否当前会话": True,
+                },
+                {
+                    "session_key": "tenant-a:group:oc_group1",
+                    "会话类型": "群聊",
+                    "飞书群名": "项目群",
+                    "ChatGPT 对话链接": "https://chatgpt.com/g/g-p-lark-group/project",
+                    "会话状态": "活跃",
+                    "是否当前会话": True,
+                },
+                {
+                    "session_key": "tenant-a:group_user:oc_group1:ou_28d4",
+                    "会话类型": "群内个人",
+                    "会话名称": "项目群 / hao",
+                    "ChatGPT 对话链接": "https://chatgpt.com/g/g-p-lark-group-user/project",
+                    "会话状态": "活跃",
+                    "是否当前会话": True,
+                },
+            ],
+        )
+
+        self.assertEqual(3, changed)
+        self.assertIn(("feishu", "user:ou_28d4"), store.contacts)
+        self.assertIn(("feishu", "group:oc_group1"), store.contacts)
+        self.assertIn(("feishu", "group_user:oc_group1:ou_28d4"), store.contacts)
+        self.assertNotIn(("feishu", "ou_28d4"), store.contacts)
+        self.assertNotIn(("feishu", "oc_group1"), store.contacts)
+
+    def test_feishu_session_index_ignores_non_current_or_missing_status_rows(self) -> None:
+        from app.pipelines.managed_contacts import sync_managed_contacts_from_sheet
+
+        store = FakeContactStore()
+        changed = sync_managed_contacts_from_sheet(
+            store,
+            "会话索引表",
+            [
+                {
+                    "session_key": "tenant-a:user:ou_old",
+                    "ChatGPT 对话链接": "https://chatgpt.com/g/g-p-lark/project",
+                    "会话状态": "活跃",
+                    "是否当前会话": False,
+                },
+                {
+                    "session_key": "tenant-a:user:ou_missing_status",
+                    "ChatGPT 对话链接": "https://chatgpt.com/g/g-p-lark/project",
+                    "是否当前会话": True,
+                },
+                {
+                    "session_key": "tenant-a:user:ou_archived",
+                    "ChatGPT 对话链接": "https://chatgpt.com/g/g-p-lark/project",
+                    "会话状态": "已归档",
+                    "是否当前会话": True,
+                },
+            ],
+        )
+
+        self.assertEqual(0, changed)
+        self.assertEqual({}, store.contacts)
 
     def test_control_panel_sheet_aliases_match_runtime_columns(self) -> None:
         from app.pipelines.managed_contacts import sync_managed_contacts_from_sheet
