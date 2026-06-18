@@ -186,9 +186,9 @@ services:
     ports:
       - "127.0.0.1:8090:8090"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8090/healthz', timeout=3)"]
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8090/healthz', timeout=10).close()"]
       interval: 30s
-      timeout: 5s
+      timeout: 20s
       retries: 5
 
   postgres:
