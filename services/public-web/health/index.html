@@ -23,7 +23,7 @@
         <div class="row" style="justify-content:space-between"><h2 style="margin:0">功能区</h2><button id="addWechatPanelBtn" class="btn primary" type="button">添加新微信</button></div>
       </section>
       <section class="band"><h2>需要关注</h2><div id="attention" class="list muted">加载中...</div></section>
-      <section class="band"><h2>T+ 同步请求（手动触发）</h2><div id="tplus"></div></section>
+      <section class="band"><h2>T+ 同步请求（畅捷通回调触发）</h2><div id="tplus"></div></section>
       <section class="band"><h2>T+ 同步执行记录（全部 · 含每小时定时）</h2><div id="tplusRuns"></div><div id="tplusRunsPager" class="row" style="gap:10px;align-items:center;margin-top:8px"></div></section>
       <section class="band"><h2>差异校验</h2><div id="reconciliation"></div></section>
       <section class="band"><h2>外部主机</h2><div id="hosts"></div></section>
@@ -100,9 +100,22 @@
       if(!items||!items.length){attention.innerHTML='<div class="muted">当前没有需要人工关注的项目。</div>';return}
       attention.innerHTML=items.map((item)=>`<div class="attention ${item.level||'warning'}"><strong>${item.code}</strong><br/><span>${item.message||''}</span></div>`).join('');
     }
-    function renderTplus(t){
-      const rows=(t.recent_requests||[]).map((item,index)=>`<tr><td>${esc(item.id)}</td><td>${esc(item.module)}</td><td>${esc(item.mode)}</td><td>${esc(item.status)}</td><td>${esc(item.sync_run_id||'')}</td><td>${fmtTime(item.requested_at)}</td><td>${fmtTime(item.finished_at)}</td><td>${esc(item.reason_event_id||'')}</td><td><button class="btn primary" type="button" onclick="openTplusRequestDetail(${index})">详情</button></td></tr>`).join('');
-      tplus.innerHTML=`<p class="muted">手动点「同步」产生的请求队列(含待处理)；每条请求执行后生成一条「执行记录」，可用「执行ID」列对应下表。 · pending ${t.pending_requests||0} · running ${t.running_requests||0} · failed ${t.failed_requests||0}</p><table><thead><tr><th>ID</th><th>模块</th><th>模式</th><th>状态</th><th>执行ID</th><th>请求时间</th><th>完成时间</th><th>事件</th><th>详情</th></tr></thead><tbody>${rows||'<tr><td colspan="9" class="muted">暂无请求</td></tr>'}</tbody></table>`;
+    let tplusReqOffset=0; const TPLUS_REQ_LIMIT=20; let tplusReqItems=[];
+    async function loadTplusRequests(){
+      try{
+        const d=await api(`/v1/ops/tplus/requests?limit=${TPLUS_REQ_LIMIT}&offset=${tplusReqOffset}`);
+        renderTplus(d);
+      }catch(e){$('tplus').innerHTML=`<span class="chip failed">同步请求加载失败：${esc(e.message)}</span>`;}
+    }
+    function renderTplus(d){
+      tplusReqItems=d.items||[];
+      const rows=tplusReqItems.map((item,index)=>`<tr><td>${esc(item.id)}</td><td>${esc(item.module)}</td><td>${esc(item.mode)}</td><td>${esc(item.status)}</td><td>${esc(item.sync_run_id||'')}</td><td>${fmtTime(item.requested_at)}</td><td>${fmtTime(item.finished_at)}</td><td>${esc(item.reason_event_id||'')}</td><td><button class="btn primary" type="button" onclick="openTplusRequestDetail(${index})">详情</button></td></tr>`).join('');
+      const total=d.total||0,limit=d.limit||TPLUS_REQ_LIMIT,offset=d.offset||0;
+      const page=Math.floor(offset/limit)+1,pages=Math.max(1,Math.ceil(total/limit));
+      tplus.innerHTML=`<p class="muted">畅捷通改 BOM 的回调事件自动产生的同步请求；「回调事件ID」即触发它的畅捷通事件，差异/冲突见下方「差异校验」。 · pending ${d.pending||0} · running ${d.running||0} · failed ${d.failed||0}</p><table><thead><tr><th>ID</th><th>模块</th><th>模式</th><th>状态</th><th>执行ID</th><th>请求时间</th><th>完成时间</th><th>回调事件ID</th><th>详情</th></tr></thead><tbody>${rows||'<tr><td colspan="9" class="muted">暂无请求</td></tr>'}</tbody></table><div class="row" style="gap:10px;align-items:center;margin-top:8px"><button class="btn" type="button" id="tplusReqPrev" ${offset<=0?'disabled':''}>上一页</button><span class="muted">第 ${page}/${pages} 页 · 共 ${total} 条</span><button class="btn" type="button" id="tplusReqNext" ${offset+limit>=total?'disabled':''}>下一页</button></div>`;
+      const prev=$('tplusReqPrev'),next=$('tplusReqNext');
+      if(prev)prev.onclick=()=>{tplusReqOffset=Math.max(0,tplusReqOffset-TPLUS_REQ_LIMIT);loadTplusRequests();};
+      if(next)next.onclick=()=>{tplusReqOffset=tplusReqOffset+TPLUS_REQ_LIMIT;loadTplusRequests();};
     }
     let tplusRunsOffset=0; const TPLUS_RUNS_LIMIT=20;
     async function loadTplusRuns(){
@@ -134,7 +147,7 @@
     function closeModal(){detailModal.classList.remove('show');modalBody.innerHTML='';}
     function jsonDetailBlock(title,value){return `<h4>${title}</h4><pre>${esc(JSON.stringify(value??{},null,2))}</pre>`;}
     function openTplusRequestDetail(index){
-      const item=latestStatus&&latestStatus.tplus&&(latestStatus.tplus.recent_requests||[])[index];
+      const item=tplusReqItems[index];
       if(!item)return;
       const summary=`<p class="muted">请求 ${esc(item.id)} · run ${esc(item.sync_run_id||'-')} · 行数 ${esc(item.row_count??'-')} · exit ${esc(item.exit_code??'-')}</p><table><tbody><tr><th>模块</th><td>${esc(item.module)}</td><th>模式</th><td>${esc(item.mode)}</td></tr><tr><th>状态</th><td>${esc(item.status)}</td><th>事件</th><td>${esc(item.reason_event_id||'-')}</td></tr><tr><th>请求时间</th><td>${fmtTime(item.requested_at)}</td><th>完成时间</th><td>${fmtTime(item.finished_at)}</td></tr></tbody></table>`;
       openModal(`T+ 同步详情 #${item.id}`,`${summary}${jsonDetailBlock('请求目标',item.target_json)}${jsonDetailBlock('执行结果',item.detail_json)}${jsonDetailBlock('请求错误',item.request_error_json)}${jsonDetailBlock('执行错误',item.error_json)}`);
@@ -243,7 +256,7 @@
         latestStatus=await loadStatus();
         renderSummary(latestStatus);
         renderAttention(latestStatus.attention_items);
-        renderTplus(latestStatus.tplus||{});
+        loadTplusRequests();
         loadTplusRuns();
         renderRecon(latestStatus.reconciliation||{});
         renderHosts(latestStatus.hosts||[]);

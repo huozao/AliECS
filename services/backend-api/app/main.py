@@ -938,6 +938,64 @@ def ops_tplus_runs(
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
+@app.get("/v1/ops/tplus/requests")
+def ops_tplus_requests(
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    """全部 T+ 同步请求（畅捷通回调事件触发的 bom 同步），分页。reason_event_id=回调事件ID。"""
+    items: list[dict[str, Any]] = []
+    total = 0
+    counts = {"pending": 0, "running": 0, "failed": 0}
+    try:
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM integration_sync_requests WHERE provider = 'chanjet'")
+                total = int(cur.fetchone()[0])
+                cur.execute(
+                    "SELECT status, COUNT(*) FROM integration_sync_requests WHERE provider = 'chanjet' GROUP BY status"
+                )
+                status_map = {row[0]: int(row[1]) for row in cur.fetchall()}
+                counts = {key: status_map.get(key, 0) for key in ("pending", "running", "failed")}
+                cur.execute(
+                    """
+                    SELECT r.id, r.module, r.mode, r.status, r.requested_at, r.started_at,
+                           r.finished_at, r.reason_event_id, r.target_json, r.sync_run_id,
+                           r.error_json, sr.detail_json, sr.error_json, sr.row_count, sr.exit_code
+                    FROM integration_sync_requests r
+                    LEFT JOIN integration_sync_runs sr ON sr.id = r.sync_run_id
+                    WHERE r.provider = 'chanjet'
+                    ORDER BY r.requested_at DESC, r.id DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (limit, offset),
+                )
+                items = [
+                    {
+                        "id": row[0],
+                        "module": row[1],
+                        "mode": row[2],
+                        "status": row[3],
+                        "requested_at": str(row[4]) if row[4] else None,
+                        "started_at": str(row[5]) if row[5] else None,
+                        "finished_at": str(row[6]) if row[6] else None,
+                        "reason_event_id": row[7],
+                        "target_json": _json_value(row[8]),
+                        "sync_run_id": row[9],
+                        "request_error_json": _json_value(row[10]),
+                        "detail_json": _json_value(row[11]),
+                        "error_json": _json_value(row[12]),
+                        "row_count": row[13],
+                        "exit_code": row[14],
+                    }
+                    for row in cur.fetchall()
+                ]
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"读取 T+ 同步请求失败：{type(exc).__name__}") from exc
+    return {"items": items, "total": total, "limit": limit, "offset": offset, **counts}
+
+
 @app.get("/v1/ops/status")
 def ops_status(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     db_ok, db_message = _db_ping()
