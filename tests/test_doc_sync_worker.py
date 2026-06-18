@@ -419,6 +419,76 @@ class FeishuBitablePaginationTests(WorkerImportTestCase):
         self.assertNotIn("bascn_secret_token", safe_path)
 
 
+class FeishuBitableSyncTests(WorkerImportTestCase):
+    def test_sync_bitable_records_upserts_managed_contact_from_session_index(self) -> None:
+        from app.pipelines.sync_feishu_full import _sync_bitable_records
+        from app.storage.postgres import UpsertDecision
+
+        class FakeClient:
+            def list_fields(self, app_token: str, table_id: str) -> list[dict]:
+                return [
+                    {"field_id": "f_session_key", "field_title": "session_key"},
+                    {"field_id": "f_name", "field_title": "飞书用户名"},
+                    {"field_id": "f_project", "field_title": "ChatGPT 对话链接"},
+                    {"field_id": "f_project_name", "field_title": "ChatGPT 项目名"},
+                    {"field_id": "f_status", "field_title": "会话状态"},
+                    {"field_id": "f_current", "field_title": "是否当前会话"},
+                ]
+
+            def get_records(self, app_token: str, table_id: str, view_id: str = "") -> dict:
+                return {
+                    "records": [
+                        {
+                            "record_id": "rec_1",
+                            "fields": {
+                                "f_session_key": "tenant-a:user:ou_28d4",
+                                "f_name": "hao",
+                                "f_project": "https://chatgpt.com/g/g-p-lark/project",
+                                "f_project_name": "飞书 AI 会话台",
+                                "f_status": "活跃",
+                                "f_current": True,
+                            },
+                        }
+                    ],
+                    "page_count": 1,
+                }
+
+        class FakeStore:
+            def __init__(self) -> None:
+                self.contacts: list[dict] = []
+
+            def replace_fields(self, source_id: int, fields: list[dict]) -> dict[str, str]:
+                return {str(field["field_id"]): str(field["field_title"]) for field in fields}
+
+            def upsert_record(self, source_id: int, snapshot: object) -> UpsertDecision:
+                return UpsertDecision(action="create", should_write=True)
+
+            def upsert_managed_contact(self, contact: dict) -> None:
+                self.contacts.append(dict(contact))
+
+            def mark_source_synced(self, source_id: int) -> None:
+                return None
+
+        counts = {"sheet_count": 0, "record_count": 0, "created_count": 0, "updated_count": 0}
+        store = FakeStore()
+
+        _sync_bitable_records(
+            store,
+            FakeClient(),  # type: ignore[arg-type]
+            1,
+            "bascn_test_token",
+            "tbl_test_table",
+            "",
+            counts,
+            source_name="会话索引表",
+        )
+
+        self.assertEqual(1, len(store.contacts))
+        self.assertEqual("feishu", store.contacts[0]["channel"])
+        self.assertEqual("ou_28d4", store.contacts[0]["peer_id"])
+        self.assertEqual(1, counts["managed_contact_count"])
+
+
 class FeishuBitableErrorTests(WorkerImportTestCase):
     def test_request_json_http_error_includes_status_without_secrets(self) -> None:
         import requests

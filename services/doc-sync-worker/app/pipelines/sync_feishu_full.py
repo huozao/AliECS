@@ -9,6 +9,7 @@ from app.providers.feishu import (
     discover_profile_sources,
     env_profiles,
 )
+from app.pipelines.managed_contacts import sync_managed_contact_from_row
 from app.storage.postgres import build_record_snapshot, compose_source_name, open_store
 
 
@@ -28,6 +29,7 @@ def _sync_bitable_records(
     table_id: str,
     view_id: str,
     counts: dict[str, int],
+    source_name: str = "",
 ) -> None:
     fields = client.list_fields(app_token, table_id)
     field_titles = store.replace_fields(source_id, fields)
@@ -42,7 +44,10 @@ def _sync_bitable_records(
     for record in records:
         if not isinstance(record, dict):
             continue
-        decision = store.upsert_record(source_id, build_record_snapshot(record, field_titles))
+        snapshot = build_record_snapshot(record, field_titles)
+        decision = store.upsert_record(source_id, snapshot)
+        if sync_managed_contact_from_row(store, source_name, snapshot.normalized_json):
+            counts["managed_contact_count"] = counts.get("managed_contact_count", 0) + 1
         if decision.action == "create":
             counts["created_count"] += 1
         elif decision.action == "update":
@@ -99,7 +104,16 @@ def run_sync_feishu_full(profiles_arg: str = "") -> int:
                         document_name=source.source_name,
                         sheet_name=source.table_id,
                     )
-                    _sync_bitable_records(store, client, source_id, app_token, source.table_id, source.view_id, counts)
+                    _sync_bitable_records(
+                        store,
+                        client,
+                        source_id,
+                        app_token,
+                        source.table_id,
+                        source.view_id,
+                        counts,
+                        source_name=source.source_name,
+                    )
                 status = "success" if counts["error_count"] == 0 else "partial_failed"
             except Exception as exc:  # noqa: BLE001 - worker should persist one run row with diagnostics.
                 exit_code = 1
