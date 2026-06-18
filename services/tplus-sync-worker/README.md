@@ -77,6 +77,18 @@ python -m tplus_datahub.jobs.job_sync_bom
 - Excel：`output/excel/`
 - 日志：`output/logs/`
 
+## 导出保留策略
+
+`output/excel/` 下每类导出（`bom_*` / `purchase_price_*` / `sales_price_* / inventory_*` 等）每次产出新文件后会自动按前缀清理，只保留 mtime 最新的 N 个（默认 48，可用环境变量 `TPLUS_EXPORT_RETENTION` 覆盖；运行时只用每类最新一份）。当前最新文件永不删除。
+
+存量积压可用脚本一次性清理（默认 dry-run，仅打印将删列表，加 `--apply` 才实删；须在 **worker 容器**内运行，backend 对该卷是只读挂载）：
+
+```bash
+docker exec -it ecs-tplus-sync-worker-1 python scripts/prune_exports.py            # 预览
+docker exec -it ecs-tplus-sync-worker-1 python scripts/prune_exports.py --apply     # 实删
+# 可选：--keep N 覆盖保留数量，--dir PATH 覆盖目录
+```
+
 ## 已实现接口
 
 - BOM 分页查询：`/tplus/api/v2/bom/QueryPage`

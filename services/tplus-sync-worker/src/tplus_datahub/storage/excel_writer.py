@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from tplus_datahub.core.utils import ensure_dir, now_timestamp
+from tplus_datahub.storage.retention import prune_exports
 
 
 def export_rows_to_excel(rows: list[dict[str, Any]], module_name: str, output_root: str | Path, timestamp: str | None = None) -> Path:
@@ -17,4 +18,5 @@ def export_rows_to_excel(rows: list[dict[str, Any]], module_name: str, output_ro
     target = target_dir / f"{module_name}_{run_timestamp}.xlsx"
     dataframe = pd.json_normalize(rows) if rows else pd.DataFrame()
     dataframe.to_excel(target, index=False)
+    prune_exports(target_dir, module_name)
     return target
