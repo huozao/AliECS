@@ -484,11 +484,7 @@ def build_webdock_metadata(body: dict[str, Any]) -> dict[str, Any]:
     wechat_account = _first_metadata_value(metadata, "wechat_account", "account", "channel_id", "channel_name")
     chat_type = _first_metadata_value(metadata, "chat_type", "conversation_type", "room_type") or "private"
     if channel == "feishu":
-        peer_id = _strip_lane_peer_prefix(
-            _first_metadata_value(
-                metadata, "peer_id", "open_id", "openId", "sender_id", "user_id", "chat_id", "id"
-            )
-        )
+        peer_id = _feishu_lane_peer_id(metadata, chat_type)
     else:
         peer_id = _first_metadata_value(
             metadata,
@@ -531,10 +527,64 @@ def normalize_channel(value: Any) -> str:
 def _strip_lane_peer_prefix(value: Any) -> str:
     text = str(value or "").strip()
     lowered = text.lower()
-    for prefix in ("user:", "chat:", "open_id:", "openid:"):
+    for prefix in ("user:", "group:", "chat:", "open_id:", "openid:"):
         if lowered.startswith(prefix):
             return text[len(prefix):]
     return text
+
+
+def _feishu_lane_peer_id(metadata: dict[str, Any], chat_type: Any) -> str:
+    raw_peer = _first_metadata_value(metadata, "peer_id", "id")
+    chat_id = _first_metadata_value(metadata, "chat_id", "chatId", "conversation_id", "room_id")
+    open_id = _first_metadata_value(metadata, "open_id", "openId", "sender_id", "user_id", "from_user_id")
+
+    prefixed = _canonical_feishu_prefixed_peer(raw_peer)
+    if _is_group_chat(chat_type):
+        if chat_id:
+            return _feishu_group_peer(chat_id)
+        if prefixed.startswith("group:"):
+            return prefixed
+        if raw_peer and not prefixed.startswith("user:"):
+            return _feishu_group_peer(raw_peer)
+    if prefixed:
+        return prefixed
+    if open_id:
+        return _feishu_user_peer(open_id)
+    if chat_id:
+        return _feishu_group_peer(chat_id)
+    return ""
+
+
+def _canonical_feishu_prefixed_peer(value: Any) -> str:
+    text = str(value or "").strip()
+    lowered = text.lower()
+    if lowered.startswith("group_user:"):
+        return text
+    if lowered.startswith("group:"):
+        return _feishu_group_peer(text[len("group:"):])
+    if lowered.startswith("chat:"):
+        return _feishu_group_peer(text[len("chat:"):])
+    if lowered.startswith("user:"):
+        return _feishu_user_peer(text[len("user:"):])
+    if lowered.startswith("open_id:"):
+        return _feishu_user_peer(text[len("open_id:"):])
+    if lowered.startswith("openid:"):
+        return _feishu_user_peer(text[len("openid:"):])
+    return ""
+
+
+def _feishu_user_peer(value: Any) -> str:
+    peer = _strip_lane_peer_prefix(value)
+    return f"user:{peer}" if peer else ""
+
+
+def _feishu_group_peer(value: Any) -> str:
+    peer = _strip_lane_peer_prefix(value)
+    return f"group:{peer}" if peer else ""
+
+
+def _is_group_chat(chat_type: Any) -> bool:
+    return str(chat_type or "").strip().lower() in {"group", "chat", "group_chat", "room"}
 
 
 def _strip_feishu_sender_prefix(text: str, raw_metadata: dict[str, Any]) -> str:

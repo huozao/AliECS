@@ -163,9 +163,9 @@ Rules:
 - Accept sheet names `会话索引表`, `sessions`, `飞书会话索引表`.
 - Read `session_key` aliases: `session_key`, `会话key`, `会话键`.
 - Extract peer:
-  - `tenant:user:open_id` -> `open_id`
-  - `tenant:group:chat_id` -> `chat_id`
-  - `tenant:group_user:chat_id:open_id` -> use `chat_id:open_id` only for internal logs; for WebDock routing v1 use `chat_id` unless a separate per-user project URL is present.
+  - `tenant:user:open_id` -> `user:open_id`
+  - `tenant:group:chat_id` -> `group:chat_id`
+  - `tenant:group_user:chat_id:open_id` -> `group_user:chat_id:open_id`
 - Only sync rows where `会话状态` is `活跃` or `待创建`, and `是否当前会话` is true/yes/1/✓.
 - Use project home URL ending `/project` for `project_url`. If the Bitable row stores a conversation `/c/...` URL, derive project home from the existing `ChatGPT 项目首页链接` field; if not present, keep the original URL but mark `notes` with `needs_project_home_url`.
 - Map display name from `飞书用户名` or `飞书群名`.
@@ -570,4 +570,3 @@ ssh webdock 'curl -fsS http://100.97.176.57:18000/healthz'
 - Group messages with @bot are logged, cleaned, sent to ChatGPT, and replied.
 - Rich/widget/image ChatGPT replies sent to Feishu are readable: Markdown for text replies, PNG/media for widget/image replies.
 - Local tests and runtime verification pass after formal deploy.
-

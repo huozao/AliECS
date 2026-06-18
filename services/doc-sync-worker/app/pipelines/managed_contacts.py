@@ -63,6 +63,8 @@ def normalize_contact_row(sheet_name: str, row: dict[str, Any]) -> dict[str, Any
     peer_id = _field(row, "peer_id")
     if not peer_id:
         return None
+    if channel == "feishu":
+        peer_id = _canonical_feishu_user_peer(peer_id)
     daily_quota = _field(row, "daily_quota")
     return {
         "channel": channel,
@@ -116,11 +118,34 @@ def _peer_from_session_key(session_key: str) -> str:
     if len(parts) < 3:
         return ""
     kind = parts[1]
-    if kind in {"user", "group"}:
-        return parts[2]
+    if kind == "user":
+        return _canonical_feishu_user_peer(parts[2])
+    if kind == "group":
+        return _canonical_feishu_group_peer(parts[2])
     if kind == "group_user" and len(parts) >= 4:
-        return parts[2]
+        chat_id = _strip_feishu_peer_prefix(parts[2])
+        open_id = _strip_feishu_peer_prefix(parts[3])
+        return f"group_user:{chat_id}:{open_id}" if chat_id and open_id else ""
     return ""
+
+
+def _canonical_feishu_user_peer(value: str) -> str:
+    peer = _strip_feishu_peer_prefix(value)
+    return f"user:{peer}" if peer else ""
+
+
+def _canonical_feishu_group_peer(value: str) -> str:
+    peer = _strip_feishu_peer_prefix(value)
+    return f"group:{peer}" if peer else ""
+
+
+def _strip_feishu_peer_prefix(value: str) -> str:
+    text = str(value or "").strip()
+    lowered = text.lower()
+    for prefix in ("user:", "group:", "chat:", "open_id:", "openid:"):
+        if lowered.startswith(prefix):
+            return text[len(prefix):]
+    return text
 
 
 def _project_home_url(row: dict[str, Any]) -> str:

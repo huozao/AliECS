@@ -485,7 +485,7 @@ class FeishuBitableSyncTests(WorkerImportTestCase):
 
         self.assertEqual(1, len(store.contacts))
         self.assertEqual("feishu", store.contacts[0]["channel"])
-        self.assertEqual("ou_28d4", store.contacts[0]["peer_id"])
+        self.assertEqual("user:ou_28d4", store.contacts[0]["peer_id"])
         self.assertEqual(1, counts["managed_contact_count"])
 
 

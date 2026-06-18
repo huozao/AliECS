@@ -43,7 +43,13 @@
 - **可迁移**：未来上数据库，`session_key` 直接作主键 / 唯一索引，零改造。
 - **多租户安全**：前缀 `tenant_key` 保证不同企业租户隔离。
 
-> ⚠️ 与现有 webdock 的对接：当前 webdock 路由用的 key 就是飞书 `open_id`（私聊）。本表的 `session_key` 是「人类可读 + 多类型」的超集，导出给 webdock 时**取 open_id / chat_id 那一段**即可（见 §11）。
+> 与现有 webdock 的对接：导出给 webdock / backend routing JSON 时不要使用裸 `open_id` 或裸 `chat_id`。运行时 peer key 必须带类型前缀：私聊=`user:open_id`，群聊=`group:chat_id`，群内个人=`group_user:chat_id:open_id`。这样同一个人在私聊和群聊不会共用一条 ChatGPT 链接，同一个群里的多人会共用群级链接。
+
+**默认会话粒度**
+
+- 私聊：一个用户和自建应用的直接对话，使用 `tenant_key:user:open_id`，独立一条 ChatGPT 对话。
+- 群聊：一个群一条共享会话，使用 `tenant_key:group:chat_id`。群里 A、B 两个人只要在同一个群 @ 机器人，默认都进入同一条 ChatGPT 对话，形成“多人围绕同一上下文讨论”。
+- 群内个人：只有在明确需要“同一个群内每个人独立上下文”时才用 `tenant_key:group_user:chat_id:open_id`，不是当前默认策略。
 
 ---
 
@@ -511,14 +517,24 @@ chat_id(文本,必) · 群名称(文本,必) · 是否启用机器人(复选,必
 1. **导出映射**：把会话索引表中「会话状态∈{活跃,待创建} 且 是否当前会话=✓」的行，导出为 webdock 认的格式：
    ```json
    {"lanes": {
-     "<open_id 或 chat_id>": {"name": "<飞书用户名/群名>", "project_url": "https://chatgpt.com/g/g-p-6a2ffe0bac248191988612d9081dd6b1-lark-hao/project"}
+     "user:<open_id>": {"name": "<飞书用户名>", "project_url": "https://chatgpt.com/g/g-p-6a2ffe0bac248191988612d9081dd6b1-lark-hao/project"},
+     "group:<chat_id>": {"name": "<飞书群名>", "project_url": "https://chatgpt.com/g/g-p-6a2ffe0bac248191988612d9081dd6b1-lark-group/project"}
    }}
    ```
-   key 取 session_key 里的 `open_id`（私聊）/ `chat_id`（群）那一段，`project_url` 用**项目首页**链接（带 `/project`，force_new 导航到它才会开新对话）。
+   key 由 `session_key` 转换而来：`tenant:user:open_id` -> `user:open_id`；`tenant:group:chat_id` -> `group:chat_id`；`tenant:group_user:chat_id:open_id` -> `group_user:chat_id:open_id`。`project_url` 用**项目首页**链接（带 `/project`，force_new 导航到它才会开新对话）。
 
 2. **喂给运行时**：让这份 JSON 进到 backend 的 `/v1/routing/feishu-projects.json`，webdock 的拉取器（已修，每 60s 拉一次）就会写进 `feishu_projects.json`、`LaneRouter` 热重载生效。之后飞书 `/新对话` 即可在项目里自动开新对话并回写链接。
 
 > ⚠️ 注意：webdock 拉取器现在是好的（本轮已修 urlopen bug），它会**每 60s 用 backend 的值覆盖** `feishu_projects.json`。所以**手动塞本地文件活不过 60s**，必须从 backend 路由源（= 本管理台导出 / 或企微表的飞书工作表）喂。
 
-**立刻能让 `/新对话` 跑起来的最小动作**（在 Bitable 自动同步管线建好之前）：把当前飞书用户（如 hao=`ou_28d4f058…`）一行 `{open_id → lark-hao 项目首页}` 加进 backend 飞书路由源即可；之后再切到管理台驱动。
-```
+**立刻能让 `/新对话` 跑起来的最小动作**（在 Bitable 自动同步管线建好之前）：把当前飞书用户（如 hao=`ou_28d4f058…`）一行 `{user:open_id → lark-hao 项目首页}` 加进 backend 飞书路由源即可；之后再切到管理台驱动。
+
+**关于是否必须配置 Bitable app_token / table_id**
+
+不必须预先人工创建多维表格并把 `app_token/table_id` 写成环境变量。更理想的落地方式是：
+
+1. 服务器复用飞书自建应用的 `app_id/app_secret`（或等价的安全 SecretRef）换取 tenant access token。
+2. 如果找不到「飞书 ChatGPT 会话管理台」，服务器用自建应用权限自动创建多维表格和 6 张数据表。
+3. 创建成功后，把 `app_token/table_id/view_id` 写入数据库或后台配置表，后续同步从数据库读取。
+
+也就是说：**Bitable 的表 ID 环境变量可以不要**；但自建应用凭据仍然必须有安全来源，不能凭空调用飞书开放平台。
