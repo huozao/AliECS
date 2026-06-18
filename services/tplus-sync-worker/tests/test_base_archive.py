@@ -14,7 +14,11 @@ class FakeQueryClient:
 
     def post(self, endpoint, payload):
         self.calls.append((endpoint, payload.copy()))
-        return {"result": [{"Code": "01", "Name": "Main"}]}
+        # 第一页返回一条（满页 PageSize=1），第二页返回空让分页正常终止，
+        # 否则「满页就翻下一页」的逻辑会无限翻页。
+        if len(self.calls) == 1:
+            return {"result": [{"Code": "01", "Name": "Main"}]}
+        return {"result": []}
 
 
 class BaseArchiveSyncTests(unittest.TestCase):
@@ -45,7 +49,13 @@ class BaseArchiveSyncTests(unittest.TestCase):
             )
 
             self.assertEqual(rows, [{"Code": "01", "Name": "Main"}])
-            self.assertEqual(client.calls, [("/tplus/api/v2/warehouse/Query", {"param": {}})])
+            self.assertEqual(
+                client.calls,
+                [
+                    ("/tplus/api/v2/warehouse/Query", {"param": {"PageIndex": 1, "PageSize": 1}}),
+                    ("/tplus/api/v2/warehouse/Query", {"param": {"PageIndex": 2, "PageSize": 1}}),
+                ],
+            )
             raw_file = Path(tmp) / "data" / "raw" / "warehouse" / "20260604_011000_page_1.json"
             self.assertTrue(raw_file.exists())
             self.assertEqual(json.loads(raw_file.read_text(encoding="utf-8"))["result"][0]["Code"], "01")
