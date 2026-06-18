@@ -8,6 +8,7 @@
 - WebDock 热更新：优先使用真实 ChatGPT widget 截图，避免克隆渲染丢失深色背景里的白色文本。
 - 生产热修：向 `managed_contacts` 临时写入 `hao (Lark)` 的 Feishu 路由，恢复 `/新对话` 到 ChatGPT 项目首页的导航来源。新规范下私聊路由 key 应为 `user:ou_28d4...`。
 - 旧电脑 WebDock 已重建并运行健康。
+- AliECS 本地新增：`doc-sync-worker` 可用飞书自建应用权限创建「飞书 ChatGPT 会话管理台」和 6 张数据表，并把 `app_token/table_id` 登记到 `external_sources`；后续同步可直接复用数据库记录，不再要求表级环境变量常驻。
 
 ## 关键验证
 
@@ -19,11 +20,11 @@
 
 ## 剩余阻塞
 
-- 生产 `FEISHU_*` Bitable 环境变量未配置，`doc-sync-worker sync-feishu-full` 不能真实读取飞书多维表格。因此当前 Feishu 路由依赖手动热种子。正式自动化可以改为用自建应用权限自动创建/发现多维表格，把 `app_token/table_id/view_id` 存数据库；但自建应用凭据仍需要安全来源。
+- 生产镜像仍需发布包含 Bitable bootstrap 的新版本；发布后可用一次性 `FEISHU_<PROFILE>_SESSION_CONSOLE_BOOTSTRAP=true` 初始化管理台，后续走数据库登记的 `external_sources`。表级 `APP_TOKEN/TABLE_ID` 不再要求常驻；自建应用 `APP_ID/APP_SECRET` 和 Bitable 权限仍需要安全来源。
 - 当前 OpenClaw bridge 收到的 Feishu 元数据只有 `channel/chat_type/peer_id/message_id`，未看到 `mentions` 或原始群事件。群消息「全量记录但仅 @ 机器人回复」不能靠文本猜测上线，应接入原始 Feishu webhook，或让 OpenClaw 明确转发 `mentions` 后再启用门控。
 
 ## 后续建议
 
-1. 在生产 `release-meta.env` 中补齐 Feishu Bitable 配置。
-2. 正式发布 AliECS doc-sync-worker 镜像后运行 `sync-feishu-full`。
+1. 正式发布 AliECS doc-sync-worker 镜像后，用 bootstrap 开关运行一次 `sync-feishu-full` 创建并登记管理台。
+2. bootstrap 成功后移除一次性开关，保留数据库 source 记录。
 3. 接入 Feishu 原始消息 webhook，落库消息日志/回复任务，再启用群 @ 门控。
