@@ -35,6 +35,10 @@ class JobSyncAllTests(unittest.TestCase):
             ),
             patch.object(job_sync_all, "sync_voucher_list", return_value=[{"code": "SO-001"}], create=True) as sync_voucher,
             patch.object(job_sync_all, "export_voucher_list", return_value="sale_order_list.xlsx", create=True) as export_voucher,
+            patch.object(job_sync_all, "sync_purchase_price", return_value=[]),
+            patch.object(job_sync_all, "export_purchase_price", return_value="purchase_price.xlsx"),
+            patch.object(job_sync_all, "sync_sales_price", return_value=[]),
+            patch.object(job_sync_all, "export_sales_price", return_value="sales_price.xlsx"),
         ):
             result = job_sync_all.main()
 
