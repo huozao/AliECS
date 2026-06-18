@@ -6,6 +6,7 @@ from typing import Any
 from config.settings import Settings, load_settings
 from tplus_datahub.core.utils import ensure_dir, now_timestamp
 from tplus_datahub.modules.bom.transform_bom import CHILD_COLUMNS, PARENT_COLUMNS, transform_bom_workbook_rows
+from tplus_datahub.storage.retention import prune_exports
 
 
 def export_bom(rows: list[Any], settings: Settings | None = None, timestamp: str | None = None) -> Path:
@@ -24,4 +25,5 @@ def export_bom(rows: list[Any], settings: Settings | None = None, timestamp: str
         pd.DataFrame(parent_rows, columns=PARENT_COLUMNS).to_excel(writer, sheet_name="物料清单", index=False)
         pd.DataFrame(child_rows, columns=CHILD_COLUMNS).to_excel(writer, sheet_name="子件明细", index=False)
 
+    prune_exports(target_dir, "bom")
     return target
