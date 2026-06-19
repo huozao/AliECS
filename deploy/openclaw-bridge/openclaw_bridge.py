@@ -116,6 +116,7 @@ class PendingBatch:
         self.user_text = details["user_text"]
         self.images = list(details["images"])
         self.metadata = dict(details["metadata"])
+        self.raw_metadata = dict(details.get("raw_metadata") or {})
         self.expected_images = expected_image_count(details)
         self.created = time.monotonic()
         self.deadline = self.created + wait_seconds
@@ -130,6 +131,9 @@ class PendingBatch:
         for key, value in details["metadata"].items():
             if value and not self.metadata.get(key):
                 self.metadata[key] = value
+        for key, value in (details.get("raw_metadata") or {}).items():
+            if value and not self.raw_metadata.get(key):
+                self.raw_metadata[key] = value
         self.updated = time.monotonic()
 
     def has_text_and_images(self) -> bool:
@@ -141,8 +145,10 @@ class PendingBatch:
     def to_body(self) -> dict[str, Any]:
         body = dict(self.body)
         body["messages"] = [{"role": "user", "content": build_outbound_content(self.user_text, self.images)}]
-        if self.metadata:
-            body["metadata"] = dict(self.metadata)
+        metadata = dict(self.raw_metadata)
+        metadata.update(self.metadata)
+        if metadata:
+            body["metadata"] = metadata
         return body
 
 

@@ -883,6 +883,45 @@ def test_bridge_passes_webdock_conversation_url_to_bitable_writer(monkeypatch):
     assert details["metadata"]["chatgpt_conversation_url"] == "https://chatgpt.com/g/g-p-lark/c/conv-1"
 
 
+def test_bridge_batch_preserves_feishu_raw_metadata_for_session_index(monkeypatch):
+    bridge = load_bridge()
+    writes = []
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "0.01")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_MEDIA_INTENT_BATCH_SECONDS", "0")
+    monkeypatch.setattr(
+        bridge,
+        "call_webdock",
+        lambda body: bridge.WebDockResult(
+            "飞书回复",
+            {"chatgpt_conversation_url": "https://chatgpt.com/g/g-p-lark/c/conv-2"},
+        ),
+    )
+    monkeypatch.setattr(bridge, "append_feishu_session_console_records", lambda details, reply, status: writes.append((details, reply, status)))
+
+    body = {
+        "messages": [{"role": "user", "content": "你好"}],
+        "metadata": {
+            "channel": "feishu",
+            "tenant_key": "tenant-a",
+            "open_id": "ou_abc",
+            "sender_id": "ou_abc",
+            "message_id": "om_1",
+            "chat_type": "private",
+        },
+    }
+
+    assert bridge.build_reply(body) == "飞书回复"
+
+    details, _reply, _status = writes[-1]
+    assert details["raw_metadata"]["tenant_key"] == "tenant-a"
+    assert details["raw_metadata"]["open_id"] == "ou_abc"
+    assert details["metadata"]["peer_id"] == "user:ou_abc"
+    assert details["metadata"]["chatgpt_conversation_url"] == "https://chatgpt.com/g/g-p-lark/c/conv-2"
+    assert bridge.feishu_session_key(details) == "tenant-a:user:ou_abc"
+
+
 def test_feishu_message_fields_mark_group_lane():
     bridge = load_bridge()
     details = {
