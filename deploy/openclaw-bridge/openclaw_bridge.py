@@ -933,14 +933,15 @@ def append_feishu_session_console_records(details: dict[str, Any], reply: str, s
     if metadata.get("channel") != "feishu" or not feishu_session_console_configured():
         return
     try:
-        if status == "已回复":
+        should_send = feishu_should_send_chatgpt(details)
+        if status == "已回复" and should_send:
             upsert_feishu_session_index_record(details)
         create_feishu_bitable_record(
             feishu_session_console_table_id("message"),
             build_feishu_message_log_fields(details, reply=reply, status=status),
         )
         task_table_id = feishu_session_console_table_id("task")
-        if task_table_id:
+        if task_table_id and should_send:
             task_status = "已发送" if status == "已回复" else "失败"
             create_feishu_bitable_record(
                 task_table_id,
@@ -970,6 +971,8 @@ def build_feishu_message_log_fields(details: dict[str, Any], *, reply: str, stat
     text = str(details.get("user_text") or "")
     message_id = feishu_message_id(details)
     is_group = feishu_is_group_message(details)
+    mentioned_bot = feishu_mentions_bot(details)
+    should_send = feishu_should_send_chatgpt(details)
     command_type = feishu_command_type(text)
     fields: dict[str, Any] = {
         "日志编号": f"bridge-{message_id or details.get('request_id') or uuid.uuid4().hex[:8]}",
@@ -988,12 +991,12 @@ def build_feishu_message_log_fields(details: dict[str, Any], *, reply: str, stat
         "消息类型": str(_first_metadata_value(raw_metadata, "message_type", "msg_type") or "text"),
         "原始消息内容": text,
         "清洗后内容": text,
-        "是否 @ 机器人": feishu_mentions_bot(details),
+        "是否 @ 机器人": mentioned_bot,
         "@对象列表": feishu_mentions_text(raw_metadata),
         "是否命令": command_type != "无",
         "命令类型": command_type,
-        "是否需要送 ChatGPT": True,
-        "不处理原因": "",
+        "是否需要送 ChatGPT": should_send,
+        "不处理原因": "" if should_send else "未@机器人",
         "匹配会话": str(metadata.get("peer_id") or ""),
         "处理状态": status,
         "是否已回复飞书": status == "已回复",
@@ -1313,13 +1316,24 @@ def feishu_has_group_mention_hint(text: str) -> bool:
 
 def feishu_mentions_bot(details: dict[str, Any]) -> bool:
     raw_metadata = details.get("raw_metadata") or {}
+    metadata = details.get("metadata") or {}
+    for key in ("mentionedBot", "mentioned_bot", "is_mentioned", "isMentioned", "wasMentioned"):
+        value = _first_metadata_value(raw_metadata, key) or _first_metadata_value(metadata, key)
+        if isinstance(value, bool):
+            return value
+        if str(value or "").strip().lower() in {"1", "true", "yes"}:
+            return True
     mentions = raw_metadata.get("mentions")
     if isinstance(mentions, list) and mentions:
         return True
-    if feishu_is_group_message(details):
-        return True
     text = str(details.get("user_text") or "")
     return feishu_has_group_mention_hint(text) or "<at " in text.lower()
+
+
+def feishu_should_send_chatgpt(details: dict[str, Any]) -> bool:
+    if not feishu_is_group_message(details):
+        return True
+    return feishu_mentions_bot(details)
 
 
 def feishu_mentions_text(raw_metadata: dict[str, Any]) -> str:
@@ -1677,6 +1691,10 @@ def build_reply(body: dict[str, Any]) -> str:
     details = request_details(body)  # peer_id/channel for chain_result tracing
     started = time.monotonic()
     try:
+        if details.get("metadata", {}).get("channel") == "feishu" and not feishu_should_send_chatgpt(details):
+            trace_chain_result(details, started, reply="")
+            append_feishu_session_console_records(details, "", "仅记录")
+            return NO_REPLY
         batched_body = maybe_batch_request(body)
         if batched_body == NO_REPLY:
             return NO_REPLY  # merged into a batch leader; the leader emits chain_result

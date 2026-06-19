@@ -922,6 +922,52 @@ def test_bridge_batch_preserves_feishu_raw_metadata_for_session_index(monkeypatc
     assert bridge.feishu_session_key(details) == "tenant-a:user:ou_abc"
 
 
+def test_bridge_records_unmentioned_feishu_group_without_webdock_or_task(monkeypatch):
+    bridge = load_bridge()
+    created = []
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "0")
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_test")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret_test")
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_APP_TOKEN", "app_token")
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_MESSAGE_TABLE_ID", "tbl_message")
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_TASK_TABLE_ID", "tbl_task")
+    monkeypatch.setattr(
+        bridge,
+        "call_webdock",
+        lambda body: (_ for _ in ()).throw(AssertionError("non-mentioned group message must not call WebDock")),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "create_feishu_bitable_record",
+        lambda table_id, fields: created.append((table_id, fields)) or {},
+    )
+
+    body = {
+        "messages": [{"role": "user", "content": "群里普通聊天"}],
+        "metadata": {
+            "channel": "feishu",
+            "tenant_key": "tenant-a",
+            "chat_type": "group",
+            "chat_id": "oc_group1",
+            "sender_id": "ou_sender",
+            "message_id": "om_group_plain",
+        },
+    }
+
+    assert bridge.build_reply(body) == bridge.NO_REPLY
+
+    assert len(created) == 1
+    table_id, fields = created[0]
+    assert table_id == "tbl_message"
+    assert fields["飞书 message_id"] == "om_group_plain"
+    assert fields["是否 @ 机器人"] is False
+    assert fields["是否需要送 ChatGPT"] is False
+    assert fields["不处理原因"] == "未@机器人"
+    assert fields["处理状态"] == "仅记录"
+
+
 def test_feishu_message_fields_mark_group_lane():
     bridge = load_bridge()
     details = {
@@ -932,6 +978,7 @@ def test_feishu_message_fields_mark_group_lane():
             "peer_id": "group:oc_group1",
             "message_id": "om_group",
         },
+        "raw_metadata": {"mentions": [{"id": {"open_id": "ou_bot"}, "name": "Bot"}]},
     }
 
     fields = bridge.build_feishu_message_log_fields(details, reply="群回复", status="已回复")
@@ -939,8 +986,31 @@ def test_feishu_message_fields_mark_group_lane():
     assert fields["聊天类型"] == "群聊"
     assert fields["群 chat_id"] == "oc_group1"
     assert fields["发送人 open_id"] == ""
+    assert fields["是否 @ 机器人"] is True
     assert fields["匹配会话"] == "group:oc_group1"
     assert fields["是否需要送 ChatGPT"] is True
+
+
+def test_feishu_message_fields_group_without_mentions_is_record_only():
+    bridge = load_bridge()
+    details = {
+        "user_text": "群里普通聊天",
+        "metadata": {
+            "channel": "feishu",
+            "chat_type": "group",
+            "peer_id": "group:oc_group1",
+            "message_id": "om_group",
+        },
+    }
+
+    fields = bridge.build_feishu_message_log_fields(details, reply="", status="仅记录")
+
+    assert fields["聊天类型"] == "群聊"
+    assert fields["是否 @ 机器人"] is False
+    assert fields["是否需要送 ChatGPT"] is False
+    assert fields["不处理原因"] == "未@机器人"
+    assert fields["处理状态"] == "仅记录"
+    assert fields["是否已回复飞书"] is False
 
 
 def test_feishu_message_fields_keep_group_sender_open_id():
@@ -953,7 +1023,7 @@ def test_feishu_message_fields_keep_group_sender_open_id():
             "peer_id": "group:oc_group1",
             "message_id": "om_group",
         },
-        "raw_metadata": {"sender_id": "ou_sender"},
+        "raw_metadata": {"sender_id": "ou_sender", "mentions": [{"id": {"open_id": "ou_bot"}, "name": "Bot"}]},
     }
 
     fields = bridge.build_feishu_message_log_fields(details, reply="群回复", status="已回复")
@@ -1105,6 +1175,7 @@ def test_feishu_session_index_archives_old_current_and_creates_new_version(monke
                 "chat_id": "oc_group1",
                 "sender_id": "ou_sender",
                 "chat_name": "项目群",
+                "mentions": [{"id": {"open_id": "ou_bot"}, "name": "Bot"}],
             },
         }
     )
