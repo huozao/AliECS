@@ -14,9 +14,11 @@ source "$META_FILE"
 : "${COMPOSE_FILE:?请在 release-meta.env 设置 COMPOSE_FILE}"
 : "${RUNTIME_ENV_FILE:?请在 release-meta.env 设置 RUNTIME_ENV_FILE}"
 : "${POSTGRES_USER:?请在 release-meta.env 设置 POSTGRES_USER}"
+: "${POSTGRES_PASSWORD:?请在 release-meta.env 设置 POSTGRES_PASSWORD}"
 : "${POSTGRES_DB:?请在 release-meta.env 设置 POSTGRES_DB}"
 
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-/root/AliECS/db/migrations}"
+PSQL_TIMEOUT_SECONDS="${PSQL_TIMEOUT_SECONDS:-30}"
 
 if [[ ! -f "$RUNTIME_ENV_FILE" ]]; then
   echo "[迁移] 找不到运行时环境文件：$RUNTIME_ENV_FILE" >&2
@@ -56,7 +58,7 @@ run_psql_file() {
   local retries=5
   local delay=2
   for ((attempt=1; attempt<=retries; attempt++)); do
-    if docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" exec -T postgres \
+    if PGPASSWORD="$POSTGRES_PASSWORD" timeout "$PSQL_TIMEOUT_SECONDS" docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" exec -T -e PGPASSWORD postgres \
       psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 < "$sql_file"; then
       return 0
     fi
@@ -70,7 +72,7 @@ run_psql_file() {
 
 run_psql_query() {
   local sql="$1"
-  docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" exec -T postgres \
+  PGPASSWORD="$POSTGRES_PASSWORD" timeout "$PSQL_TIMEOUT_SECONDS" docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" exec -T -e PGPASSWORD postgres \
     psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -Atc "$sql"
 }
 
