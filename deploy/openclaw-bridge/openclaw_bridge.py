@@ -143,7 +143,7 @@ class PendingBatch:
 def clean_user_text(text: Any) -> str:
     if not isinstance(text, str):
         return ""
-    _metadata, metadata_end = parse_openclaw_metadata_prefix(text)
+    _metadata, metadata_end = parse_openclaw_metadata_prefixes(text)
     cleaned = text[metadata_end:] if metadata_end else text
     cleaned = OPENCLAW_MESSAGE_ID_LINE_RE.sub("", cleaned)
     cleaned = replace_binary_file_blocks(cleaned)
@@ -180,8 +180,20 @@ def strip_openclaw_media_helper_text(text: str) -> str:
 def extract_openclaw_metadata(text: Any) -> dict[str, Any]:
     if not isinstance(text, str):
         return {}
-    metadata, _metadata_end = parse_openclaw_metadata_prefix(text)
+    metadata, _metadata_end = parse_openclaw_metadata_prefixes(text)
     return metadata
+
+
+def parse_openclaw_metadata_prefixes(text: str) -> tuple[dict[str, Any], int]:
+    combined: dict[str, Any] = {}
+    pos = 0
+    while pos < len(text):
+        metadata, metadata_end = parse_openclaw_metadata_prefix(text[pos:])
+        if not metadata_end:
+            break
+        combined.update(metadata)
+        pos += metadata_end
+    return combined, pos
 
 
 def parse_openclaw_metadata_prefix(text: str) -> tuple[dict[str, Any], int]:
@@ -490,6 +502,8 @@ def build_webdock_metadata(body: dict[str, Any]) -> dict[str, Any]:
     wechat_account = _first_metadata_value(metadata, "wechat_account", "account", "channel_id", "channel_name")
     chat_type = _first_metadata_value(metadata, "chat_type", "conversation_type", "room_type") or "private"
     if channel == "feishu":
+        chat_type = _infer_feishu_chat_type(metadata, chat_type)
+    if channel == "feishu":
         peer_id = _feishu_lane_peer_id(metadata, chat_type)
     else:
         peer_id = _first_metadata_value(
@@ -599,6 +613,16 @@ def _feishu_group_peer(value: Any) -> str:
 
 def _is_group_chat(chat_type: Any) -> bool:
     return str(chat_type or "").strip().lower() in {"group", "chat", "group_chat", "room"}
+
+
+def _infer_feishu_chat_type(metadata: dict[str, Any], chat_type: Any) -> str:
+    if _is_group_chat(chat_type):
+        return "group"
+    if metadata.get("is_group_chat") is True:
+        return "group"
+    if str(metadata.get("is_group_chat") or "").strip().lower() in {"1", "true", "yes"}:
+        return "group"
+    return str(chat_type or "private")
 
 
 def _strip_feishu_sender_prefix(text: str, raw_metadata: dict[str, Any]) -> str:
