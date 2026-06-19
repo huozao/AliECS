@@ -103,6 +103,12 @@ _feishu_tenant_token: str = ""
 _feishu_tenant_token_expires_at = 0.0
 
 
+class WebDockResult:
+    def __init__(self, reply: str, metadata: dict[str, Any] | None = None) -> None:
+        self.reply = reply
+        self.metadata = metadata or {}
+
+
 class PendingBatch:
     def __init__(self, body: dict[str, Any], details: dict[str, Any], wait_seconds: float) -> None:
         self.condition = Condition()
@@ -449,6 +455,7 @@ def request_details(body: dict[str, Any]) -> dict[str, Any]:
     metadata = build_webdock_metadata(body)
     if metadata.get("channel") == "feishu":
         user_text = _strip_feishu_sender_prefix(user_text, get_last_user_metadata(messages))
+        enrich_feishu_metadata_with_session_route(metadata, raw_metadata, user_text)
     if not metadata.get("peer_id"):
         inherited_metadata = get_recent_lane_metadata()
         if inherited_metadata:
@@ -533,6 +540,44 @@ def build_webdock_metadata(body: dict[str, Any]) -> dict[str, Any]:
     if metadata.get("message_id"):
         normalized["message_id"] = str(metadata["message_id"])
     return normalized
+
+
+def enrich_feishu_metadata_with_session_route(
+    metadata: dict[str, Any],
+    raw_metadata: dict[str, Any],
+    user_text: str,
+) -> None:
+    session_key = feishu_session_key_from_metadata(metadata, raw_metadata)
+    project_url = feishu_default_chatgpt_project_url()
+    current_record: dict[str, Any] | None = None
+    if session_key:
+        try:
+            current_record = find_current_feishu_session_record(session_key)
+        except Exception as exc:
+            print(
+                "feishu_session_route_lookup_failed "
+                + json.dumps({"session_key": session_key, "error": str(exc)}, ensure_ascii=False, sort_keys=True),
+                flush=True,
+            )
+    fields = current_record.get("fields") if isinstance(current_record, dict) else {}
+    if isinstance(fields, dict):
+        project_url = (
+            bitable_field_text(fields.get("ChatGPT 项目首页链接"))
+            or project_home_from_conversation_url(bitable_field_text(fields.get("ChatGPT 对话链接")))
+            or project_url
+        )
+    if project_url:
+        metadata["chatgpt_project_url"] = project_url
+
+    conversation_url = ""
+    if isinstance(fields, dict):
+        conversation_url = bitable_field_text(fields.get("ChatGPT 对话链接"))
+    if not conversation_url:
+        return
+    if feishu_command_type(user_text) == "/新对话":
+        metadata["previous_chatgpt_conversation_url"] = conversation_url
+    else:
+        metadata["chatgpt_conversation_url"] = conversation_url
 
 
 def collect_request_metadata(body: dict[str, Any]) -> dict[str, Any]:
@@ -725,6 +770,38 @@ def feishu_session_console_configured() -> bool:
     )
 
 
+def feishu_session_index_configured() -> bool:
+    app_id, app_secret = feishu_app_credentials()
+    return bool(app_id and app_secret and feishu_session_console_app_token() and feishu_session_console_table_id("session"))
+
+
+def feishu_default_chatgpt_project_url() -> str:
+    for key in (
+        "FEISHU_SESSION_CONSOLE_CHATGPT_PROJECT_URL",
+        "FEISHU_COMPANY_A_SESSION_CONSOLE_CHATGPT_PROJECT_URL",
+        "FEISHU_CHATGPT_PROJECT_URL",
+        "FEISHU_COMPANY_A_CHATGPT_PROJECT_URL",
+        "CHATGPT_PROJECT_URL",
+    ):
+        value = os.getenv(key)
+        if value and value.strip():
+            return value.strip()
+    return ""
+
+
+def feishu_default_chatgpt_project_name() -> str:
+    for key in (
+        "FEISHU_SESSION_CONSOLE_CHATGPT_PROJECT_NAME",
+        "FEISHU_COMPANY_A_SESSION_CONSOLE_CHATGPT_PROJECT_NAME",
+        "FEISHU_CHATGPT_PROJECT_NAME",
+        "FEISHU_COMPANY_A_CHATGPT_PROJECT_NAME",
+    ):
+        value = os.getenv(key)
+        if value and value.strip():
+            return value.strip()
+    return "飞书 AI 会话台"
+
+
 def feishu_tenant_access_token() -> str:
     global _feishu_tenant_token, _feishu_tenant_token_expires_at
     if _feishu_tenant_token and time.monotonic() < _feishu_tenant_token_expires_at:
@@ -749,8 +826,15 @@ def feishu_tenant_access_token() -> str:
     return token
 
 
-def feishu_post_json(path: str, payload: dict[str, Any], *, auth_token: str | None = None) -> dict[str, Any]:
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+def feishu_request_json(
+    path: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    auth_token: str | None = None,
+    method: str = "POST",
+) -> dict[str, Any]:
+    method = method.upper()
+    data = json.dumps(payload or {}, ensure_ascii=False).encode("utf-8") if method != "GET" else None
     headers = {"Content-Type": "application/json; charset=utf-8"}
     if auth_token is None:
         auth_token = feishu_tenant_access_token()
@@ -760,7 +844,7 @@ def feishu_post_json(path: str, payload: dict[str, Any], *, auth_token: str | No
         feishu_api_base() + path,
         data=data,
         headers=headers,
-        method="POST",
+        method=method,
     )
     with urllib.request.urlopen(request, timeout=20) as response:
         result = json.loads(response.read().decode("utf-8"))
@@ -768,6 +852,20 @@ def feishu_post_json(path: str, payload: dict[str, Any], *, auth_token: str | No
     if code not in (None, 0):
         raise RuntimeError(f"Feishu API error {code}: {result}")
     return result
+
+
+def feishu_post_json(
+    path: str,
+    payload: dict[str, Any],
+    *,
+    auth_token: str | None = None,
+    method: str = "POST",
+) -> dict[str, Any]:
+    return feishu_request_json(path, payload, auth_token=auth_token, method=method)
+
+
+def feishu_get_json(path: str, *, auth_token: str | None = None) -> dict[str, Any]:
+    return feishu_request_json(path, None, auth_token=auth_token, method="GET")
 
 
 def create_feishu_bitable_record(table_id: str, fields: dict[str, Any]) -> dict[str, Any]:
@@ -780,11 +878,57 @@ def create_feishu_bitable_record(table_id: str, fields: dict[str, Any]) -> dict[
     )
 
 
+def update_feishu_bitable_record(table_id: str, record_id: str, fields: dict[str, Any]) -> dict[str, Any]:
+    app_token = feishu_session_console_app_token()
+    if not app_token or not table_id or not record_id:
+        return {}
+    return feishu_post_json(
+        (
+            f"/bitable/v1/apps/{urllib.parse.quote(app_token)}/tables/"
+            f"{urllib.parse.quote(table_id)}/records/{urllib.parse.quote(record_id)}"
+        ),
+        {"fields": fields},
+        method="PUT",
+    )
+
+
+def list_feishu_bitable_records(table_id: str) -> list[dict[str, Any]]:
+    app_token = feishu_session_console_app_token()
+    if not app_token or not table_id:
+        return []
+    records: list[dict[str, Any]] = []
+    page_token = ""
+    seen_tokens: set[str] = set()
+    for _ in range(20):
+        params = {"page_size": "500"}
+        if page_token:
+            params["page_token"] = page_token
+        query = urllib.parse.urlencode(params)
+        data = feishu_get_json(
+            (
+                f"/bitable/v1/apps/{urllib.parse.quote(app_token)}/tables/"
+                f"{urllib.parse.quote(table_id)}/records?{query}"
+            )
+        )
+        block = data.get("data") or {}
+        records.extend(block.get("items") or [])
+        if not block.get("has_more"):
+            break
+        next_token = str(block.get("page_token") or "")
+        if not next_token or next_token in seen_tokens:
+            break
+        seen_tokens.add(next_token)
+        page_token = next_token
+    return records
+
+
 def append_feishu_session_console_records(details: dict[str, Any], reply: str, status: str) -> None:
     metadata = details.get("metadata") or {}
     if metadata.get("channel") != "feishu" or not feishu_session_console_configured():
         return
     try:
+        if status == "已回复":
+            upsert_feishu_session_index_record(details)
         create_feishu_bitable_record(
             feishu_session_console_table_id("message"),
             build_feishu_message_log_fields(details, reply=reply, status=status),
@@ -882,6 +1026,237 @@ def build_feishu_reply_task_fields(details: dict[str, Any], *, reply: str, statu
     if chatgpt_url:
         fields["ChatGPT 对话链接"] = chatgpt_url
     return fields
+
+
+def upsert_feishu_session_index_record(details: dict[str, Any]) -> None:
+    if not feishu_session_index_configured():
+        return
+    metadata = details.get("metadata") or {}
+    conversation_url = str(
+        _first_metadata_value(metadata, "chatgpt_conversation_url", "chatgpt_url", "chatgpt_conversation")
+        or ""
+    ).strip()
+    if not conversation_url:
+        return
+    session_key = feishu_session_key(details)
+    if not session_key:
+        return
+    table_id = feishu_session_console_table_id("session")
+    records = find_feishu_session_records(session_key)
+    same_current = None
+    current_records: list[dict[str, Any]] = []
+    max_version = 0
+    max_message_count = 0
+    max_mention_count = 0
+    for record in records:
+        fields = record.get("fields") or {}
+        if not isinstance(fields, dict):
+            continue
+        max_version = max(max_version, bitable_field_int(fields.get("会话版本")))
+        max_message_count = max(max_message_count, bitable_field_int(fields.get("消息数量")))
+        max_mention_count = max(max_mention_count, bitable_field_int(fields.get("@机器人次数")))
+        if bitable_truthy(fields.get("是否当前会话")) and bitable_field_text(fields.get("会话状态")) in {"活跃", "待创建"}:
+            current_records.append(record)
+            if bitable_field_text(fields.get("ChatGPT 对话链接")) == conversation_url:
+                same_current = record
+
+    if same_current:
+        fields = same_current.get("fields") or {}
+        update_feishu_bitable_record(
+            table_id,
+            str(same_current.get("record_id") or ""),
+            build_feishu_session_index_fields(
+                details,
+                session_key=session_key,
+                version=max(1, bitable_field_int(fields.get("会话版本"))),
+                message_count=bitable_field_int(fields.get("消息数量")) + 1,
+                mention_count=bitable_field_int(fields.get("@机器人次数")) + (1 if feishu_mentions_bot(details) else 0),
+            ),
+        )
+        return
+
+    for record in current_records:
+        record_id = str(record.get("record_id") or "")
+        if record_id:
+            update_feishu_bitable_record(table_id, record_id, {"会话状态": "已归档", "是否当前会话": False})
+
+    create_feishu_bitable_record(
+        table_id,
+        build_feishu_session_index_fields(
+            details,
+            session_key=session_key,
+            version=max_version + 1 if max_version else 1,
+            message_count=max_message_count + 1,
+            mention_count=max_mention_count + (1 if feishu_mentions_bot(details) else 0),
+        ),
+    )
+
+
+def build_feishu_session_index_fields(
+    details: dict[str, Any],
+    *,
+    session_key: str,
+    version: int,
+    message_count: int,
+    mention_count: int,
+) -> dict[str, Any]:
+    now_ms = int(time.time() * 1000)
+    metadata = details.get("metadata") or {}
+    raw_metadata = details.get("raw_metadata") or {}
+    conversation_url = str(_first_metadata_value(metadata, "chatgpt_conversation_url", "chatgpt_url") or "")
+    project_url = (
+        str(_first_metadata_value(metadata, "chatgpt_project_url") or "")
+        or feishu_default_chatgpt_project_url()
+        or project_home_from_conversation_url(conversation_url)
+    )
+    session_type = feishu_session_type(details)
+    name = feishu_session_display_name(details)
+    fields: dict[str, Any] = {
+        "会话编号": f"{safe_bitable_id(session_key)}-v{version}",
+        "会话名称": name,
+        "会话类型": session_type,
+        "session_key": session_key,
+        "关联用户": feishu_open_id(details),
+        "关联群": feishu_chat_id(details),
+        "飞书用户名": str(_first_metadata_value(raw_metadata, "name", "label", "sender_name") or ""),
+        "飞书群名": str(_first_metadata_value(raw_metadata, "chat_name", "group_name", "room_name") or ""),
+        "ChatGPT 项目名": str(_first_metadata_value(metadata, "chatgpt_project") or feishu_default_chatgpt_project_name()),
+        "ChatGPT 对话标题": name,
+        "ChatGPT 项目首页链接": project_url,
+        "ChatGPT 对话链接": conversation_url,
+        "会话状态": "活跃",
+        "是否当前会话": True,
+        "会话版本": max(1, version),
+        "上下文摘要": "",
+        "系统提示词 / 角色设定": "",
+        "回复风格": "",
+        "最近活跃时间": now_ms,
+        "消息数量": max(1, message_count),
+        "@机器人次数": max(0, mention_count),
+        "备注": f"message_id={feishu_message_id(details)}",
+    }
+    if version <= 1:
+        fields["创建时间"] = now_ms
+    return fields
+
+
+def find_current_feishu_session_record(session_key: str) -> dict[str, Any] | None:
+    for record in find_feishu_session_records(session_key):
+        fields = record.get("fields") or {}
+        if not isinstance(fields, dict):
+            continue
+        if bitable_field_text(fields.get("会话状态")) not in {"活跃", "待创建"}:
+            continue
+        if not bitable_truthy(fields.get("是否当前会话")):
+            continue
+        return record
+    return None
+
+
+def find_feishu_session_records(session_key: str) -> list[dict[str, Any]]:
+    if not session_key or not feishu_session_index_configured():
+        return []
+    table_id = feishu_session_console_table_id("session")
+    matched = []
+    for record in list_feishu_bitable_records(table_id):
+        fields = record.get("fields") or {}
+        if isinstance(fields, dict) and bitable_field_text(fields.get("session_key")) == session_key:
+            matched.append(record)
+    return matched
+
+
+def feishu_session_key(details: dict[str, Any]) -> str:
+    return feishu_session_key_from_metadata(details.get("metadata") or {}, details.get("raw_metadata") or {})
+
+
+def feishu_session_key_from_metadata(metadata: dict[str, Any], raw_metadata: dict[str, Any]) -> str:
+    tenant_key = str(
+        _first_metadata_value(raw_metadata, "tenant_key", "tenantKey")
+        or _first_metadata_value(metadata, "tenant_key", "tenantKey")
+        or os.getenv("FEISHU_TENANT_KEY")
+        or "default"
+    ).strip()
+    peer_id = str(metadata.get("peer_id") or "").strip()
+    if peer_id.startswith("group_user:"):
+        parts = peer_id.split(":", 2)
+        if len(parts) == 3:
+            return f"{tenant_key}:group_user:{_strip_lane_peer_prefix(parts[1])}:{_strip_lane_peer_prefix(parts[2])}"
+    if peer_id.startswith("group:"):
+        return f"{tenant_key}:group:{_strip_lane_peer_prefix(peer_id)}"
+    if peer_id.startswith("user:"):
+        return f"{tenant_key}:user:{_strip_lane_peer_prefix(peer_id)}"
+    chat_id = _first_metadata_value(raw_metadata, "chat_id", "chatId", "conversation_id", "room_id")
+    if chat_id:
+        return f"{tenant_key}:group:{_strip_lane_peer_prefix(chat_id)}"
+    open_id = _first_metadata_value(raw_metadata, "open_id", "openId", "sender_id", "user_id", "from_user_id")
+    if open_id:
+        return f"{tenant_key}:user:{_strip_lane_peer_prefix(open_id)}"
+    return ""
+
+
+def feishu_session_type(details: dict[str, Any]) -> str:
+    peer_id = str((details.get("metadata") or {}).get("peer_id") or "")
+    if peer_id.startswith("group_user:"):
+        return "群内个人"
+    return "群聊" if feishu_is_group_message(details) else "私聊"
+
+
+def feishu_session_display_name(details: dict[str, Any]) -> str:
+    raw_metadata = details.get("raw_metadata") or {}
+    if feishu_is_group_message(details):
+        return str(
+            _first_metadata_value(raw_metadata, "chat_name", "group_name", "room_name")
+            or feishu_chat_id(details)
+            or "飞书群聊"
+        )
+    return str(
+        _first_metadata_value(raw_metadata, "name", "label", "sender_name")
+        or feishu_open_id(details)
+        or "飞书私聊"
+    )
+
+
+def bitable_field_text(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float, bool)):
+        return str(value).strip()
+    if isinstance(value, list):
+        return "".join(bitable_field_text(item) for item in value).strip()
+    if isinstance(value, dict):
+        for key in ("text", "link", "url", "name", "value"):
+            text = bitable_field_text(value.get(key))
+            if text:
+                return text
+    return str(value).strip()
+
+
+def bitable_field_int(value: Any) -> int:
+    try:
+        return int(float(bitable_field_text(value) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def bitable_truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = bitable_field_text(value).lower()
+    return text in {"true", "1", "yes", "y", "on", "是", "当前", "活跃", "✓"}
+
+
+def project_home_from_conversation_url(url: str) -> str:
+    text = str(url or "").strip()
+    marker = "/c/"
+    if "chatgpt.com/g/" in text and marker in text:
+        return text.split(marker, 1)[0].rstrip("/") + "/project"
+    return ""
+
+
+def safe_bitable_id(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.:-]+", "_", value).strip("_")[:120] or uuid.uuid4().hex[:8]
 
 
 def feishu_message_id(details: dict[str, Any]) -> str:
@@ -1213,6 +1588,20 @@ def extract_assistant_reply(payload: dict[str, Any]) -> str:
         return ""
 
 
+def extract_webdock_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    metadata = payload.get("metadata") if isinstance(payload, dict) else None
+    if not isinstance(metadata, dict):
+        return {}
+    result: dict[str, Any] = {}
+    conversation_url = metadata.get("chatgpt_conversation_url")
+    if conversation_url:
+        result["chatgpt_conversation_url"] = str(conversation_url)
+    project_url = metadata.get("chatgpt_project_url")
+    if project_url:
+        result["chatgpt_project_url"] = str(project_url)
+    return result
+
+
 def normalize_reply(text: str) -> str:
     lowered = text.strip().lower()
     if not lowered:
@@ -1245,7 +1634,7 @@ def parse_http_error_message(exc: urllib.error.HTTPError) -> str:
     return str(detail or payload or exc)
 
 
-def call_webdock(body: dict[str, Any]) -> str:
+def call_webdock(body: dict[str, Any]) -> WebDockResult:
     outbound = build_webdock_body(body)
     data = json.dumps(outbound, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
@@ -1259,7 +1648,20 @@ def call_webdock(body: dict[str, Any]) -> str:
     )
     with urllib.request.urlopen(request, timeout=webdock_timeout()) as response:
         payload = json.loads(response.read().decode("utf-8"))
-    return normalize_reply(extract_assistant_reply(payload)) or FALLBACK_MESSAGE
+    return WebDockResult(
+        normalize_reply(extract_assistant_reply(payload)) or FALLBACK_MESSAGE,
+        extract_webdock_metadata(payload),
+    )
+
+
+def unpack_webdock_result(result: Any) -> tuple[str, dict[str, Any]]:
+    if isinstance(result, WebDockResult):
+        return result.reply, dict(result.metadata)
+    if isinstance(result, tuple) and result:
+        reply = str(result[0] or "")
+        metadata = result[1] if len(result) > 1 and isinstance(result[1], dict) else {}
+        return reply, dict(metadata)
+    return str(result or ""), {}
 
 
 def build_reply(body: dict[str, Any]) -> str:
@@ -1274,7 +1676,9 @@ def build_reply(body: dict[str, Any]) -> str:
             return NO_REPLY  # merged into a batch leader; the leader emits chain_result
         write_details = request_details(batched_body)
         write_details["request_id"] = details.get("request_id")
-        reply = call_webdock(batched_body)
+        reply, response_metadata = unpack_webdock_result(call_webdock(batched_body))
+        if response_metadata:
+            write_details.setdefault("metadata", {}).update(response_metadata)
         trace_chain_result(details, started, reply=reply)
         append_feishu_session_console_records(write_details, reply, "已回复")
         return reply

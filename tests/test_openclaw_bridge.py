@@ -848,6 +848,41 @@ def test_bridge_writes_feishu_session_console_after_reply(monkeypatch):
     assert status == "已回复"
 
 
+def test_bridge_passes_webdock_conversation_url_to_bitable_writer(monkeypatch):
+    bridge = load_bridge()
+    writes = []
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "0")
+    monkeypatch.setattr(
+        bridge,
+        "call_webdock",
+        lambda body: bridge.WebDockResult(
+            "飞书回复",
+            {"chatgpt_conversation_url": "https://chatgpt.com/g/g-p-lark/c/conv-1"},
+        ),
+    )
+    monkeypatch.setattr(bridge, "append_feishu_session_console_records", lambda details, reply, status: writes.append((details, reply, status)))
+
+    body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Sender (untrusted metadata):\n```json\n"
+                    '{"name":"hao","open_id":"ou_abc","peer_id":"ou_abc"}\n```\n\n你好'
+                ),
+            }
+        ],
+        "metadata": {"channel": "feishu", "message_id": "om_1"},
+    }
+
+    assert bridge.build_reply(body) == "飞书回复"
+
+    details, _reply, _status = writes[-1]
+    assert details["metadata"]["chatgpt_conversation_url"] == "https://chatgpt.com/g/g-p-lark/c/conv-1"
+
+
 def test_feishu_message_fields_mark_group_lane():
     bridge = load_bridge()
     details = {
@@ -907,6 +942,142 @@ def test_feishu_task_fields_include_chatgpt_input_and_reply():
     assert fields["任务状态"] == "已发送"
     assert fields["给 ChatGPT 的输入"] == "/新对话 继续"
     assert fields["ChatGPT 回复内容"] == "已开启"
+
+
+def test_bridge_adds_current_feishu_conversation_route_from_session_index(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_CHATGPT_PROJECT_URL", "https://chatgpt.com/g/g-p-lark/project")
+    monkeypatch.setattr(
+        bridge,
+        "find_current_feishu_session_record",
+        lambda session_key: {
+            "record_id": "rec_current",
+            "fields": {
+                "session_key": session_key,
+                "ChatGPT 项目首页链接": "https://chatgpt.com/g/g-p-lark/project",
+                "ChatGPT 对话链接": "https://chatgpt.com/g/g-p-lark/c/conv-current",
+                "会话状态": "活跃",
+                "是否当前会话": True,
+            },
+        },
+    )
+
+    outbound = bridge.build_webdock_body(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Sender (untrusted metadata):\n```json\n"
+                        '{"open_id":"ou_abc","tenant_key":"tenant-a","message_id":"om_1"}\n'
+                        "```\n\n继续"
+                    ),
+                }
+            ],
+            "metadata": {"channel": "feishu"},
+        }
+    )
+
+    assert outbound["metadata"]["chatgpt_project_url"] == "https://chatgpt.com/g/g-p-lark/project"
+    assert outbound["metadata"]["chatgpt_conversation_url"] == "https://chatgpt.com/g/g-p-lark/c/conv-current"
+
+
+def test_bridge_new_feishu_conversation_uses_project_and_previous_url(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_CHATGPT_PROJECT_URL", "https://chatgpt.com/g/g-p-lark/project")
+    monkeypatch.setattr(
+        bridge,
+        "find_current_feishu_session_record",
+        lambda session_key: {
+            "record_id": "rec_current",
+            "fields": {
+                "session_key": session_key,
+                "ChatGPT 项目首页链接": "https://chatgpt.com/g/g-p-lark/project",
+                "ChatGPT 对话链接": "https://chatgpt.com/g/g-p-lark/c/conv-old",
+                "会话状态": "活跃",
+                "是否当前会话": True,
+            },
+        },
+    )
+
+    outbound = bridge.build_webdock_body(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Sender (untrusted metadata):\n```json\n"
+                        '{"open_id":"ou_abc","tenant_key":"tenant-a","message_id":"om_2"}\n'
+                        "```\n\n/新对话 重新开始"
+                    ),
+                }
+            ],
+            "metadata": {"channel": "feishu"},
+        }
+    )
+
+    assert outbound["metadata"]["chatgpt_project_url"] == "https://chatgpt.com/g/g-p-lark/project"
+    assert outbound["metadata"]["previous_chatgpt_conversation_url"] == "https://chatgpt.com/g/g-p-lark/c/conv-old"
+    assert "chatgpt_conversation_url" not in outbound["metadata"]
+
+
+def test_feishu_session_index_archives_old_current_and_creates_new_version(monkeypatch):
+    bridge = load_bridge()
+    calls: list[tuple[str, str, dict]] = []
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_test")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret_test")
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_APP_TOKEN", "app_token")
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_MESSAGE_TABLE_ID", "tbl_message")
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_SESSION_TABLE_ID", "tbl_session")
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_CHATGPT_PROJECT_URL", "https://chatgpt.com/g/g-p-lark/project")
+    monkeypatch.setattr(
+        bridge,
+        "list_feishu_bitable_records",
+        lambda table_id: [
+            {
+                "record_id": "rec_old",
+                "fields": {
+                    "session_key": "tenant-a:group:oc_group1",
+                    "ChatGPT 对话链接": "https://chatgpt.com/g/g-p-lark/c/conv-old",
+                    "会话状态": "活跃",
+                    "是否当前会话": True,
+                    "会话版本": 2,
+                    "消息数量": 5,
+                    "@机器人次数": 5,
+                },
+            }
+        ],
+    )
+    monkeypatch.setattr(bridge, "update_feishu_bitable_record", lambda table_id, record_id, fields: calls.append(("update", record_id, fields)) or {})
+    monkeypatch.setattr(bridge, "create_feishu_bitable_record", lambda table_id, fields: calls.append(("create", table_id, fields)) or {})
+
+    bridge.upsert_feishu_session_index_record(
+        {
+            "user_text": "/新对话 重新开始",
+            "metadata": {
+                "channel": "feishu",
+                "chat_type": "group",
+                "peer_id": "group:oc_group1",
+                "message_id": "om_group",
+                "chatgpt_conversation_url": "https://chatgpt.com/g/g-p-lark/c/conv-new",
+            },
+            "raw_metadata": {
+                "tenant_key": "tenant-a",
+                "chat_id": "oc_group1",
+                "sender_id": "ou_sender",
+                "chat_name": "项目群",
+            },
+        }
+    )
+
+    assert calls[0] == ("update", "rec_old", {"会话状态": "已归档", "是否当前会话": False})
+    created = calls[1][2]
+    assert created["session_key"] == "tenant-a:group:oc_group1"
+    assert created["会话版本"] == 3
+    assert created["是否当前会话"] is True
+    assert created["ChatGPT 对话链接"] == "https://chatgpt.com/g/g-p-lark/c/conv-new"
+    assert created["消息数量"] == 6
+    assert created["@机器人次数"] == 6
 
 
 def test_bridge_emits_chain_result_on_http_error(monkeypatch, capsys):
