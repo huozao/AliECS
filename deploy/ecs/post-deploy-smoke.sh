@@ -15,10 +15,13 @@ source "$META_FILE"
 : "${COMPOSE_FILE:?Please set COMPOSE_FILE in release-meta.env}"
 : "${RUNTIME_ENV_FILE:?Please set RUNTIME_ENV_FILE in release-meta.env}"
 : "${POSTGRES_USER:?Please set POSTGRES_USER in release-meta.env}"
+: "${POSTGRES_PASSWORD:?Please set POSTGRES_PASSWORD in release-meta.env}"
 : "${POSTGRES_DB:?Please set POSTGRES_DB in release-meta.env}"
 : "${HEALTHCHECK_URL:?Please set HEALTHCHECK_URL in release-meta.env}"
 
 compose=(docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE")
+POSTGRES_CONTAINER_NAME="${POSTGRES_CONTAINER_NAME:-ecs-postgres-1}"
+PSQL_TIMEOUT_SECONDS="${PSQL_TIMEOUT_SECONDS:-30}"
 
 require_service() {
   local service="$1"
@@ -45,7 +48,7 @@ check_url() {
 check_table() {
   local table="$1"
   local exists
-  exists="$("${compose[@]}" exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "select to_regclass('public.${table}') is not null")"
+  exists="$(PGPASSWORD="$POSTGRES_PASSWORD" timeout "$PSQL_TIMEOUT_SECONDS" docker exec -e PGPASSWORD "$POSTGRES_CONTAINER_NAME" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "select to_regclass('public.${table}') is not null")"
   if [[ "$exists" != "t" ]]; then
     echo "[post-deploy] Missing database table: $table" >&2
     exit 1
@@ -55,7 +58,7 @@ check_table() {
 
 count_table() {
   local table="$1"
-  "${compose[@]}" exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "select count(*) from public.${table}"
+  PGPASSWORD="$POSTGRES_PASSWORD" timeout "$PSQL_TIMEOUT_SECONDS" docker exec -e PGPASSWORD "$POSTGRES_CONTAINER_NAME" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "select count(*) from public.${table}"
 }
 
 echo "[post-deploy] Checking compose services"

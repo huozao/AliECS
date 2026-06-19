@@ -19,6 +19,7 @@ source "$META_FILE"
 
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-/root/AliECS/db/migrations}"
 PSQL_TIMEOUT_SECONDS="${PSQL_TIMEOUT_SECONDS:-30}"
+POSTGRES_CONTAINER_NAME="${POSTGRES_CONTAINER_NAME:-ecs-postgres-1}"
 
 if [[ ! -f "$RUNTIME_ENV_FILE" ]]; then
   echo "[迁移] 找不到运行时环境文件：$RUNTIME_ENV_FILE" >&2
@@ -39,7 +40,7 @@ docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" up -d postgres
 
 echo "[迁移] 等待 postgres 就绪"
 for ((i=1; i<=30; i++)); do
-  if docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" exec -T postgres \
+  if docker exec "$POSTGRES_CONTAINER_NAME" \
     pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
     echo "[迁移] postgres 已就绪"
     break
@@ -58,7 +59,7 @@ run_psql_file() {
   local retries=5
   local delay=2
   for ((attempt=1; attempt<=retries; attempt++)); do
-    if PGPASSWORD="$POSTGRES_PASSWORD" timeout "$PSQL_TIMEOUT_SECONDS" docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" exec -T -e PGPASSWORD postgres \
+    if PGPASSWORD="$POSTGRES_PASSWORD" timeout "$PSQL_TIMEOUT_SECONDS" docker exec -i -e PGPASSWORD "$POSTGRES_CONTAINER_NAME" \
       psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 < "$sql_file"; then
       return 0
     fi
@@ -72,7 +73,7 @@ run_psql_file() {
 
 run_psql_query() {
   local sql="$1"
-  PGPASSWORD="$POSTGRES_PASSWORD" timeout "$PSQL_TIMEOUT_SECONDS" docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" exec -T -e PGPASSWORD postgres \
+  PGPASSWORD="$POSTGRES_PASSWORD" timeout "$PSQL_TIMEOUT_SECONDS" docker exec -e PGPASSWORD "$POSTGRES_CONTAINER_NAME" \
     psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -Atc "$sql"
 }
 

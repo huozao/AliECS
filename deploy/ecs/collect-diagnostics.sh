@@ -52,7 +52,10 @@ fi
 COMPOSE_FILE="${COMPOSE_FILE:-$ROOT_DIR/compose.prod.yml}"
 RUNTIME_ENV_FILE="${RUNTIME_ENV_FILE:-$ROOT_DIR/runtime.env}"
 POSTGRES_USER="${POSTGRES_USER:-app}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
 POSTGRES_DB="${POSTGRES_DB:-app}"
+POSTGRES_CONTAINER_NAME="${POSTGRES_CONTAINER_NAME:-ecs-postgres-1}"
+PSQL_TIMEOUT_SECONDS="${PSQL_TIMEOUT_SECONDS:-30}"
 HEALTHCHECK_URL="${HEALTHCHECK_URL:-http://127.0.0.1:8000/readyz}"
 compose=(docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE")
 
@@ -96,13 +99,13 @@ safe_run "admin-ui" curl -fsS http://127.0.0.1:8081
 
 section "doc-sync tables"
 for table in external_sources external_fields external_records sync_runs sync_requests; do
-  "${compose[@]}" exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc \
+  PGPASSWORD="$POSTGRES_PASSWORD" timeout "$PSQL_TIMEOUT_SECONDS" docker exec -e PGPASSWORD "$POSTGRES_CONTAINER_NAME" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc \
     "select '${table}=' || coalesce((select count(*)::text from public.${table}), 'missing')" 2>&1 | redact \
     || echo "$table=CHECK_FAILED"
 done
 
 section "recent sync runs"
-"${compose[@]}" exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc \
+PGPASSWORD="$POSTGRES_PASSWORD" timeout "$PSQL_TIMEOUT_SECONDS" docker exec -e PGPASSWORD "$POSTGRES_CONTAINER_NAME" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc \
   "select id || ' provider=' || provider || ' profile=' || coalesce(env_profile,'') || ' status=' || status || ' records=' || record_count || ' errors=' || error_count || ' started=' || started_at from sync_runs order by id desc limit 5" 2>&1 | redact \
   || echo "[diagnostics] sync_runs query failed"
 
