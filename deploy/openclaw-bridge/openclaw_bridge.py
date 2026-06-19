@@ -72,6 +72,10 @@ OPENCLAW_MEDIA_NO_CAPTION_RE = re.compile(r"^\s*\[User sent media without captio
 # e.g. "![image]" or "![image](media://…)". The real image is forwarded as an
 # image_url part, so the placeholder is noise in the ChatGPT prompt.
 OPENCLAW_IMAGE_PLACEHOLDER_RE = re.compile(r"!\[[^\]\n]*\](\([^)\n]*\))?")
+FILE_MARKER_RE = re.compile(
+    r"^[ \t]*FILE:\s+(?P<url>\S+)\s+name=(?P<name>\S+)\s+mime=(?P<mime>\S+)[ \t]*$",
+    re.MULTILINE,
+)
 MEDIA_INTENT_RE = re.compile(
     r"(图片|照片|这张图|图像|头像|原图|参考图|风格图|背景|修图|改图|抠图|"
     r"第一张|第二张|第三张|两张|多张|image|photo|picture|avatar|reference)",
@@ -1632,7 +1636,40 @@ def normalize_reply(text: str) -> str:
                 "bridge -> WebDock -> ChatGPT connected, but ChatGPT/WebDock returned a timeout or browser error.",
                 "ChatGPT browser response extraction",
             )
-    return text.strip()
+    return rewrite_file_markers_as_media(text.strip())
+
+
+def split_file_markers(text: str) -> tuple[str, list[dict[str, str]]]:
+    files: list[dict[str, str]] = []
+
+    def _remove(match: re.Match[str]) -> str:
+        files.append({
+            "url": match.group("url"),
+            "name": urllib.parse.unquote(match.group("name")),
+            "mime": urllib.parse.unquote(match.group("mime")),
+        })
+        return ""
+
+    body = FILE_MARKER_RE.sub(_remove, text or "")
+    body = re.sub(r"\n{3,}", "\n\n", body).strip()
+    return body, files
+
+
+def rewrite_file_markers_as_media(text: str) -> str:
+    body, files = split_file_markers(text)
+    if not files:
+        return text.strip()
+    parts = [body] if body else []
+    parts.extend(f"MEDIA: {item['url']}" for item in files)
+    return "\n".join(parts).strip()
+
+
+def media_proxy_headers(headers: Any) -> dict[str, str]:
+    out = {"Content-Type": headers.get("Content-Type", "application/octet-stream")}
+    content_disposition = headers.get("Content-Disposition")
+    if content_disposition:
+        out["Content-Disposition"] = content_disposition
+    return out
 
 
 def diagnostic_message(reason: str, stop_at: str) -> str:
@@ -1836,9 +1873,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             with urllib.request.urlopen(target, timeout=20) as response:
                 data = response.read()
-                content_type = response.headers.get("Content-Type", "application/octet-stream")
+                headers = media_proxy_headers(response.headers)
             self.send_response(200)
-            self.send_header("Content-Type", content_type)
+            for key, value in headers.items():
+                self.send_header(key, value)
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
