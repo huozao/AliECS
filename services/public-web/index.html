@@ -6,7 +6,7 @@
   <title>AliECS · 首页</title>
   <style>
     :root{--bg:#f7f5f0;--card:#fffdf8;--text:#25211b;--muted:#766f63;--line:#e7dfd0;--primary:#6f5e46;--shadow:0 12px 30px rgba(69,56,38,.08)}
-    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top left,rgba(180,157,118,.18),transparent 35%),var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui}.wrap{max-width:1120px;margin:0 auto;padding:20px 18px 56px}.topbar{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;background:rgba(255,253,248,.92);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:20px;padding:18px 20px;margin-bottom:16px}h1{margin:0;font-size:34px}.subtitle{margin:8px 0 0;color:var(--muted)}.top-actions{display:flex;gap:8px;flex-wrap:nowrap;justify-content:flex-end;white-space:nowrap;overflow:auto;max-width:64%}.btn,button{border:0;border-radius:999px;padding:9px 13px;background:#e8dfcf;color:var(--text);cursor:pointer;font-weight:650;text-decoration:none}.btn.primary{background:var(--primary);color:#fff}.btn.subtle{background:#efe8dc;color:#6e6355}.card{background:rgba(255,253,248,.92);border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:var(--shadow);margin-bottom:16px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.feature-card{min-height:190px;display:flex;flex-direction:column;justify-content:space-between}.hidden{display:none!important}.small{font-size:12px}.muted{color:var(--muted)}.error,.success{border-radius:14px;padding:12px 14px;margin-bottom:14px}.error{display:none;background:#f5d7d3;color:#a6423a}.success{display:none;background:#dfeee3;color:#3f7a4c}.modal{position:fixed;inset:0;background:rgba(30,22,12,.28);display:none;align-items:center;justify-content:center;padding:16px}.modal.show{display:flex}.panel{width:min(440px,100%);background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px}.panel input{width:100%;border:1px solid var(--line);border-radius:12px;padding:11px 12px;margin-bottom:10px}@media (max-width:900px){.grid{grid-template-columns:1fr}.topbar{flex-wrap:wrap}.top-actions{max-width:100%}}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top left,rgba(180,157,118,.18),transparent 35%),var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui}.wrap{max-width:1120px;margin:0 auto;padding:20px 18px 56px}.topbar{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;background:rgba(255,253,248,.92);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:20px;padding:18px 20px;margin-bottom:16px}h1{margin:0;font-size:34px}.subtitle{margin:8px 0 0;color:var(--muted)}.top-actions{display:flex;gap:8px;flex-wrap:nowrap;justify-content:flex-end;white-space:nowrap;overflow:auto;max-width:64%}.btn,button{border:0;border-radius:999px;padding:9px 13px;background:#e8dfcf;color:var(--text);cursor:pointer;font-weight:650;text-decoration:none}.btn.primary{background:var(--primary);color:#fff}.btn.subtle{background:#efe8dc;color:#6e6355}button:disabled,.btn:disabled{opacity:.6;cursor:progress}.card{background:rgba(255,253,248,.92);border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:var(--shadow);margin-bottom:16px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.feature-card{min-height:190px;display:flex;flex-direction:column;justify-content:space-between}.hidden{display:none!important}.small{font-size:12px}.muted{color:var(--muted)}.error,.success{border-radius:14px;padding:12px 14px;margin-bottom:14px}.error{display:none;background:#f5d7d3;color:#a6423a}.success{display:none;background:#dfeee3;color:#3f7a4c}.modal{position:fixed;inset:0;background:rgba(30,22,12,.28);display:none;align-items:center;justify-content:center;padding:16px}.modal.show{display:flex}.panel{width:min(440px,100%);background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px}.panel input{width:100%;border:1px solid var(--line);border-radius:12px;padding:11px 12px;margin-bottom:10px}@media (max-width:900px){.grid{grid-template-columns:1fr}.topbar{flex-wrap:wrap}.top-actions{max-width:100%}}
   </style>
 </head>
 <body>
@@ -78,6 +78,7 @@
       topLoginBtn.classList.toggle('hidden',logged);
       topRegisterBtn.classList.toggle('hidden',logged);
       topLogoutBtn.classList.toggle('hidden',!logged);
+      topLogoutBtn.textContent=logged?`退出登录（${state.user.username}）`:'退出登录';
     }
     function isInternal(url){return typeof url==='string'&&url.startsWith('/');}
     function renderFeatureAction(feature){
@@ -103,14 +104,25 @@
     function openModal(mode){state.mode=mode;modalTitle.textContent=mode==='login'?'登录':'注册';modalHint.textContent=mode==='login'?'请输入账号密码。':'请输入新账号信息（注册请求）。';authModal.classList.add('show');}
     function closeAuthModal(){authModal.classList.remove('show');modalUsername.value='';modalPassword.value='';}
     async function handleAuthSubmit(){
+      if(submitAuthBtn.disabled)return;
       const username=modalUsername.value.trim(),password=modalPassword.value;
       if(!username||!password){showError('请输入用户名和密码。');return;}
-      if(state.mode==='login'){
-        const data=await api('/v1/auth/login',{method:'POST',body:JSON.stringify({username,password})});
-        setAuthToken(data.token);syncTokenState();showSuccess('登录成功。');closeAuthModal();await loadFeatures();
-      }else{
-        await api('/v1/auth/register',{method:'POST',body:JSON.stringify({username,password,note:'portal'})});
-        showSuccess('注册请求已提交，请联系管理员开通。');closeAuthModal();
+      const isLogin=state.mode==='login';
+      const originalLabel=submitAuthBtn.textContent;
+      submitAuthBtn.disabled=true;
+      submitAuthBtn.textContent=isLogin?'登录中…':'提交中…';
+      modalHint.textContent=isLogin?'已提交，正在登录，请稍候…':'已提交注册请求，请稍候…';
+      try{
+        if(isLogin){
+          const data=await api('/v1/auth/login',{method:'POST',body:JSON.stringify({username,password})});
+          setAuthToken(data.token);syncTokenState();showSuccess('登录成功。');closeAuthModal();await loadFeatures();
+        }else{
+          await api('/v1/auth/register',{method:'POST',body:JSON.stringify({username,password,note:'portal'})});
+          showSuccess('注册请求已提交，请联系管理员开通。');closeAuthModal();
+        }
+      }finally{
+        submitAuthBtn.disabled=false;
+        submitAuthBtn.textContent=originalLabel;
       }
     }
     function logout(){clearAuthToken();syncTokenState();state.user=null;showSuccess('已退出登录。');loadFeatures().catch((error)=>showError(error.message));}
