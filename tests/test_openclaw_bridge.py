@@ -784,6 +784,81 @@ def test_bridge_emits_chain_result_for_feishu_roundtrip(monkeypatch, capsys):
     assert ev["reply_len"] == len("已完成")
 
 
+def test_bridge_writes_feishu_session_console_after_reply(monkeypatch):
+    bridge = load_bridge()
+    writes = []
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "0")
+    monkeypatch.setattr(bridge, "call_webdock", lambda body: "飞书回复")
+    monkeypatch.setattr(bridge, "append_feishu_session_console_records", lambda details, reply, status: writes.append((details, reply, status)))
+
+    body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Sender (untrusted metadata):\n```json\n"
+                    '{"name":"hao","open_id":"ou_abc","peer_id":"ou_abc"}\n```\n\n你好'
+                ),
+            }
+        ],
+        "metadata": {"channel": "feishu", "message_id": "om_1"},
+    }
+
+    assert bridge.build_reply(body) == "飞书回复"
+
+    assert writes
+    details, reply, status = writes[-1]
+    assert details["metadata"]["channel"] == "feishu"
+    assert details["metadata"]["peer_id"] == "user:ou_abc"
+    assert reply == "飞书回复"
+    assert status == "已回复"
+
+
+def test_feishu_message_fields_mark_group_lane():
+    bridge = load_bridge()
+    details = {
+        "user_text": "群里 @ 机器人 的问题",
+        "metadata": {
+            "channel": "feishu",
+            "chat_type": "group",
+            "peer_id": "group:oc_group1",
+            "message_id": "om_group",
+        },
+    }
+
+    fields = bridge.build_feishu_message_log_fields(details, reply="群回复", status="已回复")
+
+    assert fields["聊天类型"] == "群聊"
+    assert fields["群 chat_id"] == "oc_group1"
+    assert fields["发送人 open_id"] == ""
+    assert fields["匹配会话"] == "group:oc_group1"
+    assert fields["是否需要送 ChatGPT"] is True
+
+
+def test_feishu_task_fields_include_chatgpt_input_and_reply():
+    bridge = load_bridge()
+    details = {
+        "user_text": "/新对话 继续",
+        "metadata": {
+            "channel": "feishu",
+            "chat_type": "private",
+            "peer_id": "user:ou_abc",
+            "message_id": "om_private",
+        },
+    }
+
+    fields = bridge.build_feishu_reply_task_fields(details, reply="已开启", status="已发送")
+
+    assert fields["关联消息"] == "om_private"
+    assert fields["关联会话"] == "user:ou_abc"
+    assert fields["任务类型"] == "新建会话"
+    assert fields["任务状态"] == "已发送"
+    assert fields["给 ChatGPT 的输入"] == "/新对话 继续"
+    assert fields["ChatGPT 回复内容"] == "已开启"
+
+
 def test_bridge_emits_chain_result_on_http_error(monkeypatch, capsys):
     bridge = load_bridge()
     monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
