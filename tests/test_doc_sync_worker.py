@@ -549,6 +549,31 @@ class FeishuBitableSyncTests(WorkerImportTestCase):
         self.assertEqual("tbl_sessions", sources[0].table_id)
         self.assertEqual("会话索引表", sources[0].source_name)
 
+    def test_feishu_env_and_persisted_sources_are_merged(self) -> None:
+        from app.pipelines.sync_feishu_full import _merge_feishu_sources
+        from app.providers.feishu import FeishuBitableSource
+
+        sources = _merge_feishu_sources(
+            [
+                FeishuBitableSource(
+                    env_profile="COMPANY_A",
+                    app_token="bascn_env",
+                    table_id="tbl_env",
+                    source_name="已有表",
+                )
+            ],
+            [
+                FeishuBitableSource(
+                    env_profile="COMPANY_A",
+                    app_token="bascn_console",
+                    table_id="tbl_sessions",
+                    source_name="会话索引表",
+                )
+            ],
+        )
+
+        self.assertEqual(["已有表", "会话索引表"], [source.source_name for source in sources])
+
     def test_sync_bitable_records_upserts_managed_contact_from_session_index(self) -> None:
         from app.pipelines.sync_feishu_full import _sync_bitable_records
         from app.storage.postgres import UpsertDecision

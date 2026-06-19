@@ -203,6 +203,21 @@ def _persisted_feishu_sources(store: Any, profile: str) -> list[FeishuBitableSou
     return sources
 
 
+def _merge_feishu_sources(
+    env_sources: list[FeishuBitableSource],
+    persisted_sources: list[FeishuBitableSource],
+) -> list[FeishuBitableSource]:
+    sources: list[FeishuBitableSource] = []
+    seen: set[tuple[str, str, str]] = set()
+    for source in [*env_sources, *persisted_sources]:
+        key = (source.app_token or source.wiki_node_token, source.table_id, source.source_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        sources.append(source)
+    return sources
+
+
 def bootstrap_session_console_sources(
     store: Any,
     client: FeishuBitableClient,
@@ -314,7 +329,10 @@ def run_sync_feishu_full(profiles_arg: str = "") -> int:
             errors: list[dict[str, Any]] = []
             try:
                 credentials = credentials_for_profile(profile)
-                sources = discover_profile_sources(profile)
+                sources = _merge_feishu_sources(
+                    discover_profile_sources(profile),
+                    _persisted_feishu_sources(store, profile),
+                )
                 if not credentials:
                     raise RuntimeError(f"{profile} 缺少 FEISHU_{profile}_APP_ID 或 FEISHU_{profile}_APP_SECRET。")
                 credential = credentials[0]
@@ -323,8 +341,6 @@ def run_sync_feishu_full(profiles_arg: str = "") -> int:
                     app_secret=credential.app_secret,
                     api_base=credential.api_base,
                 )
-                if not sources:
-                    sources = _persisted_feishu_sources(store, profile)
                 if not sources:
                     bootstrap_config = session_console_bootstrap_config(profile)
                     if bootstrap_config.enabled:
