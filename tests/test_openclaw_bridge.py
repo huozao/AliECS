@@ -869,6 +869,24 @@ def test_feishu_message_fields_mark_group_lane():
     assert fields["是否需要送 ChatGPT"] is True
 
 
+def test_feishu_message_fields_keep_group_sender_open_id():
+    bridge = load_bridge()
+    details = {
+        "user_text": "群里 @ 机器人 的问题",
+        "metadata": {
+            "channel": "feishu",
+            "chat_type": "group",
+            "peer_id": "group:oc_group1",
+            "message_id": "om_group",
+        },
+        "raw_metadata": {"sender_id": "ou_sender"},
+    }
+
+    fields = bridge.build_feishu_message_log_fields(details, reply="群回复", status="已回复")
+
+    assert fields["发送人 open_id"] == "ou_sender"
+
+
 def test_feishu_task_fields_include_chatgpt_input_and_reply():
     bridge = load_bridge()
     details = {

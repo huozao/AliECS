@@ -831,9 +831,7 @@ def build_feishu_message_log_fields(details: dict[str, Any], *, reply: str, stat
         "聊天类型": "群聊" if is_group else "私聊",
         "关联用户": feishu_open_id(details),
         "关联群": feishu_chat_id(details),
-        "发送人 open_id": feishu_open_id(details)
-        if not is_group
-        else str(_first_metadata_value(raw_metadata, "open_id", "openId") or ""),
+        "发送人 open_id": feishu_open_id(details),
         "发送人名称": str(_first_metadata_value(raw_metadata, "name", "label", "sender_name") or ""),
         "群 chat_id": feishu_chat_id(details),
         "群名称": str(_first_metadata_value(raw_metadata, "chat_name", "group_name", "room_name") or ""),
