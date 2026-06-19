@@ -1253,6 +1253,41 @@ def test_bridge_reports_webdock_busy_with_diagnostic(monkeypatch):
     assert "WebDock browser lock" in reply
 
 
+def test_parse_file_marker():
+    bridge = load_bridge()
+
+    body, files = bridge.split_file_markers(
+        "见附件\nFILE: http://webdock/media/abc name=report.pdf mime=application/pdf"
+    )
+
+    assert body.strip() == "见附件"
+    assert files == [{"url": "http://webdock/media/abc", "name": "report.pdf", "mime": "application/pdf"}]
+
+
+def test_bridge_rewrites_file_marker_to_openclaw_media_marker():
+    bridge = load_bridge()
+
+    reply = bridge.normalize_reply(
+        "见附件\nFILE: http://webdock/media/abc name=report.pdf mime=application/pdf"
+    )
+
+    assert reply == "见附件\nMEDIA: http://webdock/media/abc"
+
+
+def test_media_proxy_headers_keep_filename():
+    bridge = load_bridge()
+
+    headers = bridge.media_proxy_headers({
+        "Content-Type": "application/pdf",
+        "Content-Disposition": 'attachment; filename="report.pdf"',
+    })
+
+    assert headers == {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": 'attachment; filename="report.pdf"',
+    }
+
+
 def test_bridge_hosts_accepts_comma_separated_list(monkeypatch):
     bridge = load_bridge()
     monkeypatch.setenv("OPENCLAW_BRIDGE_HOSTS", "127.0.0.1, 172.20.0.1")
