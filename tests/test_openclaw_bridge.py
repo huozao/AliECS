@@ -1264,14 +1264,74 @@ def test_parse_file_marker():
     assert files == [{"url": "http://webdock/media/abc", "name": "report.pdf", "mime": "application/pdf"}]
 
 
-def test_bridge_rewrites_file_marker_to_openclaw_media_marker():
+def test_normalize_reply_preserves_file_marker():
     bridge = load_bridge()
 
+    # normalize_reply must keep FILE: intact; build_reply/deliver_feishu_files turns
+    # it into a native Feishu file (OpenClaw's MEDIA: directive can't deliver files,
+    # upstream issue #48891).
     reply = bridge.normalize_reply(
         "见附件\nFILE: http://webdock/media/abc name=report.pdf mime=application/pdf"
     )
 
+    assert "FILE: http://webdock/media/abc" in reply
+
+
+def test_rewrite_file_markers_as_media_fallback():
+    bridge = load_bridge()
+
+    reply = bridge.rewrite_file_markers_as_media(
+        "见附件\nFILE: http://webdock/media/abc name=report.pdf mime=application/pdf"
+    )
+
     assert reply == "见附件\nMEDIA: http://webdock/media/abc"
+
+
+def test_deliver_feishu_files_sends_native_file_and_strips_marker(monkeypatch):
+    bridge = load_bridge()
+    sent = []
+    monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("cli_x", "sec"))
+    monkeypatch.setattr(bridge, "feishu_tenant_access_token", lambda: "tok")
+    monkeypatch.setattr(bridge, "fetch_outbound_file_bytes", lambda url: b"%PDF-1.4 data")
+    monkeypatch.setattr(bridge, "feishu_upload_file", lambda data, name, ftype, token: f"key::{name}::{ftype}")
+    monkeypatch.setattr(bridge, "feishu_send_file_message", lambda details, mid, key, token: sent.append((mid, key)))
+
+    details = {"metadata": {"channel": "feishu", "message_id": "om_1"}}
+    out = bridge.deliver_feishu_files(
+        "已生成\nFILE: http://h/media/abc name=report.pdf mime=application/pdf", details
+    )
+
+    assert out == "已生成"  # FILE marker stripped, text kept; no MEDIA: leak
+    assert sent == [("om_1", "key::report.pdf::pdf")]
+
+
+def test_deliver_feishu_files_caption_when_text_empty(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("cli_x", "sec"))
+    monkeypatch.setattr(bridge, "feishu_tenant_access_token", lambda: "tok")
+    monkeypatch.setattr(bridge, "fetch_outbound_file_bytes", lambda url: b"data")
+    monkeypatch.setattr(bridge, "feishu_upload_file", lambda *a, **k: "key")
+    monkeypatch.setattr(bridge, "feishu_send_file_message", lambda *a, **k: None)
+
+    details = {"metadata": {"channel": "feishu", "message_id": "om_1"}}
+    out = bridge.deliver_feishu_files(
+        "FILE: http://h/media/abc name=scan.pdf mime=application/pdf", details
+    )
+
+    # file sent but no text -> visible caption so OpenClaw doesn't emit no-visible-reply
+    assert out == "📎 scan.pdf"
+
+
+def test_deliver_feishu_files_falls_back_without_credentials(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("", ""))
+
+    details = {"metadata": {"channel": "feishu", "message_id": "om_1"}}
+    out = bridge.deliver_feishu_files(
+        "见附件\nFILE: http://h/media/abc name=report.pdf mime=application/pdf", details
+    )
+
+    assert out == "见附件\nMEDIA: http://h/media/abc"  # legacy fallback, file not lost
 
 
 def test_media_proxy_headers_keep_filename():

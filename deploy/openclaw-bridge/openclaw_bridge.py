@@ -878,6 +878,95 @@ def feishu_get_json(path: str, *, auth_token: str | None = None) -> dict[str, An
     return feishu_request_json(path, None, auth_token=auth_token, method="GET")
 
 
+# Feishu im/v1/files limit (channel doc mediaMaxMb default 30).
+FEISHU_MAX_FILE_BYTES = 30 * 1024 * 1024
+
+
+def feishu_file_type_for(file_name: str) -> str:
+    """Map a filename extension to a Feishu im/v1/files ``file_type``. Unknown
+    document types fall back to the generic ``stream`` type."""
+    ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
+    return {
+        "pdf": "pdf",
+        "doc": "doc", "docx": "doc",
+        "xls": "xls", "xlsx": "xls",
+        "ppt": "ppt", "pptx": "ppt",
+        "mp4": "mp4", "opus": "opus",
+    }.get(ext, "stream")
+
+
+def feishu_upload_file(data: bytes, file_name: str, file_type: str, auth_token: str) -> str:
+    """Upload bytes to Feishu ``im/v1/files`` (multipart) and return the file_key."""
+    boundary = "----openclawBridge" + uuid.uuid4().hex
+    crlf = b"\r\n"
+    parts: list[bytes] = []
+    for name, value in (("file_type", file_type), ("file_name", file_name)):
+        parts.append(b"--" + boundary.encode())
+        parts.append(('Content-Disposition: form-data; name="%s"' % name).encode("utf-8"))
+        parts.append(b"")
+        parts.append(str(value).encode("utf-8"))
+    parts.append(b"--" + boundary.encode())
+    parts.append(('Content-Disposition: form-data; name="file"; filename="%s"' % file_name).encode("utf-8"))
+    parts.append(b"Content-Type: application/octet-stream")
+    parts.append(b"")
+    body = crlf.join(parts) + crlf + data + crlf + b"--" + boundary.encode() + b"--" + crlf
+    request = urllib.request.Request(
+        feishu_api_base() + "/im/v1/files",
+        data=body,
+        headers={
+            "Authorization": "Bearer " + auth_token,
+            "Content-Type": "multipart/form-data; boundary=" + boundary,
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        result = json.loads(response.read().decode("utf-8"))
+    if result.get("code") not in (None, 0):
+        raise RuntimeError(f"Feishu file upload error: {result}")
+    file_key = (result.get("data") or {}).get("file_key")
+    if not file_key:
+        raise RuntimeError(f"Feishu file upload missing file_key: {result}")
+    return str(file_key)
+
+
+def feishu_send_file_message(details: dict[str, Any], message_id: str, file_key: str, auth_token: str) -> None:
+    """Deliver a file_key to the Feishu user, replying to their message when we have
+    its id, otherwise sending a fresh message to the open_id (DM) / chat_id (group)."""
+    content = json.dumps({"file_key": file_key}, ensure_ascii=False)
+    if message_id:
+        feishu_post_json(
+            f"/im/v1/messages/{urllib.parse.quote(message_id)}/reply",
+            {"msg_type": "file", "content": content},
+            auth_token=auth_token,
+        )
+        return
+    if feishu_is_group_message(details):
+        receive_id, receive_id_type = feishu_chat_id(details), "chat_id"
+    else:
+        receive_id, receive_id_type = feishu_open_id(details), "open_id"
+    if not receive_id:
+        raise RuntimeError("no Feishu receive_id for file delivery")
+    feishu_post_json(
+        f"/im/v1/messages?receive_id_type={receive_id_type}",
+        {"receive_id": receive_id, "msg_type": "file", "content": content},
+        auth_token=auth_token,
+    )
+
+
+def fetch_outbound_file_bytes(url: str) -> bytes:
+    """Fetch a file referenced by a FILE marker. WebDock ``/media/<token>`` URLs are
+    pulled over the internal WebDock base (reverse tunnel) rather than the public
+    host so delivery does not depend on external DNS/TLS."""
+    parsed = urllib.parse.urlparse(url)
+    target = url
+    if parsed.path.startswith("/media/"):
+        root = webdock_media_root()
+        if root:
+            target = root + parsed.path
+    with urllib.request.urlopen(target, timeout=30) as response:
+        return response.read()
+
+
 def create_feishu_bitable_record(table_id: str, fields: dict[str, Any]) -> dict[str, Any]:
     app_token = feishu_session_console_app_token()
     if not app_token or not table_id:
@@ -1636,7 +1725,10 @@ def normalize_reply(text: str) -> str:
                 "bridge -> WebDock -> ChatGPT connected, but ChatGPT/WebDock returned a timeout or browser error.",
                 "ChatGPT browser response extraction",
             )
-    return rewrite_file_markers_as_media(text.strip())
+    # Leave FILE: markers intact here; build_reply delivers them as native Feishu
+    # files (deliver_feishu_files) and only falls back to the MEDIA rewrite when
+    # direct delivery is unavailable.
+    return text.strip()
 
 
 def split_file_markers(text: str) -> tuple[str, list[dict[str, str]]]:
@@ -1662,6 +1754,52 @@ def rewrite_file_markers_as_media(text: str) -> str:
     parts = [body] if body else []
     parts.extend(f"MEDIA: {item['url']}" for item in files)
     return "\n".join(parts).strip()
+
+
+def deliver_feishu_files(reply: str, details: dict[str, Any]) -> str:
+    """Send any FILE: markers in a Feishu reply as native Feishu file messages
+    (im/v1/files + msg_type=file) and return the remaining text.
+
+    OpenClaw's legacy ``MEDIA:`` directive does not deliver files/images on Feishu
+    (upstream issue #48891, closed as not planned), so we push the file straight to
+    the user via the Feishu API. Falls back to the MEDIA rewrite when Feishu
+    credentials are missing or every upload fails, so the file is never lost."""
+    body, files = split_file_markers(reply)
+    if not files:
+        return reply
+    metadata = details.get("metadata") or {}
+    if metadata.get("channel") != "feishu" or not feishu_app_credentials()[0]:
+        return rewrite_file_markers_as_media(reply)
+    try:
+        auth_token = feishu_tenant_access_token()
+    except Exception as exc:  # token fetch failed; keep the legacy fallback
+        print(f"feishu file delivery: token error: {exc}")
+        auth_token = ""
+    if not auth_token:
+        return rewrite_file_markers_as_media(reply)
+    message_id = feishu_message_id(details)
+    delivered: list[str] = []
+    for item in files:
+        name = item.get("name") or "file"
+        try:
+            data = fetch_outbound_file_bytes(item["url"])
+            if not data or len(data) > FEISHU_MAX_FILE_BYTES:
+                print(f"feishu file delivery: skip {name} (size {len(data) if data else 0})")
+                continue
+            file_key = feishu_upload_file(data, name, feishu_file_type_for(name), auth_token)
+            feishu_send_file_message(details, message_id, file_key, auth_token)
+            delivered.append(name)
+        except Exception as exc:
+            print(f"feishu file delivery failed for {name}: {exc}")
+    if not delivered:
+        # Nothing went through directly; keep the legacy marker so OpenClaw still tries.
+        return rewrite_file_markers_as_media(reply)
+    body = body.strip()
+    if body:
+        return body
+    # File(s) sent but no accompanying text — give OpenClaw a visible caption so it
+    # does not emit the "no-visible-reply" fallback.
+    return "📎 " + "、".join(delivered)
 
 
 def media_proxy_headers(headers: Any) -> dict[str, str]:
@@ -1740,6 +1878,7 @@ def build_reply(body: dict[str, Any]) -> str:
         reply, response_metadata = unpack_webdock_result(call_webdock(batched_body))
         if response_metadata:
             write_details.setdefault("metadata", {}).update(response_metadata)
+        reply = deliver_feishu_files(reply, write_details)
         trace_chain_result(details, started, reply=reply)
         append_feishu_session_console_records(write_details, reply, "已回复")
         return reply
