@@ -1,18 +1,27 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, HTTPException, Request
 
+from app.integrations.feishu.handlers import handle_feishu_webhook
+
+
+LOGGER = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/webhooks", tags=["webhooks"])
 
 
 @router.post("/feishu")
-def receive_feishu_webhook(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
-    return {
-        "status": "received",
-        "provider": "feishu",
-        "mode": "placeholder",
-        "received_keys": sorted(payload.keys()),
-    }
+async def receive_feishu_webhook(request: Request) -> dict[str, Any]:
+    body = await request.body()
+    headers = {key.lower(): value for key, value in request.headers.items()}
+    try:
+        return handle_feishu_webhook(body, headers)
+    except PermissionError as exc:
+        LOGGER.warning("feishu webhook rejected: %s", exc)
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except (ValueError, RuntimeError) as exc:
+        LOGGER.warning("feishu webhook bad payload: %s", exc)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

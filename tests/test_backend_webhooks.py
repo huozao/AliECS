@@ -138,12 +138,9 @@ class BackendWebhookGatewayTests(unittest.TestCase):
         self.assertEqual("wecom", result["provider"])
         self.assertEqual("placeholder", result["mode"])
 
-    def test_feishu_webhook_placeholder_response(self) -> None:
-        result = self._call_post("/v1/webhooks/feishu", {"event": "ping"})
-
-        self.assertEqual("received", result["status"])
-        self.assertEqual("feishu", result["provider"])
-        self.assertEqual("placeholder", result["mode"])
+    # Feishu webhook moved off the placeholder router; real coverage lives in
+    # tests/test_backend_feishu_webhook.py (URL challenge, encrypted payload,
+    # signature, verification token).
 
 
 if __name__ == "__main__":
