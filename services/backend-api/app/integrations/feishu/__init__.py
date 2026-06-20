@@ -1,1 +1,1 @@
-"""Feishu webhook integration placeholder."""
+"""Feishu webhook integration."""
