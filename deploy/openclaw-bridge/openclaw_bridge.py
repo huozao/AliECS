@@ -23,6 +23,10 @@ OPENCLAW_METADATA_PREFIX_RE = re.compile(
     flags=re.DOTALL,
 )
 OPENCLAW_MESSAGE_ID_LINE_RE = re.compile(r"^[ \t]*\[message_id:[^\]\n]*\][ \t]*\n?", re.IGNORECASE | re.MULTILINE)
+FEISHU_MENTION_HELPER_PREFIXES = (
+    "[System: The content may include mention tags in the form ",
+    "[System: If user_id is ",
+)
 MAX_BRIDGE_IMAGES = 4
 MAX_BRIDGE_IMAGE_BYTES = 20 * 1024 * 1024
 FEISHU_PEER_PREFIXES = ("ou_", "oc_")
@@ -76,6 +80,10 @@ FILE_MARKER_RE = re.compile(
     r"^[ \t]*FILE:\s+(?P<url>\S+)\s+name=(?P<name>\S+)\s+mime=(?P<mime>\S+)[ \t]*$",
     re.MULTILINE,
 )
+MEDIA_MARKER_RE = re.compile(
+    r"^[ \t]*MEDIA:\s+(?P<url>\S+)[ \t]*$",
+    re.MULTILINE,
+)
 MEDIA_INTENT_RE = re.compile(
     r"(图片|照片|这张图|图像|头像|原图|参考图|风格图|背景|修图|改图|抠图|"
     r"第一张|第二张|第三张|两张|多张|image|photo|picture|avatar|reference)",
@@ -105,6 +113,9 @@ _pending_batches: dict[str, Any] = {}
 _pending_batches_lock = Lock()
 _feishu_tenant_token: str = ""
 _feishu_tenant_token_expires_at = 0.0
+_feishu_group_policy_cache: dict[str, tuple[float, bool, str]] = {}
+_feishu_group_policy_cache_lock = Lock()
+FEISHU_GROUP_POLICY_CACHE_SECONDS = 15.0
 
 
 class WebDockResult:
@@ -447,14 +458,12 @@ def webdock_media_root() -> str:
 
 
 def webdock_timeout() -> int:
-    # Must be >= WebDock's chat_timeout_seconds (prod runtime override ~300s for
-    # long reasoning + image work), otherwise the bridge gives up before WebDock
-    # returns the real reply. The SSE keepalive (stream_sse) covers OpenClaw's
-    # ~120s idle limit during this wait.
+    # Must outlast WebDock's 20-minute hard cap; SSE keepalives cover OpenClaw's
+    # shorter idle limit while this synchronous upstream request is active.
     try:
-        return max(5, int(os.getenv("WEB_DOCK_TIMEOUT_SECONDS", "320")))
+        return max(1260, int(os.getenv("WEB_DOCK_TIMEOUT_SECONDS", "1260")))
     except ValueError:
-        return 320
+        return 1260
 
 
 def request_details(body: dict[str, Any]) -> dict[str, Any]:
@@ -465,6 +474,7 @@ def request_details(body: dict[str, Any]) -> dict[str, Any]:
     metadata = build_webdock_metadata(body)
     if metadata.get("channel") == "feishu":
         user_text = _strip_feishu_sender_prefix(user_text, get_last_user_metadata(messages))
+        user_text = strip_feishu_mention_helper_text(user_text)
         enrich_feishu_metadata_with_session_route(metadata, raw_metadata, user_text)
     if not metadata.get("peer_id"):
         inherited_metadata = get_recent_lane_metadata()
@@ -701,6 +711,27 @@ def _strip_feishu_sender_prefix(text: str, raw_metadata: dict[str, Any]) -> str:
     return text
 
 
+def strip_feishu_mention_helper_text(text: str) -> str:
+    """Remove OpenClaw's Feishu mention instructions and the bot's own leading
+    mention. The helper block is channel-injected text, not user content."""
+    if not text:
+        return text
+    kept: list[str] = []
+    saw_self_mention_helper = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(FEISHU_MENTION_HELPER_PREFIXES):
+            if stripped.startswith("[System: If user_id is ") and stripped.endswith("that mention refers to you.]"):
+                saw_self_mention_helper = True
+            continue
+        kept.append(line)
+    cleaned = "\n".join(kept).strip()
+    if saw_self_mention_helper:
+        cleaned = re.sub(r"^\s*<at\s+user_id=([\"'])[^\"']+\1>.*?</at>\s*", "", cleaned, count=1)
+        cleaned = re.sub(r"^\s*@\S+(?:[ \t]+|(?=\r?$))", "", cleaned, count=1)
+    return cleaned.strip()
+
+
 def _looks_like_feishu(metadata: dict[str, Any]) -> bool:
     if metadata.get("open_id"):
         return True
@@ -761,6 +792,18 @@ def feishu_session_console_table_id(kind: str) -> str:
         "session": (
             "FEISHU_SESSION_CONSOLE_SESSION_TABLE_ID",
             "FEISHU_COMPANY_A_SESSION_CONSOLE_SESSION_TABLE_ID",
+        ),
+        "user": (
+            "FEISHU_SESSION_CONSOLE_USER_TABLE_ID",
+            "FEISHU_COMPANY_A_SESSION_CONSOLE_USER_TABLE_ID",
+        ),
+        "group": (
+            "FEISHU_SESSION_CONSOLE_GROUP_TABLE_ID",
+            "FEISHU_COMPANY_A_SESSION_CONSOLE_GROUP_TABLE_ID",
+        ),
+        "rule": (
+            "FEISHU_SESSION_CONSOLE_RULE_TABLE_ID",
+            "FEISHU_COMPANY_A_SESSION_CONSOLE_RULE_TABLE_ID",
         ),
     }.get(kind, ())
     for name in env_names:
@@ -878,6 +921,152 @@ def feishu_get_json(path: str, *, auth_token: str | None = None) -> dict[str, An
     return feishu_request_json(path, None, auth_token=auth_token, method="GET")
 
 
+# Feishu im/v1/files limit (channel doc mediaMaxMb default 30).
+FEISHU_MAX_FILE_BYTES = 30 * 1024 * 1024
+
+
+def feishu_file_type_for(file_name: str) -> str:
+    """Map a filename extension to a Feishu im/v1/files ``file_type``. Unknown
+    document types fall back to the generic ``stream`` type."""
+    ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
+    return {
+        "pdf": "pdf",
+        "doc": "doc", "docx": "doc",
+        "xls": "xls", "xlsx": "xls",
+        "ppt": "ppt", "pptx": "ppt",
+        "mp4": "mp4", "opus": "opus",
+    }.get(ext, "stream")
+
+
+def feishu_upload_file(data: bytes, file_name: str, file_type: str, auth_token: str) -> str:
+    """Upload bytes to Feishu ``im/v1/files`` (multipart) and return the file_key."""
+    boundary = "----openclawBridge" + uuid.uuid4().hex
+    crlf = b"\r\n"
+    parts: list[bytes] = []
+    for name, value in (("file_type", file_type), ("file_name", file_name)):
+        parts.append(b"--" + boundary.encode())
+        parts.append(('Content-Disposition: form-data; name="%s"' % name).encode("utf-8"))
+        parts.append(b"")
+        parts.append(str(value).encode("utf-8"))
+    parts.append(b"--" + boundary.encode())
+    parts.append(('Content-Disposition: form-data; name="file"; filename="%s"' % file_name).encode("utf-8"))
+    parts.append(b"Content-Type: application/octet-stream")
+    parts.append(b"")
+    body = crlf.join(parts) + crlf + data + crlf + b"--" + boundary.encode() + b"--" + crlf
+    request = urllib.request.Request(
+        feishu_api_base() + "/im/v1/files",
+        data=body,
+        headers={
+            "Authorization": "Bearer " + auth_token,
+            "Content-Type": "multipart/form-data; boundary=" + boundary,
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        result = json.loads(response.read().decode("utf-8"))
+    if result.get("code") not in (None, 0):
+        raise RuntimeError(f"Feishu file upload error: {result}")
+    file_key = (result.get("data") or {}).get("file_key")
+    if not file_key:
+        raise RuntimeError(f"Feishu file upload missing file_key: {result}")
+    return str(file_key)
+
+
+def feishu_upload_image(data: bytes, auth_token: str) -> str:
+    """Upload image bytes to Feishu ``im/v1/images`` and return the image_key."""
+    boundary = "----openclawBridge" + uuid.uuid4().hex
+    crlf = b"\r\n"
+    parts = [
+        b"--" + boundary.encode(),
+        b'Content-Disposition: form-data; name="image_type"',
+        b"",
+        b"message",
+        b"--" + boundary.encode(),
+        b'Content-Disposition: form-data; name="image"; filename="image.png"',
+        b"Content-Type: application/octet-stream",
+        b"",
+    ]
+    body = crlf.join(parts) + crlf + data + crlf + b"--" + boundary.encode() + b"--" + crlf
+    request = urllib.request.Request(
+        feishu_api_base() + "/im/v1/images",
+        data=body,
+        headers={
+            "Authorization": "Bearer " + auth_token,
+            "Content-Type": "multipart/form-data; boundary=" + boundary,
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        result = json.loads(response.read().decode("utf-8"))
+    if result.get("code") not in (None, 0):
+        raise RuntimeError(f"Feishu image upload error: {result}")
+    image_key = (result.get("data") or {}).get("image_key")
+    if not image_key:
+        raise RuntimeError(f"Feishu image upload missing image_key: {result}")
+    return str(image_key)
+
+
+def feishu_send_file_message(details: dict[str, Any], message_id: str, file_key: str, auth_token: str) -> None:
+    """Deliver a file_key to the Feishu user, replying to their message when we have
+    its id, otherwise sending a fresh message to the open_id (DM) / chat_id (group)."""
+    content = json.dumps({"file_key": file_key}, ensure_ascii=False)
+    if message_id:
+        feishu_post_json(
+            f"/im/v1/messages/{urllib.parse.quote(message_id)}/reply",
+            {"msg_type": "file", "content": content},
+            auth_token=auth_token,
+        )
+        return
+    if feishu_is_group_message(details):
+        receive_id, receive_id_type = feishu_chat_id(details), "chat_id"
+    else:
+        receive_id, receive_id_type = feishu_open_id(details), "open_id"
+    if not receive_id:
+        raise RuntimeError("no Feishu receive_id for file delivery")
+    feishu_post_json(
+        f"/im/v1/messages?receive_id_type={receive_id_type}",
+        {"receive_id": receive_id, "msg_type": "file", "content": content},
+        auth_token=auth_token,
+    )
+
+
+def feishu_send_image_message(details: dict[str, Any], message_id: str, image_key: str, auth_token: str) -> None:
+    """Deliver an image_key as a native Feishu image message."""
+    content = json.dumps({"image_key": image_key}, ensure_ascii=False)
+    if message_id:
+        feishu_post_json(
+            f"/im/v1/messages/{urllib.parse.quote(message_id)}/reply",
+            {"msg_type": "image", "content": content},
+            auth_token=auth_token,
+        )
+        return
+    if feishu_is_group_message(details):
+        receive_id, receive_id_type = feishu_chat_id(details), "chat_id"
+    else:
+        receive_id, receive_id_type = feishu_open_id(details), "open_id"
+    if not receive_id:
+        raise RuntimeError("no Feishu receive_id for image delivery")
+    feishu_post_json(
+        f"/im/v1/messages?receive_id_type={receive_id_type}",
+        {"receive_id": receive_id, "msg_type": "image", "content": content},
+        auth_token=auth_token,
+    )
+
+
+def fetch_outbound_file_bytes(url: str) -> bytes:
+    """Fetch a file referenced by a FILE marker. WebDock ``/media/<token>`` URLs are
+    pulled over the internal WebDock base (reverse tunnel) rather than the public
+    host so delivery does not depend on external DNS/TLS."""
+    parsed = urllib.parse.urlparse(url)
+    target = url
+    if parsed.path.startswith("/media/"):
+        root = webdock_media_root()
+        if root:
+            target = root + parsed.path
+    with urllib.request.urlopen(target, timeout=30) as response:
+        return response.read()
+
+
 def create_feishu_bitable_record(table_id: str, fields: dict[str, Any]) -> dict[str, Any]:
     app_token = feishu_session_console_app_token()
     if not app_token or not table_id:
@@ -932,25 +1121,164 @@ def list_feishu_bitable_records(table_id: str) -> list[dict[str, Any]]:
     return records
 
 
+def bitable_url_value(url: str) -> dict[str, str]:
+    return {"text": url, "link": url}
+
+
+def bitable_link_value(*record_ids: str) -> list[str]:
+    return [record_id for record_id in record_ids if record_id]
+
+
+def bitable_created_record_id(result: dict[str, Any]) -> str:
+    data = result.get("data") or {}
+    record = data.get("record") or {}
+    return str(record.get("record_id") or data.get("record_id") or "")
+
+
+def find_feishu_bitable_record(table_id: str, field_name: str, expected: str) -> dict[str, Any] | None:
+    if not table_id or not expected:
+        return None
+    for record in list_feishu_bitable_records(table_id):
+        fields = record.get("fields") or {}
+        if isinstance(fields, dict) and bitable_field_text(fields.get(field_name)) == expected:
+            return record
+    return None
+
+
+def upsert_feishu_user_record(details: dict[str, Any]) -> str:
+    table_id = feishu_session_console_table_id("user")
+    open_id = feishu_open_id(details)
+    if not table_id or not open_id:
+        return ""
+    raw_metadata = details.get("raw_metadata") or {}
+    now_ms = int(time.time() * 1000)
+    fields = {
+        "用户编号": f"user-{safe_bitable_id(open_id)}",
+        "飞书用户名": str(_first_metadata_value(raw_metadata, "name", "label", "sender_name") or open_id),
+        "open_id": open_id,
+        "union_id": str(_first_metadata_value(raw_metadata, "union_id", "unionId") or ""),
+        "user_id": str(_first_metadata_value(raw_metadata, "user_id", "userId") or ""),
+        "用户状态": "启用",
+        "用户角色": "普通用户",
+        "最近互动时间": now_ms,
+    }
+    existing = find_feishu_bitable_record(table_id, "open_id", open_id)
+    if existing:
+        record_id = str(existing.get("record_id") or "")
+        if record_id:
+            update_feishu_bitable_record(table_id, record_id, fields)
+        return record_id
+    return bitable_created_record_id(create_feishu_bitable_record(table_id, fields))
+
+
+def upsert_feishu_group_record(details: dict[str, Any]) -> str:
+    table_id = feishu_session_console_table_id("group")
+    chat_id = feishu_chat_id(details)
+    if not table_id or not chat_id:
+        return ""
+    raw_metadata = details.get("raw_metadata") or {}
+    now_ms = int(time.time() * 1000)
+    fields: dict[str, Any] = {
+        "群编号": f"group-{safe_bitable_id(chat_id)}",
+        "群名称": str(_first_metadata_value(raw_metadata, "chat_name", "group_name", "room_name") or chat_id),
+        "chat_id": chat_id,
+        "最近消息时间": now_ms,
+    }
+    if feishu_mentions_bot(details):
+        fields["最近 @ 机器人时间"] = now_ms
+    existing = find_feishu_bitable_record(table_id, "chat_id", chat_id)
+    if existing:
+        record_id = str(existing.get("record_id") or "")
+        if record_id:
+            update_feishu_bitable_record(table_id, record_id, fields)
+        return record_id
+    fields.update(
+        {
+            "群类型": "普通群",
+            "是否启用机器人": True,
+            "是否记录全量消息": True,
+            "回复模式": "回复所有",
+        }
+    )
+    return bitable_created_record_id(create_feishu_bitable_record(table_id, fields))
+
+
+def ensure_feishu_default_rule_record() -> str:
+    table_id = feishu_session_console_table_id("rule")
+    if not table_id:
+        return ""
+    existing = find_feishu_bitable_record(table_id, "规则编号", "global-default")
+    if existing:
+        return str(existing.get("record_id") or "")
+    fields = {
+        "规则编号": "global-default",
+        "规则名称": "默认飞书会话规则",
+        "规则对象类型": "全局",
+        "是否启用": True,
+        "是否记录全量消息": True,
+        "回复模式": "回复所有",
+        "是否允许图片": True,
+        "是否允许文件": True,
+        "是否需要审核": False,
+        "每日最大请求数": 0,
+        "敏感群标记": False,
+        "备注": "openclaw-bridge 自动维护",
+    }
+    return bitable_created_record_id(create_feishu_bitable_record(table_id, fields))
+
+
 def append_feishu_session_console_records(details: dict[str, Any], reply: str, status: str) -> None:
     metadata = details.get("metadata") or {}
     if metadata.get("channel") != "feishu" or not feishu_session_console_configured():
         return
     try:
         should_send = feishu_should_send_chatgpt(details)
+        user_record_id = upsert_feishu_user_record(details)
+        group_record_id = upsert_feishu_group_record(details)
+        session_record_id = ""
         if status == "已回复" and should_send:
-            upsert_feishu_session_index_record(details)
-        create_feishu_bitable_record(
+            session_record_id = upsert_feishu_session_index_record(
+                details,
+                user_record_id=user_record_id,
+                group_record_id=group_record_id,
+            )
+        message_fields = build_feishu_message_log_fields(details, reply=reply, status=status)
+        if user_record_id:
+            message_fields["关联用户记录"] = bitable_link_value(user_record_id)
+        if group_record_id:
+            message_fields["关联群记录"] = bitable_link_value(group_record_id)
+        if session_record_id:
+            message_fields["匹配会话记录"] = bitable_link_value(session_record_id)
+        message_result = create_feishu_bitable_record(
             feishu_session_console_table_id("message"),
-            build_feishu_message_log_fields(details, reply=reply, status=status),
+            message_fields,
         )
+        message_record_id = bitable_created_record_id(message_result)
         task_table_id = feishu_session_console_table_id("task")
         if task_table_id and should_send:
             task_status = "已发送" if status == "已回复" else "失败"
+            task_fields = build_feishu_reply_task_fields(details, reply=reply, status=task_status)
+            if message_record_id:
+                task_fields["关联消息记录"] = bitable_link_value(message_record_id)
+            if session_record_id:
+                task_fields["关联会话记录"] = bitable_link_value(session_record_id)
             create_feishu_bitable_record(
                 task_table_id,
-                build_feishu_reply_task_fields(details, reply=reply, status=task_status),
+                task_fields,
             )
+        if session_record_id and user_record_id and not feishu_is_group_message(details):
+            update_feishu_bitable_record(
+                feishu_session_console_table_id("user"),
+                user_record_id,
+                {"默认私聊会话记录": bitable_link_value(session_record_id)},
+            )
+        if session_record_id and group_record_id:
+            update_feishu_bitable_record(
+                feishu_session_console_table_id("group"),
+                group_record_id,
+                {"默认会话记录": bitable_link_value(session_record_id)},
+            )
+        ensure_feishu_default_rule_record()
     except Exception as exc:
         print(
             "feishu_bitable_write_failed "
@@ -1010,7 +1338,7 @@ def build_feishu_message_log_fields(details: dict[str, Any], *, reply: str, stat
     }
     attachment_url = str(_first_metadata_value(raw_metadata, "attachment_url", "file_url", "image_url") or "")
     if attachment_url:
-        fields["附件链接"] = attachment_url
+        fields["附件链接"] = bitable_url_value(attachment_url)
     return fields
 
 
@@ -1037,23 +1365,28 @@ def build_feishu_reply_task_fields(details: dict[str, Any], *, reply: str, statu
     }
     chatgpt_url = str(_first_metadata_value(metadata, "chatgpt_conversation_url", "chatgpt_url") or "")
     if chatgpt_url:
-        fields["ChatGPT 对话链接"] = chatgpt_url
+        fields["ChatGPT 对话链接"] = bitable_url_value(chatgpt_url)
     return fields
 
 
-def upsert_feishu_session_index_record(details: dict[str, Any]) -> None:
+def upsert_feishu_session_index_record(
+    details: dict[str, Any],
+    *,
+    user_record_id: str = "",
+    group_record_id: str = "",
+) -> str:
     if not feishu_session_index_configured():
-        return
+        return ""
     metadata = details.get("metadata") or {}
     conversation_url = str(
         _first_metadata_value(metadata, "chatgpt_conversation_url", "chatgpt_url", "chatgpt_conversation")
         or ""
     ).strip()
     if not conversation_url:
-        return
+        return ""
     session_key = feishu_session_key(details)
     if not session_key:
-        return
+        return ""
     table_id = feishu_session_console_table_id("session")
     records = find_feishu_session_records(session_key)
     same_current = None
@@ -1084,16 +1417,18 @@ def upsert_feishu_session_index_record(details: dict[str, Any]) -> None:
                 version=max(1, bitable_field_int(fields.get("会话版本"))),
                 message_count=bitable_field_int(fields.get("消息数量")) + 1,
                 mention_count=bitable_field_int(fields.get("@机器人次数")) + (1 if feishu_mentions_bot(details) else 0),
+                user_record_id=user_record_id,
+                group_record_id=group_record_id,
             ),
         )
-        return
+        return str(same_current.get("record_id") or "")
 
     for record in current_records:
         record_id = str(record.get("record_id") or "")
         if record_id:
             update_feishu_bitable_record(table_id, record_id, {"会话状态": "已归档", "是否当前会话": False})
 
-    create_feishu_bitable_record(
+    created = create_feishu_bitable_record(
         table_id,
         build_feishu_session_index_fields(
             details,
@@ -1101,8 +1436,11 @@ def upsert_feishu_session_index_record(details: dict[str, Any]) -> None:
             version=max_version + 1 if max_version else 1,
             message_count=max_message_count + 1,
             mention_count=max_mention_count + (1 if feishu_mentions_bot(details) else 0),
+            user_record_id=user_record_id,
+            group_record_id=group_record_id,
         ),
     )
+    return bitable_created_record_id(created)
 
 
 def build_feishu_session_index_fields(
@@ -1112,6 +1450,8 @@ def build_feishu_session_index_fields(
     version: int,
     message_count: int,
     mention_count: int,
+    user_record_id: str = "",
+    group_record_id: str = "",
 ) -> dict[str, Any]:
     now_ms = int(time.time() * 1000)
     metadata = details.get("metadata") or {}
@@ -1135,8 +1475,6 @@ def build_feishu_session_index_fields(
         "飞书群名": str(_first_metadata_value(raw_metadata, "chat_name", "group_name", "room_name") or ""),
         "ChatGPT 项目名": str(_first_metadata_value(metadata, "chatgpt_project") or feishu_default_chatgpt_project_name()),
         "ChatGPT 对话标题": name,
-        "ChatGPT 项目首页链接": project_url,
-        "ChatGPT 对话链接": conversation_url,
         "会话状态": "活跃",
         "是否当前会话": True,
         "会话版本": max(1, version),
@@ -1150,6 +1488,14 @@ def build_feishu_session_index_fields(
     }
     if version <= 1:
         fields["创建时间"] = now_ms
+    if project_url:
+        fields["ChatGPT 项目首页链接"] = bitable_url_value(project_url)
+    if conversation_url:
+        fields["ChatGPT 对话链接"] = bitable_url_value(conversation_url)
+    if user_record_id:
+        fields["关联用户记录"] = bitable_link_value(user_record_id)
+    if group_record_id:
+        fields["关联群记录"] = bitable_link_value(group_record_id)
     return fields
 
 
@@ -1293,10 +1639,13 @@ def feishu_open_id(details: dict[str, Any]) -> str:
 def feishu_chat_id(details: dict[str, Any]) -> str:
     metadata = details.get("metadata") or {}
     raw_metadata = details.get("raw_metadata") or {}
+    peer_id = str(metadata.get("peer_id") or "")
+    chat_type = metadata.get("chat_type") or raw_metadata.get("chat_type")
+    if not peer_id.startswith("group:") and not _is_group_chat(chat_type):
+        return ""
     value = _first_metadata_value(raw_metadata, "chat_id", "chatId", "conversation_id", "room_id")
     if value:
         return _strip_lane_peer_prefix(value)
-    peer_id = str(metadata.get("peer_id") or "")
     if peer_id.startswith("group:"):
         return _strip_lane_peer_prefix(peer_id)
     return ""
@@ -1321,7 +1670,7 @@ def feishu_has_group_mention_hint(text: str) -> bool:
 def feishu_mentions_bot(details: dict[str, Any]) -> bool:
     raw_metadata = details.get("raw_metadata") or {}
     metadata = details.get("metadata") or {}
-    for key in ("mentionedBot", "mentioned_bot", "is_mentioned", "isMentioned", "wasMentioned"):
+    for key in ("mentionedBot", "mentioned_bot", "is_mentioned", "isMentioned", "wasMentioned", "was_mentioned"):
         value = _first_metadata_value(raw_metadata, key) or _first_metadata_value(metadata, key)
         if isinstance(value, bool):
             return value
@@ -1337,7 +1686,51 @@ def feishu_mentions_bot(details: dict[str, Any]) -> bool:
 def feishu_should_send_chatgpt(details: dict[str, Any]) -> bool:
     if not feishu_is_group_message(details):
         return True
-    return feishu_mentions_bot(details)
+    enabled, reply_mode = feishu_group_reply_policy(details)
+    if not enabled:
+        return False
+    if reply_mode == "仅@回复":
+        return feishu_mentions_bot(details)
+    return True
+
+
+def feishu_group_reply_policy(details: dict[str, Any]) -> tuple[bool, str]:
+    """Return the manually controlled group policy, defaulting safely to reply-all.
+
+    Bitable is a runtime control plane, so cache briefly to avoid multiple API
+    scans during one request while still applying manual changes quickly.
+    """
+    chat_id = feishu_chat_id(details)
+    if not chat_id:
+        return True, "回复所有"
+    now = time.monotonic()
+    with _feishu_group_policy_cache_lock:
+        cached = _feishu_group_policy_cache.get(chat_id)
+        if cached and now - cached[0] < FEISHU_GROUP_POLICY_CACHE_SECONDS:
+            return cached[1], cached[2]
+
+    enabled = True
+    reply_mode = "回复所有"
+    table_id = feishu_session_console_table_id("group")
+    if table_id:
+        try:
+            record = find_feishu_bitable_record(table_id, "chat_id", chat_id)
+            fields = (record or {}).get("fields") or {}
+            if "是否启用机器人" in fields:
+                enabled = bitable_truthy(fields.get("是否启用机器人"))
+            configured_mode = bitable_field_text(fields.get("回复模式")).strip()
+            if configured_mode in {"回复所有", "仅@回复"}:
+                reply_mode = configured_mode
+        except Exception as exc:
+            print(
+                "feishu_group_policy_read_failed "
+                + json.dumps({"chat_id": chat_id, "error": str(exc)}, ensure_ascii=False, sort_keys=True),
+                flush=True,
+            )
+
+    with _feishu_group_policy_cache_lock:
+        _feishu_group_policy_cache[chat_id] = (now, enabled, reply_mode)
+    return enabled, reply_mode
 
 
 def feishu_mentions_text(raw_metadata: dict[str, Any]) -> str:
@@ -1636,7 +2029,10 @@ def normalize_reply(text: str) -> str:
                 "bridge -> WebDock -> ChatGPT connected, but ChatGPT/WebDock returned a timeout or browser error.",
                 "ChatGPT browser response extraction",
             )
-    return rewrite_file_markers_as_media(text.strip())
+    # Leave FILE: markers intact here; build_reply delivers them as native Feishu
+    # files (deliver_feishu_files) and only falls back to the MEDIA rewrite when
+    # direct delivery is unavailable.
+    return text.strip()
 
 
 def split_file_markers(text: str) -> tuple[str, list[dict[str, str]]]:
@@ -1662,6 +2058,117 @@ def rewrite_file_markers_as_media(text: str) -> str:
     parts = [body] if body else []
     parts.extend(f"MEDIA: {item['url']}" for item in files)
     return "\n".join(parts).strip()
+
+
+def visible_file_fallback(body: str, files: list[dict[str, str]]) -> str:
+    parts = [body] if body else []
+    parts.extend(f"附件下载：{item['url']}" for item in files)
+    return "\n".join(parts).strip()
+
+
+def split_media_markers(text: str) -> tuple[str, list[str]]:
+    urls: list[str] = []
+
+    def _remove(match: re.Match[str]) -> str:
+        urls.append(match.group("url"))
+        return ""
+
+    body = MEDIA_MARKER_RE.sub(_remove, text or "")
+    body = re.sub(r"\n{3,}", "\n\n", body).strip()
+    return body, urls
+
+
+def visible_media_fallback(body: str, urls: list[str]) -> str:
+    parts = [body] if body else []
+    parts.extend(f"图片链接：{url}" for url in urls)
+    return "\n".join(parts).strip()
+
+
+def deliver_feishu_files(reply: str, details: dict[str, Any]) -> str:
+    """Send any FILE: markers in a Feishu reply as native Feishu file messages
+    (im/v1/files + msg_type=file) and return the remaining text.
+
+    OpenClaw's legacy ``MEDIA:`` directive does not deliver files/images on Feishu
+    (upstream issue #48891, closed as not planned), so we push the file straight to
+    the user via the Feishu API. Falls back to the MEDIA rewrite when Feishu
+    credentials are missing or every upload fails, so the file is never lost."""
+    body, files = split_file_markers(reply)
+    if not files:
+        return reply
+    metadata = details.get("metadata") or {}
+    if metadata.get("channel") != "feishu":
+        return rewrite_file_markers_as_media(reply)
+    if not feishu_app_credentials()[0]:
+        return visible_file_fallback(body, files)
+    try:
+        auth_token = feishu_tenant_access_token()
+    except Exception as exc:  # token fetch failed; keep the legacy fallback
+        print(f"feishu file delivery: token error: {exc}")
+        auth_token = ""
+    if not auth_token:
+        return visible_file_fallback(body, files)
+    message_id = feishu_message_id(details)
+    delivered: list[str] = []
+    for item in files:
+        name = item.get("name") or "file"
+        try:
+            data = fetch_outbound_file_bytes(item["url"])
+            if not data or len(data) > FEISHU_MAX_FILE_BYTES:
+                print(f"feishu file delivery: skip {name} (size {len(data) if data else 0})")
+                continue
+            file_key = feishu_upload_file(data, name, feishu_file_type_for(name), auth_token)
+            feishu_send_file_message(details, message_id, file_key, auth_token)
+            delivered.append(name)
+        except Exception as exc:
+            print(f"feishu file delivery failed for {name}: {exc}")
+    if not delivered:
+        return visible_file_fallback(body, files)
+    body = body.strip()
+    if body:
+        return body
+    # File(s) sent but no accompanying text — give OpenClaw a visible caption so it
+    # does not emit the "no-visible-reply" fallback.
+    return "📎 " + "、".join(delivered)
+
+
+def deliver_feishu_media(reply: str, details: dict[str, Any]) -> str:
+    """Send legacy ``MEDIA:`` image markers as native Feishu image messages."""
+    body, urls = split_media_markers(reply)
+    if not urls:
+        return reply
+    metadata = details.get("metadata") or {}
+    if metadata.get("channel") != "feishu":
+        return reply
+    if not feishu_app_credentials()[0]:
+        return visible_media_fallback(body, urls)
+    try:
+        auth_token = feishu_tenant_access_token()
+    except Exception as exc:
+        print(f"feishu image delivery: token error: {exc}")
+        auth_token = ""
+    if not auth_token:
+        return visible_media_fallback(body, urls)
+    message_id = feishu_message_id(details)
+    failed: list[str] = []
+    delivered = 0
+    for url in urls:
+        try:
+            data = fetch_outbound_file_bytes(url)
+            if not data or len(data) > FEISHU_MAX_FILE_BYTES:
+                raise RuntimeError(f"invalid image size {len(data) if data else 0}")
+            image_key = feishu_upload_image(data, auth_token)
+            feishu_send_image_message(details, message_id, image_key, auth_token)
+            delivered += 1
+        except Exception as exc:
+            print(f"feishu image delivery failed for {url}: {exc}")
+            failed.append(url)
+    parts = [body] if body else []
+    parts.extend(f"图片链接：{url}" for url in failed)
+    if parts:
+        return "\n".join(parts).strip()
+    if delivered:
+        return "🖼️ 图片已发送"
+    return visible_media_fallback(body, urls)
 
 
 def media_proxy_headers(headers: Any) -> dict[str, str]:
@@ -1740,6 +2247,8 @@ def build_reply(body: dict[str, Any]) -> str:
         reply, response_metadata = unpack_webdock_result(call_webdock(batched_body))
         if response_metadata:
             write_details.setdefault("metadata", {}).update(response_metadata)
+        reply = deliver_feishu_files(reply, write_details)
+        reply = deliver_feishu_media(reply, write_details)
         trace_chain_result(details, started, reply=reply)
         append_feishu_session_console_records(write_details, reply, "已回复")
         return reply
@@ -1806,6 +2315,14 @@ def _stream_chunk(model: str, *, delta: dict[str, Any], finish_reason: str | Non
     return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8")
 
 
+# OpenClaw 2026.6.5's stall detector counts a stream chunk as progress only when
+# its delta has NON-EMPTY content; an empty-string delta no longer resets the idle
+# timer, so long WebDock replies (>~130s) were aborted as ``stalled_agent_run`` and
+# shown to the user as the "no-visible-reply" fallback. A zero-width space is
+# non-empty (survives str.strip()/JS trim) yet invisible in the rendered reply.
+_KEEPALIVE_DELTA_CONTENT = "\u200b"
+
+
 def stream_sse(
     write: Any,
     body: dict[str, Any],
@@ -1818,9 +2335,11 @@ def stream_sse(
 
     build_reply blocks for as long as WebDock/ChatGPT take to answer (can be
     minutes for long reasoning + image work). During that wait we periodically
-    push an empty-delta keepalive chunk so OpenClaw's idle timer keeps resetting
-    instead of cutting us off at ~120s. ``write(bytes) -> bool`` must return
-    False once the client has disconnected, which stops the stream early."""
+    push a keepalive chunk (zero-width-space delta, see _KEEPALIVE_DELTA_CONTENT)
+    so OpenClaw's idle/stall timer keeps resetting instead of aborting the run as
+    ``stalled_agent_run`` and dropping the real reply. ``write(bytes) -> bool``
+    must return False once the client has disconnected, which stops the stream
+    early."""
     if reply_fn is None:
         reply_fn = build_reply
     if keepalive is None:
@@ -1842,7 +2361,7 @@ def stream_sse(
         worker.join(timeout=keepalive)
         if not worker.is_alive():
             break
-        if not write(_stream_chunk(model, delta={"content": ""}, finish_reason=None)):
+        if not write(_stream_chunk(model, delta={"content": _KEEPALIVE_DELTA_CONTENT}, finish_reason=None)):
             return  # OpenClaw disconnected; drop the (still-running) worker result
 
     reply = result.get("reply")

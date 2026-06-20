@@ -8,13 +8,24 @@ import time
 import urllib.error
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE_PATH = ROOT / "deploy" / "openclaw-bridge" / "openclaw_bridge.py"
+BITABLE_MIGRATION_PATH = ROOT / "deploy" / "openclaw-bridge" / "migrate_feishu_bitable_links.py"
 
 
 def load_bridge():
     spec = importlib.util.spec_from_file_location("openclaw_bridge", BRIDGE_PATH)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_bitable_migration():
+    spec = importlib.util.spec_from_file_location("migrate_feishu_bitable_links", BITABLE_MIGRATION_PATH)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -34,6 +45,37 @@ def test_bridge_removes_openclaw_metadata_from_last_user_message():
     )
 
     assert text == "请只回复：ok"
+
+
+def test_bridge_strips_feishu_bot_mention_helper_before_webdock():
+    bridge = load_bridge()
+    helper = (
+        '[System: The content may include mention tags in the form '
+        '<at user_id="...">name</at>. Treat these as real mentions of Feishu entities (users or bots).]\n'
+        '[System: If user_id is "ou_bot", that mention refers to you.]'
+    )
+    body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": f"@hao的智能助手 请处理这张图片\n\n{helper}"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,UE5H"}},
+                ],
+            }
+        ],
+        "metadata": {
+            "channel": "feishu",
+            "chat_type": "group",
+            "chat_id": "oc_group_clean",
+            "was_mentioned": True,
+        },
+    }
+
+    details = bridge.request_details(body)
+
+    assert details["user_text"] == "请处理这张图片"
+    assert len(details["images"]) == 1
 
 
 def test_bridge_removes_unfenced_openclaw_metadata_from_last_user_message():
@@ -925,6 +967,7 @@ def test_bridge_batch_preserves_feishu_raw_metadata_for_session_index(monkeypatc
 def test_bridge_records_unmentioned_feishu_group_without_webdock_or_task(monkeypatch):
     bridge = load_bridge()
     created = []
+    monkeypatch.setattr(bridge, "feishu_group_reply_policy", lambda details: (True, "仅@回复"))
     monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
     monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
     monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "0")
@@ -968,6 +1011,120 @@ def test_bridge_records_unmentioned_feishu_group_without_webdock_or_task(monkeyp
     assert fields["处理状态"] == "仅记录"
 
 
+def test_feishu_group_without_policy_defaults_to_reply_all(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record", lambda *args: None)
+    details = {
+        "user_text": "群里普通聊天",
+        "metadata": {"channel": "feishu", "chat_type": "group", "peer_id": "group:oc_default_all"},
+        "raw_metadata": {"chat_id": "oc_default_all"},
+    }
+
+    assert bridge.feishu_should_send_chatgpt(details) is True
+
+
+def test_feishu_group_only_mention_policy_reads_group_table(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_GROUP_TABLE_ID", "tbl_group")
+    monkeypatch.setattr(
+        bridge,
+        "find_feishu_bitable_record",
+        lambda *args: {
+            "fields": {
+                "chat_id": "oc_only_at",
+                "是否启用机器人": True,
+                "回复模式": "仅@回复",
+            }
+        },
+    )
+    details = {
+        "user_text": "群里普通聊天",
+        "metadata": {"channel": "feishu", "chat_type": "group", "peer_id": "group:oc_only_at"},
+        "raw_metadata": {"chat_id": "oc_only_at"},
+    }
+
+    assert bridge.feishu_should_send_chatgpt(details) is False
+    details["raw_metadata"]["was_mentioned"] = True
+    assert bridge.feishu_should_send_chatgpt(details) is True
+
+
+def test_feishu_disabled_group_never_replies(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_GROUP_TABLE_ID", "tbl_group")
+    monkeypatch.setattr(
+        bridge,
+        "find_feishu_bitable_record",
+        lambda *args: {
+            "fields": {
+                "chat_id": "oc_disabled",
+                "是否启用机器人": False,
+                "回复模式": "回复所有",
+            }
+        },
+    )
+    details = {
+        "user_text": "@机器人 仍不应回复",
+        "metadata": {"channel": "feishu", "chat_type": "group", "peer_id": "group:oc_disabled"},
+        "raw_metadata": {"chat_id": "oc_disabled", "wasMentioned": True},
+    }
+
+    assert bridge.feishu_should_send_chatgpt(details) is False
+
+
+def test_upsert_existing_group_preserves_manual_control_fields(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_GROUP_TABLE_ID", "tbl_group")
+    monkeypatch.setattr(
+        bridge,
+        "find_feishu_bitable_record",
+        lambda *args: {
+            "record_id": "rec_group",
+            "fields": {
+                "是否启用机器人": False,
+                "是否记录全量消息": False,
+                "回复模式": "仅@回复",
+                "风险级别": "高",
+            },
+        },
+    )
+    updated = []
+    monkeypatch.setattr(
+        bridge,
+        "update_feishu_bitable_record",
+        lambda table_id, record_id, fields: updated.append(fields) or {},
+    )
+    details = {
+        "user_text": "群消息",
+        "metadata": {"channel": "feishu", "chat_type": "group", "peer_id": "group:oc_preserve"},
+        "raw_metadata": {"chat_id": "oc_preserve", "group_name": "测试群"},
+    }
+
+    assert bridge.upsert_feishu_group_record(details) == "rec_group"
+    assert updated
+    for field in ("是否启用机器人", "是否记录全量消息", "回复模式", "风险级别"):
+        assert field not in updated[0]
+
+
+def test_new_group_defaults_to_reply_all(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_GROUP_TABLE_ID", "tbl_group")
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record", lambda *args: None)
+    created = []
+    monkeypatch.setattr(
+        bridge,
+        "create_feishu_bitable_record",
+        lambda table_id, fields: created.append(fields) or {"data": {"record": {"record_id": "rec_group"}}},
+    )
+    details = {
+        "user_text": "群消息",
+        "metadata": {"channel": "feishu", "chat_type": "group", "peer_id": "group:oc_new"},
+        "raw_metadata": {"chat_id": "oc_new"},
+    }
+
+    assert bridge.upsert_feishu_group_record(details) == "rec_group"
+    assert created[0]["回复模式"] == "回复所有"
+
+
 def test_feishu_message_fields_mark_group_lane():
     bridge = load_bridge()
     details = {
@@ -991,8 +1148,23 @@ def test_feishu_message_fields_mark_group_lane():
     assert fields["是否需要送 ChatGPT"] is True
 
 
-def test_feishu_message_fields_group_without_mentions_is_record_only():
+def test_private_feishu_message_does_not_treat_p2p_chat_id_as_group():
     bridge = load_bridge()
+    details = {
+        "metadata": {
+            "channel": "feishu",
+            "chat_type": "private",
+            "peer_id": "user:ou_abc",
+        },
+        "raw_metadata": {"chat_id": "oc_p2p_chat", "open_id": "ou_abc"},
+    }
+
+    assert bridge.feishu_chat_id(details) == ""
+
+
+def test_feishu_message_fields_group_without_mentions_is_record_only(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_group_reply_policy", lambda details: (True, "仅@回复"))
     details = {
         "user_text": "群里普通聊天",
         "metadata": {
@@ -1185,9 +1357,159 @@ def test_feishu_session_index_archives_old_current_and_creates_new_version(monke
     assert created["session_key"] == "tenant-a:group:oc_group1"
     assert created["会话版本"] == 3
     assert created["是否当前会话"] is True
-    assert created["ChatGPT 对话链接"] == "https://chatgpt.com/g/g-p-lark/c/conv-new"
+    assert created["ChatGPT 对话链接"] == {
+        "text": "https://chatgpt.com/g/g-p-lark/c/conv-new",
+        "link": "https://chatgpt.com/g/g-p-lark/c/conv-new",
+    }
     assert created["消息数量"] == 6
     assert created["@机器人次数"] == 6
+
+
+def test_session_console_supports_master_table_ids_and_record_links(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_USER_TABLE_ID", "tbl_user")
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_GROUP_TABLE_ID", "tbl_group")
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_RULE_TABLE_ID", "tbl_rule")
+
+    assert bridge.feishu_session_console_table_id("user") == "tbl_user"
+    assert bridge.feishu_session_console_table_id("group") == "tbl_group"
+    assert bridge.feishu_session_console_table_id("rule") == "tbl_rule"
+    assert bridge.bitable_link_value("rec_1") == ["rec_1"]
+
+
+def test_bitable_migration_defines_non_destructive_relation_fields():
+    migration = load_bitable_migration()
+    specs = migration.relation_field_specs(
+        {
+            "会话索引表": "tbl_session",
+            "消息日志表": "tbl_message",
+            "回复任务表": "tbl_task",
+            "群表": "tbl_group",
+            "用户表": "tbl_user",
+            "规则配置表": "tbl_rule",
+        }
+    )
+
+    assert ("会话索引表", "关联用户记录", "tbl_user") in specs
+    assert ("消息日志表", "匹配会话记录", "tbl_session") in specs
+    assert ("回复任务表", "关联消息记录", "tbl_message") in specs
+    assert ("规则配置表", "关联会话记录", "tbl_session") in specs
+
+
+def test_bitable_migration_defines_control_single_select_options():
+    migration = load_bitable_migration()
+    specs = {
+        (table_name, field_name): options
+        for table_name, field_name, options in migration.control_select_field_specs()
+    }
+
+    assert specs[("群表", "回复模式")] == ("回复所有", "仅@回复")
+    assert specs[("用户表", "用户状态")] == ("启用", "停用")
+    assert specs[("规则配置表", "规则对象类型")] == ("全局", "用户", "群", "会话")
+    assert specs[("会话索引表", "会话状态")] == ("待创建", "活跃", "已归档")
+    assert specs[("消息日志表", "命令类型")] == ("无", "/新对话", "/重置", "/摘要")
+    assert specs[("消息日志表", "处理状态")] == ("已回复", "仅记录", "失败")
+    assert specs[("回复任务表", "审核状态")] == ("无需审核", "待审核", "已通过", "已拒绝")
+    assert not any(field_name.startswith("关联") for _, field_name in specs)
+
+
+def test_bitable_migration_rejects_unknown_existing_select_value():
+    migration = load_bitable_migration()
+
+    with pytest.raises(ValueError, match="群表.回复模式.*未知模式"):
+        migration.validate_control_field_values(
+            "群表",
+            "回复模式",
+            ("回复所有", "仅@回复"),
+            [{"record_id": "rec_bad", "fields": {"回复模式": "未知模式"}}],
+        )
+
+
+def test_bitable_migration_normalizes_reply_all_alias():
+    migration = load_bitable_migration()
+
+    assert migration.canonical_control_field_value("规则配置表", "回复模式", "全部回复") == "回复所有"
+    migration.validate_control_field_values(
+        "规则配置表",
+        "回复模式",
+        ("回复所有", "仅@回复"),
+        [{"record_id": "rec_alias", "fields": {"回复模式": "全部回复"}}],
+    )
+
+
+def test_bitable_migration_identifies_global_and_group_default_rules():
+    migration = load_bitable_migration()
+
+    assert migration.is_default_reply_rule_id("global-default") is True
+    assert migration.is_default_reply_rule_id("group-default-oc_group") is True
+    assert migration.is_default_reply_rule_id("user-default-ou_user") is False
+
+
+def test_bitable_single_select_payload_keeps_field_name_and_exact_options():
+    migration = load_bitable_migration()
+
+    payload = migration.single_select_field_payload("回复模式", ("回复所有", "仅@回复"))
+
+    assert payload["field_name"] == "回复模式"
+    assert payload["type"] == 3
+    assert [item["name"] for item in payload["property"]["options"]] == ["回复所有", "仅@回复"]
+
+
+def test_session_index_fields_use_url_objects_and_master_record_links(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_CHATGPT_PROJECT_URL", "https://chatgpt.com/g/g-p-lark/project")
+    details = {
+        "metadata": {
+            "channel": "feishu",
+            "peer_id": "user:ou_abc",
+            "message_id": "om_1",
+            "chatgpt_conversation_url": "https://chatgpt.com/g/g-p-lark/c/conv-1",
+        },
+        "raw_metadata": {"name": "hao"},
+    }
+
+    fields = bridge.build_feishu_session_index_fields(
+        details,
+        session_key="tenant:user:ou_abc",
+        version=1,
+        message_count=1,
+        mention_count=0,
+        user_record_id="rec_user",
+        group_record_id="",
+    )
+
+    assert fields["ChatGPT 项目首页链接"] == {
+        "text": "https://chatgpt.com/g/g-p-lark/project",
+        "link": "https://chatgpt.com/g/g-p-lark/project",
+    }
+    assert fields["ChatGPT 对话链接"] == {
+        "text": "https://chatgpt.com/g/g-p-lark/c/conv-1",
+        "link": "https://chatgpt.com/g/g-p-lark/c/conv-1",
+    }
+    assert fields["关联用户记录"] == ["rec_user"]
+    assert "关联群记录" not in fields
+
+
+def test_upsert_feishu_user_record_creates_master_record(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_USER_TABLE_ID", "tbl_user")
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record", lambda *args: None)
+    created = []
+    monkeypatch.setattr(
+        bridge,
+        "create_feishu_bitable_record",
+        lambda table_id, fields: created.append((table_id, fields))
+        or {"data": {"record": {"record_id": "rec_user"}}},
+    )
+    details = {
+        "metadata": {"channel": "feishu", "peer_id": "user:ou_abc"},
+        "raw_metadata": {"open_id": "ou_abc", "name": "hao"},
+    }
+
+    assert bridge.upsert_feishu_user_record(details) == "rec_user"
+    assert created[0][0] == "tbl_user"
+    assert created[0][1]["open_id"] == "ou_abc"
+    assert created[0][1]["飞书用户名"] == "hao"
 
 
 def test_bridge_emits_chain_result_on_http_error(monkeypatch, capsys):
@@ -1264,14 +1586,132 @@ def test_parse_file_marker():
     assert files == [{"url": "http://webdock/media/abc", "name": "report.pdf", "mime": "application/pdf"}]
 
 
-def test_bridge_rewrites_file_marker_to_openclaw_media_marker():
+def test_normalize_reply_preserves_file_marker():
     bridge = load_bridge()
 
+    # normalize_reply must keep FILE: intact; build_reply/deliver_feishu_files turns
+    # it into a native Feishu file (OpenClaw's MEDIA: directive can't deliver files,
+    # upstream issue #48891).
     reply = bridge.normalize_reply(
         "见附件\nFILE: http://webdock/media/abc name=report.pdf mime=application/pdf"
     )
 
+    assert "FILE: http://webdock/media/abc" in reply
+
+
+def test_rewrite_file_markers_as_media_fallback():
+    bridge = load_bridge()
+
+    reply = bridge.rewrite_file_markers_as_media(
+        "见附件\nFILE: http://webdock/media/abc name=report.pdf mime=application/pdf"
+    )
+
     assert reply == "见附件\nMEDIA: http://webdock/media/abc"
+
+
+def test_deliver_feishu_files_sends_native_file_and_strips_marker(monkeypatch):
+    bridge = load_bridge()
+    sent = []
+    monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("cli_x", "sec"))
+    monkeypatch.setattr(bridge, "feishu_tenant_access_token", lambda: "tok")
+    monkeypatch.setattr(bridge, "fetch_outbound_file_bytes", lambda url: b"%PDF-1.4 data")
+    monkeypatch.setattr(bridge, "feishu_upload_file", lambda data, name, ftype, token: f"key::{name}::{ftype}")
+    monkeypatch.setattr(bridge, "feishu_send_file_message", lambda details, mid, key, token: sent.append((mid, key)))
+
+    details = {"metadata": {"channel": "feishu", "message_id": "om_1"}}
+    out = bridge.deliver_feishu_files(
+        "已生成\nFILE: http://h/media/abc name=report.pdf mime=application/pdf", details
+    )
+
+    assert out == "已生成"  # FILE marker stripped, text kept; no MEDIA: leak
+    assert sent == [("om_1", "key::report.pdf::pdf")]
+
+
+def test_deliver_feishu_files_caption_when_text_empty(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("cli_x", "sec"))
+    monkeypatch.setattr(bridge, "feishu_tenant_access_token", lambda: "tok")
+    monkeypatch.setattr(bridge, "fetch_outbound_file_bytes", lambda url: b"data")
+    monkeypatch.setattr(bridge, "feishu_upload_file", lambda *a, **k: "key")
+    monkeypatch.setattr(bridge, "feishu_send_file_message", lambda *a, **k: None)
+
+    details = {"metadata": {"channel": "feishu", "message_id": "om_1"}}
+    out = bridge.deliver_feishu_files(
+        "FILE: http://h/media/abc name=scan.pdf mime=application/pdf", details
+    )
+
+    # file sent but no text -> visible caption so OpenClaw doesn't emit no-visible-reply
+    assert out == "📎 scan.pdf"
+
+
+def test_deliver_feishu_files_falls_back_without_credentials(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("", ""))
+
+    details = {"metadata": {"channel": "feishu", "message_id": "om_1"}}
+    out = bridge.deliver_feishu_files(
+        "见附件\nFILE: http://h/media/abc name=report.pdf mime=application/pdf", details
+    )
+
+    assert out == "见附件\n附件下载：http://h/media/abc"
+
+
+def test_parse_media_marker():
+    bridge = load_bridge()
+
+    body, media = bridge.split_media_markers(
+        "图片已生成\nMEDIA: http://webdock/media/image-1"
+    )
+
+    assert body == "图片已生成"
+    assert media == ["http://webdock/media/image-1"]
+
+
+def test_deliver_feishu_media_sends_native_image_and_strips_marker(monkeypatch):
+    bridge = load_bridge()
+    sent = []
+    monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("cli_x", "sec"))
+    monkeypatch.setattr(bridge, "feishu_tenant_access_token", lambda: "tok")
+    monkeypatch.setattr(bridge, "fetch_outbound_file_bytes", lambda url: b"PNGDATA")
+    monkeypatch.setattr(bridge, "feishu_upload_image", lambda data, token: "img_key")
+    monkeypatch.setattr(
+        bridge,
+        "feishu_send_image_message",
+        lambda details, mid, key, token: sent.append((mid, key)),
+    )
+
+    details = {"metadata": {"channel": "feishu", "message_id": "om_1"}}
+    out = bridge.deliver_feishu_media(
+        "图片已生成\nMEDIA: http://h/media/image-1", details
+    )
+
+    assert out == "图片已生成"
+    assert sent == [("om_1", "img_key")]
+
+
+def test_deliver_feishu_media_caption_when_text_empty(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("cli_x", "sec"))
+    monkeypatch.setattr(bridge, "feishu_tenant_access_token", lambda: "tok")
+    monkeypatch.setattr(bridge, "fetch_outbound_file_bytes", lambda url: b"PNGDATA")
+    monkeypatch.setattr(bridge, "feishu_upload_image", lambda data, token: "img_key")
+    monkeypatch.setattr(bridge, "feishu_send_image_message", lambda *args: None)
+
+    details = {"metadata": {"channel": "feishu", "message_id": "om_1"}}
+
+    assert bridge.deliver_feishu_media("MEDIA: http://h/media/image-1", details) == "🖼️ 图片已发送"
+
+
+def test_deliver_feishu_media_falls_back_to_visible_link(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("", ""))
+
+    details = {"metadata": {"channel": "feishu", "message_id": "om_1"}}
+    out = bridge.deliver_feishu_media(
+        "图片已生成\nMEDIA: http://h/media/image-1", details
+    )
+
+    assert out == "图片已生成\n图片链接：http://h/media/image-1"
 
 
 def test_media_proxy_headers_keep_filename():
@@ -1327,12 +1767,18 @@ def test_stream_sse_emits_keepalives_then_final_reply():
 
     payloads, saw_done = _parse_sse(events)
     assert saw_done
-    # keepalive chunks: empty content, not finished
+    # keepalive chunks: NON-empty content (zero-width space) so OpenClaw 2026.6.5's
+    # stall detector counts them as stream progress; an empty "" delta no longer
+    # resets the idle timer and would abort long replies as stalled_agent_run.
     heartbeats = [
         p for p in payloads
-        if p["choices"][0]["delta"] == {"content": ""} and p["choices"][0]["finish_reason"] is None
+        if p["choices"][0]["delta"] == {"content": bridge._KEEPALIVE_DELTA_CONTENT}
+        and p["choices"][0]["finish_reason"] is None
     ]
     assert len(heartbeats) >= 1
+    assert bridge._KEEPALIVE_DELTA_CONTENT != ""
+    # invisible yet survives trimming (regular whitespace would be stripped to "")
+    assert bridge._KEEPALIVE_DELTA_CONTENT.strip() == bridge._KEEPALIVE_DELTA_CONTENT
     # the real reply is delivered after the wait
     contents = [p["choices"][0]["delta"].get("content") for p in payloads]
     assert "最终回复" in [c for c in contents if c]
@@ -1380,9 +1826,16 @@ def test_stream_sse_uses_fallback_when_reply_fn_raises():
 def test_webdock_timeout_default_covers_long_chatgpt(monkeypatch):
     bridge = load_bridge()
     monkeypatch.delenv("WEB_DOCK_TIMEOUT_SECONDS", raising=False)
-    # must outlast WebDock's prod chat_timeout (~300s) so the bridge waits for
-    # the real reply instead of timing out first
-    assert bridge.webdock_timeout() >= 300
+    # Must outlast WebDock's 20-minute hard cap so the bridge receives the real
+    # reply or WebDock's own timeout response instead of terminating first.
+    assert bridge.webdock_timeout() == 1260
+
+
+def test_webdock_timeout_env_cannot_undercut_hard_cap(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_TIMEOUT_SECONDS", "320")
+
+    assert bridge.webdock_timeout() == 1260
 
 
 def test_keepalive_interval_well_under_openclaw_idle(monkeypatch):
