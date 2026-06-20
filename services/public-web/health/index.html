@@ -23,8 +23,15 @@
         <div class="row" style="justify-content:space-between"><h2 style="margin:0">功能区</h2><button id="addWechatPanelBtn" class="btn primary" type="button">添加新微信</button></div>
       </section>
       <section class="band"><h2>需要关注</h2><div id="attention" class="list muted">加载中...</div></section>
-      <section class="band"><h2>T+ 同步请求（畅捷通回调触发）</h2><div id="tplus"></div></section>
-      <section class="band"><h2>T+ 同步执行记录（全部 · 含每小时定时）</h2><div id="tplusRuns"></div><div id="tplusRunsPager" class="row" style="gap:10px;align-items:center;margin-top:8px"></div></section>
+      <section class="band" id="tplusSyncModule">
+        <h2>T+ 同步</h2>
+        <p class="muted">合并展示同步请求与实际执行记录；来源标识：手动同步、定时同步、订阅变更同步。</p>
+        <div class="row" style="gap:8px;margin-bottom:10px"><span class="chip degraded">手动同步</span><span class="chip ok">定时同步</span><span class="chip warning">订阅变更同步</span></div>
+        <h3 style="margin:0 0 8px">同步请求</h3>
+        <div id="tplus"></div>
+        <h3 style="margin:16px 0 8px">执行记录（全部）</h3>
+        <div id="tplusRuns"></div><div id="tplusRunsPager" class="row" style="gap:10px;align-items:center;margin-top:8px"></div>
+      </section>
       <section class="band"><h2>差异校验</h2><div id="reconciliation"></div></section>
       <section class="band"><h2>外部主机</h2><div id="hosts"></div></section>
       <section class="band">
@@ -100,6 +107,12 @@
       if(!items||!items.length){attention.innerHTML='<div class="muted">当前没有需要人工关注的项目。</div>';return}
       attention.innerHTML=items.map((item)=>`<div class="attention ${item.level||'warning'}"><strong>${item.code}</strong><br/><span>${item.message||''}</span></div>`).join('');
     }
+    function syncOriginLabel(item){
+      const mode=String((item&&item.mode)||'').toLowerCase();
+      if(mode==='scheduled_full')return '<span class="chip ok">定时同步</span>';
+      if((item&&item.reason_event_id)||mode==='incremental')return '<span class="chip warning">订阅变更同步</span>';
+      return '<span class="chip degraded">手动同步</span>';
+    }
     let tplusReqOffset=0; const TPLUS_REQ_LIMIT=20; let tplusReqItems=[];
     async function loadTplusRequests(){
       try{
@@ -109,10 +122,10 @@
     }
     function renderTplus(d){
       tplusReqItems=d.items||[];
-      const rows=tplusReqItems.map((item,index)=>`<tr><td>${esc(item.id)}</td><td>${esc(item.module)}</td><td>${esc(item.mode)}</td><td>${esc(item.status)}</td><td>${esc(item.sync_run_id||'')}</td><td>${fmtTime(item.requested_at)}</td><td>${fmtTime(item.finished_at)}</td><td>${esc(item.reason_event_id||'')}</td><td><button class="btn primary" type="button" onclick="openTplusRequestDetail(${index})">详情</button></td></tr>`).join('');
+      const rows=tplusReqItems.map((item,index)=>`<tr><td>${esc(item.id)}</td><td>${syncOriginLabel(item)}</td><td>${esc(item.module)}</td><td>${esc(item.mode)}</td><td>${esc(item.status)}</td><td>${esc(item.sync_run_id||'')}</td><td>${fmtTime(item.requested_at)}</td><td>${fmtTime(item.finished_at)}</td><td>${esc(item.reason_event_id||'')}</td><td><button class="btn primary" type="button" onclick="openTplusRequestDetail(${index})">详情</button></td></tr>`).join('');
       const total=d.total||0,limit=d.limit||TPLUS_REQ_LIMIT,offset=d.offset||0;
       const page=Math.floor(offset/limit)+1,pages=Math.max(1,Math.ceil(total/limit));
-      tplus.innerHTML=`<p class="muted">畅捷通改 BOM 的回调事件自动产生的同步请求；「回调事件ID」即触发它的畅捷通事件，差异/冲突见下方「差异校验」。 · pending ${d.pending||0} · running ${d.running||0} · failed ${d.failed||0}</p><table><thead><tr><th>ID</th><th>模块</th><th>模式</th><th>状态</th><th>执行ID</th><th>请求时间</th><th>完成时间</th><th>回调事件ID</th><th>详情</th></tr></thead><tbody>${rows||'<tr><td colspan="9" class="muted">暂无请求</td></tr>'}</tbody></table><div class="row" style="gap:10px;align-items:center;margin-top:8px"><button class="btn" type="button" id="tplusReqPrev" ${offset<=0?'disabled':''}>上一页</button><span class="muted">第 ${page}/${pages} 页 · 共 ${total} 条</span><button class="btn" type="button" id="tplusReqNext" ${offset+limit>=total?'disabled':''}>下一页</button></div>`;
+      tplus.innerHTML=`<p class="muted">畅捷通 BOM 订阅消息变化会产生同步请求；「回调事件ID」即触发它的畅捷通事件，差异/冲突见下方「差异校验」。 · pending ${d.pending||0} · running ${d.running||0} · failed ${d.failed||0}</p><table><thead><tr><th>ID</th><th>来源</th><th>模块</th><th>模式</th><th>状态</th><th>执行ID</th><th>请求时间</th><th>完成时间</th><th>回调事件ID</th><th>详情</th></tr></thead><tbody>${rows||'<tr><td colspan="10" class="muted">暂无请求</td></tr>'}</tbody></table><div class="row" style="gap:10px;align-items:center;margin-top:8px"><button class="btn" type="button" id="tplusReqPrev" ${offset<=0?'disabled':''}>上一页</button><span class="muted">第 ${page}/${pages} 页 · 共 ${total} 条</span><button class="btn" type="button" id="tplusReqNext" ${offset+limit>=total?'disabled':''}>下一页</button></div>`;
       const prev=$('tplusReqPrev'),next=$('tplusReqNext');
       if(prev)prev.onclick=()=>{tplusReqOffset=Math.max(0,tplusReqOffset-TPLUS_REQ_LIMIT);loadTplusRequests();};
       if(next)next.onclick=()=>{tplusReqOffset=tplusReqOffset+TPLUS_REQ_LIMIT;loadTplusRequests();};
@@ -125,8 +138,8 @@
       }catch(e){$('tplusRuns').innerHTML=`<span class="chip failed">同步记录加载失败：${esc(e.message)}</span>`;$('tplusRunsPager').innerHTML='';}
     }
     function renderTplusRuns(d){
-      const rows=(d.items||[]).map((it)=>`<tr><td>${esc(it.id)}</td><td>${esc(it.module)}</td><td>${esc(it.mode)}</td><td>${esc(it.status)}</td><td>${fmtTime(it.finished_at)}</td><td>${esc(it.exit_code)}</td><td>${esc(it.row_count)}</td></tr>`).join('');
-      $('tplusRuns').innerHTML=`<p class="muted">每次实际执行(含每小时定时 scheduled_full 与手动 bom)。配方页「来源」行的「同步 #ID」对应本表 ID。</p><table><thead><tr><th>ID</th><th>模块</th><th>模式</th><th>状态</th><th>完成时间</th><th>退出码</th><th>行数</th></tr></thead><tbody>${rows||'<tr><td colspan="7" class="muted">暂无记录</td></tr>'}</tbody></table>`;
+      const rows=(d.items||[]).map((it)=>`<tr><td>${esc(it.id)}</td><td>${syncOriginLabel(it)}</td><td>${esc(it.module)}</td><td>${esc(it.mode)}</td><td>${esc(it.status)}</td><td>${fmtTime(it.finished_at)}</td><td>${esc(it.exit_code)}</td><td>${esc(it.row_count)}</td><td>${esc(it.request_id||'')}</td></tr>`).join('');
+      $('tplusRuns').innerHTML=`<p class="muted">每次实际执行；scheduled_full 标为定时同步，关联回调事件的记录标为订阅变更同步，其余 BOM 全量记录标为手动同步。配方页「来源」行的「同步 #ID」对应本表 ID。</p><table><thead><tr><th>ID</th><th>来源</th><th>模块</th><th>模式</th><th>状态</th><th>完成时间</th><th>退出码</th><th>行数</th><th>请求ID</th></tr></thead><tbody>${rows||'<tr><td colspan="9" class="muted">暂无记录</td></tr>'}</tbody></table>`;
       const total=d.total||0,limit=d.limit||TPLUS_RUNS_LIMIT,offset=d.offset||0;
       const page=Math.floor(offset/limit)+1,pages=Math.max(1,Math.ceil(total/limit));
       $('tplusRunsPager').innerHTML=`<button class="btn" type="button" id="tplusRunsPrev" ${offset<=0?'disabled':''}>上一页</button><span class="muted">第 ${page}/${pages} 页 · 共 ${total} 条</span><button class="btn" type="button" id="tplusRunsNext" ${offset+limit>=total?'disabled':''}>下一页</button>`;
@@ -149,7 +162,7 @@
     function openTplusRequestDetail(index){
       const item=tplusReqItems[index];
       if(!item)return;
-      const summary=`<p class="muted">请求 ${esc(item.id)} · run ${esc(item.sync_run_id||'-')} · 行数 ${esc(item.row_count??'-')} · exit ${esc(item.exit_code??'-')}</p><table><tbody><tr><th>模块</th><td>${esc(item.module)}</td><th>模式</th><td>${esc(item.mode)}</td></tr><tr><th>状态</th><td>${esc(item.status)}</td><th>事件</th><td>${esc(item.reason_event_id||'-')}</td></tr><tr><th>请求时间</th><td>${fmtTime(item.requested_at)}</td><th>完成时间</th><td>${fmtTime(item.finished_at)}</td></tr></tbody></table>`;
+      const summary=`<p class="muted">请求 ${esc(item.id)} · run ${esc(item.sync_run_id||'-')} · 行数 ${esc(item.row_count??'-')} · exit ${esc(item.exit_code??'-')}</p><table><tbody><tr><th>来源</th><td>${syncOriginLabel(item)}</td><th>模块</th><td>${esc(item.module)}</td></tr><tr><th>模式</th><td>${esc(item.mode)}</td><th>状态</th><td>${esc(item.status)}</td></tr><tr><th>事件</th><td>${esc(item.reason_event_id||'-')}</td><th>请求时间</th><td>${fmtTime(item.requested_at)}</td></tr><tr><th>完成时间</th><td>${fmtTime(item.finished_at)}</td><th></th><td></td></tr></tbody></table>`;
       openModal(`T+ 同步详情 #${item.id}`,`${summary}${jsonDetailBlock('请求目标',item.target_json)}${jsonDetailBlock('执行结果',item.detail_json)}${jsonDetailBlock('请求错误',item.request_error_json)}${jsonDetailBlock('执行错误',item.error_json)}`);
     }
     function renderDiffItemRows(title,items){

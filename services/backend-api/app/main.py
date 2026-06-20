@@ -913,10 +913,18 @@ def ops_tplus_runs(
                 total = int(cur.fetchone()[0])
                 cur.execute(
                     """
-                    SELECT id, module, mode, status, finished_at, exit_code, row_count
-                    FROM integration_sync_runs
-                    WHERE provider = 'chanjet'
-                    ORDER BY finished_at DESC NULLS LAST, id DESC
+                    SELECT sr.id, sr.module, sr.mode, sr.status, sr.finished_at, sr.exit_code, sr.row_count,
+                           req.id, req.reason_event_id
+                    FROM integration_sync_runs sr
+                    LEFT JOIN LATERAL (
+                        SELECT id, reason_event_id
+                        FROM integration_sync_requests
+                        WHERE provider = 'chanjet' AND sync_run_id = sr.id
+                        ORDER BY requested_at DESC NULLS LAST, id DESC
+                        LIMIT 1
+                    ) req ON TRUE
+                    WHERE sr.provider = 'chanjet'
+                    ORDER BY sr.finished_at DESC NULLS LAST, sr.id DESC
                     LIMIT %s OFFSET %s
                     """,
                     (limit, offset),
@@ -930,6 +938,8 @@ def ops_tplus_runs(
                         "finished_at": str(row[4]) if row[4] else None,
                         "exit_code": row[5],
                         "row_count": row[6],
+                        "request_id": row[7],
+                        "reason_event_id": row[8],
                     }
                     for row in cur.fetchall()
                 ]

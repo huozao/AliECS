@@ -18,6 +18,16 @@ class HealthFrontendTests(unittest.TestCase):
         self.assertIn("请求目标", self.html)
         self.assertIn("执行结果", self.html)
 
+    def test_tplus_requests_and_runs_are_one_labeled_module(self) -> None:
+        self.assertIn('<section class="band" id="tplusSyncModule">', self.html)
+        self.assertIn("<h2>T+ 同步</h2>", self.html)
+        self.assertNotIn("T+ 同步请求（畅捷通回调触发）", self.html)
+        self.assertNotIn("T+ 同步执行记录（全部", self.html)
+        self.assertIn("function syncOriginLabel(", self.html)
+        self.assertIn("手动同步", self.html)
+        self.assertIn("定时同步", self.html)
+        self.assertIn("订阅变更同步", self.html)
+
 
 if __name__ == "__main__":
     unittest.main()
