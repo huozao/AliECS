@@ -1327,12 +1327,18 @@ def test_stream_sse_emits_keepalives_then_final_reply():
 
     payloads, saw_done = _parse_sse(events)
     assert saw_done
-    # keepalive chunks: empty content, not finished
+    # keepalive chunks: NON-empty content (zero-width space) so OpenClaw 2026.6.5's
+    # stall detector counts them as stream progress; an empty "" delta no longer
+    # resets the idle timer and would abort long replies as stalled_agent_run.
     heartbeats = [
         p for p in payloads
-        if p["choices"][0]["delta"] == {"content": ""} and p["choices"][0]["finish_reason"] is None
+        if p["choices"][0]["delta"] == {"content": bridge._KEEPALIVE_DELTA_CONTENT}
+        and p["choices"][0]["finish_reason"] is None
     ]
     assert len(heartbeats) >= 1
+    assert bridge._KEEPALIVE_DELTA_CONTENT != ""
+    # invisible yet survives trimming (regular whitespace would be stripped to "")
+    assert bridge._KEEPALIVE_DELTA_CONTENT.strip() == bridge._KEEPALIVE_DELTA_CONTENT
     # the real reply is delivered after the wait
     contents = [p["choices"][0]["delta"].get("content") for p in payloads]
     assert "最终回复" in [c for c in contents if c]

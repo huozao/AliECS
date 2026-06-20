@@ -1806,6 +1806,14 @@ def _stream_chunk(model: str, *, delta: dict[str, Any], finish_reason: str | Non
     return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8")
 
 
+# OpenClaw 2026.6.5's stall detector counts a stream chunk as progress only when
+# its delta has NON-EMPTY content; an empty-string delta no longer resets the idle
+# timer, so long WebDock replies (>~130s) were aborted as ``stalled_agent_run`` and
+# shown to the user as the "no-visible-reply" fallback. A zero-width space is
+# non-empty (survives str.strip()/JS trim) yet invisible in the rendered reply.
+_KEEPALIVE_DELTA_CONTENT = "\u200b"
+
+
 def stream_sse(
     write: Any,
     body: dict[str, Any],
@@ -1818,9 +1826,11 @@ def stream_sse(
 
     build_reply blocks for as long as WebDock/ChatGPT take to answer (can be
     minutes for long reasoning + image work). During that wait we periodically
-    push an empty-delta keepalive chunk so OpenClaw's idle timer keeps resetting
-    instead of cutting us off at ~120s. ``write(bytes) -> bool`` must return
-    False once the client has disconnected, which stops the stream early."""
+    push a keepalive chunk (zero-width-space delta, see _KEEPALIVE_DELTA_CONTENT)
+    so OpenClaw's idle/stall timer keeps resetting instead of aborting the run as
+    ``stalled_agent_run`` and dropping the real reply. ``write(bytes) -> bool``
+    must return False once the client has disconnected, which stops the stream
+    early."""
     if reply_fn is None:
         reply_fn = build_reply
     if keepalive is None:
@@ -1842,7 +1852,7 @@ def stream_sse(
         worker.join(timeout=keepalive)
         if not worker.is_alive():
             break
-        if not write(_stream_chunk(model, delta={"content": ""}, finish_reason=None)):
+        if not write(_stream_chunk(model, delta={"content": _KEEPALIVE_DELTA_CONTENT}, finish_reason=None)):
             return  # OpenClaw disconnected; drop the (still-running) worker result
 
     reply = result.get("reply")
