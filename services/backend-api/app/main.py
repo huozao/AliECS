@@ -1414,13 +1414,13 @@ def _ops_http_targets() -> list[dict[str, Any]]:
         targets = [
             {
                 "name": "AliECS Backend API",
-                "url": os.getenv("OPS_HEALTH_BACKEND_URL", "https://hydwang.xyz/api/healthz"),
+                "url": os.getenv("OPS_HEALTH_BACKEND_URL", "").strip(),
                 "description": "公网反代后的 AliECS 后端健康检查。",
                 "timeout": 3,
             },
             {
                 "name": "AliECS Public Web",
-                "url": os.getenv("OPS_HEALTH_PUBLIC_WEB_URL", "https://hydwang.xyz/"),
+                "url": os.getenv("OPS_HEALTH_PUBLIC_WEB_URL", "").strip(),
                 "description": "公网首页入口。",
                 "timeout": 3,
             },
@@ -1441,7 +1441,10 @@ def _ops_http_targets() -> list[dict[str, Any]]:
                     "timeout": 3,
                 }
             )
-        return targets
+        # Drop targets without an explicit URL (e.g. backend/public-web before
+        # OPS_HEALTH_*_URL is configured) so the health page doesn't render
+        # blank "url is empty" rows.
+        return [t for t in targets if str(t.get("url") or "").strip()]
     try:
         targets = json.loads(raw)
     except Exception as exc:
@@ -2721,7 +2724,7 @@ def _anniversary_payload(row: tuple[Any, ...], today: date | None = None) -> dic
 
 
 def _share_base_url() -> str:
-    return os.getenv("SHARE_BASE_URL", os.getenv("APP_BASE_URL", "https://www.hydwang.xyz")).rstrip("/")
+    return os.getenv("SHARE_BASE_URL", os.getenv("APP_BASE_URL", "")).rstrip("/")
 
 
 _share_hits: dict[str, list[float]] = {}

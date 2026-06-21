@@ -152,7 +152,9 @@ def run_migration(
 
 
 def _client_from_env() -> AdventureLogClient:
-    base_url = os.getenv("ADVENTURELOG_BASE_URL", "https://adventure-media.hydwang.xyz").strip()
+    base_url = os.getenv("ADVENTURELOG_BASE_URL", "").strip()
+    if not base_url:
+        raise RuntimeError("ADVENTURELOG_BASE_URL is required")
     token = os.getenv("ADVENTURELOG_API_TOKEN", "").strip()
     if not token:
         raise RuntimeError("ADVENTURELOG_API_TOKEN is required")

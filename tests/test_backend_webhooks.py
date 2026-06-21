@@ -120,7 +120,7 @@ class BackendWebhookGatewayTests(unittest.TestCase):
             "/v1/webhooks/chanjet/oauth",
             code="code-for-test",
             state="state-for-test",
-            redirect_uri="https://hydwang.xyz/api/v1/webhooks/chanjet/oauth",
+            redirect_uri="https://example.com/api/v1/webhooks/chanjet/oauth",
         )
 
         self.assertEqual(True, result["code_received"])
