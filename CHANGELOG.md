@@ -1,5 +1,12 @@
 # 版本记录
 
+## v2.1.12：openclaw-bridge 群策略缓存可推送失效 + bitable 写记录异步化
+
+- 新增 `POST /admin/invalidate-feishu-group-policy` 端点（`X-Admin-Secret` 鉴权，未配 secret 时端点关闭）：bitable 群配置（「回复模式」/「是否启用机器人」）修改后由 bitable 自动化触发，按 `chat_id` 立即清缓存，无需等 TTL；空 `chat_id` 清整表（运维兜底）。
+- `FEISHU_GROUP_POLICY_CACHE_SECONDS` 默认 15s → 600s，新增 `OPENCLAW_BRIDGE_FEISHU_POLICY_CACHE_SECONDS` env 覆盖；配合 invalidate 端点可放心拉到 3600+，显著减少 bitable HTTP 扫描频次。
+- `append_feishu_session_console_records` 改 fire-and-forget 异步：4 处调用点（已回复/失败/仅记录）由 daemon Thread 接管 5–8 次 bitable 写，节省每请求 2–3s 阻塞；失败仍走原 `print` 路径。details 深拷贝防主线程后续 mutate 串入 worker。
+- 新增 5 个 pytest（端点鉴权关/拒错 secret/清单 chat_id/清全表/异步发射+deepcopy/TTL env 读取）。
+
 ## v2.1.11：Couple Memory 重建为 App 内闭环
 
 - Couple Dashboard 的地图足迹与相册入口从 AdventureLog 外链收回 App 内，`/map/` 恢复 Leaflet + `/v1/map/memories` 打点，并支持年份/标签筛选。

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import copy
+import hmac
 import json
 import base64
 import mimetypes
@@ -115,7 +117,13 @@ _feishu_tenant_token: str = ""
 _feishu_tenant_token_expires_at = 0.0
 _feishu_group_policy_cache: dict[str, tuple[float, bool, str]] = {}
 _feishu_group_policy_cache_lock = Lock()
-FEISHU_GROUP_POLICY_CACHE_SECONDS = 15.0
+# Cache TTL for the bitable-driven group policy lookup. Default 600s (10min) —
+# safe to raise (e.g. 3600+) once the bitable automation -> /admin/invalidate-
+# feishu-group-policy webhook is wired up, since manual edits then push-invalidate
+# the cache instead of waiting it out. Env override lets ops tune without rebuild.
+FEISHU_GROUP_POLICY_CACHE_SECONDS = float(
+    os.getenv("OPENCLAW_BRIDGE_FEISHU_POLICY_CACHE_SECONDS", "600")
+)
 
 
 class WebDockResult:
@@ -1296,6 +1304,28 @@ def append_feishu_session_console_records(details: dict[str, Any], reply: str, s
         )
 
 
+def append_feishu_session_console_records_async(
+    details: dict[str, Any], reply: str, status: str
+) -> None:
+    """Fire-and-forget wrapper for bitable session console writes.
+
+    The sync version makes 5-8 bitable HTTP calls per request (upsert user/group/
+    session + create message/task records + chase default-record links), adding
+    2-3s to every chain_result, even on the short-circuit "仅记录" path that does
+    not call WebDock at all. Detaching to a daemon thread frees the request
+    handler immediately. Errors still surface via the sync function's print path,
+    which is fine because bitable is a secondary audit log (the primary archive
+    lives on the laptop in webdock /var/log/webdock/archive). details is
+    deep-copied so the caller can mutate the original after firing.
+    """
+    Thread(
+        target=append_feishu_session_console_records,
+        args=(copy.deepcopy(details), reply, status),
+        daemon=True,
+        name="bitable-writer",
+    ).start()
+
+
 def build_feishu_message_log_fields(details: dict[str, Any], *, reply: str, status: str) -> dict[str, Any]:
     now_ms = int(time.time() * 1000)
     metadata = details.get("metadata") or {}
@@ -2237,7 +2267,7 @@ def build_reply(body: dict[str, Any]) -> str:
     try:
         if details.get("metadata", {}).get("channel") == "feishu" and not feishu_should_send_chatgpt(details):
             trace_chain_result(details, started, reply="")
-            append_feishu_session_console_records(details, "", "仅记录")
+            append_feishu_session_console_records_async(details, "", "仅记录")
             return NO_REPLY
         batched_body = maybe_batch_request(body)
         if batched_body == NO_REPLY:
@@ -2250,7 +2280,7 @@ def build_reply(body: dict[str, Any]) -> str:
         reply = deliver_feishu_files(reply, write_details)
         reply = deliver_feishu_media(reply, write_details)
         trace_chain_result(details, started, reply=reply)
-        append_feishu_session_console_records(write_details, reply, "已回复")
+        append_feishu_session_console_records_async(write_details, reply, "已回复")
         return reply
     except urllib.error.HTTPError as exc:
         if exc.code == 429:
@@ -2269,7 +2299,7 @@ def build_reply(body: dict[str, Any]) -> str:
                 "WebDock API",
             )
         trace_chain_result(details, started, http_code=exc.code)
-        append_feishu_session_console_records(details, reply, "失败")
+        append_feishu_session_console_records_async(details, reply, "失败")
         return reply
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
         print(f"webdock unavailable: {exc}")
@@ -2289,7 +2319,7 @@ def build_reply(body: dict[str, Any]) -> str:
                 "ECS tunnel or WebDock API",
             )
         trace_chain_result(details, started, error=exc)
-        append_feishu_session_console_records(details, reply, "失败")
+        append_feishu_session_console_records_async(details, reply, "失败")
         return reply
 
 
@@ -2408,6 +2438,47 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
+    def _handle_invalidate_feishu_group_policy(self) -> None:
+        """Drop the cached bitable group policy so the NEXT group message refetches.
+
+        Wired to a bitable automation: when an ops user edits the "回复模式" /
+        "是否启用机器人" field on the 群配置 table, the automation POSTs here with
+        the changed chat_id, and we evict that cache entry. Lets the TTL stay
+        generous (cache-heavy = fewer bitable HTTP scans) without paying the
+        "manual edits take a TTL window to apply" cost.
+
+        Auth: shared secret in X-Admin-Secret header, compared with
+        OPENCLAW_BRIDGE_ADMIN_SECRET env. No env -> endpoint disabled (403). An
+        empty chat_id clears the whole cache (operator escape hatch).
+        """
+        expected = os.getenv("OPENCLAW_BRIDGE_ADMIN_SECRET") or ""
+        if not expected:
+            return self._json(403, {"error": "admin endpoint disabled"})
+        provided = self.headers.get("X-Admin-Secret") or ""
+        if not hmac.compare_digest(provided, expected):
+            return self._json(403, {"error": "forbidden"})
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        raw = self.rfile.read(length).decode("utf-8", errors="replace") if length else ""
+        try:
+            body = json.loads(raw) if raw else {}
+        except Exception:
+            body = {}
+        chat_id_raw = body.get("chat_id") if isinstance(body, dict) else None
+        chat_id = chat_id_raw.strip() if isinstance(chat_id_raw, str) else ""
+        with _feishu_group_policy_cache_lock:
+            if chat_id:
+                _feishu_group_policy_cache.pop(chat_id, None)
+                cleared: list[str] = [chat_id]
+            else:
+                cleared = sorted(_feishu_group_policy_cache.keys())
+                _feishu_group_policy_cache.clear()
+        print(
+            "feishu_group_policy_invalidated "
+            + json.dumps({"cleared": cleared}, ensure_ascii=False, sort_keys=True),
+            flush=True,
+        )
+        return self._json(200, {"ok": True, "cleared": cleared})
+
     def do_GET(self) -> None:
         if self.path.startswith("/media/"):
             return self._proxy_media()
@@ -2426,6 +2497,8 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(404, {"error": "not found"})
 
     def do_POST(self) -> None:
+        if self.path.rstrip("/") == "/admin/invalidate-feishu-group-policy":
+            return self._handle_invalidate_feishu_group_policy()
         if self.path.rstrip("/") != "/v1/chat/completions":
             return self._json(404, {"error": "not found"})
 
