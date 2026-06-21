@@ -63,11 +63,28 @@ class BackendOpsStatusTests(unittest.TestCase):
         self.assertIn("database_unhealthy", [item["code"] for item in result["attention_items"]])
 
     def test_ops_status_uses_default_external_hosts_when_env_is_empty(self) -> None:
+        # WebDock API is always present (defaults to the in-host SSH tunnel),
+        # but the public-facing Backend/Public-Web rows only appear once the
+        # tenant configures OPS_HEALTH_BACKEND_URL / OPS_HEALTH_PUBLIC_WEB_URL.
         result = self._call_get("/v1/ops/status")
 
         names = {item["name"] for item in result["hosts"]}
-        self.assertIn("AliECS Backend API", names)
         self.assertIn("WebDock API", names)
+        self.assertNotIn("AliECS Backend API", names)
+        self.assertNotIn("AliECS Public Web", names)
+
+    def test_ops_status_shows_backend_row_when_env_configured(self) -> None:
+        os.environ["OPS_HEALTH_BACKEND_URL"] = "https://example.com/api/healthz"
+        os.environ["OPS_HEALTH_PUBLIC_WEB_URL"] = "https://example.com/"
+        try:
+            result = self._call_get("/v1/ops/status")
+        finally:
+            os.environ.pop("OPS_HEALTH_BACKEND_URL", None)
+            os.environ.pop("OPS_HEALTH_PUBLIC_WEB_URL", None)
+
+        names = {item["name"] for item in result["hosts"]}
+        self.assertIn("AliECS Backend API", names)
+        self.assertIn("AliECS Public Web", names)
 
     def test_default_webdock_host_uses_ecs_ssh_tunnel_not_tailscale(self) -> None:
         from app.main import _ops_http_targets
