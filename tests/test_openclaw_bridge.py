@@ -1927,3 +1927,123 @@ def test_bridge_dedups_single_inbound_image_to_one_part(monkeypatch, tmp_path):
     }
     images = bridge.get_last_user_images(body["messages"])
     assert len(images) == 1
+
+
+# --- /admin/invalidate-feishu-group-policy + async bitable writer ---
+
+
+def _make_invalidate_handler(bridge, *, headers, body=""):
+    """Handler instance wired with mock headers / rfile / _json captor.
+
+    Bypasses BaseHTTPRequestHandler.__init__ (it expects a real socket); the
+    invalidate path only touches self.headers, self.rfile, and self._json.
+    """
+    handler = bridge.Handler.__new__(bridge.Handler)
+    handler.headers = headers
+    handler.rfile = io.BytesIO(body.encode("utf-8") if isinstance(body, str) else body)
+    captured: dict = {}
+
+    def fake_json(status, obj):
+        captured["status"] = status
+        captured["obj"] = obj
+
+    handler._json = fake_json
+    return handler, captured
+
+
+def test_invalidate_endpoint_disabled_when_secret_env_unset(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.delenv("OPENCLAW_BRIDGE_ADMIN_SECRET", raising=False)
+    handler, captured = _make_invalidate_handler(
+        bridge, headers={"X-Admin-Secret": "anything", "Content-Length": "0"}
+    )
+    handler._handle_invalidate_feishu_group_policy()
+    assert captured["status"] == 403
+    assert captured["obj"]["error"] == "admin endpoint disabled"
+
+
+def test_invalidate_endpoint_rejects_wrong_secret(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("OPENCLAW_BRIDGE_ADMIN_SECRET", "correct-secret")
+    handler, captured = _make_invalidate_handler(
+        bridge, headers={"X-Admin-Secret": "wrong", "Content-Length": "0"}
+    )
+    handler._handle_invalidate_feishu_group_policy()
+    assert captured["status"] == 403
+    assert captured["obj"]["error"] == "forbidden"
+
+
+def test_invalidate_endpoint_clears_named_chat_id(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("OPENCLAW_BRIDGE_ADMIN_SECRET", "abc")
+    bridge._feishu_group_policy_cache.clear()
+    bridge._feishu_group_policy_cache["oc_keep"] = (1.0, True, "回复所有")
+    bridge._feishu_group_policy_cache["oc_drop"] = (1.0, True, "仅@回复")
+    body = json.dumps({"chat_id": "oc_drop"})
+    handler, captured = _make_invalidate_handler(
+        bridge,
+        headers={"X-Admin-Secret": "abc", "Content-Length": str(len(body))},
+        body=body,
+    )
+
+    handler._handle_invalidate_feishu_group_policy()
+
+    assert captured["status"] == 200
+    assert captured["obj"] == {"ok": True, "cleared": ["oc_drop"]}
+    assert "oc_keep" in bridge._feishu_group_policy_cache
+    assert "oc_drop" not in bridge._feishu_group_policy_cache
+
+
+def test_invalidate_endpoint_clears_all_when_chat_id_missing(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("OPENCLAW_BRIDGE_ADMIN_SECRET", "abc")
+    bridge._feishu_group_policy_cache.clear()
+    bridge._feishu_group_policy_cache["oc_a"] = (1.0, True, "回复所有")
+    bridge._feishu_group_policy_cache["oc_b"] = (1.0, False, "回复所有")
+    handler, captured = _make_invalidate_handler(
+        bridge,
+        headers={"X-Admin-Secret": "abc", "Content-Length": "2"},
+        body="{}",
+    )
+
+    handler._handle_invalidate_feishu_group_policy()
+
+    assert captured["status"] == 200
+    assert sorted(captured["obj"]["cleared"]) == ["oc_a", "oc_b"]
+    assert bridge._feishu_group_policy_cache == {}
+
+
+def test_append_feishu_session_console_records_async_fires_in_background(monkeypatch):
+    bridge = load_bridge()
+    called = threading.Event()
+    captured: dict = {}
+
+    def fake_sync(details, reply, status):
+        captured["details"] = details
+        captured["reply"] = reply
+        captured["status"] = status
+        called.set()
+
+    monkeypatch.setattr(bridge, "append_feishu_session_console_records", fake_sync)
+
+    details_input = {"metadata": {"channel": "feishu", "peer_id": "group:oc_x"}}
+    bridge.append_feishu_session_console_records_async(details_input, "hello", "已回复")
+
+    assert called.wait(timeout=2.0), "background bitable writer never fired"
+    assert captured["reply"] == "hello"
+    assert captured["status"] == "已回复"
+    # The wrapper deep-copies details so the caller can mutate the original
+    # post-fire without poisoning the in-flight writer thread.
+    details_input["metadata"]["channel"] = "wechat"
+    assert captured["details"]["metadata"]["channel"] == "feishu"
+
+
+def test_feishu_group_policy_cache_ttl_reads_env_at_import(monkeypatch):
+    # Module-import-time env read: ops can raise the TTL without code change.
+    monkeypatch.delenv("OPENCLAW_BRIDGE_FEISHU_POLICY_CACHE_SECONDS", raising=False)
+    bridge = load_bridge()
+    assert bridge.FEISHU_GROUP_POLICY_CACHE_SECONDS == 600.0
+
+    monkeypatch.setenv("OPENCLAW_BRIDGE_FEISHU_POLICY_CACHE_SECONDS", "1800")
+    bridge2 = load_bridge()
+    assert bridge2.FEISHU_GROUP_POLICY_CACHE_SECONDS == 1800.0
