@@ -470,6 +470,33 @@ class FeishuBitablePaginationTests(WorkerImportTestCase):
 
 
 class FeishuBitableSyncTests(WorkerImportTestCase):
+    def test_feishu_sync_registers_one_bitable_app_anchor(self) -> None:
+        from app.pipelines.sync_feishu_full import ensure_bitable_app_anchor
+        from app.providers.feishu import FeishuBitableSource
+
+        class FakeStore:
+            def upsert_structure_document(self, **kwargs: object) -> int:
+                self.kwargs = kwargs
+                return 88
+
+        source = FeishuBitableSource(
+            env_profile="COMPANY_A",
+            app_token="bascn-app",
+            table_id="tbl-one",
+            source_name="会话索引表",
+            source_url="https://example.feishu.cn/base/bascn-app",
+            document_name="飞书会话管理台",
+            sheet_name="会话索引表",
+        )
+        store = FakeStore()
+
+        source_id = ensure_bitable_app_anchor(store, "COMPANY_A", "bascn-app", source)
+
+        self.assertEqual(88, source_id)
+        self.assertEqual("feishu", store.kwargs["provider"])
+        self.assertEqual("bitable_app", store.kwargs["source_type"])
+        self.assertEqual("飞书会话管理台", store.kwargs["document_name"])
+
     def test_bootstrap_session_console_creates_tables_and_registers_sources(self) -> None:
         from app.pipelines.sync_feishu_full import bootstrap_session_console_sources
 

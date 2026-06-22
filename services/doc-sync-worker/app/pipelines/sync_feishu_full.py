@@ -272,6 +272,23 @@ def _resolve_app_token(client: FeishuBitableClient, source: FeishuBitableSource)
     raise RuntimeError(f"{source.source_name} 缺少 FEISHU_APP_TOKEN 或 FEISHU_WIKI_NODE_TOKEN。")
 
 
+def ensure_bitable_app_anchor(
+    store: Any,
+    profile: str,
+    app_token: str,
+    source: FeishuBitableSource,
+) -> int:
+    document_name = source.document_name or source.source_name or app_token
+    return store.upsert_structure_document(
+        provider="feishu",
+        env_profile=profile,
+        source_type="bitable_app",
+        external_doc_id=app_token,
+        document_name=document_name,
+        source_url=source.source_url,
+    )
+
+
 def _sync_bitable_records(
     store: Any,
     client: FeishuBitableClient,
@@ -363,6 +380,7 @@ def run_sync_feishu_full(profiles_arg: str = "") -> int:
                     app_token = _resolve_app_token(client, source)
                     document_name = source.document_name or source.source_name
                     sheet_name = source.sheet_name or source.table_id
+                    ensure_bitable_app_anchor(store, profile, app_token, source)
                     source_id = store.ensure_source(
                         provider="feishu",
                         env_profile=profile,

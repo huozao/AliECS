@@ -167,6 +167,37 @@ docker compose --env-file /root/AliECS/deploy/ecs/runtime.env -f /root/AliECS/de
 docker compose --env-file /root/AliECS/deploy/ecs/runtime.env -f /root/AliECS/deploy/ecs/compose.prod.yml run --rm doc-sync-worker python -m app.main consume-sync-requests --limit 10
 ```
 
+## 企微/飞书文档结构备份
+
+备份文档固定包含 `企微A-最新结构`、`企微B-最新结构`、`飞书-最新结构`、`结构变更历史`。每行代表一个企微智能表格文档或飞书多维表格应用，只保存文档定位 ID、工作表编码/名称及规范化字段结构，不读取或写入源业务记录内容。企微最新表按 `企业配置:docid` 更新，飞书按 `FEISHU:企业配置:app_token` 更新；结构哈希变化时才追加一行历史。
+
+总体字段固定排在工作表明细前面：`平台`、`来源类型`、`智能表格名称`、`工作表数量`、`字段总数`、`来源链接`、`企业配置`、`状态`、`文档定位ID`、`docid`。企微 API 不支持原地移动字段；检测到旧顺序时，worker 会先创建临时工作表、复制并核对记录，再替换旧表。
+
+备份文档自身登记为企微 A 的 `structure_backup_doc`，只采集四张备份工作表的字段结构，不采集其中记录。飞书按 app_token 建立 `bitable_app` 锚点，其下每个 table_id 作为一个工作表槽位写入 `飞书-最新结构`。
+
+首次在企微 A 创建备份文档：
+
+```bash
+docker compose --env-file /root/AliECS/deploy/ecs/runtime.env -f /root/AliECS/deploy/ecs/compose.prod.yml run --rm doc-sync-worker python -m app.main bootstrap-wecom-structure-backup
+```
+
+把输出的 `docid` 写入 ECS 私有 `release-meta.env`，再启用：
+
+```bash
+WECOM_STRUCTURE_BACKUP_ENABLED=true
+WECOM_STRUCTURE_BACKUP_DOCID=dc_xxx
+WECOM_STRUCTURE_BACKUP_PROFILE=COMPANY_A
+WECOM_STRUCTURE_BACKUP_MAX_SHEETS=20
+```
+
+手工生成并消费全部结构备份任务：
+
+```bash
+docker compose --env-file /root/AliECS/deploy/ecs/runtime.env -f /root/AliECS/deploy/ecs/compose.prod.yml run --rm doc-sync-worker python -m app.main sync-wecom-structure-backup
+```
+
+常驻 worker 每日完成企微和飞书全量同步后自动执行；网页“创建副本”完成首次同步后也会自动入队。失败任务保存在 `wecom_structure_backup_jobs`，按指数退避重试。
+
 ## 常见错误
 
 - 缺少 `WECOM_CORP_ID` / `WECOM_APP_SECRET`：检查 profile 变量名，例如 `WECOM_COMPANY_A_CORP_ID`。

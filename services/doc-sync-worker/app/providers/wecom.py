@@ -330,3 +330,78 @@ class WeComSmartsheetClient:
         merged["fetched_count"] = len(records)
         merged["page_count"] = page_count
         return merged
+
+    def create_doc(self, doc_name: str, admin_users: list[str]) -> str:
+        data = self._post(
+            "/wedoc/create_doc",
+            {"doc_type": 10, "doc_name": doc_name, "admin_users": admin_users},
+        )
+        docid = str(data.get("docid") or "")
+        if not docid:
+            raise RuntimeError(f"/wedoc/create_doc 未返回 docid: {data}")
+        return docid
+
+    def add_sheet(self, docid: str, title: str, index: int) -> None:
+        self._post(
+            "/wedoc/smartsheet/add_sheet",
+            {"docid": docid, "properties": {"title": title, "index": index}},
+        )
+
+    def update_sheet(self, docid: str, sheet_id: str, title: str) -> None:
+        self._post(
+            "/wedoc/smartsheet/update_sheet",
+            {"docid": docid, "properties": {"sheet_id": sheet_id, "title": title}},
+        )
+
+    def delete_sheet(self, docid: str, sheet_id: str) -> None:
+        self._post("/wedoc/smartsheet/delete_sheet", {"docid": docid, "sheet_id": sheet_id})
+
+    def add_fields(self, docid: str, sheet_id: str, fields: list[dict[str, Any]]) -> None:
+        self._post(
+            "/wedoc/smartsheet/add_fields",
+            {"docid": docid, "sheet_id": sheet_id, "fields": fields},
+        )
+
+    def update_fields(self, docid: str, sheet_id: str, fields: list[dict[str, Any]]) -> None:
+        self._post(
+            "/wedoc/smartsheet/update_fields",
+            {"docid": docid, "sheet_id": sheet_id, "fields": fields},
+        )
+
+    def add_records(self, docid: str, sheet_id: str, records: list[dict[str, Any]]) -> dict[str, Any]:
+        return self._post(
+            "/wedoc/smartsheet/add_records",
+            {
+                "docid": docid,
+                "sheet_id": sheet_id,
+                "key_type": "CELL_VALUE_KEY_TYPE_FIELD_TITLE",
+                "records": _text_record_payloads(records),
+            },
+        )
+
+    def update_records(self, docid: str, sheet_id: str, records: list[dict[str, Any]]) -> dict[str, Any]:
+        return self._post(
+            "/wedoc/smartsheet/update_records",
+            {
+                "docid": docid,
+                "sheet_id": sheet_id,
+                "key_type": "CELL_VALUE_KEY_TYPE_FIELD_TITLE",
+                "records": _text_record_payloads(records),
+            },
+        )
+
+
+def _text_record_payloads(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    for record in records:
+        values = record.get("values") if isinstance(record.get("values"), dict) else {}
+        converted = {
+            str(title): value
+            if isinstance(value, (list, dict))
+            else ([{"type": "text", "text": str(value)}] if value not in (None, "") else [])
+            for title, value in values.items()
+        }
+        payload = dict(record)
+        payload["values"] = converted
+        payloads.append(payload)
+    return payloads
