@@ -131,6 +131,16 @@ class BackendExportsTests(unittest.TestCase):
             wecom_a["items"],
         )
 
+    def test_match_export_files_buckets_to_first_run_at_or_after_file_time(self):
+        from app.main import _match_export_files_to_runs
+        runs = [(252, "2026-06-24T10:10:00"), (251, "2026-06-24T10:08:00"), (250, "2026-06-24T09:00:00")]
+        files = ["bom_20260624_100751.xlsx", "current_stock_20260624_100752.xlsx", "bom_20260624_085500.xlsx"]
+        mapping = _match_export_files_to_runs(runs, files)
+        self.assertEqual(["bom_20260624_100751.xlsx", "current_stock_20260624_100752.xlsx"],
+                         sorted(mapping[251]))
+        self.assertEqual(["bom_20260624_085500.xlsx"], mapping[250])
+        self.assertNotIn(252, mapping)
+
     def test_tplus_download_rejects_traversal_and_non_xlsx(self) -> None:
         from fastapi import HTTPException
 

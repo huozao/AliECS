@@ -2022,6 +2022,38 @@ def _tplus_module_of(file_name: str) -> str:
     return stem
 
 
+def _parse_export_timestamp(file_name: str) -> datetime | None:
+    stem = file_name[:-5] if file_name.endswith(".xlsx") else file_name
+    parts = stem.rsplit("_", 2)
+    if len(parts) == 3 and len(parts[1]) == 8 and len(parts[2]) == 6 and parts[1].isdigit() and parts[2].isdigit():
+        try:
+            return datetime.strptime(parts[1] + parts[2], "%Y%m%d%H%M%S")
+        except ValueError:
+            return None
+    return None
+
+
+def _match_export_files_to_runs(runs: list[tuple[Any, Any]], files: list[str]) -> dict[Any, list[str]]:
+    """把每个文件归给 finished_at >= 文件时间戳 的最早一次 run。
+    runs: [(run_id, finished_at_iso_or_dt)]，可乱序。返回 {run_id: [file,...]}。"""
+    parsed_runs = []
+    for run_id, finished in runs:
+        if finished is None:
+            continue
+        dt = finished if isinstance(finished, datetime) else datetime.fromisoformat(str(finished).replace("Z", "")[:19])
+        parsed_runs.append((dt, run_id))
+    parsed_runs.sort()
+    mapping: dict[Any, list[str]] = {}
+    for name in files:
+        t = _parse_export_timestamp(name)
+        if t is None:
+            continue
+        chosen = next((rid for dt, rid in parsed_runs if dt >= t), None)
+        if chosen is not None:
+            mapping.setdefault(chosen, []).append(name)
+    return mapping
+
+
 def _latest_tplus_exports() -> list[dict[str, Any]]:
     directory = _tplus_export_dir()
     latest: dict[str, Path] = {}
