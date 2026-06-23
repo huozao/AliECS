@@ -25,14 +25,10 @@
       <section class="band"><h2>需要关注</h2><div id="attention" class="list muted">加载中...</div></section>
       <section class="band" id="tplusSyncModule">
         <h2>T+ 同步</h2>
-        <p class="muted">合并展示同步请求与实际执行记录；来源标识：手动同步、定时同步、订阅变更同步。</p>
+        <p class="muted">统一时间线：每次同步(执行)按 <b>#编号</b> 列出，与配方页「同步 #N」对应；含本次变化与产出的全量 BOM Excel(可下载核对)。来源：手动同步、定时同步、订阅变更同步。</p>
         <div class="row" style="gap:8px;margin-bottom:10px"><span class="chip degraded">手动同步</span><span class="chip ok">定时同步</span><span class="chip warning">订阅变更同步</span></div>
-        <h3 style="margin:0 0 8px">同步请求</h3>
-        <div id="tplus"></div>
-        <h3 style="margin:16px 0 8px">执行记录（全部）</h3>
-        <div id="tplusRuns"></div><div id="tplusRunsPager" class="row" style="gap:10px;align-items:center;margin-top:8px"></div>
+        <div id="tplusTimeline"></div><div id="tplusTimelinePager" class="row" style="gap:10px;align-items:center;margin-top:8px"></div>
       </section>
-      <section class="band"><h2>差异校验</h2><div id="reconciliation"></div></section>
       <section class="band"><h2>外部主机</h2><div id="hosts"></div></section>
       <section class="band">
         <div class="row" style="justify-content:space-between"><h2 style="margin:0">数据导出</h2><button id="syncAllBtn" class="btn" type="button" onclick="syncAllExports(this)">同步数据列表</button></div>
@@ -113,43 +109,55 @@
       if((item&&item.reason_event_id)||mode==='incremental')return '<span class="chip warning">订阅变更同步</span>';
       return '<span class="chip degraded">手动同步</span>';
     }
-    let tplusReqOffset=0; const TPLUS_REQ_LIMIT=20; let tplusReqItems=[];
-    async function loadTplusRequests(){
+    let tplusTlOffset=0; const TPLUS_TL_LIMIT=20; let tplusTlItems=[];
+    async function loadTplusTimeline(){
       try{
-        const d=await api(`/v1/ops/tplus/requests?limit=${TPLUS_REQ_LIMIT}&offset=${tplusReqOffset}`);
-        renderTplus(d);
-      }catch(e){$('tplus').innerHTML=`<span class="chip failed">同步请求加载失败：${esc(e.message)}</span>`;}
+        const d=await api(`/v1/ops/tplus/timeline?limit=${TPLUS_TL_LIMIT}&offset=${tplusTlOffset}`);
+        renderTplusTimeline(d);
+      }catch(e){$('tplusTimeline').innerHTML=`<span class="chip failed">时间线加载失败：${esc(e.message)}</span>`;$('tplusTimelinePager').innerHTML='';}
     }
-    function renderTplus(d){
-      tplusReqItems=d.items||[];
-      const rows=tplusReqItems.map((item,index)=>`<tr><td>${esc(item.id)}</td><td>${syncOriginLabel(item)}</td><td>${esc(item.module)}</td><td>${esc(item.mode)}</td><td>${esc(item.status)}</td><td>${esc(item.sync_run_id||'')}</td><td>${fmtTime(item.requested_at)}</td><td>${fmtTime(item.finished_at)}</td><td>${esc(item.reason_event_id||'')}</td><td><button class="btn primary" type="button" onclick="openTplusRequestDetail(${index})">详情</button></td></tr>`).join('');
-      const total=d.total||0,limit=d.limit||TPLUS_REQ_LIMIT,offset=d.offset||0;
+    function diffSummaryText(s){
+      if(!s)return '<span class="muted">—</span>';
+      const parts=[];
+      if(s.qty_changed)parts.push(`改数值${s.qty_changed}`);
+      if(s.material_changed)parts.push(`增删料${s.material_changed}`);
+      if(s.bom_deleted)parts.push(`删BOM${s.bom_deleted}`);
+      if(s.bom_added)parts.push(`新增${s.bom_added}`);
+      if(s.status_changed)parts.push(`状态${s.status_changed}`);
+      if(s.cosmetic_changed)parts.push(`其它${s.cosmetic_changed}`);
+      if(!parts.length)return '<span class="muted">无变化</span>';
+      const txt=parts.join(' · ');
+      return s.needs_review?`<span class="chip failed">需复核</span> ${esc(txt)}`:esc(txt);
+    }
+    function excelCell(files){
+      if(!files||!files.length)return '<span class="muted">—</span>';
+      return files.map((f)=>f.pruned
+        ?`<span class="chip" title="已超出保留期被清理">${esc(f.name)}（已清理）</span>`
+        :`<button class="btn primary" type="button" onclick="downloadExport('${esc(f.download_url)}','${esc(f.name)}')">${esc(f.name)}</button>`
+      ).join(' ');
+    }
+    function renderTplusTimeline(d){
+      tplusTlItems=d.items||[];
+      const rows=tplusTlItems.map((it,index)=>{
+        const numCell=it.kind==='run'?`<b>${esc(it.number)}</b>`:`<span class="muted">${esc(it.number)}</span>`;
+        const trCls=it.needs_review?' style="background:#f9eceb"':'';
+        return `<tr${trCls}><td>${numCell}</td><td>${syncOriginLabel(it)}</td><td>${esc(it.module)}</td><td>${esc(it.mode)}</td><td>${chip(it.status)}</td><td>${fmtTime(it.event_time)}</td><td>${esc(it.row_count??'')}</td><td>${esc(it.exit_code??'')}</td><td>${esc(it.reason_event_id||'')}</td><td>${diffSummaryText(it.diff_summary)}</td><td>${excelCell(it.export_files)}</td><td><button class="btn primary" type="button" onclick="openTimelineDetail(${index})">详情</button></td></tr>`;
+      }).join('');
+      $('tplusTimeline').innerHTML=`<table><thead><tr><th>编号</th><th>来源</th><th>模块</th><th>模式</th><th>状态</th><th>时间</th><th>行数</th><th>退出码</th><th>回调事件ID</th><th>本次变化</th><th>生成的 Excel</th><th>详情</th></tr></thead><tbody>${rows||'<tr><td colspan="12" class="muted">暂无记录</td></tr>'}</tbody></table>`;
+      const total=d.total||0,limit=d.limit||TPLUS_TL_LIMIT,offset=d.offset||0;
       const page=Math.floor(offset/limit)+1,pages=Math.max(1,Math.ceil(total/limit));
-      tplus.innerHTML=`<p class="muted">畅捷通 BOM 订阅消息变化会产生同步请求；「回调事件ID」即触发它的畅捷通事件，差异/冲突见下方「差异校验」。 · pending ${d.pending||0} · running ${d.running||0} · failed ${d.failed||0}</p><table><thead><tr><th>ID</th><th>来源</th><th>模块</th><th>模式</th><th>状态</th><th>执行ID</th><th>请求时间</th><th>完成时间</th><th>回调事件ID</th><th>详情</th></tr></thead><tbody>${rows||'<tr><td colspan="10" class="muted">暂无请求</td></tr>'}</tbody></table><div class="row" style="gap:10px;align-items:center;margin-top:8px"><button class="btn" type="button" id="tplusReqPrev" ${offset<=0?'disabled':''}>上一页</button><span class="muted">第 ${page}/${pages} 页 · 共 ${total} 条</span><button class="btn" type="button" id="tplusReqNext" ${offset+limit>=total?'disabled':''}>下一页</button></div>`;
-      const prev=$('tplusReqPrev'),next=$('tplusReqNext');
-      if(prev)prev.onclick=()=>{tplusReqOffset=Math.max(0,tplusReqOffset-TPLUS_REQ_LIMIT);loadTplusRequests();};
-      if(next)next.onclick=()=>{tplusReqOffset=tplusReqOffset+TPLUS_REQ_LIMIT;loadTplusRequests();};
+      $('tplusTimelinePager').innerHTML=`<button class="btn" type="button" id="tplusTlPrev" ${offset<=0?'disabled':''}>上一页</button><span class="muted">第 ${page}/${pages} 页 · 共 ${total} 条</span><button class="btn" type="button" id="tplusTlNext" ${offset+limit>=total?'disabled':''}>下一页</button>`;
+      const prev=$('tplusTlPrev'),next=$('tplusTlNext');
+      if(prev)prev.onclick=()=>{tplusTlOffset=Math.max(0,tplusTlOffset-TPLUS_TL_LIMIT);loadTplusTimeline();};
+      if(next)next.onclick=()=>{tplusTlOffset=tplusTlOffset+TPLUS_TL_LIMIT;loadTplusTimeline();};
     }
-    let tplusRunsOffset=0; const TPLUS_RUNS_LIMIT=20;
-    async function loadTplusRuns(){
-      try{
-        const d=await api(`/v1/ops/tplus/runs?limit=${TPLUS_RUNS_LIMIT}&offset=${tplusRunsOffset}`);
-        renderTplusRuns(d);
-      }catch(e){$('tplusRuns').innerHTML=`<span class="chip failed">同步记录加载失败：${esc(e.message)}</span>`;$('tplusRunsPager').innerHTML='';}
-    }
-    function renderTplusRuns(d){
-      const rows=(d.items||[]).map((it)=>`<tr><td>${esc(it.id)}</td><td>${syncOriginLabel(it)}</td><td>${esc(it.module)}</td><td>${esc(it.mode)}</td><td>${esc(it.status)}</td><td>${fmtTime(it.finished_at)}</td><td>${esc(it.exit_code)}</td><td>${esc(it.row_count)}</td><td>${esc(it.request_id||'')}</td></tr>`).join('');
-      $('tplusRuns').innerHTML=`<p class="muted">每次实际执行；scheduled_full 标为定时同步，关联回调事件的记录标为订阅变更同步，其余 BOM 全量记录标为手动同步。配方页「来源」行的「同步 #ID」对应本表 ID。</p><table><thead><tr><th>ID</th><th>来源</th><th>模块</th><th>模式</th><th>状态</th><th>完成时间</th><th>退出码</th><th>行数</th><th>请求ID</th></tr></thead><tbody>${rows||'<tr><td colspan="9" class="muted">暂无记录</td></tr>'}</tbody></table>`;
-      const total=d.total||0,limit=d.limit||TPLUS_RUNS_LIMIT,offset=d.offset||0;
-      const page=Math.floor(offset/limit)+1,pages=Math.max(1,Math.ceil(total/limit));
-      $('tplusRunsPager').innerHTML=`<button class="btn" type="button" id="tplusRunsPrev" ${offset<=0?'disabled':''}>上一页</button><span class="muted">第 ${page}/${pages} 页 · 共 ${total} 条</span><button class="btn" type="button" id="tplusRunsNext" ${offset+limit>=total?'disabled':''}>下一页</button>`;
-      const prev=$('tplusRunsPrev'),next=$('tplusRunsNext');
-      if(prev)prev.onclick=()=>{tplusRunsOffset=Math.max(0,tplusRunsOffset-TPLUS_RUNS_LIMIT);loadTplusRuns();};
-      if(next)next.onclick=()=>{tplusRunsOffset=tplusRunsOffset+TPLUS_RUNS_LIMIT;loadTplusRuns();};
-    }
-    function renderRecon(r){
-      const rows=(r.recent||[]).map((item)=>`<tr><td>${item.id}</td><td>${item.module}</td><td>${item.severity}</td><td>${item.summary}</td><td>${fmtTime(item.created_at)}</td><td><button class="btn primary" type="button" onclick="openRecon(${item.id})">打开详情</button></td></tr>`).join('');
-      reconciliation.innerHTML=`<p class="muted">待人工确认：${r.needs_review||0}</p><table><thead><tr><th>ID</th><th>模块</th><th>级别</th><th>摘要</th><th>时间</th><th>处理</th></tr></thead><tbody>${rows||'<tr><td colspan="6" class="muted">暂无差异</td></tr>'}</tbody></table>`;
+    function openTimelineDetail(index){
+      const it=tplusTlItems[index];if(!it)return;
+      const head=`<p class="muted">${esc(it.number)} · ${esc(it.module)}/${esc(it.mode)}/${esc(it.status)} · ${fmtTime(it.event_time)} · 请求ID ${esc(it.request_id||'-')} · 事件 ${esc(it.reason_event_id||'-')}</p>`;
+      const files=(it.export_files||[]).length?`<p>产出 Excel：${excelCell(it.export_files)}</p>`:'';
+      const review=it.needs_review&&it.reconciliation_id
+        ?`<div class="row" style="margin-top:10px"><button class="btn primary" onclick="resolveRecon(${it.reconciliation_id},'use_current')">采用当前</button><button class="btn" onclick="resolveRecon(${it.reconciliation_id},'use_previous')">保留上一</button><button class="btn" onclick="resolveRecon(${it.reconciliation_id},'ignore')">忽略</button></div>`:'';
+      openModal(`同步详情 ${it.number}`,`${head}${files}${jsonDetailBlock('变化摘要',it.diff_summary)}${review}`);
     }
     function renderHosts(items){
       const rows=(items||[]).map((item)=>`<tr><td>${item.name}</td><td>${chip(item.ok?'ok':'failed')}</td><td>${item.status_code||''}</td><td>${item.latency_ms||''}</td><td>${item.description||item.message||item.url||''}</td><td><button class="btn primary" type="button" onclick="openHost('${encodeURIComponent(item.name)}')">查看/刷新</button></td></tr>`).join('');
@@ -159,12 +167,6 @@
     function openModal(title,html){modalTitle.textContent=title;modalBody.innerHTML=html;detailModal.classList.add('show');}
     function closeModal(){detailModal.classList.remove('show');modalBody.innerHTML='';}
     function jsonDetailBlock(title,value){return `<h4>${title}</h4><pre>${esc(JSON.stringify(value??{},null,2))}</pre>`;}
-    function openTplusRequestDetail(index){
-      const item=tplusReqItems[index];
-      if(!item)return;
-      const summary=`<p class="muted">请求 ${esc(item.id)} · run ${esc(item.sync_run_id||'-')} · 行数 ${esc(item.row_count??'-')} · exit ${esc(item.exit_code??'-')}</p><table><tbody><tr><th>来源</th><td>${syncOriginLabel(item)}</td><th>模块</th><td>${esc(item.module)}</td></tr><tr><th>模式</th><td>${esc(item.mode)}</td><th>状态</th><td>${esc(item.status)}</td></tr><tr><th>事件</th><td>${esc(item.reason_event_id||'-')}</td><th>请求时间</th><td>${fmtTime(item.requested_at)}</td></tr><tr><th>完成时间</th><td>${fmtTime(item.finished_at)}</td><th></th><td></td></tr></tbody></table>`;
-      openModal(`T+ 同步详情 #${item.id}`,`${summary}${jsonDetailBlock('请求目标',item.target_json)}${jsonDetailBlock('执行结果',item.detail_json)}${jsonDetailBlock('请求错误',item.request_error_json)}${jsonDetailBlock('执行错误',item.error_json)}`);
-    }
     function renderDiffItemRows(title,items){
       const rows=(items||[]).map((item)=>`<tr><td>${esc(item.parent_code)}</td><td>${esc(item.parent_name)}</td><td>${esc(item.version)}</td><td>${esc(item.child_code)}</td><td>${esc(item.child_name)}</td><td>${esc(item.unit)}</td><td>${esc(item.quantity)}</td><td>${esc(item.disabled)}</td></tr>`).join('');
       return `<h4>${title}（${(items||[]).length}）</h4><table><thead><tr><th>父件编码</th><th>父件名称</th><th>版本</th><th>子件编码</th><th>子件名称</th><th>单位</th><th>数量</th><th>停用</th></tr></thead><tbody>${rows||'<tr><td colspan="8" class="muted">无</td></tr>'}</tbody></table>`;
@@ -269,9 +271,7 @@
         latestStatus=await loadStatus();
         renderSummary(latestStatus);
         renderAttention(latestStatus.attention_items);
-        loadTplusRequests();
-        loadTplusRuns();
-        renderRecon(latestStatus.reconciliation||{});
+        loadTplusTimeline();
         renderHosts(latestStatus.hosts||[]);
       }catch(error){attention.innerHTML=`<div class="attention critical"><strong>health_load_failed</strong><br/>${error.message}</div>`;}
       finally{refreshBtn.disabled=false}
