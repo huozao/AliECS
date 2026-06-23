@@ -186,6 +186,27 @@ def _latest_full_snapshot(conn: Any) -> dict[str, Any] | None:
     }
 
 
+def assemble_current_full_bom(conn: Any) -> list[Any]:
+    """从 tplus_bom_records 取未失踪记录，按 (Code,Version) 去重(取 last_seen 最新)，返回原始行列表。"""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT raw_json, last_seen_at
+            FROM tplus_bom_records
+            WHERE missing_since IS NULL
+            ORDER BY last_seen_at ASC NULLS FIRST
+            """
+        )
+        rows = cur.fetchall()
+    by_key: dict[tuple[str, str], Any] = {}
+    for raw, _seen in rows:
+        record = raw if isinstance(raw, Mapping) else {}
+        key = (str(record.get("Code") or record.get("code") or ""),
+               str(record.get("Version") or record.get("version") or ""))
+        by_key[key] = record  # ASC 排序 → 后写覆盖=最新 last_seen 胜出
+    return list(by_key.values())
+
+
 def _upsert_tplus_bom_records(cur: Any, records: list[dict[str, Any]]) -> None:
     for record in records:
         cur.execute(

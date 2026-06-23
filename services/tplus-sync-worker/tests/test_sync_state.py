@@ -156,5 +156,41 @@ class SyncStateTests(unittest.TestCase):
         self.assertFalse(c["needs_review"])
 
 
+class AssembleCurrentFullBomTests(unittest.TestCase):
+    def test_dedupes_by_code_version_prefers_latest_seen(self):
+        from tplus_datahub.jobs.sync_state import assemble_current_full_bom
+        rows = [
+            ({"Code": "P", "Version": "V", "Disabled": "1", "BOMChilds": []}, "2026-06-24 09:00"),
+            ({"Code": "P", "Version": "V", "Disabled": "0", "BOMChilds": [{"Code": "C"}]}, "2026-06-24 10:00"),
+            ({"Code": "Q", "Version": "V", "Disabled": "0", "BOMChilds": []}, "2026-06-24 08:00"),
+        ]
+        full = assemble_current_full_bom(_FakeBomRecordsConn(rows))
+        codes = sorted((r["Code"], r["Version"], r["Disabled"]) for r in full)
+        self.assertEqual([("P", "V", "0"), ("Q", "V", "0")], codes)
+
+
+class _FakeBomRecordsConn:
+    def __init__(self, rows):
+        self._rows = rows
+    def cursor(self):
+        return _FakeBomRecordsCursor(self._rows)
+    def close(self):
+        pass
+
+
+class _FakeBomRecordsCursor:
+    def __init__(self, rows):
+        self._rows = rows
+        self._out = []
+    def __enter__(self):
+        return self
+    def __exit__(self, *_):
+        pass
+    def execute(self, sql, params=None):
+        self._out = [(raw, seen) for raw, seen in self._rows]
+    def fetchall(self):
+        return self._out
+
+
 if __name__ == "__main__":
     unittest.main()
