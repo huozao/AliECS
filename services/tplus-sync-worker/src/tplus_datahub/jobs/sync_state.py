@@ -66,57 +66,6 @@ def build_snapshot_diff(previous: dict[str, Any] | None, current: dict[str, Any]
     }
 
 
-def record_bom_snapshot_if_configured(rows: list[Any], *, mode: str, source_json: dict[str, Any] | None = None) -> None:
-    if psycopg is None:
-        return
-    database_url = os.getenv("DATABASE_URL", "").strip()
-    if not database_url:
-        return
-    snapshot = snapshot_bom_rows(rows)
-    source = dict(source_json or {})
-    source["mode"] = mode
-    source["snapshot_hash"] = snapshot["snapshot_hash"]
-    source["records"] = snapshot["raw_records"]
-    source["items"] = snapshot["items"]
-    try:
-        with closing(psycopg.connect(database_url, connect_timeout=3)) as conn:
-            previous = _latest_full_snapshot(conn) if mode in {"full_bom", "scheduled_full"} else None
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO integration_sync_snapshots(provider, module, mode, row_count, snapshot_hash, source_json)
-                    VALUES ('chanjet', 'bom', %s, %s, %s, %s)
-                    RETURNING id
-                    """,
-                    (mode, snapshot["row_count"], snapshot["snapshot_hash"], Jsonb(source)),
-                )
-                snapshot_id = int(cur.fetchone()[0])
-                snapshot["id"] = snapshot_id
-                if mode in {"full_bom", "scheduled_full"}:
-                    diff = build_snapshot_diff(previous, snapshot)
-                    if diff is not None:
-                        cur.execute(
-                            """
-                            INSERT INTO integration_reconciliation_diffs(
-                                provider, module, status, severity, summary, diff_json,
-                                full_snapshot_id, incremental_snapshot_id
-                            )
-                            VALUES ('chanjet', 'bom', %s, %s, %s, %s, %s, NULL)
-                            """,
-                            (
-                                diff["status"],
-                                diff["severity"],
-                                diff["summary"],
-                                Jsonb(diff["diff_json"]),
-                                snapshot_id,
-                            ),
-                        )
-                _upsert_tplus_bom_records(cur, snapshot["records"])
-            conn.commit()
-    except Exception:
-        return
-
-
 def upsert_and_snapshot_full_bom(
     fetched_rows: list[Any], *, mode: str, source_json: dict[str, Any] | None = None
 ) -> list[Any]:
