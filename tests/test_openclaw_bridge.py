@@ -829,6 +829,17 @@ def test_bridge_emits_redacted_request_trace_for_batch(monkeypatch, capsys):
 _BRIDGE_ISO_Z_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
 
 
+def test_max_bridge_images_defaults_to_20():
+    bridge = load_bridge()
+    assert bridge.MAX_BRIDGE_IMAGES == 20
+
+
+def test_max_bridge_images_env_override(monkeypatch):
+    monkeypatch.setenv("MAX_BRIDGE_IMAGES", "11")
+    bridge = load_bridge()
+    assert bridge.MAX_BRIDGE_IMAGES == 11
+
+
 def test_utc_now_iso_returns_iso8601_z():
     bridge = load_bridge()
     assert _BRIDGE_ISO_Z_RE.match(bridge.utc_now_iso())

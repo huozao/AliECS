@@ -42,7 +42,12 @@ FEISHU_MENTION_HELPER_PREFIXES = (
     "[System: The content may include mention tags in the form ",
     "[System: If user_id is ",
 )
-MAX_BRIDGE_IMAGES = 4
+try:
+    # Inbound images forwarded to WebDock per turn. Env-tunable (default 20) so the
+    # cap can track what ChatGPT's composer actually accepts without a code change.
+    MAX_BRIDGE_IMAGES = max(1, int(os.getenv("MAX_BRIDGE_IMAGES", "20")))
+except ValueError:
+    MAX_BRIDGE_IMAGES = 20
 MAX_BRIDGE_IMAGE_BYTES = 20 * 1024 * 1024
 FEISHU_PEER_PREFIXES = ("ou_", "oc_")
 
