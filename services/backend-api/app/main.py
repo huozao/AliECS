@@ -1006,6 +1006,104 @@ def ops_tplus_requests(
     return {"items": items, "total": total, "limit": limit, "offset": offset, **counts}
 
 
+@app.get("/v1/ops/tplus/timeline")
+def ops_tplus_timeline(
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    """统一时间线：执行(run) + 无执行的孤儿请求，按时间倒序分页；附产出 Excel 与变化摘要。"""
+    items: list[dict[str, Any]] = []
+    total = 0
+    try:
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT (SELECT COUNT(*) FROM integration_sync_runs WHERE provider='chanjet')
+                         + (SELECT COUNT(*) FROM integration_sync_requests
+                            WHERE provider='chanjet' AND sync_run_id IS NULL)
+                    """
+                )
+                total = int(cur.fetchone()[0])
+                cur.execute(
+                    """
+                    SELECT kind, id, module, mode, status, event_time, row_count, exit_code,
+                           reason_event_id, request_id, detail_json, reconciliation_id
+                    FROM (
+                        SELECT 'run' AS kind, sr.id AS id, sr.module, sr.mode, sr.status,
+                               sr.finished_at AS event_time, sr.row_count, sr.exit_code,
+                               req.reason_event_id, req.id AS request_id, sr.detail_json,
+                               rec.id AS reconciliation_id
+                        FROM integration_sync_runs sr
+                        LEFT JOIN LATERAL (
+                            SELECT id, reason_event_id FROM integration_sync_requests
+                            WHERE provider='chanjet' AND sync_run_id = sr.id
+                            ORDER BY requested_at DESC NULLS LAST, id DESC LIMIT 1
+                        ) req ON TRUE
+                        LEFT JOIN LATERAL (
+                            SELECT d.id FROM integration_reconciliation_diffs d
+                            JOIN integration_sync_snapshots s ON s.id = d.full_snapshot_id
+                            WHERE d.provider='chanjet' AND d.status='needs_review'
+                              AND s.created_at <= sr.finished_at
+                            ORDER BY s.created_at DESC LIMIT 1
+                        ) rec ON TRUE
+                        WHERE sr.provider='chanjet'
+                        UNION ALL
+                        SELECT 'request' AS kind, r.id, r.module, r.mode, r.status,
+                               r.requested_at AS event_time, NULL::int, NULL::int,
+                               r.reason_event_id, r.id, r.error_json, NULL::bigint
+                        FROM integration_sync_requests r
+                        WHERE r.provider='chanjet' AND r.sync_run_id IS NULL
+                    ) merged
+                    ORDER BY event_time DESC NULLS LAST, kind, id DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (limit, offset),
+                )
+                rows = cur.fetchall()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"读取 T+ 时间线失败：{type(exc).__name__}") from exc
+
+    run_rows = [(r[1], r[5]) for r in rows if r[0] == "run"]
+    export_dir = _tplus_export_dir()
+    disk_files = [p.name for p in export_dir.glob("*.xlsx")] if export_dir.is_dir() else []
+    fallback = _match_export_files_to_runs(run_rows, disk_files)
+    existing = set(disk_files)
+
+    for (kind, rid, module, mode, status, event_time, row_count, exit_code,
+         reason_event_id, request_id, detail, reconciliation_id) in rows:
+        detail = _json_value(detail) or {}
+        diff_summary = detail.get("diff_summary")
+        row: dict[str, Any] = {
+            "kind": kind,
+            "number": f"#{rid}" if kind == "run" else f"请求·R{rid}",
+            "id": rid,
+            "module": module,
+            "mode": mode,
+            "status": status,
+            "event_time": str(event_time) if event_time else None,
+            "row_count": row_count,
+            "exit_code": exit_code,
+            "reason_event_id": reason_event_id,
+            "request_id": request_id,
+            "diff_summary": diff_summary,
+            "needs_review": bool((diff_summary or {}).get("needs_review")),
+            "reconciliation_id": reconciliation_id,
+            "export_files": [],
+        }
+        if kind == "run":
+            names = list(detail.get("export_files") or []) or fallback.get(rid, [])
+            row["export_files"] = [
+                {"name": name,
+                 "download_url": f"/v1/exports/tplus/{name}" if name in existing else None,
+                 "pruned": name not in existing}
+                for name in names
+            ]
+        items.append(row)
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
 @app.get("/v1/ops/status")
 def ops_status(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     db_ok, db_message = _db_ping()

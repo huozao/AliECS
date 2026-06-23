@@ -154,6 +154,31 @@ class BackendOpsStatusTests(unittest.TestCase):
         self.assertEqual(58, run["request_id"])
         self.assertEqual("10728331-569a-443f-89ad-b8b22df7a591", run["reason_event_id"])
 
+    def test_tplus_timeline_merges_runs_and_orphan_requests(self) -> None:
+        from app import main as main_module
+        import pathlib
+        old_conn = main_module._conn
+        old_dir = main_module._tplus_export_dir
+        main_module._conn = lambda: _FakeTimelineConn()
+        main_module._tplus_export_dir = lambda: pathlib.Path("/nonexistent-dir-for-test")
+        try:
+            result = main_module.ops_tplus_timeline(limit=20, offset=0, _={})
+        finally:
+            main_module._conn = old_conn
+            main_module._tplus_export_dir = old_dir
+        kinds = [row["kind"] for row in result["items"]]
+        self.assertIn("run", kinds)
+        self.assertIn("request", kinds)
+        run_row = next(r for r in result["items"] if r["kind"] == "run")
+        self.assertEqual("#251", run_row["number"])
+        self.assertEqual(["bom_20260624_100751.xlsx"], [f["name"] for f in run_row["export_files"]])
+        self.assertTrue(run_row["export_files"][0]["pruned"])
+        self.assertTrue(run_row["needs_review"])
+        self.assertEqual(77, run_row["reconciliation_id"])
+        req_row = next(r for r in result["items"] if r["kind"] == "request")
+        self.assertEqual("请求·R58", req_row["number"])
+        self.assertEqual(2, result["total"])
+
     def test_formula_cost_rbac_seed_includes_requested_roles_and_permission(self) -> None:
         migration = Path(__file__).resolve().parents[1] / "db" / "migrations" / "0012_formula_cost_rbac.sql"
         sql = migration.read_text(encoding="utf-8")
@@ -230,6 +255,51 @@ class _FakeTplusStatusCursor:
                     0,
                 )
             ]
+            return
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return self._rows
+
+    def fetchone(self) -> tuple[Any, ...] | None:
+        return self._one
+
+
+class _FakeTimelineConn:
+    def cursor(self) -> "_FakeTimelineCursor":
+        return _FakeTimelineCursor()
+
+    def close(self) -> None:
+        pass
+
+
+class _FakeTimelineCursor:
+    def __init__(self) -> None:
+        self._rows: list[tuple[Any, ...]] = []
+        self._one: tuple[Any, ...] | None = None
+
+    def __enter__(self) -> "_FakeTimelineCursor":
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        pass
+
+    def execute(self, sql: str, params: tuple[Any, ...] | list[Any] | None = None) -> None:
+        normalized = " ".join(sql.lower().split())
+        self._rows = []
+        self._one = None
+        if "union all" in normalized:
+            self._rows = [
+                ("run", 251, "all", "scheduled_full", "success", "2026-06-24T10:08:00", 800, 0,
+                 None, None,
+                 {"run": 5, "export_files": ["bom_20260624_100751.xlsx"],
+                  "diff_summary": {"qty_changed": 1, "needs_review": True}}, 77),
+                ("request", 58, "bom", "incremental", "pending", "2026-06-24T10:05:00", None, None,
+                 "evt-1", 58, {}, None),
+            ]
+            return
+        if "count(*)" in normalized:
+            self._one = (2,)
             return
         raise AssertionError(f"unexpected SQL: {sql}")
 
