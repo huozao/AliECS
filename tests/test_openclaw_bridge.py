@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import re
 import threading
 import time
 import urllib.error
@@ -823,6 +824,39 @@ def test_bridge_emits_redacted_request_trace_for_batch(monkeypatch, capsys):
     assert event["wait_seconds"] == 0.01
     assert event["expected_images"] == 2
     assert "把一张头像" not in lines[-1]
+
+
+_BRIDGE_ISO_Z_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
+
+
+def test_utc_now_iso_returns_iso8601_z():
+    bridge = load_bridge()
+    assert _BRIDGE_ISO_Z_RE.match(bridge.utc_now_iso())
+
+
+def test_bridge_request_trace_includes_utc_ts(monkeypatch, capsys):
+    bridge = load_bridge()
+    monkeypatch.setenv("OPENCLAW_BRIDGE_TRACE", "1")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "0.01")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_MEDIA_INTENT_BATCH_SECONDS", "0.01")
+    body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Conversation info (untrusted metadata):\n```json\n"
+                    '{"peer_id":"user-1","message_id":"msg-1"}\n```\n\nhi'
+                ),
+            }
+        ]
+    }
+
+    bridge.maybe_batch_request(body)
+
+    lines = [line for line in capsys.readouterr().out.splitlines() if "bridge_request_trace" in line]
+    assert lines
+    event = json.loads(lines[-1].split(" ", 1)[1])
+    assert _BRIDGE_ISO_Z_RE.match(event["ts"]), event.get("ts")
 
 
 def test_bridge_emits_chain_result_for_feishu_roundtrip(monkeypatch, capsys):
