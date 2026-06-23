@@ -82,5 +82,24 @@ class SyncStateTests(unittest.TestCase):
         self.assertIn("quantity", detail["changed"][0]["changed_fields"])
 
 
+    def test_toggling_disabled_is_a_field_change_not_remove_add(self):
+        previous = snapshot_bom_rows(
+            [{"Code": "P1", "Name": "成品1", "Version": "V1", "Disabled": "0",
+              "BOMChilds": [{"ID": "1", "Code": "C1", "Name": "料1", "RequiredQuantity": 1, "Unit": {"Name": "kg"}}]}]
+        )
+        current = snapshot_bom_rows(
+            [{"Code": "P1", "Name": "成品1", "Version": "V1", "Disabled": "1",
+              "BOMChilds": [{"ID": "1", "Code": "C1", "Name": "料1", "RequiredQuantity": 1, "Unit": {"Name": "kg"}}]}]
+        )
+        previous["id"], current["id"] = 1, 2
+        diff = build_snapshot_diff(previous=previous, current=current)
+        assert diff is not None
+        detail = diff["diff_json"]
+        self.assertEqual(0, detail["added_count"])
+        self.assertEqual(0, detail["removed_count"])
+        self.assertEqual(1, detail["changed_count"])
+        self.assertIn("disabled", detail["changed"][0]["changed_fields"])
+
+
 if __name__ == "__main__":
     unittest.main()

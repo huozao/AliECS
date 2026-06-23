@@ -280,7 +280,7 @@ def _bom_item_from_parent_child(
     if not key["parent_code"] and not key["version"] and not key["child_code"]:
         record_key = f"raw|{parent_index}|{child_index}"
     else:
-        record_key = "|".join(str(key[name]) for name in ["parent_code", "version", "disabled", "child_code", "child_id"])
+        record_key = "|".join(str(key[name]) for name in ["parent_code", "version", "child_code", "child_id"])
     return {
         "record_key": record_key,
         "record_hash": _stable_hash(comparable),
