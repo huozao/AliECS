@@ -76,7 +76,7 @@ class WorkerLoopTests(unittest.TestCase):
                     "status": "success",
                     "row_count": 0,
                     "exit_code": 0,
-                    "detail_json": {"run": 1},
+                    "detail_json": {"run": 1, "export_files": []},
                     "error_json": {},
                 }
             ],
@@ -99,7 +99,7 @@ class WorkerLoopTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertEqual("failed", recorded[0]["status"])
         self.assertEqual(1, recorded[0]["exit_code"])
-        self.assertEqual({"run": 1}, recorded[0]["detail_json"])
+        self.assertEqual({"run": 1, "export_files": []}, recorded[0]["detail_json"])
 
     def test_run_forever_consumes_manual_bom_request_between_full_runs(self):
         old_interval = os.environ.get("TPLUS_SYNC_INTERVAL_SECONDS")
@@ -179,6 +179,29 @@ class WorkerLoopTests(unittest.TestCase):
         self.assertEqual(calls[1], ("bom", 7, "incremental"))
         self.assertEqual(calls[2], ("finish", 7, "success", 0, "incremental"))
         self.assertEqual(calls[3], ("full",))
+
+
+    def test_scheduled_run_records_export_files_from_result(self):
+        import tplus_datahub.jobs.worker_loop as wl
+        from tplus_datahub.jobs.job_sync_all import SyncAllResult
+        recorded = {}
+        def fake_record(**kwargs):
+            recorded.update(kwargs); return 1
+        wl.run_forever(
+            sync_once=lambda: SyncAllResult(0, ["bom_20260624_100751.xlsx", "current_stock_x.xlsx"]),
+            record_sync_run=fake_record,
+            sleep=lambda s: None,
+            max_runs=1,
+        )
+        self.assertEqual(["bom_20260624_100751.xlsx", "current_stock_x.xlsx"],
+                         recorded["detail_json"]["export_files"])
+
+    def test_scheduled_run_tolerates_int_sync_once(self):
+        import tplus_datahub.jobs.worker_loop as wl
+        recorded = {}
+        wl.run_forever(sync_once=lambda: 0, record_sync_run=lambda **k: recorded.update(k) or 1,
+                       sleep=lambda s: None, max_runs=1)
+        self.assertEqual([], recorded["detail_json"]["export_files"])
 
 
 if __name__ == "__main__":

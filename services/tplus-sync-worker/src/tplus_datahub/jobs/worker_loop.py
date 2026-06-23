@@ -4,11 +4,13 @@ import os
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from tplus_datahub.core.logger import get_logger
 from tplus_datahub.jobs.db_sync_requests import fetch_next_bom_request, finish_bom_request
+from tplus_datahub.jobs.job_sync_all import run as sync_all_run
 from tplus_datahub.jobs.job_sync_bom import main as sync_bom_main
-from tplus_datahub.jobs.job_sync_all import main as sync_all_main
+from tplus_datahub.jobs.job_sync_bom import run as sync_bom_run
 from tplus_datahub.jobs.sync_state import record_tplus_sync_run_if_configured
 
 
@@ -72,7 +74,7 @@ def _run_pending_db_bom_request(
     *,
     fetch_db_bom_request: Callable[..., dict | None],
     finish_db_bom_request: Callable[[int, str, int, dict], None],
-    sync_bom_request_once: Callable[[dict], int | None],
+    sync_bom_request_once: Callable[[dict], Any],
     logger,
 ) -> int | None:
     if not _truthy(os.getenv("TPLUS_DB_SYNC_REQUESTS_ENABLED", "true")):
@@ -83,13 +85,16 @@ def _run_pending_db_bom_request(
     request_id = int(request["id"])
     logger.info("DB T+ BOM sync request detected: id=%s mode=%s", request_id, request.get("mode"))
     try:
-        exit_code = int(sync_bom_request_once(request) or 0)
+        result = sync_bom_request_once(request)
+        exit_code = int(getattr(result, "exit_code", result) or 0)
+        export_files = list(getattr(result, "export_files", []) or [])
     except Exception as exc:
         logger.exception("DB T+ BOM sync failed with unexpected exception: id=%s", request_id)
         exit_code = 1
+        export_files = []
         detail = {"error": str(exc), "mode": request.get("mode"), "target_json": request.get("target_json") or {}}
     else:
-        detail = {"mode": request.get("mode"), "target_json": request.get("target_json") or {}}
+        detail = {"mode": request.get("mode"), "target_json": request.get("target_json") or {}, "export_files": export_files}
     status = "success" if exit_code == 0 else "failed"
     finish_db_bom_request(request_id, status, exit_code, detail)
     return exit_code
@@ -136,9 +141,9 @@ def _default_finish_db_bom_request(request_id: int, status: str, exit_code: int,
 
 def run_forever(
     *,
-    sync_once: Callable[[], int | None] = sync_all_main,
+    sync_once: Callable[[], Any] = sync_all_run,
     sync_bom_once: Callable[[], int | None] = sync_bom_main,
-    sync_bom_request_once: Callable[[dict], int | None] = lambda request: sync_bom_main(
+    sync_bom_request_once: Callable[[dict], Any] = lambda request: sync_bom_run(
         target=request.get("target_json") or {},
         mode=str(request.get("mode") or "incremental"),
     ),
@@ -157,10 +162,16 @@ def run_forever(
         run_count += 1
         logger.info("T+ sync run started: run=%s", run_count)
         try:
-            last_exit_code = int(sync_once() or 0)
+            outcome = sync_once()
         except Exception:
             logger.exception("T+ sync run failed with unexpected exception: run=%s", run_count)
-            last_exit_code = 1
+            outcome = 1
+        if hasattr(outcome, "exit_code"):
+            last_exit_code = int(outcome.exit_code or 0)
+            export_files = list(getattr(outcome, "export_files", []) or [])
+        else:
+            last_exit_code = int(outcome or 0)
+            export_files = []
 
         if last_exit_code == 0:
             logger.info("T+ sync run finished: run=%s status=success", run_count)
@@ -176,7 +187,7 @@ def run_forever(
                 status=status,
                 row_count=0,
                 exit_code=last_exit_code,
-                detail_json={"run": run_count},
+                detail_json={"run": run_count, "export_files": export_files},
                 error_json={},
             )
         except Exception:
