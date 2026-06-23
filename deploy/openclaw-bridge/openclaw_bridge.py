@@ -13,9 +13,22 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Condition, Lock, Thread
 from typing import Any
+
+
+def utc_now_iso() -> str:
+    """Current time as UTC ISO8601 with milliseconds and a Z suffix, e.g.
+    ``2026-06-23T15:30:00.123Z`` — every bridge log line shows its timezone at a
+    glance (containers run UTC, but the suffix makes it explicit and unambiguous)."""
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def log_line(message: str) -> None:
+    """Print a diagnostic line prefixed with a UTC ISO8601-Z timestamp."""
+    print(f"{utc_now_iso()} {message}", flush=True)
 
 
 FALLBACK_MESSAGE = os.getenv("WEB_DOCK_FALLBACK_MESSAGE", "ChatGPT 浏览器暂不可用，请稍后再试。")
@@ -29,7 +42,12 @@ FEISHU_MENTION_HELPER_PREFIXES = (
     "[System: The content may include mention tags in the form ",
     "[System: If user_id is ",
 )
-MAX_BRIDGE_IMAGES = 4
+try:
+    # Inbound images forwarded to WebDock per turn. Env-tunable (default 20) so the
+    # cap can track what ChatGPT's composer actually accepts without a code change.
+    MAX_BRIDGE_IMAGES = max(1, int(os.getenv("MAX_BRIDGE_IMAGES", "20")))
+except ValueError:
+    MAX_BRIDGE_IMAGES = 20
 MAX_BRIDGE_IMAGE_BYTES = 20 * 1024 * 1024
 FEISHU_PEER_PREFIXES = ("ou_", "oc_")
 
@@ -582,10 +600,9 @@ def enrich_feishu_metadata_with_session_route(
         try:
             current_record = find_current_feishu_session_record(session_key)
         except Exception as exc:
-            print(
+            log_line(
                 "feishu_session_route_lookup_failed "
-                + json.dumps({"session_key": session_key, "error": str(exc)}, ensure_ascii=False, sort_keys=True),
-                flush=True,
+                + json.dumps({"session_key": session_key, "error": str(exc)}, ensure_ascii=False, sort_keys=True)
             )
     fields = current_record.get("fields") if isinstance(current_record, dict) else {}
     if isinstance(fields, dict):
@@ -1288,7 +1305,7 @@ def append_feishu_session_console_records(details: dict[str, Any], reply: str, s
             )
         ensure_feishu_default_rule_record()
     except Exception as exc:
-        print(
+        log_line(
             "feishu_bitable_write_failed "
             + json.dumps(
                 {
@@ -1299,8 +1316,7 @@ def append_feishu_session_console_records(details: dict[str, Any], reply: str, s
                 },
                 ensure_ascii=False,
                 sort_keys=True,
-            ),
-            flush=True,
+            )
         )
 
 
@@ -1752,10 +1768,9 @@ def feishu_group_reply_policy(details: dict[str, Any]) -> tuple[bool, str]:
             if configured_mode in {"回复所有", "仅@回复"}:
                 reply_mode = configured_mode
         except Exception as exc:
-            print(
+            log_line(
                 "feishu_group_policy_read_failed "
-                + json.dumps({"chat_id": chat_id, "error": str(exc)}, ensure_ascii=False, sort_keys=True),
-                flush=True,
+                + json.dumps({"chat_id": chat_id, "error": str(exc)}, ensure_ascii=False, sort_keys=True)
             )
 
     with _feishu_group_policy_cache_lock:
@@ -1876,6 +1891,7 @@ def trace_batch_event(
     image_count = len(pending.images) if pending is not None else len(details.get("images") or [])
     expected_images = pending.expected_images if pending is not None else expected_image_count(details)
     payload = {
+        "ts": utc_now_iso(),
         "event": event,
         "request_id": details.get("request_id"),
         "wechat_account": metadata.get("wechat_account"),
@@ -1932,6 +1948,7 @@ def trace_chain_result(
         return
     metadata = details.get("metadata") or {}
     payload = {
+        "ts": utc_now_iso(),
         "event": "chain_result",
         "request_id": details.get("request_id"),
         "channel": metadata.get("channel") or "wechat",
@@ -2133,7 +2150,7 @@ def deliver_feishu_files(reply: str, details: dict[str, Any]) -> str:
     try:
         auth_token = feishu_tenant_access_token()
     except Exception as exc:  # token fetch failed; keep the legacy fallback
-        print(f"feishu file delivery: token error: {exc}")
+        log_line(f"feishu file delivery: token error: {exc}")
         auth_token = ""
     if not auth_token:
         return visible_file_fallback(body, files)
@@ -2144,13 +2161,13 @@ def deliver_feishu_files(reply: str, details: dict[str, Any]) -> str:
         try:
             data = fetch_outbound_file_bytes(item["url"])
             if not data or len(data) > FEISHU_MAX_FILE_BYTES:
-                print(f"feishu file delivery: skip {name} (size {len(data) if data else 0})")
+                log_line(f"feishu file delivery: skip {name} (size {len(data) if data else 0})")
                 continue
             file_key = feishu_upload_file(data, name, feishu_file_type_for(name), auth_token)
             feishu_send_file_message(details, message_id, file_key, auth_token)
             delivered.append(name)
         except Exception as exc:
-            print(f"feishu file delivery failed for {name}: {exc}")
+            log_line(f"feishu file delivery failed for {name}: {exc}")
     if not delivered:
         return visible_file_fallback(body, files)
     body = body.strip()
@@ -2174,7 +2191,7 @@ def deliver_feishu_media(reply: str, details: dict[str, Any]) -> str:
     try:
         auth_token = feishu_tenant_access_token()
     except Exception as exc:
-        print(f"feishu image delivery: token error: {exc}")
+        log_line(f"feishu image delivery: token error: {exc}")
         auth_token = ""
     if not auth_token:
         return visible_media_fallback(body, urls)
@@ -2190,7 +2207,7 @@ def deliver_feishu_media(reply: str, details: dict[str, Any]) -> str:
             feishu_send_image_message(details, message_id, image_key, auth_token)
             delivered += 1
         except Exception as exc:
-            print(f"feishu image delivery failed for {url}: {exc}")
+            log_line(f"feishu image delivery failed for {url}: {exc}")
             failed.append(url)
     parts = [body] if body else []
     parts.extend(f"图片链接：{url}" for url in failed)
@@ -2302,7 +2319,7 @@ def build_reply(body: dict[str, Any]) -> str:
         append_feishu_session_console_records_async(details, reply, "失败")
         return reply
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
-        print(f"webdock unavailable: {exc}")
+        log_line(f"webdock unavailable: {exc}")
         if isinstance(exc, TimeoutError):
             reply = diagnostic_message(
                 "bridge -> WebDock 请求超时，ChatGPT 可能仍在生成或页面未完成响应。",
@@ -2381,7 +2398,7 @@ def stream_sse(
         try:
             result["reply"] = reply_fn(body)
         except Exception as exc:  # keep the stream alive even if the worker fails
-            print(f"bridge stream worker error: {exc}")
+            log_line(f"bridge stream worker error: {exc}")
             result["reply"] = FALLBACK_MESSAGE
 
     worker = Thread(target=_run, daemon=True)
@@ -2472,10 +2489,9 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 cleared = sorted(_feishu_group_policy_cache.keys())
                 _feishu_group_policy_cache.clear()
-        print(
+        log_line(
             "feishu_group_policy_invalidated "
-            + json.dumps({"cleared": cleared}, ensure_ascii=False, sort_keys=True),
-            flush=True,
+            + json.dumps({"cleared": cleared}, ensure_ascii=False, sort_keys=True)
         )
         return self._json(200, {"ok": True, "cleared": cleared})
 
@@ -2545,7 +2561,8 @@ class Handler(BaseHTTPRequestHandler):
         stream_sse(write, body, model)
 
     def log_message(self, fmt: str, *args: Any) -> None:
-        print("[%s] %s" % (self.log_date_time_string(), fmt % args))
+        # UTC ISO8601-Z instead of BaseHTTPRequestHandler's local-time bracket form.
+        log_line(fmt % args)
 
 
 def get_bridge_hosts() -> list[str]:
@@ -2559,5 +2576,5 @@ if __name__ == "__main__":
     servers = [ThreadingHTTPServer((host, bridge_port), Handler) for host in bridge_hosts]
     for server in servers[1:]:
         Thread(target=server.serve_forever, daemon=True).start()
-    print("OpenClaw bridge listening on " + ", ".join(f"http://{host}:{bridge_port}/v1" for host in bridge_hosts))
+    log_line("OpenClaw bridge listening on " + ", ".join(f"http://{host}:{bridge_port}/v1" for host in bridge_hosts))
     servers[0].serve_forever()
