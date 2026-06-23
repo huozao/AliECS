@@ -5,6 +5,7 @@ import json
 import os
 from collections.abc import Mapping
 from contextlib import closing
+from dataclasses import dataclass
 from typing import Any
 
 try:
@@ -66,16 +67,23 @@ def build_snapshot_diff(previous: dict[str, Any] | None, current: dict[str, Any]
     }
 
 
+@dataclass
+class FullBomSnapshotResult:
+    full_rows: list[Any]
+    full_snapshot_id: int | None = None
+    diff_summary: dict[str, Any] | None = None
+
+
 def upsert_and_snapshot_full_bom(
     fetched_rows: list[Any], *, mode: str, source_json: dict[str, Any] | None = None
-) -> list[Any]:
+) -> FullBomSnapshotResult:
     """upsert 抓到的行 → 从 DB 拼全量 → 写全量快照 → 与上一份全量快照分类 diff →
     仅当 needs_review 时写 reconciliation。返回用于导出的全量行(无 DB 时回退 fetched_rows)。"""
     if psycopg is None:
-        return fetched_rows
+        return FullBomSnapshotResult(full_rows=fetched_rows)
     database_url = os.getenv("DATABASE_URL", "").strip()
     if not database_url:
-        return fetched_rows
+        return FullBomSnapshotResult(full_rows=fetched_rows)
     try:
         with closing(psycopg.connect(database_url, connect_timeout=3)) as conn:
             with conn.cursor() as cur:
@@ -107,10 +115,15 @@ def upsert_and_snapshot_full_bom(
                         """,
                         (diff["status"], diff["severity"], diff["summary"], Jsonb(diff["diff_json"]), snapshot["id"]),
                     )
+            diff_summary = diff["diff_json"]["classification"] if diff is not None else None
             conn.commit()
-            return full_rows
+            return FullBomSnapshotResult(
+                full_rows=full_rows,
+                full_snapshot_id=snapshot["id"],
+                diff_summary=diff_summary,
+            )
     except Exception:
-        return fetched_rows
+        return FullBomSnapshotResult(full_rows=fetched_rows)
 
 
 def record_tplus_sync_run_if_configured(

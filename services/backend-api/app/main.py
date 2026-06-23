@@ -1041,13 +1041,9 @@ def ops_tplus_timeline(
                             WHERE provider='chanjet' AND sync_run_id = sr.id
                             ORDER BY requested_at DESC NULLS LAST, id DESC LIMIT 1
                         ) req ON TRUE
-                        LEFT JOIN LATERAL (
-                            SELECT d.id FROM integration_reconciliation_diffs d
-                            JOIN integration_sync_snapshots s ON s.id = d.full_snapshot_id
-                            WHERE d.provider='chanjet' AND d.status='needs_review'
-                              AND s.created_at <= sr.finished_at
-                            ORDER BY s.created_at DESC LIMIT 1
-                        ) rec ON TRUE
+                        LEFT JOIN integration_reconciliation_diffs rec
+                            ON rec.provider='chanjet' AND rec.status='needs_review'
+                            AND rec.full_snapshot_id = NULLIF(sr.detail_json->>'full_snapshot_id','')::bigint
                         WHERE sr.provider='chanjet'
                         UNION ALL
                         SELECT 'request' AS kind, r.id, r.module, r.mode, r.status,

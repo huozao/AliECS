@@ -28,6 +28,8 @@ def build_query_params_from_target(target: dict | None) -> dict[str, str]:
 class SyncBomResult:
     exit_code: int
     export_files: list[str] = field(default_factory=list)
+    diff_summary: dict | None = None
+    full_snapshot_id: int | None = None
 
 
 def run(target: dict | None = None, mode: str = "full_bom") -> SyncBomResult:
@@ -40,10 +42,11 @@ def run(target: dict | None = None, mode: str = "full_bom") -> SyncBomResult:
             rows = sync_bom(settings=settings, timestamp=timestamp, query_params=query_params, include_disabled=True)
         else:
             rows = sync_bom(settings=settings, timestamp=timestamp)
-        full_rows = upsert_and_snapshot_full_bom(rows, mode=mode, source_json={"target": target or {}})
-        excel_path = export_bom(full_rows, settings=settings, timestamp=timestamp)
-        logger.info("Excel 已导出(全量 %s 行)：%s", len(full_rows), excel_path)
-        return SyncBomResult(exit_code=0, export_files=[excel_path.name])
+        snap = upsert_and_snapshot_full_bom(rows, mode=mode, source_json={"target": target or {}})
+        excel_path = export_bom(snap.full_rows, settings=settings, timestamp=timestamp)
+        logger.info("Excel 已导出(全量 %s 行)：%s", len(snap.full_rows), excel_path)
+        return SyncBomResult(exit_code=0, export_files=[excel_path.name],
+                             diff_summary=snap.diff_summary, full_snapshot_id=snap.full_snapshot_id)
     except ConfigError as exc:
         logger.error("配置错误：%s", exc); return SyncBomResult(2)
     except ChanjetAPIError as exc:

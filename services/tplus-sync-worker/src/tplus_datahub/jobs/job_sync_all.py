@@ -29,6 +29,8 @@ from pathlib import Path
 class SyncAllResult:
     exit_code: int
     export_files: list[str] = field(default_factory=list)
+    diff_summary: dict | None = None
+    full_snapshot_id: int | None = None
 
 
 def _basename(path: object) -> str:
@@ -60,8 +62,8 @@ def run() -> SyncAllResult:
         settings = load_settings()
 
         bom_rows = sync_bom(settings=settings, timestamp=timestamp)
-        full_rows = upsert_and_snapshot_full_bom(bom_rows, mode="scheduled_full", source_json={"job": "job_sync_all"})
-        bom_path = export_bom(full_rows, settings=settings, timestamp=timestamp)
+        snap = upsert_and_snapshot_full_bom(bom_rows, mode="scheduled_full", source_json={"job": "job_sync_all"})
+        bom_path = export_bom(snap.full_rows, settings=settings, timestamp=timestamp)
         exports.append(_basename(bom_path)); logger.info("BOM Excel exported: %s", bom_path)
 
         inventory_rows = sync_inventory(settings=settings, timestamp=timestamp)
@@ -92,7 +94,7 @@ def run() -> SyncAllResult:
 
         for module_name in PENDING_MODULES:
             logger.info("%s module endpoint is not confirmed; skipped", module_name)
-        return SyncAllResult(0, exports)
+        return SyncAllResult(0, exports, diff_summary=snap.diff_summary, full_snapshot_id=snap.full_snapshot_id)
     except ConfigError as exc:
         logger.error("Config error: %s", exc); return SyncAllResult(2, exports)
     except ChanjetAPIError as exc:

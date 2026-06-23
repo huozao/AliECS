@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import ANY, patch
 
 import tplus_datahub.jobs.job_sync_all as job_sync_all
+from tplus_datahub.jobs.sync_state import FullBomSnapshotResult
 
 
 class JobSyncAllTests(unittest.TestCase):
@@ -9,7 +10,7 @@ class JobSyncAllTests(unittest.TestCase):
         with (
             patch.object(job_sync_all, "load_settings", return_value="settings"),
             patch.object(job_sync_all, "sync_bom", return_value=[]),
-            patch.object(job_sync_all, "upsert_and_snapshot_full_bom", return_value=[]),
+            patch.object(job_sync_all, "upsert_and_snapshot_full_bom", return_value=FullBomSnapshotResult(full_rows=[])),
             patch.object(job_sync_all, "export_bom", return_value="bom.xlsx"),
             patch.object(job_sync_all, "sync_inventory", return_value=[]),
             patch.object(job_sync_all, "export_inventory", return_value="inventory.xlsx"),
@@ -72,7 +73,7 @@ class JobSyncAllTests(unittest.TestCase):
         with (
             patch.object(job, "load_settings", return_value="settings"),
             patch.object(job, "sync_bom", return_value=[]),
-            patch.object(job, "upsert_and_snapshot_full_bom", return_value=[], create=True),
+            patch.object(job, "upsert_and_snapshot_full_bom", return_value=FullBomSnapshotResult(full_rows=[], full_snapshot_id=7, diff_summary={"needs_review": False}), create=True),
             patch.object(job, "export_bom", return_value=Path("/x/bom_20260624_100751.xlsx")),
             patch.object(job, "sync_inventory", return_value=[]),
             patch.object(job, "export_inventory", return_value=Path("/x/current_stock_20260624_100752.xlsx")),
@@ -90,6 +91,7 @@ class JobSyncAllTests(unittest.TestCase):
         self.assertIn("bom_20260624_100751.xlsx", result.export_files)
         self.assertIn("current_stock_20260624_100752.xlsx", result.export_files)
         self.assertEqual(5, len(result.export_files))
+        self.assertEqual(7, result.full_snapshot_id)
 
 
 if __name__ == "__main__":

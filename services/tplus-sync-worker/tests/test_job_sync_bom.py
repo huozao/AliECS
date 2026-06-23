@@ -35,20 +35,25 @@ class JobSyncBomTests(unittest.TestCase):
 
     def test_incremental_exports_assembled_full_and_returns_basename(self):
         import tplus_datahub.jobs.job_sync_bom as job
+        from tplus_datahub.jobs.sync_state import FullBomSnapshotResult
         from unittest.mock import patch
         from pathlib import Path
         with (
             patch.object(job, "load_settings", return_value="settings"),
             patch.object(job, "sync_bom", return_value=[{"Code": "P", "Version": "V"}]),
             patch.object(job, "upsert_and_snapshot_full_bom",
-                         return_value=[{"Code": "P", "Version": "V"}, {"Code": "Q", "Version": "V"}]) as upsert,
+                         return_value=FullBomSnapshotResult(
+                             full_rows=[{"Code": "P", "Version": "V"}, {"Code": "Q", "Version": "V"}],
+                             full_snapshot_id=12,
+                             diff_summary={"needs_review": True, "qty_changed": 1})) as upsert,
             patch.object(job, "export_bom", return_value=Path("/x/bom_20260624_100751.xlsx")) as export,
         ):
             result = job.run(target={"code": "P"}, mode="incremental")
         self.assertEqual(0, result.exit_code)
         self.assertEqual(["bom_20260624_100751.xlsx"], result.export_files)
-        # 导出用的是拼出的全量(2 行)，非抓到的 1 行
         self.assertEqual(2, len(export.call_args.args[0]))
+        self.assertEqual({"needs_review": True, "qty_changed": 1}, result.diff_summary)
+        self.assertEqual(12, result.full_snapshot_id)
         upsert.assert_called_once()
 
     def test_incremental_request_without_target_falls_back_to_full_bom(self):

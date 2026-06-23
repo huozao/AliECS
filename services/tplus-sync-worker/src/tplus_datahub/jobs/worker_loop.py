@@ -88,13 +88,18 @@ def _run_pending_db_bom_request(
         result = sync_bom_request_once(request)
         exit_code = int(getattr(result, "exit_code", result) or 0)
         export_files = list(getattr(result, "export_files", []) or [])
+        diff_summary = getattr(result, "diff_summary", None)
+        full_snapshot_id = getattr(result, "full_snapshot_id", None)
     except Exception as exc:
         logger.exception("DB T+ BOM sync failed with unexpected exception: id=%s", request_id)
         exit_code = 1
         export_files = []
+        diff_summary = None
+        full_snapshot_id = None
         detail = {"error": str(exc), "mode": request.get("mode"), "target_json": request.get("target_json") or {}}
     else:
-        detail = {"mode": request.get("mode"), "target_json": request.get("target_json") or {}, "export_files": export_files}
+        detail = {"mode": request.get("mode"), "target_json": request.get("target_json") or {},
+                  "export_files": export_files, "diff_summary": diff_summary, "full_snapshot_id": full_snapshot_id}
     status = "success" if exit_code == 0 else "failed"
     finish_db_bom_request(request_id, status, exit_code, detail)
     return exit_code
@@ -169,9 +174,13 @@ def run_forever(
         if hasattr(outcome, "exit_code"):
             last_exit_code = int(outcome.exit_code or 0)
             export_files = list(getattr(outcome, "export_files", []) or [])
+            diff_summary = getattr(outcome, "diff_summary", None)
+            full_snapshot_id = getattr(outcome, "full_snapshot_id", None)
         else:
             last_exit_code = int(outcome or 0)
             export_files = []
+            diff_summary = None
+            full_snapshot_id = None
 
         if last_exit_code == 0:
             logger.info("T+ sync run finished: run=%s status=success", run_count)
@@ -187,7 +196,8 @@ def run_forever(
                 status=status,
                 row_count=0,
                 exit_code=last_exit_code,
-                detail_json={"run": run_count, "export_files": export_files},
+                detail_json={"run": run_count, "export_files": export_files,
+                             "diff_summary": diff_summary, "full_snapshot_id": full_snapshot_id},
                 error_json={},
             )
         except Exception:
