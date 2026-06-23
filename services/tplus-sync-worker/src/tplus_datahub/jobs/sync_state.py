@@ -117,6 +117,53 @@ def record_bom_snapshot_if_configured(rows: list[Any], *, mode: str, source_json
         return
 
 
+def upsert_and_snapshot_full_bom(
+    fetched_rows: list[Any], *, mode: str, source_json: dict[str, Any] | None = None
+) -> list[Any]:
+    """upsert 抓到的行 → 从 DB 拼全量 → 写全量快照 → 与上一份全量快照分类 diff →
+    仅当 needs_review 时写 reconciliation。返回用于导出的全量行(无 DB 时回退 fetched_rows)。"""
+    if psycopg is None:
+        return fetched_rows
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if not database_url:
+        return fetched_rows
+    try:
+        with closing(psycopg.connect(database_url, connect_timeout=3)) as conn:
+            with conn.cursor() as cur:
+                _upsert_tplus_bom_records(cur, [_normalize_row(r) for r in fetched_rows])
+            conn.commit()
+            full_rows = assemble_current_full_bom(conn)
+            snapshot = snapshot_bom_rows(full_rows)
+            source = dict(source_json or {})
+            source.update({"mode": mode, "snapshot_hash": snapshot["snapshot_hash"],
+                           "records": snapshot["raw_records"], "items": snapshot["items"]})
+            previous = _latest_full_snapshot(conn)
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO integration_sync_snapshots(provider, module, mode, row_count, snapshot_hash, source_json)
+                    VALUES ('chanjet', 'bom', %s, %s, %s, %s) RETURNING id
+                    """,
+                    (mode, snapshot["row_count"], snapshot["snapshot_hash"], Jsonb(source)),
+                )
+                snapshot["id"] = int(cur.fetchone()[0])
+                diff = build_snapshot_diff(previous, snapshot)
+                if diff is not None and diff["status"] == "needs_review":
+                    cur.execute(
+                        """
+                        INSERT INTO integration_reconciliation_diffs(
+                            provider, module, status, severity, summary, diff_json,
+                            full_snapshot_id, incremental_snapshot_id)
+                        VALUES ('chanjet', 'bom', %s, %s, %s, %s, %s, NULL)
+                        """,
+                        (diff["status"], diff["severity"], diff["summary"], Jsonb(diff["diff_json"]), snapshot["id"]),
+                    )
+            conn.commit()
+            return full_rows
+    except Exception:
+        return fetched_rows
+
+
 def record_tplus_sync_run_if_configured(
     *,
     module: str,
@@ -169,7 +216,6 @@ def _latest_full_snapshot(conn: Any) -> dict[str, Any] | None:
             FROM integration_sync_snapshots
             WHERE provider = 'chanjet'
               AND module = 'bom'
-              AND mode IN ('full_bom', 'scheduled_full')
             ORDER BY created_at DESC, id DESC
             LIMIT 1
             """
