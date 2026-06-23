@@ -39,10 +39,11 @@ def build_snapshot_diff(previous: dict[str, Any] | None, current: dict[str, Any]
         return None
     previous_count = int(previous.get("row_count") or 0)
     current_count = int(current.get("row_count") or 0)
-    item_diff = _diff_snapshot_items(previous.get("items") or [], current.get("items") or [])
+    classification = classify_bom_changes(previous.get("items") or [], current.get("items") or [])
+    needs_review = bool(classification["needs_review"])
     return {
-        "status": "needs_review",
-        "severity": "warning",
+        "status": "needs_review" if needs_review else "informational",
+        "severity": "warning" if needs_review else "info",
         "summary": f"BOM full snapshot changed: rows {previous_count} -> {current_count}",
         "diff_json": {
             "previous_snapshot_id": previous.get("id"),
@@ -52,7 +53,15 @@ def build_snapshot_diff(previous: dict[str, Any] | None, current: dict[str, Any]
             "previous_row_count": previous_count,
             "current_row_count": current_count,
             "row_count_delta": current_count - previous_count,
-            **item_diff,
+            "classification": {k: classification[k] for k in (
+                "qty_changed", "material_changed", "bom_deleted", "bom_added",
+                "status_changed", "cosmetic_changed", "needs_review")},
+            "added": classification.get("added", []),
+            "removed": classification.get("removed", []),
+            "changed": classification.get("changed", []),
+            "added_count": classification.get("added_count", 0),
+            "removed_count": classification.get("removed_count", 0),
+            "changed_count": classification.get("changed_count", 0),
         },
     }
 
@@ -285,6 +294,54 @@ def _bom_item_from_parent_child(
         "record_key": record_key,
         "record_hash": _stable_hash(comparable),
         **comparable,
+    }
+
+
+_PARENT_KEY_FIELDS = ("parent_code", "version")
+_STATUS_FIELDS = {"disabled", "default_bom"}
+_COSMETIC_FIELDS = {"parent_name", "child_name", "unit", "memo", "waste_rate"}
+
+
+def _parent_key(item: Mapping[str, Any]) -> tuple[str, str]:
+    return (str(item.get("parent_code") or ""), str(item.get("version") or ""))
+
+
+def classify_bom_changes(previous_items: list[Any], current_items: list[Any]) -> dict[str, Any]:
+    """把 item 级 diff 归类。needs_review 仅当: 改数值 / 增删替换原料 / 删整条 BOM。"""
+    item_diff = _diff_snapshot_items(previous_items, current_items)
+    prev_parents = {_parent_key(i) for i in previous_items}
+    cur_parents = {_parent_key(i) for i in current_items}
+    deleted_parents = prev_parents - cur_parents
+    added_parents = cur_parents - prev_parents
+
+    material_changed = 0
+    for item in (item_diff.get("added") or []) + (item_diff.get("removed") or []):
+        pk = _parent_key(item)
+        if pk not in added_parents and pk not in deleted_parents:
+            material_changed += 1
+
+    qty_changed = 0
+    status_changed = 0
+    cosmetic_changed = 0
+    for change in item_diff.get("changed") or []:
+        fields = set(change.get("changed_fields") or [])
+        if "quantity" in fields or "child_code" in fields:
+            qty_changed += 1
+        elif fields and fields <= _STATUS_FIELDS:
+            status_changed += 1
+        elif fields:
+            cosmetic_changed += 1
+
+    needs_review = qty_changed > 0 or material_changed > 0 or len(deleted_parents) > 0
+    return {
+        "qty_changed": qty_changed,
+        "material_changed": material_changed,
+        "bom_deleted": len(deleted_parents),
+        "bom_added": len(added_parents),
+        "status_changed": status_changed,
+        "cosmetic_changed": cosmetic_changed,
+        "needs_review": needs_review,
+        **item_diff,
     }
 
 

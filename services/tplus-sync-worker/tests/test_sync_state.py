@@ -31,12 +31,11 @@ class SyncStateTests(unittest.TestCase):
             previous={"id": 1, "row_count": 2, "snapshot_hash": "abc"},
             current={"id": 2, "row_count": 3, "snapshot_hash": "def"},
         )
-
         self.assertIsNotNone(diff)
         assert diff is not None
-        self.assertEqual("needs_review", diff["status"])
-        self.assertIn("BOM full snapshot changed", diff["summary"])
+        self.assertEqual("informational", diff["status"])
         self.assertEqual(1, diff["diff_json"]["row_count_delta"])
+        self.assertFalse(diff["diff_json"]["classification"]["needs_review"])
 
     def test_build_snapshot_diff_includes_bom_item_level_changes(self):
         previous = snapshot_bom_rows(
@@ -99,6 +98,62 @@ class SyncStateTests(unittest.TestCase):
         self.assertEqual(0, detail["removed_count"])
         self.assertEqual(1, detail["changed_count"])
         self.assertIn("disabled", detail["changed"][0]["changed_fields"])
+
+
+    def _snap(self, rows, sid):
+        s = snapshot_bom_rows(rows)
+        s["id"] = sid
+        return s
+
+    def test_qty_change_needs_review(self):
+        prev = self._snap([{"Code": "P", "Version": "V", "Disabled": "0",
+            "BOMChilds": [{"ID": "1", "Code": "C", "RequiredQuantity": 1}]}], 1)
+        cur = self._snap([{"Code": "P", "Version": "V", "Disabled": "0",
+            "BOMChilds": [{"ID": "1", "Code": "C", "RequiredQuantity": 2}]}], 2)
+        diff = build_snapshot_diff(previous=prev, current=cur)
+        c = diff["diff_json"]["classification"]
+        self.assertEqual(1, c["qty_changed"])
+        self.assertTrue(c["needs_review"])
+        self.assertEqual("needs_review", diff["status"])
+
+    def test_material_add_needs_review(self):
+        prev = self._snap([{"Code": "P", "Version": "V", "Disabled": "0",
+            "BOMChilds": [{"ID": "1", "Code": "C1", "RequiredQuantity": 1}]}], 1)
+        cur = self._snap([{"Code": "P", "Version": "V", "Disabled": "0",
+            "BOMChilds": [{"ID": "1", "Code": "C1", "RequiredQuantity": 1},
+                          {"ID": "2", "Code": "C2", "RequiredQuantity": 1}]}], 2)
+        c = build_snapshot_diff(previous=prev, current=cur)["diff_json"]["classification"]
+        self.assertEqual(1, c["material_changed"])
+        self.assertTrue(c["needs_review"])
+
+    def test_bom_deletion_needs_review(self):
+        prev = self._snap([{"Code": "P", "Version": "V", "Disabled": "0",
+            "BOMChilds": [{"ID": "1", "Code": "C", "RequiredQuantity": 1}]}], 1)
+        cur = self._snap([], 2)
+        c = build_snapshot_diff(previous=prev, current=cur)["diff_json"]["classification"]
+        self.assertEqual(1, c["bom_deleted"])
+        self.assertTrue(c["needs_review"])
+
+    def test_status_and_cosmetic_changes_are_informational(self):
+        prev = self._snap([{"Code": "P", "Name": "旧名", "Version": "V", "Disabled": "0", "IsDefaultBom": "1",
+            "BOMChilds": [{"ID": "1", "Code": "C", "Name": "料", "RequiredQuantity": 1, "Unit": {"Name": "kg"}}]}], 1)
+        cur = self._snap([{"Code": "P", "Name": "新名", "Version": "V", "Disabled": "1", "IsDefaultBom": "0",
+            "BOMChilds": [{"ID": "1", "Code": "C", "Name": "料改名", "RequiredQuantity": 1, "Unit": {"Name": "g"}}]}], 2)
+        diff = build_snapshot_diff(previous=prev, current=cur)
+        c = diff["diff_json"]["classification"]
+        self.assertEqual(0, c["qty_changed"])
+        self.assertEqual(0, c["material_changed"])
+        self.assertEqual(0, c["bom_deleted"])
+        self.assertFalse(c["needs_review"])
+        self.assertEqual("informational", diff["status"])
+
+    def test_new_bom_is_informational(self):
+        prev = self._snap([], 1)
+        cur = self._snap([{"Code": "P", "Version": "V", "Disabled": "0",
+            "BOMChilds": [{"ID": "1", "Code": "C", "RequiredQuantity": 1}]}], 2)
+        c = build_snapshot_diff(previous=prev, current=cur)["diff_json"]["classification"]
+        self.assertEqual(1, c["bom_added"])
+        self.assertFalse(c["needs_review"])
 
 
 if __name__ == "__main__":
