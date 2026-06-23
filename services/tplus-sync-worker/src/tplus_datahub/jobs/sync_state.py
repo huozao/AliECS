@@ -297,9 +297,7 @@ def _bom_item_from_parent_child(
     }
 
 
-_PARENT_KEY_FIELDS = ("parent_code", "version")
 _STATUS_FIELDS = {"disabled", "default_bom"}
-_COSMETIC_FIELDS = {"parent_name", "child_name", "unit", "memo", "waste_rate"}
 
 
 def _parent_key(item: Mapping[str, Any]) -> tuple[str, str]:
