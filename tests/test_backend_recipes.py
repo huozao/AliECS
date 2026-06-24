@@ -58,6 +58,15 @@ class BackendRecipeRouteTests(unittest.TestCase):
                 del sys.modules[name]
         sys.path[:] = self._old_sys_path
 
+    def test_warm_recipe_caches_populates_detail_cache(self) -> None:
+        # 后台预热：解析进缓存，使用户请求永不撞冷解析；价格表缺失时优雅跳过、不抛异常。
+        from app.main import warm_recipe_caches
+        from app.recipes import bom_query as bq
+
+        bq._DETAIL_CACHE.clear()
+        warm_recipe_caches()
+        self.assertTrue(bq._DETAIL_CACHE)
+
     def _write_source_workbook(self) -> Path:
         source = self.tmp_path / "bom_20260604.xlsx"
         material_rows = [

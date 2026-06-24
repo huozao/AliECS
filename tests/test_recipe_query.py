@@ -267,6 +267,37 @@ class RecipeQueryTests(unittest.TestCase):
         self.assertAlmostEqual(12.5, recipes[0]["system_total"])
         self.assertAlmostEqual(12.5, recipes[0]["current_total"])
 
+    def test_concurrent_load_parses_only_once(self) -> None:
+        # 并发 query+cost 命中同一文件时，加锁后只解析一次、共享同一份结果（防冷解析双倍 CPU/504）。
+        import threading
+        import time
+        from app.recipes import bom_query as bq
+        source = self._write_source_workbook()
+        bq._DETAIL_CACHE.clear()
+        calls = {"n": 0}
+        real = bq._load_detail_from_workbook_uncached
+
+        def counting(path):
+            calls["n"] += 1
+            time.sleep(0.3)  # 拖长解析，制造并发窗口
+            return real(path)
+
+        bq._load_detail_from_workbook_uncached = counting
+        results: list = []
+        try:
+            threads = [
+                threading.Thread(target=lambda: results.append(bq.load_detail_from_workbook(source)))
+                for _ in range(4)
+            ]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        finally:
+            bq._load_detail_from_workbook_uncached = real
+        self.assertEqual(1, calls["n"])  # 4 个并发只触发一次解析
+        self.assertTrue(results and all(r is results[0] for r in results))
+
     def test_float_or_zero_coercion_contract(self) -> None:
         # 锁定 _float_or_zero 的数值强转语义（重构掉 per-scalar pd.Series 后必须逐一致）。
         from app.recipes.bom_query import _float_or_zero

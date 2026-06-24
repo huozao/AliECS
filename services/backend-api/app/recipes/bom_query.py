@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -344,6 +345,9 @@ def file_content_signature(path: Path) -> str:
 # 按文件内容签名缓存已解析的 BOM 明细。openpyxl 解析整本 xlsx 约 3s，且
 # /query 与 /cost 会各解析一次、T+ 每小时产出的文件常逐字节相同，故缓存收益很大。
 _DETAIL_CACHE: dict[str, pd.DataFrame] = {}
+# 串行化冷解析：/query 与 /cost 接口会并行命中同一文件，冷解析在机器 CPU 突发时达
+# 9~17s，两个线程同时解析会让 CPU/内存翻倍、更易一起 504。加锁后并发只解析一次、共享结果。
+_DETAIL_LOCK = threading.Lock()
 
 
 def load_detail_from_workbook(input_path: Path) -> pd.DataFrame:
@@ -351,10 +355,14 @@ def load_detail_from_workbook(input_path: Path) -> pd.DataFrame:
     cached = _DETAIL_CACHE.get(signature)
     if cached is not None:
         return cached
-    detail = _load_detail_from_workbook_uncached(input_path)
-    _DETAIL_CACHE.clear()  # 只保留最新一份，限制内存
-    _DETAIL_CACHE[signature] = detail
-    return detail
+    with _DETAIL_LOCK:
+        cached = _DETAIL_CACHE.get(signature)  # 拿到锁后复检，避免并发重复解析
+        if cached is not None:
+            return cached
+        detail = _load_detail_from_workbook_uncached(input_path)
+        _DETAIL_CACHE.clear()  # 只保留最新一份，限制内存
+        _DETAIL_CACHE[signature] = detail
+        return detail
 
 
 def _load_detail_from_workbook_uncached(input_path: Path) -> pd.DataFrame:
