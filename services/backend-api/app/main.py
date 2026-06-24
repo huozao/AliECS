@@ -8,6 +8,7 @@ import json
 import os
 import secrets
 import shutil
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -32,6 +33,7 @@ from app.recipes.active_bom import copy_latest_bom_source, export_active_bom_row
 from app.recipes.bom_query import (
     calculate_recipe_costs,
     export_path_for_id,
+    load_detail_from_workbook,
     locate_recipe_source,
     new_export_path,
     query_recipe_workbook,
@@ -1911,6 +1913,38 @@ def _latest_bom_sync_run() -> dict[str, Any] | None:
                 }
     except Exception:
         return None
+
+
+# ── 配方/价格缓存预热 ──────────────────────────────────────────────
+# 冷解析在机器 CPU 突发时可达 9~17s（远超 nginx 60s）→ 宽查询 504 的根因之一。后台线程
+# 定期探测（命中缓存只是一次 md5，极快），文件变化才在请求路径之外重解析，让用户请求永远
+# 命中热缓存。任何异常都吞掉（数据未就绪时优雅跳过）。
+_RECIPE_WARM_INTERVAL = max(15, int(os.getenv("RECIPE_CACHE_WARM_INTERVAL", "45")))
+
+
+def warm_recipe_caches() -> None:
+    try:
+        load_detail_from_workbook(locate_recipe_source())
+    except Exception:
+        pass
+    try:
+        latest_purchase_prices()
+        latest_sales_prices()
+    except Exception:
+        pass
+
+
+def _recipe_cache_warm_loop() -> None:
+    while True:
+        warm_recipe_caches()
+        time.sleep(_RECIPE_WARM_INTERVAL)
+
+
+@app.on_event("startup")
+def _start_recipe_cache_warmer() -> None:
+    if os.getenv("RECIPE_CACHE_WARM", "1") != "1":
+        return
+    threading.Thread(target=_recipe_cache_warm_loop, name="recipe-cache-warmer", daemon=True).start()
 
 
 @app.post("/v1/recipes/query")

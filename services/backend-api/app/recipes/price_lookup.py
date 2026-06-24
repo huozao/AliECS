@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import threading
 from pathlib import Path
 
 import pandas as pd
@@ -37,6 +38,7 @@ def _latest_file(directory: Path, prefix: str) -> Path | None:
 
 # 按文件内容签名缓存解析结果：sales/purchase 价格 xlsx 解析约 0.6~3s，避免每次 /cost 重复解析。
 _PRICE_CACHE: dict[str, dict[str, dict[str, object]]] = {}
+_PRICE_LOCK = threading.Lock()  # 与 BOM 解析同理：并发只解析一次价格表，避免双重解析
 
 
 def _file_content_signature(path: Path) -> str:
@@ -52,11 +54,15 @@ def _read_latest_prices(path: Path) -> dict[str, dict[str, object]]:
     cached = _PRICE_CACHE.get(signature)
     if cached is not None:
         return cached
-    result = _read_latest_prices_uncached(path)
-    if len(_PRICE_CACHE) >= 6:  # 采购+销售各一份，留些余量后整体清空限制内存
-        _PRICE_CACHE.clear()
-    _PRICE_CACHE[signature] = result
-    return result
+    with _PRICE_LOCK:
+        cached = _PRICE_CACHE.get(signature)  # 拿到锁后复检
+        if cached is not None:
+            return cached
+        result = _read_latest_prices_uncached(path)
+        if len(_PRICE_CACHE) >= 6:  # 采购+销售各一份，留些余量后整体清空限制内存
+            _PRICE_CACHE.clear()
+        _PRICE_CACHE[signature] = result
+        return result
 
 
 def _read_latest_prices_uncached(path: Path) -> dict[str, dict[str, object]]:
