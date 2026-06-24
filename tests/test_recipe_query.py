@@ -33,6 +33,31 @@ class RecipeQueryTests(unittest.TestCase):
                 del sys.modules[name]
         sys.path[:] = self._old_sys_path
 
+    def test_locate_recipe_source_uses_latest_export_not_active_dir(self) -> None:
+        # formula 始终用 worker 最新全量导出，不再被人工激活的「活动 BOM」目录劫持。
+        import os
+        from app.recipes.bom_query import locate_recipe_source
+        active_dir = self.tmp_path / "active"
+        input_dir = self.tmp_path / "export"
+        active_dir.mkdir()
+        input_dir.mkdir()
+        (active_dir / "bom_20260101_000000.xlsx").write_bytes(b"x")  # 旧的人工激活文件
+        (input_dir / "bom_20260624_044650.xlsx").write_bytes(b"x")   # worker 最新导出
+        saved = {k: os.environ.get(k) for k in
+                 ("RECIPE_BOM_INPUT_PATH", "RECIPE_ACTIVE_BOM_DIR", "RECIPE_BOM_INPUT_DIR")}
+        os.environ.pop("RECIPE_BOM_INPUT_PATH", None)
+        os.environ["RECIPE_ACTIVE_BOM_DIR"] = str(active_dir)
+        os.environ["RECIPE_BOM_INPUT_DIR"] = str(input_dir)
+        try:
+            result = locate_recipe_source()
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+        self.assertEqual("bom_20260624_044650.xlsx", result.name)
+
     def _write_source_workbook(self) -> Path:
         source = self.tmp_path / "bom_20260604.xlsx"
         material_rows = [

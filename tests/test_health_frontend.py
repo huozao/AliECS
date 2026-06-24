@@ -40,6 +40,16 @@ class HealthFrontendTests(unittest.TestCase):
         self.assertNotIn("function loadTplusRequests(", self.html)
         self.assertNotIn("<h2>差异校验</h2>", self.html)
 
+    def test_timeline_detail_shows_reviewable_change_breakdown(self) -> None:
+        # 复核需能看到具体变化明细（名称+数量），并能"标记已复核"消警。
+        self.assertIn("function renderDiffDetail(", self.html)
+        self.assertIn("function renderChangedRows(", self.html)
+        self.assertIn("/v1/ops/reconciliation/", self.html)
+        self.assertIn("标记已复核", self.html)
+        self.assertIn("变化明细", self.html)
+        self.assertIn("原数量", self.html)
+        self.assertIn("新数量", self.html)
+
 
 if __name__ == "__main__":
     unittest.main()

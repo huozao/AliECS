@@ -151,13 +151,35 @@
       if(prev)prev.onclick=()=>{tplusTlOffset=Math.max(0,tplusTlOffset-TPLUS_TL_LIMIT);loadTplusTimeline();};
       if(next)next.onclick=()=>{tplusTlOffset=tplusTlOffset+TPLUS_TL_LIMIT;loadTplusTimeline();};
     }
-    function openTimelineDetail(index){
+    function renderDiffItemRows(title,items){
+      const rows=(items||[]).map((item)=>`<tr><td>${esc(item.parent_code)}</td><td>${esc(item.parent_name)}</td><td>${esc(item.version)}</td><td>${esc(item.child_code)}</td><td>${esc(item.child_name)}</td><td>${esc(item.unit)}</td><td>${esc(item.quantity)}</td><td>${esc(item.disabled)}</td></tr>`).join('');
+      return `<h4>${title}（${(items||[]).length}）</h4><table><thead><tr><th>父件编码</th><th>父件名称</th><th>版本</th><th>子件编码</th><th>子件名称</th><th>单位</th><th>数量</th><th>停用</th></tr></thead><tbody>${rows||'<tr><td colspan="8" class="muted">无</td></tr>'}</tbody></table>`;
+    }
+    function renderChangedRows(items){
+      const rows=(items||[]).map((item)=>`<tr><td>${esc(item.key&&item.key.parent_code)}</td><td>${esc(item.key&&item.key.version)}</td><td>${esc(item.key&&item.key.child_code)}</td><td>${esc((item.changed_fields||[]).join(', '))}</td><td>${esc(item.before&&item.before.quantity)}</td><td>${esc(item.after&&item.after.quantity)}</td><td>${esc(item.before&&item.before.child_name)}</td><td>${esc(item.after&&item.after.child_name)}</td></tr>`).join('');
+      return `<h4>字段变化（${(items||[]).length}）</h4><table><thead><tr><th>父件编码</th><th>版本</th><th>子件编码</th><th>变化字段</th><th>原数量</th><th>新数量</th><th>原子件名</th><th>新子件名</th></tr></thead><tbody>${rows||'<tr><td colspan="8" class="muted">无</td></tr>'}</tbody></table>`;
+    }
+    function renderDiffDetail(diff){
+      const d=diff||{};
+      return `<p class="muted">新增 ${d.added_count||0} · 删除 ${d.removed_count||0} · 变化 ${d.changed_count||0} · 行数变化 ${d.row_count_delta||0}</p>${renderDiffItemRows('新增子件',d.added||[])}${renderDiffItemRows('删除子件',d.removed||[])}${renderChangedRows(d.changed||[])}<details style="margin-top:12px"><summary>原始 JSON</summary><pre>${esc(JSON.stringify(d,null,2))}</pre></details>`;
+    }
+    async function openTimelineDetail(index){
       const it=tplusTlItems[index];if(!it)return;
       const head=`<p class="muted">${esc(it.number)} · ${esc(it.module)}/${esc(it.mode)}/${esc(it.status)} · ${fmtTime(it.event_time)} · 请求ID ${esc(it.request_id||'-')} · 事件 ${esc(it.reason_event_id||'-')}</p>`;
       const files=(it.export_files||[]).length?`<p>产出 Excel：${excelCell(it.export_files)}</p>`:'';
-      const review=it.needs_review&&it.reconciliation_id
-        ?`<div class="row" style="margin-top:10px"><button class="btn primary" onclick="resolveRecon(${it.reconciliation_id},'use_current')">采用当前</button><button class="btn" onclick="resolveRecon(${it.reconciliation_id},'use_previous')">保留上一</button><button class="btn" onclick="resolveRecon(${it.reconciliation_id},'ignore')">忽略</button></div>`:'';
-      openModal(`同步详情 ${it.number}`,`${head}${files}${jsonDetailBlock('变化摘要',it.diff_summary)}${review}`);
+      const base=`${head}${files}${jsonDetailBlock('变化摘要',it.diff_summary)}`;
+      if(!it.reconciliation_id){openModal(`同步详情 ${it.number}`,base);return;}
+      openModal(`同步详情 ${it.number}`,`${base}<p class="muted">正在加载变化明细…</p>`);
+      try{
+        const data=await api(`/v1/ops/reconciliation/${it.reconciliation_id}`);
+        const detail=renderDiffDetail(data.diff_json||{});
+        const action=data.status==='needs_review'
+          ?`<div class="row" style="margin-top:10px"><button class="btn primary" onclick="resolveRecon(${it.reconciliation_id},'ignore')">标记已复核</button></div>`
+          :`<p class="muted">复核状态：${esc(data.status)}</p>`;
+        openModal(`同步详情 ${it.number}`,`${base}<h3 style="margin:14px 0 6px">变化明细</h3>${detail}${action}`);
+      }catch(error){
+        openModal(`同步详情 ${it.number}`,`${base}<div class="attention critical">变化明细加载失败：${esc(error.message)}</div>`);
+      }
     }
     function renderHosts(items){
       const rows=(items||[]).map((item)=>`<tr><td>${item.name}</td><td>${chip(item.ok?'ok':'failed')}</td><td>${item.status_code||''}</td><td>${item.latency_ms||''}</td><td>${item.description||item.message||item.url||''}</td><td><button class="btn primary" type="button" onclick="openHost('${encodeURIComponent(item.name)}')">查看/刷新</button></td></tr>`).join('');
@@ -171,8 +193,7 @@
       try{
         const note=document.getElementById('reconNote')?.value||'';
         const data=await api(`/v1/ops/reconciliation/${id}/actions`,{method:'POST',body:JSON.stringify({action,note})});
-        const resolution=data.resolution||{};
-        openModal(`差异已处理 #${id}`,`<p>处理状态：${esc(data.status)}</p><p class="muted">生成文件：${esc(resolution.active_export_name||'-')}</p><pre>${esc(JSON.stringify(resolution,null,2))}</pre>`);
+        openModal(`复核已处理 #${id}`,`<p>状态：${esc(data.status)}</p><pre>${esc(JSON.stringify(data.resolution||{},null,2))}</pre>`);
         await refresh();
       }catch(error){openModal(`差异处理失败 #${id}`,`<div class="attention critical"><strong>处理失败</strong><br/>${error.message}</div>`);}
     }

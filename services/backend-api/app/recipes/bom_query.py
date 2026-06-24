@@ -186,7 +186,10 @@ def flatten_codes(values: Iterable[str] | None) -> list[str]:
     return list(dict.fromkeys(result))
 
 
-def locate_recipe_source(*, include_active: bool = True) -> Path:
+def locate_recipe_source(*, include_active: bool = False) -> Path:
+    # 默认始终用 worker 最新产出的全量导出（与 health 时间线「同步 #N」一致），不再被
+    # 人工激活的「活动 BOM」目录劫持——复核仅作记录/告警，不阻断 formula 查询。
+    # include_active 仅供需要"上次激活快照"的特殊路径显式开启。
     configured_path = os.getenv("RECIPE_BOM_INPUT_PATH", "").strip()
     if configured_path:
         path = Path(configured_path)
