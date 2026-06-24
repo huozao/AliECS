@@ -149,7 +149,7 @@ jobs:
           host: ${{ secrets.ECS_HOST }}
           username: ${{ secrets.ECS_USER }}
           key: ${{ secrets.ECS_SSH_KEY }}
-          command_timeout: 25m
+          command_timeout: 40m
           envs: GHCR_USERNAME,GHCR_TOKEN,ALIYUN_KMS_SECRET_NAME,ALIYUN_REGION_ID
           script: |
             set -euo pipefail
