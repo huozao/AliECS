@@ -69,7 +69,7 @@ class WechatLoginQrTests(unittest.TestCase):
     def test_health_page_has_add_wechat_entry(self) -> None:
         html = HEALTH_PAGE.read_text(encoding="utf-8")
 
-        self.assertIn("功能区", html)
+        self.assertIn("渠道与其他", html)
         self.assertIn("添加新微信", html)
         self.assertIn("wechatQrModal", html)
         self.assertIn("/v1/ops/wechat/login-qr", html)
