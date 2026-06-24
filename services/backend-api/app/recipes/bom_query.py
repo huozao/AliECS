@@ -452,20 +452,20 @@ def query_recipe_workbook(
 
 
 def _cost_quantity(quantity: object, unit: object) -> float:
-    value = pd.to_numeric(pd.Series([quantity]), errors="coerce").iloc[0]
-    if pd.isna(value):
-        return 0.0
-    unit_text = normalize_cell(unit)
-    if unit_text in GRAM_UNITS:
-        return float(value) / 1000
-    return float(value)
+    value = _float_or_zero(quantity)
+    if normalize_cell(unit) in GRAM_UNITS:
+        return value / 1000
+    return value
 
 
 def _float_or_zero(value: object) -> float:
-    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-    if pd.isna(numeric):
+    # 纯 float() 强转替代 per-scalar `pd.Series([x])+to_numeric`：语义一致（不可解析/NaN→0），
+    # 但不再在 iterrows 循环里为每个标量新建 Series（全量核算 ~115s → 亚秒）。
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
         return 0.0
-    return float(numeric)
+    return 0.0 if numeric != numeric else numeric
 
 
 def _normalized_float_mapping(values: dict[str, float] | None) -> dict[str, float]:

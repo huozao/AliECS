@@ -267,6 +267,29 @@ class RecipeQueryTests(unittest.TestCase):
         self.assertAlmostEqual(12.5, recipes[0]["system_total"])
         self.assertAlmostEqual(12.5, recipes[0]["current_total"])
 
+    def test_float_or_zero_coercion_contract(self) -> None:
+        # 锁定 _float_or_zero 的数值强转语义（重构掉 per-scalar pd.Series 后必须逐一致）。
+        from app.recipes.bom_query import _float_or_zero
+        cases = [
+            (5, 5.0), (5.5, 5.5), ("5", 5.0), ("5.5", 5.5), ("  7 ", 7.0),
+            (None, 0.0), ("", 0.0), ("abc", 0.0), ("1,234", 0.0), (True, 1.0),
+        ]
+        for value, expected in cases:
+            self.assertEqual(expected, _float_or_zero(value), msg=repr(value))
+        self.assertEqual(0.0, _float_or_zero(float("nan")))
+        self.assertEqual(0.0, _float_or_zero(pd.NA))
+
+    def test_cost_quantity_unit_and_coercion_contract(self) -> None:
+        # 克类单位 /1000、其余原值；无法解析→0。
+        from app.recipes.bom_query import _cost_quantity
+        self.assertAlmostEqual(0.005, _cost_quantity(5, "克"))
+        self.assertAlmostEqual(0.5, _cost_quantity(500, "g"))
+        self.assertAlmostEqual(0.005, _cost_quantity(5, " G "))
+        self.assertAlmostEqual(5.0, _cost_quantity(5, "kg"))
+        self.assertAlmostEqual(0.0025, _cost_quantity("2.5", "g"))
+        self.assertEqual(0.0, _cost_quantity(None, "克"))
+        self.assertEqual(0.0, _cost_quantity("abc", "kg"))
+
     def test_save_recipe_workbook_creates_human_review_and_matrix_sheets(self) -> None:
         from app.recipes.bom_query import query_recipe_workbook, save_recipe_workbook
 
