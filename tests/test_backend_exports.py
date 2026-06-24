@@ -141,6 +141,15 @@ class BackendExportsTests(unittest.TestCase):
         self.assertEqual(["bom_20260624_085500.xlsx"], mapping[250])
         self.assertNotIn(252, mapping)
 
+    def test_match_export_files_handles_timezone_aware_run_datetimes(self):
+        # psycopg returns timestamptz columns as tz-aware datetimes; file timestamps
+        # parse to naive datetimes. Comparing the two must not raise TypeError.
+        from datetime import datetime, timezone
+        from app.main import _match_export_files_to_runs
+        aware = datetime(2026, 6, 23, 22, 42, 2, 746980, tzinfo=timezone.utc)
+        mapping = _match_export_files_to_runs([(253, aware)], ["bom_20260623_224150.xlsx"])
+        self.assertEqual(["bom_20260623_224150.xlsx"], mapping[253])
+
     def test_tplus_download_rejects_traversal_and_non_xlsx(self) -> None:
         from fastapi import HTTPException
 

@@ -179,6 +179,28 @@ class BackendOpsStatusTests(unittest.TestCase):
         self.assertEqual("请求·R58", req_row["number"])
         self.assertEqual(2, result["total"])
 
+    def test_tplus_timeline_matches_ondisk_excel_with_tzaware_run_time(self) -> None:
+        # Production scenario: psycopg returns event_time as tz-aware datetime and the
+        # export dir has files -> the time-match fallback must not raise (regression for 500).
+        from app import main as main_module
+        import pathlib
+        import tempfile
+        old_conn = main_module._conn
+        old_dir = main_module._tplus_export_dir
+        tmp = tempfile.mkdtemp()
+        (pathlib.Path(tmp) / "bom_20260623_224150.xlsx").write_bytes(b"x")
+        main_module._conn = lambda: _FakeTimelineTzConn()
+        main_module._tplus_export_dir = lambda: pathlib.Path(tmp)
+        try:
+            result = main_module.ops_tplus_timeline(limit=20, offset=0, _={})
+        finally:
+            main_module._conn = old_conn
+            main_module._tplus_export_dir = old_dir
+        run_row = next(r for r in result["items"] if r["kind"] == "run")
+        self.assertEqual(["bom_20260623_224150.xlsx"], [f["name"] for f in run_row["export_files"]])
+        self.assertFalse(run_row["export_files"][0]["pruned"])
+        self.assertEqual(f"/v1/exports/tplus/bom_20260623_224150.xlsx", run_row["export_files"][0]["download_url"])
+
     def test_formula_cost_rbac_seed_includes_requested_roles_and_permission(self) -> None:
         migration = Path(__file__).resolve().parents[1] / "db" / "migrations" / "0012_formula_cost_rbac.sql"
         sql = migration.read_text(encoding="utf-8")
@@ -300,6 +322,51 @@ class _FakeTimelineCursor:
             return
         if "count(*)" in normalized:
             self._one = (2,)
+            return
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return self._rows
+
+    def fetchone(self) -> tuple[Any, ...] | None:
+        return self._one
+
+
+class _FakeTimelineTzConn:
+    def cursor(self) -> "_FakeTimelineTzCursor":
+        return _FakeTimelineTzCursor()
+
+    def close(self) -> None:
+        pass
+
+
+class _FakeTimelineTzCursor:
+    def __init__(self) -> None:
+        self._rows: list[tuple[Any, ...]] = []
+        self._one: tuple[Any, ...] | None = None
+
+    def __enter__(self) -> "_FakeTimelineTzCursor":
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        pass
+
+    def execute(self, sql: str, params: tuple[Any, ...] | list[Any] | None = None) -> None:
+        import datetime as _dt
+        normalized = " ".join(sql.lower().split())
+        self._rows = []
+        self._one = None
+        if "union all" in normalized:
+            # event_time is a tz-aware datetime, like psycopg returns for timestamptz;
+            # detail_json has no export_files so the on-disk time-match fallback runs.
+            self._rows = [
+                ("run", 253, "all", "scheduled_full", "success",
+                 _dt.datetime(2026, 6, 23, 22, 42, 2, 746980, tzinfo=_dt.timezone.utc),
+                 800, 0, None, None, {"run": 5}, None),
+            ]
+            return
+        if "count(*)" in normalized:
+            self._one = (1,)
             return
         raise AssertionError(f"unexpected SQL: {sql}")
 

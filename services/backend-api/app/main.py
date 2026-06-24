@@ -2135,6 +2135,9 @@ def _match_export_files_to_runs(runs: list[tuple[Any, Any]], files: list[str]) -
         if finished is None:
             continue
         dt = finished if isinstance(finished, datetime) else datetime.fromisoformat(str(finished).replace("Z", "")[:19])
+        # psycopg 返回 timestamptz 为 tz-aware；文件名时间戳解析为 naive。统一为 naive-UTC 再比较，避免 TypeError。
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
         parsed_runs.append((dt, run_id))
     parsed_runs.sort()
     mapping: dict[Any, list[str]] = {}
