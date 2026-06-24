@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>AliECS · 数据导出</title>
+  <style>
+    :root{--bg:#f7f5f0;--panel:#fffdf8;--text:#25211b;--muted:#766f63;--line:#e7dfd0;--good:#3f7a4c;--warn:#a46b1f;--bad:#a6423a;--primary:#6f5e46;--shadow:0 12px 30px rgba(69,56,38,.08)}
+    *{box-sizing:border-box}.hidden{display:none!important}body{margin:0;background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui}.wrap{max-width:1180px;margin:0 auto;padding:20px 18px 56px}.topbar{display:flex;justify-content:space-between;gap:14px;align-items:center;background:rgba(255,253,248,.94);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px;padding:16px 18px;margin-bottom:16px}h1{margin:0;font-size:30px}.subtitle{margin:6px 0 0;color:var(--muted)}.actions{display:flex;gap:8px;flex-wrap:wrap}.btn,button{border:0;border-radius:999px;padding:9px 13px;background:#e8dfcf;color:var(--text);font-weight:650;text-decoration:none;cursor:pointer}.btn.primary{background:var(--primary);color:#fff}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.band,.panel{background:rgba(255,253,248,.94);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:16px;padding:16px;margin-bottom:14px}.clickable{cursor:pointer}.metric{font-size:30px;font-weight:800;margin-top:8px}.muted{color:var(--muted)}.chip{display:inline-flex;align-items:center;border-radius:999px;padding:5px 9px;font-size:12px;font-weight:750}.ok{background:#dfeee3;color:var(--good)}.degraded,.warning{background:#f4ead8;color:var(--warn)}.critical,.failed{background:#f5d7d3;color:var(--bad)}table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}th,td{border-bottom:1px solid var(--line);padding:9px 10px;text-align:left;font-size:13px;vertical-align:top}th{background:#f2eadc}.list{display:grid;gap:8px}.attention{border-left:4px solid var(--warn);padding:8px 10px;background:#fff;border-radius:8px}.attention.critical{border-left-color:var(--bad)}.modal{position:fixed;inset:0;background:rgba(30,22,12,.28);display:none;align-items:center;justify-content:center;padding:16px}.modal.show{display:flex}.modal-panel{width:min(860px,100%);max-height:88vh;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px}pre{white-space:pre-wrap;word-break:break-word;background:#f7f5f0;border:1px solid var(--line);border-radius:12px;padding:12px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}textarea{width:100%;min-height:76px;border:1px solid var(--line);border-radius:12px;padding:10px 12px;font:inherit}@media (max-width:900px){.grid{grid-template-columns:1fr}.topbar{align-items:flex-start;flex-direction:column}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <div><h1>数据导出</h1><p class="subtitle">管理导出目录、同步文档与下载数据文件。</p></div>
+      <nav class="actions"><a class="btn" href="/health/">← 返回 API Health</a><button id="loginBtn" class="btn" type="button">登录</button><button id="logoutBtn" class="btn hidden" type="button">退出登录</button><button id="refreshBtn" class="btn primary hidden" type="button">刷新</button></nav>
+    </header>
+    <div id="msg" class="attention" style="display:none;margin-bottom:14px"></div>
+    <div id="gateHint" class="band">此页面仅管理员可见。请点右上角「登录」。</div>
+    <div id="adminContent" class="hidden">
+      <section class="band">
+        <div class="row" style="justify-content:space-between"><h2 style="margin:0">数据导出</h2><button id="syncAllBtn" class="btn" type="button" onclick="syncAllExports(this)">同步数据列表</button></div>
+        <div id="exportTabs" class="row" style="margin:10px 0"></div>
+        <div id="exportList" class="muted">加载中...</div>
+      </section>
+    </div>
+  </div>
+  <div id="detailModal" class="modal">
+    <div class="modal-panel">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center">
+        <h3 id="modalTitle" style="margin:0">详情</h3>
+        <button id="closeModalBtn" class="btn" type="button">关闭</button>
+      </div>
+      <div id="modalBody" style="margin-top:12px"></div>
+    </div>
+  </div>
+  <div id="authModal" class="modal">
+    <div class="modal-panel" style="width:min(420px,100%)">
+      <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">管理员登录</h3><button id="closeAuthBtn" class="btn" type="button">关闭</button></div>
+      <input id="usernameInput" placeholder="用户名" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-top:10px;font:inherit"/>
+      <input id="passwordInput" type="password" placeholder="密码" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-top:8px;font:inherit"/>
+      <div style="display:flex;justify-content:flex-end;margin-top:10px"><button id="submitLoginBtn" class="btn primary" type="button">提交</button></div>
+    </div>
+  </div>
+  <script>
+    const API_BASE=location.port==='8080'?'http://localhost:8000':'/api';
+    const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
+    const token=()=>AUTH_KEYS.map((key)=>localStorage.getItem(key)||'').find(Boolean)||'';
+    const fmtTime=(value)=>value?new Date(value).toLocaleString():'-';
+    const chip=(status)=>`<span class="chip ${status||'degraded'}">${status||'unknown'}</span>`;
+    const esc=(value)=>String(value??'').replace(/[&<>"']/g,(char)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+    function authHeaders(){const headers={'Content-Type':'application/json'};const t=token();if(t)headers.Authorization=`Bearer ${t}`;return headers;}
+    async function api(path,opt={}){
+      const response=await fetch(`${API_BASE}${path}`,{...opt,headers:Object.assign(authHeaders(),opt.headers||{})});
+      const text=await response.text();
+      let data={};
+      if(text){try{data=JSON.parse(text)}catch{data={raw:text}}}
+      if(!response.ok)throw new Error(data.detail||`HTTP ${response.status}`);
+      return data;
+    }
+    const $=(id)=>document.getElementById(id);
+    const setAuthToken=(t)=>AUTH_KEYS.forEach((k)=>localStorage.setItem(k,t));
+    const clearAuthToken=()=>AUTH_KEYS.forEach((k)=>localStorage.removeItem(k));
+    function showError(t){const m=$('msg');if(!m)return;m.textContent=t;m.className='attention critical';m.style.display=t?'block':'none';}
+    function showSuccess(t){const m=$('msg');if(!m)return;m.textContent=t;m.className='attention';m.style.display=t?'block':'none';}
+    function clearMessage(){const m=$('msg');if(m)m.style.display='none';}
+    async function fetchMe(){if(!token())return null;try{return await api('/v1/auth/me');}catch{return null;}}
+    const isAdminUser=(me)=>!!me&&(((me.roles||[]).includes('admin'))||((me.permissions||[]).includes('admin.access')));
+    function applyGate(me){const admin=isAdminUser(me);$('loginBtn').classList.toggle('hidden',admin);$('logoutBtn').classList.toggle('hidden',!token());$('adminContent').classList.toggle('hidden',!admin);$('gateHint').classList.toggle('hidden',admin);$('refreshBtn').classList.toggle('hidden',!admin);if(admin){loadExports().catch((e)=>{$('exportList').innerHTML=`<span class="chip failed">导出目录加载失败：${esc(e.message)}</span>`;});}}
+    async function login(){clearMessage();const username=$('usernameInput').value.trim(),password=$('passwordInput').value;if(!username||!password){showError('请输入用户名和密码。');return;}const data=await api('/v1/auth/login',{method:'POST',body:JSON.stringify({username,password})});setAuthToken(data.token);$('authModal').classList.remove('show');const me=await fetchMe();applyGate(me);if(isAdminUser(me))showSuccess('登录成功。');else showError('当前账号不是管理员，无法查看此页面。');}
+    let exportCatalog=null,activeExportTab='tplus';
+    async function loadExports(){exportCatalog=await api('/v1/exports/catalog');renderExports();}
+    function scheduleExportRefresh(delays){delays.forEach((delay)=>setTimeout(()=>loadExports().catch(()=>{}),delay));}
+    function fmtSize(bytes){if(bytes==null)return'';if(bytes>=1048576)return `${(bytes/1048576).toFixed(1)} MB`;if(bytes>=1024)return `${(bytes/1024).toFixed(0)} KB`;return `${bytes} B`;}
+    function renderExports(){
+      const tabsData=(exportCatalog&&exportCatalog.tabs)||[];
+      $('exportTabs').innerHTML=tabsData.map((tab)=>`<button class="btn ${tab.key===activeExportTab?'primary':''}" type="button" onclick="selectExportTab('${esc(tab.key)}')">${esc(tab.title)}（${(tab.items||[]).length}）</button>`).join('');
+      const tab=tabsData.find((item)=>item.key===activeExportTab)||tabsData[0];
+      if(!tab){$('exportList').innerHTML='<span class="muted">暂无可导出数据。</span>';return;}
+      const rows=(tab.items||[]).map((item)=>{const scale=item.sheets!=null?`${item.sheets} 表 / ${item.rows} 行`:(item.rows!=null?`${item.rows} 行`:fmtSize(item.size_bytes));const description=item.description||'-';const download=item.download_url?`<button class="btn primary" type="button" onclick="downloadExport('${esc(item.download_url)}','${esc(item.file_name||item.name)}')">下载</button>`:`<button class="btn primary" type="button" disabled title="等待同步完成">待同步</button>`;const actions=item.source_id!=null?` <button class="btn" type="button" onclick="syncExportDoc(${item.source_id},this)">立即同步</button> <button class="btn" type="button" onclick="copyExportDoc(${item.source_id},'${esc(item.name)}',this)">创建副本</button>`:'';return `<tr><td>${esc(item.name)}</td><td>${esc(description)}</td><td>${scale}</td><td>${esc(item.updated_at?String(item.updated_at).slice(0,19).replace('T',' '):'-')}</td><td>${download}${actions}</td></tr>`;}).join('');
+      $('exportList').innerHTML=`<table><thead><tr><th>名称</th><th>描述</th><th>规模</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="5" class="muted">该来源暂无数据，需先配置同步源。</td></tr>'}</tbody></table>`;
+    }
+    function selectExportTab(key){activeExportTab=key;renderExports();}
+    async function syncAllExports(btn){
+      btn.disabled=true;btn.textContent='请求中...';
+      try{const data=await api('/v1/exports/sync-all',{method:'POST'});showSuccess(data.message||'同步请求已创建。');loadExports().catch(()=>{});scheduleExportRefresh([15000,60000]);}
+      catch(error){showError(`同步请求失败：${error.message}`);}
+      finally{btn.disabled=false;btn.textContent='同步数据列表';}
+    }
+    async function syncExportDoc(sourceId,btn){
+      btn.disabled=true;btn.textContent='请求中...';
+      try{const data=await api(`/v1/exports/external-doc/${sourceId}/sync-requests`,{method:'POST'});showSuccess(data.message||'同步请求已创建。');loadExports().catch(()=>{});scheduleExportRefresh([15000,45000]);}
+      catch(error){showError(`同步请求失败：${error.message}`);}
+      finally{btn.disabled=false;btn.textContent='立即同步';}
+    }
+    async function copyExportDoc(sourceId,name,btn){
+      if(!confirm(`确认在企业微信中创建「${name}」的完整副本（含全部工作表结构与记录）？`))return;
+      btn.disabled=true;btn.textContent='创建中...';
+      try{
+        const data=await api(`/v1/exports/external-doc/${sourceId}/copy`,{method:'POST'});
+        const warn=(data.warnings&&data.warnings.length)?`；注意：${data.warnings.join('；')}`:'';
+        showSuccess(`副本「${data.new_doc_name}」已创建：${data.sheets_created} 表 / ${data.records_written} 行${data.records_skipped?`（${data.records_skipped} 行跳过）`:''}${warn} 链接：${data.url}`);
+        loadExports().catch(()=>{});
+        scheduleExportRefresh([15000,45000]);
+      }catch(error){showError(`创建副本失败：${error.message}`);}
+      finally{btn.disabled=false;btn.textContent='创建副本';}
+    }
+    async function downloadExport(url,name){
+      try{
+        const response=await fetch(`${API_BASE}${url}`,{headers:authHeaders()});
+        if(!response.ok){let detail=`HTTP ${response.status}`;try{detail=(await response.json()).detail||detail;}catch{}throw new Error(detail);}
+        const blob=await response.blob();
+        const disposition=response.headers.get('Content-Disposition')||'';
+        const match=disposition.match(/filename\*=UTF-8''([^;]+)/);
+        const fileName=match?decodeURIComponent(match[1]):(name&&name.endsWith('.xlsx')?name:`${name||'export'}.xlsx`);
+        const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=fileName;document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(a.href);
+      }catch(error){showError(`下载失败：${error.message}`);}
+    }
+    function openModal(title,html){modalTitle.textContent=title;modalBody.innerHTML=html;detailModal.classList.add('show');}
+    function closeModal(){detailModal.classList.remove('show');modalBody.innerHTML='';}
+    refreshBtn.onclick=()=>loadExports().catch(()=>{});
+    closeModalBtn.onclick=closeModal;detailModal.onclick=(event)=>{if(event.target===detailModal)closeModal();};
+    loginBtn.onclick=()=>authModal.classList.add('show');
+    logoutBtn.onclick=()=>{clearAuthToken();applyGate(null);showSuccess('已退出登录。');};
+    closeAuthBtn.onclick=()=>authModal.classList.remove('show');
+    submitLoginBtn.onclick=()=>login().catch((e)=>showError(e.message));
+    passwordInput.onkeydown=(e)=>{if(e.key==='Enter')login().catch((err)=>showError(err.message));};
+    authModal.onclick=(event)=>{if(event.target===authModal)authModal.classList.remove('show');};
+    (async()=>{applyGate(await fetchMe());})();
+  </script>
+</body>
+</html>

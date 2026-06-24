@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>AliECS · T+ 同步时间线</title>
+  <style>
+    :root{--bg:#f7f5f0;--panel:#fffdf8;--text:#25211b;--muted:#766f63;--line:#e7dfd0;--good:#3f7a4c;--warn:#a46b1f;--bad:#a6423a;--primary:#6f5e46;--shadow:0 12px 30px rgba(69,56,38,.08)}
+    *{box-sizing:border-box}.hidden{display:none!important}body{margin:0;background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui}.wrap{max-width:1180px;margin:0 auto;padding:20px 18px 56px}.topbar{display:flex;justify-content:space-between;gap:14px;align-items:center;background:rgba(255,253,248,.94);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px;padding:16px 18px;margin-bottom:16px}h1{margin:0;font-size:30px}.subtitle{margin:6px 0 0;color:var(--muted)}.actions{display:flex;gap:8px;flex-wrap:wrap}.btn,button{border:0;border-radius:999px;padding:9px 13px;background:#e8dfcf;color:var(--text);font-weight:650;text-decoration:none;cursor:pointer}.btn.primary{background:var(--primary);color:#fff}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.band,.panel{background:rgba(255,253,248,.94);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:16px;padding:16px;margin-bottom:14px}.clickable{cursor:pointer}.metric{font-size:30px;font-weight:800;margin-top:8px}.muted{color:var(--muted)}.chip{display:inline-flex;align-items:center;border-radius:999px;padding:5px 9px;font-size:12px;font-weight:750}.ok{background:#dfeee3;color:var(--good)}.degraded,.warning{background:#f4ead8;color:var(--warn)}.critical,.failed{background:#f5d7d3;color:var(--bad)}table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}th,td{border-bottom:1px solid var(--line);padding:9px 10px;text-align:left;font-size:13px;vertical-align:top}th{background:#f2eadc}.list{display:grid;gap:8px}.attention{border-left:4px solid var(--warn);padding:8px 10px;background:#fff;border-radius:8px}.attention.critical{border-left-color:var(--bad)}.modal{position:fixed;inset:0;background:rgba(30,22,12,.28);display:none;align-items:center;justify-content:center;padding:16px}.modal.show{display:flex}.modal-panel{width:min(860px,100%);max-height:88vh;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px}pre{white-space:pre-wrap;word-break:break-word;background:#f7f5f0;border:1px solid var(--line);border-radius:12px;padding:12px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}textarea{width:100%;min-height:76px;border:1px solid var(--line);border-radius:12px;padding:10px 12px;font:inherit}@media (max-width:900px){.grid{grid-template-columns:1fr}.topbar{align-items:flex-start;flex-direction:column}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <div><h1>T+ 同步时间线</h1><p class="subtitle">每次同步按编号列出，含本次变化与产出的全量 BOM Excel。</p></div>
+      <nav class="actions"><a class="btn" href="/health/">← 返回 API Health</a><button id="loginBtn" class="btn" type="button">登录</button><button id="logoutBtn" class="btn hidden" type="button">退出登录</button><button id="refreshBtn" class="btn primary hidden" type="button">刷新</button></nav>
+    </header>
+    <div id="msg" class="attention" style="display:none;margin-bottom:14px"></div>
+    <div id="gateHint" class="band">此页面仅管理员可见。请点右上角「登录」。</div>
+    <div id="adminContent" class="hidden">
+      <section class="band">
+        <h2>T+ 同步</h2>
+        <p class="muted">统一时间线：每次同步(执行)按 <b>#编号</b> 列出，与配方页「同步 #N」对应；含本次变化与产出的全量 BOM Excel(可下载核对)。来源：手动同步、定时同步、订阅变更同步。</p>
+        <div class="row" style="gap:8px;margin-bottom:10px"><span class="chip degraded">手动同步</span><span class="chip ok">定时同步</span><span class="chip warning">订阅变更同步</span></div>
+        <div id="tplusTimeline"></div><div id="tplusTimelinePager" class="row" style="gap:10px;align-items:center;margin-top:8px"></div>
+      </section>
+    </div>
+  </div>
+  <div id="detailModal" class="modal">
+    <div class="modal-panel">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center">
+        <h3 id="modalTitle" style="margin:0">详情</h3>
+        <button id="closeModalBtn" class="btn" type="button">关闭</button>
+      </div>
+      <div id="modalBody" style="margin-top:12px"></div>
+    </div>
+  </div>
+  <div id="authModal" class="modal">
+    <div class="modal-panel" style="width:min(420px,100%)">
+      <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">管理员登录</h3><button id="closeAuthBtn" class="btn" type="button">关闭</button></div>
+      <input id="usernameInput" placeholder="用户名" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-top:10px;font:inherit"/>
+      <input id="passwordInput" type="password" placeholder="密码" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-top:8px;font:inherit"/>
+      <div style="display:flex;justify-content:flex-end;margin-top:10px"><button id="submitLoginBtn" class="btn primary" type="button">提交</button></div>
+    </div>
+  </div>
+  <script>
+    const API_BASE=location.port==='8080'?'http://localhost:8000':'/api';
+    const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
+    const token=()=>AUTH_KEYS.map((key)=>localStorage.getItem(key)||'').find(Boolean)||'';
+    const fmtTime=(value)=>value?new Date(value).toLocaleString():'-';
+    const chip=(status)=>`<span class="chip ${status||'degraded'}">${status||'unknown'}</span>`;
+    const esc=(value)=>String(value??'').replace(/[&<>"']/g,(char)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+    function authHeaders(){const headers={'Content-Type':'application/json'};const t=token();if(t)headers.Authorization=`Bearer ${t}`;return headers;}
+    async function api(path,opt={}){
+      const response=await fetch(`${API_BASE}${path}`,{...opt,headers:Object.assign(authHeaders(),opt.headers||{})});
+      const text=await response.text();
+      let data={};
+      if(text){try{data=JSON.parse(text)}catch{data={raw:text}}}
+      if(!response.ok)throw new Error(data.detail||`HTTP ${response.status}`);
+      return data;
+    }
+    const $=(id)=>document.getElementById(id);
+    const setAuthToken=(t)=>AUTH_KEYS.forEach((k)=>localStorage.setItem(k,t));
+    const clearAuthToken=()=>AUTH_KEYS.forEach((k)=>localStorage.removeItem(k));
+    function showError(t){const m=$('msg');if(!m)return;m.textContent=t;m.className='attention critical';m.style.display=t?'block':'none';}
+    function showSuccess(t){const m=$('msg');if(!m)return;m.textContent=t;m.className='attention';m.style.display=t?'block':'none';}
+    function clearMessage(){const m=$('msg');if(m)m.style.display='none';}
+    async function fetchMe(){if(!token())return null;try{return await api('/v1/auth/me');}catch{return null;}}
+    const isAdminUser=(me)=>!!me&&(((me.roles||[]).includes('admin'))||((me.permissions||[]).includes('admin.access')));
+    function applyGate(me){const admin=isAdminUser(me);$('loginBtn').classList.toggle('hidden',admin);$('logoutBtn').classList.toggle('hidden',!token());$('adminContent').classList.toggle('hidden',!admin);$('gateHint').classList.toggle('hidden',admin);$('refreshBtn').classList.toggle('hidden',!admin);if(admin){loadTplusTimeline();}}
+    async function login(){clearMessage();const username=$('usernameInput').value.trim(),password=$('passwordInput').value;if(!username||!password){showError('请输入用户名和密码。');return;}const data=await api('/v1/auth/login',{method:'POST',body:JSON.stringify({username,password})});setAuthToken(data.token);$('authModal').classList.remove('show');const me=await fetchMe();applyGate(me);if(isAdminUser(me))showSuccess('登录成功。');else showError('当前账号不是管理员，无法查看此页面。');}
+    function syncOriginLabel(item){
+      const mode=String((item&&item.mode)||'').toLowerCase();
+      if(mode==='scheduled_full')return '<span class="chip ok">定时同步</span>';
+      if((item&&item.reason_event_id)||mode==='incremental')return '<span class="chip warning">订阅变更同步</span>';
+      return '<span class="chip degraded">手动同步</span>';
+    }
+    let tplusTlOffset=0; const TPLUS_TL_LIMIT=20; let tplusTlItems=[];
+    async function loadTplusTimeline(){
+      try{
+        const d=await api(`/v1/ops/tplus/timeline?limit=${TPLUS_TL_LIMIT}&offset=${tplusTlOffset}`);
+        renderTplusTimeline(d);
+      }catch(e){$('tplusTimeline').innerHTML=`<span class="chip failed">时间线加载失败：${esc(e.message)}</span>`;$('tplusTimelinePager').innerHTML='';}
+    }
+    function diffSummaryText(s){
+      if(!s)return '<span class="muted">—</span>';
+      const parts=[];
+      if(s.qty_changed)parts.push(`改数值${s.qty_changed}`);
+      if(s.material_changed)parts.push(`增删料${s.material_changed}`);
+      if(s.bom_deleted)parts.push(`删BOM${s.bom_deleted}`);
+      if(s.bom_added)parts.push(`新增${s.bom_added}`);
+      if(s.status_changed)parts.push(`状态${s.status_changed}`);
+      if(s.cosmetic_changed)parts.push(`其它${s.cosmetic_changed}`);
+      if(!parts.length)return '<span class="muted">无变化</span>';
+      const txt=parts.join(' · ');
+      return s.needs_review?`<span class="chip failed">需复核</span> ${esc(txt)}`:esc(txt);
+    }
+    function excelCell(files){
+      if(!files||!files.length)return '<span class="muted">—</span>';
+      return files.map((f)=>f.pruned
+        ?`<span class="chip" title="已超出保留期被清理">${esc(f.name)}（已清理）</span>`
+        :`<button class="btn primary" type="button" onclick="downloadExport('${esc(f.download_url)}','${esc(f.name)}')">${esc(f.name)}</button>`
+      ).join(' ');
+    }
+    function renderTplusTimeline(d){
+      tplusTlItems=d.items||[];
+      const rows=tplusTlItems.map((it,index)=>{
+        const numCell=it.kind==='run'?`<b>${esc(it.number)}</b>`:`<span class="muted">${esc(it.number)}</span>`;
+        const trCls=it.needs_review?' style="background:#f9eceb"':'';
+        const fileCount=(it.export_files||[]).length;
+        const fileBtn=fileCount>0?`<button class="btn" type="button" onclick="openTimelineDetail(${index})">📄 ${fileCount} 个</button>`:'<span class="muted">—</span>';
+        return `<tr${trCls}><td>${numCell}</td><td>${syncOriginLabel(it)}</td><td>${esc(it.module)}</td><td>${esc(it.mode)}</td><td>${chip(it.status)}</td><td>${fmtTime(it.event_time)}</td><td>${esc(it.row_count??'')}</td><td>${esc(it.exit_code??'')}</td><td>${esc(it.reason_event_id||'')}</td><td>${diffSummaryText(it.diff_summary)}</td><td>${fileBtn}</td><td><button class="btn primary" type="button" onclick="openTimelineDetail(${index})">详情</button></td></tr>`;
+      }).join('');
+      $('tplusTimeline').innerHTML=`<table><thead><tr><th>编号</th><th>来源</th><th>模块</th><th>模式</th><th>状态</th><th>时间</th><th>行数</th><th>退出码</th><th>回调事件ID</th><th>本次变化</th><th>生成的 Excel</th><th>详情</th></tr></thead><tbody>${rows||'<tr><td colspan="12" class="muted">暂无记录</td></tr>'}</tbody></table>`;
+      const total=d.total||0,limit=d.limit||TPLUS_TL_LIMIT,offset=d.offset||0;
+      const page=Math.floor(offset/limit)+1,pages=Math.max(1,Math.ceil(total/limit));
+      $('tplusTimelinePager').innerHTML=`<button class="btn" type="button" id="tplusTlPrev" ${offset<=0?'disabled':''}>上一页</button><span class="muted">第 ${page}/${pages} 页 · 共 ${total} 条</span><button class="btn" type="button" id="tplusTlNext" ${offset+limit>=total?'disabled':''}>下一页</button>`;
+      const prev=$('tplusTlPrev'),next=$('tplusTlNext');
+      if(prev)prev.onclick=()=>{tplusTlOffset=Math.max(0,tplusTlOffset-TPLUS_TL_LIMIT);loadTplusTimeline();};
+      if(next)next.onclick=()=>{tplusTlOffset=tplusTlOffset+TPLUS_TL_LIMIT;loadTplusTimeline();};
+    }
+    function renderDiffItemRows(title,items){
+      const rows=(items||[]).map((item)=>`<tr><td>${esc(item.parent_code)}</td><td>${esc(item.parent_name)}</td><td>${esc(item.version)}</td><td>${esc(item.child_code)}</td><td>${esc(item.child_name)}</td><td>${esc(item.unit)}</td><td>${esc(item.quantity)}</td><td>${esc(item.disabled)}</td></tr>`).join('');
+      return `<h4>${title}（${(items||[]).length}）</h4><table><thead><tr><th>父件编码</th><th>父件名称</th><th>版本</th><th>子件编码</th><th>子件名称</th><th>单位</th><th>数量</th><th>停用</th></tr></thead><tbody>${rows||'<tr><td colspan="8" class="muted">无</td></tr>'}</tbody></table>`;
+    }
+    function renderChangedRows(items){
+      const rows=(items||[]).map((item)=>`<tr><td>${esc(item.key&&item.key.parent_code)}</td><td>${esc(item.key&&item.key.version)}</td><td>${esc(item.key&&item.key.child_code)}</td><td>${esc((item.changed_fields||[]).join(', '))}</td><td>${esc(item.before&&item.before.quantity)}</td><td>${esc(item.after&&item.after.quantity)}</td><td>${esc(item.before&&item.before.child_name)}</td><td>${esc(item.after&&item.after.child_name)}</td></tr>`).join('');
+      return `<h4>字段变化（${(items||[]).length}）</h4><table><thead><tr><th>父件编码</th><th>版本</th><th>子件编码</th><th>变化字段</th><th>原数量</th><th>新数量</th><th>原子件名</th><th>新子件名</th></tr></thead><tbody>${rows||'<tr><td colspan="8" class="muted">无</td></tr>'}</tbody></table>`;
+    }
+    function renderDiffDetail(diff){
+      const d=diff||{};
+      return `<p class="muted">新增 ${d.added_count||0} · 删除 ${d.removed_count||0} · 变化 ${d.changed_count||0} · 行数变化 ${d.row_count_delta||0}</p>${renderDiffItemRows('新增子件',d.added||[])}${renderDiffItemRows('删除子件',d.removed||[])}${renderChangedRows(d.changed||[])}<details style="margin-top:12px"><summary>原始 JSON</summary><pre>${esc(JSON.stringify(d,null,2))}</pre></details>`;
+    }
+    async function openTimelineDetail(index){
+      const it=tplusTlItems[index];if(!it)return;
+      const head=`<p class="muted">${esc(it.number)} · ${esc(it.module)}/${esc(it.mode)}/${esc(it.status)} · ${fmtTime(it.event_time)} · 请求ID ${esc(it.request_id||'-')} · 事件 ${esc(it.reason_event_id||'-')}</p>`;
+      const files=(it.export_files||[]).length?`<p>产出 Excel：${excelCell(it.export_files)}</p>`:'';
+      const base=`${head}${files}${jsonDetailBlock('变化摘要',it.diff_summary)}`;
+      if(!it.reconciliation_id){openModal(`同步详情 ${it.number}`,base);return;}
+      openModal(`同步详情 ${it.number}`,`${base}<p class="muted">正在加载变化明细…</p>`);
+      try{
+        const data=await api(`/v1/ops/reconciliation/${it.reconciliation_id}`);
+        const detail=renderDiffDetail(data.diff_json||{});
+        const action=data.status==='needs_review'
+          ?`<div class="row" style="margin-top:10px"><button class="btn primary" onclick="resolveRecon(${it.reconciliation_id},'ignore')">标记已复核</button></div>`
+          :`<p class="muted">复核状态：${esc(data.status)}</p>`;
+        openModal(`同步详情 ${it.number}`,`${base}<h3 style="margin:14px 0 6px">变化明细</h3>${detail}${action}`);
+      }catch(error){
+        openModal(`同步详情 ${it.number}`,`${base}<div class="attention critical">变化明细加载失败：${esc(error.message)}</div>`);
+      }
+    }
+    function openModal(title,html){modalTitle.textContent=title;modalBody.innerHTML=html;detailModal.classList.add('show');}
+    function closeModal(){detailModal.classList.remove('show');modalBody.innerHTML='';}
+    function jsonDetailBlock(title,value){return `<h4>${title}</h4><pre>${esc(JSON.stringify(value??{},null,2))}</pre>`;}
+    async function resolveRecon(id,action){
+      try{
+        const note=document.getElementById('reconNote')?.value||'';
+        const data=await api(`/v1/ops/reconciliation/${id}/actions`,{method:'POST',body:JSON.stringify({action,note})});
+        openModal(`复核已处理 #${id}`,`<p>状态：${esc(data.status)}</p><pre>${esc(JSON.stringify(data.resolution||{},null,2))}</pre>`);
+        await loadTplusTimeline();
+      }catch(error){openModal(`差异处理失败 #${id}`,`<div class="attention critical"><strong>处理失败</strong><br/>${error.message}</div>`);}
+    }
+    async function downloadExport(url,name){
+      try{
+        const response=await fetch(`${API_BASE}${url}`,{headers:authHeaders()});
+        if(!response.ok){let detail=`HTTP ${response.status}`;try{detail=(await response.json()).detail||detail;}catch{}throw new Error(detail);}
+        const blob=await response.blob();
+        const disposition=response.headers.get('Content-Disposition')||'';
+        const match=disposition.match(/filename\*=UTF-8''([^;]+)/);
+        const fileName=match?decodeURIComponent(match[1]):(name&&name.endsWith('.xlsx')?name:`${name||'export'}.xlsx`);
+        const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=fileName;document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(a.href);
+      }catch(error){showError(`下载失败：${error.message}`);}
+    }
+    refreshBtn.onclick=()=>loadTplusTimeline();
+    closeModalBtn.onclick=closeModal;detailModal.onclick=(event)=>{if(event.target===detailModal)closeModal();};
+    loginBtn.onclick=()=>authModal.classList.add('show');
+    logoutBtn.onclick=()=>{clearAuthToken();applyGate(null);showSuccess('已退出登录。');};
+    closeAuthBtn.onclick=()=>authModal.classList.remove('show');
+    submitLoginBtn.onclick=()=>login().catch((e)=>showError(e.message));
+    passwordInput.onkeydown=(e)=>{if(e.key==='Enter')login().catch((err)=>showError(err.message));};
+    authModal.onclick=(event)=>{if(event.target===authModal)authModal.classList.remove('show');};
+    (async()=>{applyGate(await fetchMe());})();
+  </script>
+</body>
+</html>
