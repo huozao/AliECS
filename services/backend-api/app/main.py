@@ -38,6 +38,7 @@ from app.recipes.bom_query import (
     new_export_path,
     query_recipe_workbook,
     recipe_cost_export_filename,
+    recipe_raw_export_filename,
     save_recipe_cost_workbook,
     save_recipe_workbook,
 )
@@ -2158,9 +2159,9 @@ def recipe_download(file_id: str, user: dict[str, Any] = Depends(require_login))
         path = export_path_for_id(file_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    context = _RECIPE_QUERY_CONTEXT.get(file_id)
     if not path.is_file():
         # 延迟生成：用查询时记录的上下文按需写出导出文件
-        context = _RECIPE_QUERY_CONTEXT.get(file_id)
         if context is None:
             raise HTTPException(status_code=404, detail="下载文件已过期，请重新查询后再下载。")
         try:
@@ -2173,10 +2174,11 @@ def recipe_download(file_id: str, user: dict[str, Any] = Depends(require_login))
             save_recipe_workbook(path, result)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"导出文件生成失败：{type(exc).__name__}") from exc
+    filename = recipe_raw_export_filename(str(context["query"]) if context else None)
     return FileResponse(
         path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename=f"配方查询_{file_id}.xlsx",
+        filename=filename,
     )
 
 

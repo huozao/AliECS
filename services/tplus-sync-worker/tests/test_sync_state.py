@@ -169,6 +169,43 @@ class AssembleCurrentFullBomTests(unittest.TestCase):
         self.assertEqual([("P", "V", "0"), ("Q", "V", "0")], codes)
 
 
+class MarkMissingRecordsTests(unittest.TestCase):
+    def test_full_sync_prunes_records_not_in_batch(self):
+        from tplus_datahub.jobs.sync_state import _mark_missing_records
+        cur = _RecordingCursor()
+        _mark_missing_records(cur, "scheduled_full", [{"record_key": "a"}, {"record_key": "b"}])
+        self.assertEqual(1, len(cur.calls))
+        sql, params = cur.calls[0]
+        self.assertIn("missing_since = NOW()", sql)
+        self.assertIn("record_key <> ALL", sql)
+        self.assertEqual((["a", "b"],), params)
+
+    def test_full_bom_mode_also_prunes(self):
+        from tplus_datahub.jobs.sync_state import _mark_missing_records
+        cur = _RecordingCursor()
+        _mark_missing_records(cur, "full_bom", [{"record_key": "a"}])
+        self.assertEqual(1, len(cur.calls))
+
+    def test_incremental_does_not_prune(self):
+        from tplus_datahub.jobs.sync_state import _mark_missing_records
+        cur = _RecordingCursor()
+        _mark_missing_records(cur, "incremental", [{"record_key": "a"}])
+        self.assertEqual([], cur.calls)
+
+    def test_empty_batch_does_not_prune(self):
+        from tplus_datahub.jobs.sync_state import _mark_missing_records
+        cur = _RecordingCursor()
+        _mark_missing_records(cur, "scheduled_full", [])
+        self.assertEqual([], cur.calls)
+
+
+class _RecordingCursor:
+    def __init__(self):
+        self.calls = []
+    def execute(self, sql, params=None):
+        self.calls.append((sql, params))
+
+
 class _FakeBomRecordsConn:
     def __init__(self, rows):
         self._rows = rows

@@ -298,6 +298,18 @@ class RecipeQueryTests(unittest.TestCase):
         self.assertEqual(1, calls["n"])  # 4 个并发只触发一次解析
         self.assertTrue(results and all(r is results[0] for r in results))
 
+    def test_raw_export_filename_includes_codes_space_joined(self) -> None:
+        from app.recipes.bom_query import recipe_raw_export_filename
+        from datetime import datetime
+        now = datetime(2026, 6, 28, 9, 30, 0)
+        # 单编码
+        self.assertEqual("配方查询_6800_20260628-093000.xlsx", recipe_raw_export_filename("6800", now=now))
+        # 多编码：原分隔符(逗号/中文逗号/顿号)→空格
+        self.assertEqual("配方查询_4791 4588_20260628-093000.xlsx", recipe_raw_export_filename("4791,4588", now=now))
+        self.assertEqual("配方查询_4791 4588 4197_20260628-093000.xlsx", recipe_raw_export_filename("4791，4588、4197", now=now))
+        # 空查询 → 全部
+        self.assertEqual("配方查询_全部_20260628-093000.xlsx", recipe_raw_export_filename("", now=now))
+
     def test_float_or_zero_coercion_contract(self) -> None:
         # 锁定 _float_or_zero 的数值强转语义（重构掉 per-scalar pd.Series 后必须逐一致）。
         from app.recipes.bom_query import _float_or_zero

@@ -139,7 +139,7 @@
         const numCell=it.kind==='run'?`<b>${esc(it.number)}</b>`:`<span class="muted">${esc(it.number)}</span>`;
         const trCls=it.needs_review?' style="background:#f9eceb"':'';
         const fileCount=(it.export_files||[]).length;
-        const fileBtn=fileCount>0?`<button class="btn" type="button" onclick="openTimelineDetail(${index})">📄 ${fileCount} 个</button>`:'<span class="muted">—</span>';
+        const fileBtn=fileCount>0?`<button class="btn" type="button" onclick="openExcelOnly(${index})">📄 ${fileCount} 个</button>`:'<span class="muted">—</span>';
         return `<tr${trCls}><td>${numCell}</td><td>${syncOriginLabel(it)}</td><td>${esc(it.module)}</td><td>${esc(it.mode)}</td><td>${chip(it.status)}</td><td>${fmtTime(it.event_time)}</td><td>${esc(it.row_count??'')}</td><td>${esc(it.exit_code??'')}</td><td>${esc(it.reason_event_id||'')}</td><td>${diffSummaryText(it.diff_summary)}</td><td>${fileBtn}</td><td><button class="btn primary" type="button" onclick="openTimelineDetail(${index})">详情</button></td></tr>`;
       }).join('');
       $('tplusTimeline').innerHTML=`<table><thead><tr><th>编号</th><th>来源</th><th>模块</th><th>模式</th><th>状态</th><th>时间</th><th>行数</th><th>退出码</th><th>回调事件ID</th><th>本次变化</th><th>生成的 Excel</th><th>详情</th></tr></thead><tbody>${rows||'<tr><td colspan="12" class="muted">暂无记录</td></tr>'}</tbody></table>`;
@@ -162,11 +162,15 @@
       const d=diff||{};
       return `<p class="muted">新增 ${d.added_count||0} · 删除 ${d.removed_count||0} · 变化 ${d.changed_count||0} · 行数变化 ${d.row_count_delta||0}</p>${renderDiffItemRows('新增子件',d.added||[])}${renderDiffItemRows('删除子件',d.removed||[])}${renderChangedRows(d.changed||[])}<details style="margin-top:12px"><summary>原始 JSON</summary><pre>${esc(JSON.stringify(d,null,2))}</pre></details>`;
     }
+    function openExcelOnly(index){
+      const it=tplusTlItems[index];if(!it)return;
+      const files=(it.export_files||[]).length?excelCell(it.export_files):'<span class="muted">本次无产出文件</span>';
+      openModal(`产出 Excel ${it.number}`,`<p>${files}</p>`);
+    }
     async function openTimelineDetail(index){
       const it=tplusTlItems[index];if(!it)return;
       const head=`<p class="muted">${esc(it.number)} · ${esc(it.module)}/${esc(it.mode)}/${esc(it.status)} · ${fmtTime(it.event_time)} · 请求ID ${esc(it.request_id||'-')} · 事件 ${esc(it.reason_event_id||'-')}</p>`;
-      const files=(it.export_files||[]).length?`<p>产出 Excel：${excelCell(it.export_files)}</p>`:'';
-      const base=`${head}${files}${jsonDetailBlock('变化摘要',it.diff_summary)}`;
+      const base=`${head}<p>本次变化：${diffSummaryText(it.diff_summary)}</p>`;
       if(!it.reconciliation_id){openModal(`同步详情 ${it.number}`,base);return;}
       openModal(`同步详情 ${it.number}`,`${base}<p class="muted">正在加载变化明细…</p>`);
       try{
