@@ -33,6 +33,18 @@ class TplusSyncFrontendTests(unittest.TestCase):
     def test_has_back_link_to_health(self) -> None:
         self.assertIn('href="/health/"', self.html)
 
+    def test_has_sync_config_card(self) -> None:
+        self.assertIn('id="syncConfigCard"', self.html)
+        self.assertIn('id="syncEnabled"', self.html)
+        self.assertIn('id="syncIntervalHours"', self.html)
+
+    def test_has_sync_config_loader_and_saver(self) -> None:
+        self.assertIn("function loadSyncConfig(", self.html)
+        self.assertIn("function saveSyncConfig(", self.html)
+
+    def test_calls_sync_config_endpoint(self) -> None:
+        self.assertIn("/v1/ops/tplus/sync-config", self.html)
+
 
 if __name__ == "__main__":
     unittest.main()

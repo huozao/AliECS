@@ -62,6 +62,22 @@ class BackendOpsStatusTests(unittest.TestCase):
         self.assertIn("attention_items", result)
         self.assertIn("database_unhealthy", [item["code"] for item in result["attention_items"]])
 
+    def test_sync_config_get_returns_defaults_without_database(self) -> None:
+        result = self._call_get("/v1/ops/tplus/sync-config")
+        self.assertTrue(result["enabled"])
+        self.assertEqual(86400, result["interval_seconds"])
+        self.assertEqual(24, result["interval_hours"])
+
+    def test_sync_config_update_model_enforces_hour_bounds(self) -> None:
+        from pydantic import ValidationError
+        from app.main import SyncConfigUpdate
+
+        SyncConfigUpdate(enabled=True, interval_hours=1)  # 下限可取
+        with self.assertRaises(ValidationError):
+            SyncConfigUpdate(enabled=True, interval_hours=0.5)  # < 1h 拒绝
+        with self.assertRaises(ValidationError):
+            SyncConfigUpdate(enabled=False, interval_hours=200)  # > 168h 拒绝
+
     def test_ops_status_uses_default_external_hosts_when_env_is_empty(self) -> None:
         # WebDock API is always present (defaults to the in-host SSH tunnel),
         # but the public-facing Backend/Public-Web rows only appear once the

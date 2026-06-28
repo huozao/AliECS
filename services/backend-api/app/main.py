@@ -898,6 +898,78 @@ def healthz() -> dict[str, object]:
     }
 
 
+_SYNC_CONFIG_DEFAULTS = {"enabled": True, "interval_seconds": 86400}
+
+
+def _read_sync_config_row(provider: str = "chanjet") -> dict[str, Any]:
+    """读取定时同步配置行；DB 不可用 / 表或行不存在一律回退默认（不报错）。"""
+    try:
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT enabled, interval_seconds, updated_at, updated_by "
+                    "FROM integration_sync_config WHERE provider = %s",
+                    (provider,),
+                )
+                row = cur.fetchone()
+                if row:
+                    return {"enabled": bool(row[0]), "interval_seconds": int(row[1]),
+                            "updated_at": str(row[2]) if row[2] else None, "updated_by": row[3]}
+    except Exception:
+        pass
+    return {**_SYNC_CONFIG_DEFAULTS, "updated_at": None, "updated_by": None}
+
+
+def _sync_config_response(row: dict[str, Any]) -> dict[str, Any]:
+    seconds = int(row.get("interval_seconds") or 86400)
+    return {
+        "enabled": bool(row.get("enabled", True)),
+        "interval_seconds": seconds,
+        "interval_hours": round(seconds / 3600, 4),
+        "updated_at": row.get("updated_at"),
+        "updated_by": row.get("updated_by"),
+    }
+
+
+class SyncConfigUpdate(BaseModel):
+    enabled: bool
+    interval_hours: float = Field(ge=1, le=168)  # 下限 1h（防误填打爆机器）、上限 7d
+
+
+@app.get("/v1/ops/tplus/sync-config")
+def ops_tplus_sync_config_get(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    """定时同步开关与间隔。worker 每轮热读同一张表。"""
+    return _sync_config_response(_read_sync_config_row())
+
+
+@app.put("/v1/ops/tplus/sync-config")
+def ops_tplus_sync_config_put(
+    body: SyncConfigUpdate, user: dict[str, Any] = Depends(require_admin)
+) -> dict[str, Any]:
+    interval_seconds = int(round(body.interval_hours * 3600))
+    try:
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO integration_sync_config(provider, enabled, interval_seconds, updated_at, updated_by)
+                    VALUES ('chanjet', %s, %s, NOW(), %s)
+                    ON CONFLICT (provider) DO UPDATE
+                    SET enabled = EXCLUDED.enabled,
+                        interval_seconds = EXCLUDED.interval_seconds,
+                        updated_at = NOW(),
+                        updated_by = EXCLUDED.updated_by
+                    """,
+                    (body.enabled, interval_seconds, str(user.get("sub") or "")),
+                )
+            conn.commit()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"保存定时同步配置失败：{type(exc).__name__}") from exc
+    return _sync_config_response(_read_sync_config_row())
+
+
 @app.get("/v1/ops/tplus/runs")
 def ops_tplus_runs(
     limit: int = Query(default=20, ge=1, le=200),
