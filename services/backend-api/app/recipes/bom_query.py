@@ -614,6 +614,16 @@ def _safe_filename_part(value: object, *, max_len: int = 42) -> str:
     return text[:max_len] or "未命名"
 
 
+def recipe_raw_export_filename(query_text: str | None, *, now: datetime | None = None) -> str:
+    """原始明细下载文件名：带上查询的编码，便于辨认查的是什么。
+    多编码用空格连接（原分隔符 , ， ; ； 、 不适合文件名）；去掉文件系统非法字符。"""
+    stamp = (now or datetime.now()).strftime("%Y%m%d-%H%M%S")
+    codes = parse_codes_text(query_text or "")
+    cleaned = [re.sub(r'[\\/:*?"<>|\r\n\t]+', "", code).strip() for code in codes]
+    label = re.sub(r"\s+", " ", " ".join(part for part in cleaned if part)).strip()[:80]
+    return f"配方查询_{label or '全部'}_{stamp}.xlsx"
+
+
 def recipe_cost_export_filename(
     recipes: list[dict[str, object]],
     query_text: str,

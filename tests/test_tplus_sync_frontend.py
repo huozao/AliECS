@@ -45,6 +45,16 @@ class TplusSyncFrontendTests(unittest.TestCase):
     def test_calls_sync_config_endpoint(self) -> None:
         self.assertIn("/v1/ops/tplus/sync-config", self.html)
 
+    def test_excel_column_opens_excel_only_view(self) -> None:
+        # 「生成的 Excel」列按钮只展示文件下载，不再混入变化摘要
+        self.assertIn("function openExcelOnly(", self.html)
+        self.assertIn("openExcelOnly(", self.html)
+
+    def test_detail_shows_readable_change_not_raw_json(self) -> None:
+        # 变化摘要移到「详情」里以可读形式展示，不再倾倒原始 JSON
+        self.assertIn("本次变化：", self.html)
+        self.assertNotIn("jsonDetailBlock('变化摘要'", self.html)
+
 
 if __name__ == "__main__":
     unittest.main()

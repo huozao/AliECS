@@ -86,8 +86,10 @@ def upsert_and_snapshot_full_bom(
         return FullBomSnapshotResult(full_rows=fetched_rows)
     try:
         with closing(psycopg.connect(database_url, connect_timeout=3)) as conn:
+            normalized = [_normalize_row(r) for r in fetched_rows]
             with conn.cursor() as cur:
-                _upsert_tplus_bom_records(cur, [_normalize_row(r) for r in fetched_rows])
+                _upsert_tplus_bom_records(cur, normalized)
+                _mark_missing_records(cur, mode, normalized)
             conn.commit()
             full_rows = assemble_current_full_bom(conn)
             snapshot = snapshot_bom_rows(full_rows)
@@ -213,6 +215,23 @@ def assemble_current_full_bom(conn: Any) -> list[Any]:
                str(record.get("Version") or record.get("version") or ""))
         by_key[key] = record  # ASC 排序 → 后写覆盖=最新 last_seen 胜出
     return list(by_key.values())
+
+
+# 全量同步模式：本批应代表 T+ 当前全部 BOM，可据此剪枝失踪记录。增量(只抓单条)不可。
+_FULL_SYNC_MODES = {"scheduled_full", "full_bom"}
+
+
+def _mark_missing_records(cur: Any, mode: str, normalized: list[dict[str, Any]]) -> None:
+    """全量同步把"本批未出现的活跃记录"标记 missing_since=NOW()——改名/删除的 BOM 不再
+    泄漏到导出(原先 missing_since 从不被设置 → 僵尸记录永久残留)。
+    增量模式批次是部分的，空批次(全量异常返回0行)也跳过，二者都不剪枝以防误清空。"""
+    if mode not in _FULL_SYNC_MODES or not normalized:
+        return
+    cur.execute(
+        "UPDATE tplus_bom_records SET missing_since = NOW() "
+        "WHERE missing_since IS NULL AND record_key <> ALL(%s)",
+        ([record["record_key"] for record in normalized],),
+    )
 
 
 def _upsert_tplus_bom_records(cur: Any, records: list[dict[str, Any]]) -> None:
