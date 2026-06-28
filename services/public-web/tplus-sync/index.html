@@ -18,6 +18,16 @@
     <div id="msg" class="attention" style="display:none;margin-bottom:14px"></div>
     <div id="gateHint" class="band">此页面仅管理员可见。请点右上角「登录」。</div>
     <div id="adminContent" class="hidden">
+      <section class="band" id="syncConfigCard">
+        <h2>定时同步设置</h2>
+        <p class="muted">控制定时全量同步的开关与间隔。关闭后只停定时器，手动同步与订阅变更同步照常。改动下次循环生效。</p>
+        <div class="row" style="gap:16px">
+          <label class="row" style="gap:8px"><input type="checkbox" id="syncEnabled"/> 开启定时同步</label>
+          <label class="row" style="gap:8px">间隔 <input type="number" id="syncIntervalHours" min="1" max="168" step="1" style="width:92px;border:1px solid var(--line);border-radius:10px;padding:8px 10px;font:inherit"/> 小时</label>
+          <button id="saveSyncConfigBtn" class="btn primary" type="button">保存</button>
+          <span id="syncConfigStatus" class="muted"></span>
+        </div>
+      </section>
       <section class="band">
         <h2>T+ 同步</h2>
         <p class="muted">统一时间线：每次同步(执行)按 <b>#编号</b> 列出，与配方页「同步 #N」对应；含本次变化与产出的全量 BOM Excel(可下载核对)。来源：手动同步、定时同步、订阅变更同步。</p>
@@ -67,7 +77,28 @@
     function clearMessage(){const m=$('msg');if(m)m.style.display='none';}
     async function fetchMe(){if(!token())return null;try{return await api('/v1/auth/me');}catch{return null;}}
     const isAdminUser=(me)=>!!me&&(((me.roles||[]).includes('admin'))||((me.permissions||[]).includes('admin.access')));
-    function applyGate(me){const admin=isAdminUser(me);$('loginBtn').classList.toggle('hidden',admin);$('logoutBtn').classList.toggle('hidden',!token());$('adminContent').classList.toggle('hidden',!admin);$('gateHint').classList.toggle('hidden',admin);$('refreshBtn').classList.toggle('hidden',!admin);if(admin){loadTplusTimeline();}}
+    function applyGate(me){const admin=isAdminUser(me);$('loginBtn').classList.toggle('hidden',admin);$('logoutBtn').classList.toggle('hidden',!token());$('adminContent').classList.toggle('hidden',!admin);$('gateHint').classList.toggle('hidden',admin);$('refreshBtn').classList.toggle('hidden',!admin);if(admin){loadSyncConfig();loadTplusTimeline();}}
+    async function loadSyncConfig(){
+      try{
+        const c=await api('/v1/ops/tplus/sync-config');
+        $('syncEnabled').checked=!!c.enabled;
+        $('syncIntervalHours').value=(c.interval_hours!=null)?c.interval_hours:24;
+        $('syncConfigStatus').textContent=c.updated_at?`上次更新：${fmtTime(c.updated_at)}${c.updated_by?(' · '+esc(c.updated_by)):''}`:'';
+      }catch(e){$('syncConfigStatus').textContent='加载失败：'+esc(e.message);}
+    }
+    async function saveSyncConfig(){
+      const enabled=$('syncEnabled').checked;
+      const interval_hours=Number($('syncIntervalHours').value);
+      if(!(interval_hours>=1)){showError('间隔至少 1 小时。');return;}
+      $('syncConfigStatus').textContent='保存中…';
+      try{
+        const c=await api('/v1/ops/tplus/sync-config',{method:'PUT',body:JSON.stringify({enabled,interval_hours})});
+        $('syncEnabled').checked=!!c.enabled;
+        $('syncIntervalHours').value=c.interval_hours;
+        $('syncConfigStatus').textContent='已保存，下次循环生效。';
+        showSuccess('定时同步设置已保存。');
+      }catch(e){$('syncConfigStatus').textContent='';showError('保存失败：'+esc(e.message));}
+    }
     async function login(){clearMessage();const username=$('usernameInput').value.trim(),password=$('passwordInput').value;if(!username||!password){showError('请输入用户名和密码。');return;}const data=await api('/v1/auth/login',{method:'POST',body:JSON.stringify({username,password})});setAuthToken(data.token);$('authModal').classList.remove('show');const me=await fetchMe();applyGate(me);if(isAdminUser(me))showSuccess('登录成功。');else showError('当前账号不是管理员，无法查看此页面。');}
     function syncOriginLabel(item){
       const mode=String((item&&item.mode)||'').toLowerCase();
@@ -172,6 +203,7 @@
       }catch(error){showError(`下载失败：${error.message}`);}
     }
     refreshBtn.onclick=()=>loadTplusTimeline();
+    saveSyncConfigBtn.onclick=()=>saveSyncConfig().catch((e)=>showError(e.message));
     closeModalBtn.onclick=closeModal;detailModal.onclick=(event)=>{if(event.target===detailModal)closeModal();};
     loginBtn.onclick=()=>authModal.classList.add('show');
     logoutBtn.onclick=()=>{clearAuthToken();applyGate(null);showSuccess('已退出登录。');};

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from tplus_datahub.core.logger import get_logger
-from tplus_datahub.jobs.db_sync_requests import fetch_next_bom_request, finish_bom_request
+from tplus_datahub.jobs.db_sync_requests import fetch_next_bom_request, fetch_sync_config, finish_bom_request
 from tplus_datahub.jobs.job_sync_all import run as sync_all_run
 from tplus_datahub.jobs.job_sync_bom import main as sync_bom_main
 from tplus_datahub.jobs.job_sync_bom import run as sync_bom_run
@@ -68,6 +68,30 @@ def _run_pending_bom_request(sync_bom_once: Callable[[], int | None], logger) ->
 
 def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _default_read_sync_config() -> dict | None:
+    return fetch_sync_config()
+
+
+def _resolve_sync_config(read_sync_config: Callable[[], dict | None]) -> tuple[bool, int]:
+    """解析定时同步配置 → (enabled, interval_seconds)。
+    任何异常/缺失/非法值都回退到 env 默认（enabled 视为 true），保证不阻断 worker。"""
+    try:
+        cfg = read_sync_config()
+    except Exception:
+        cfg = None
+    env_interval = _read_positive_int("TPLUS_SYNC_INTERVAL_SECONDS", 86400)
+    if not cfg:
+        return True, env_interval
+    enabled = bool(cfg.get("enabled", True))
+    try:
+        interval = int(cfg.get("interval_seconds"))
+    except (TypeError, ValueError):
+        interval = 0
+    if interval <= 0:
+        interval = env_interval
+    return enabled, interval
 
 
 def _run_pending_db_bom_request(
@@ -155,53 +179,58 @@ def run_forever(
     fetch_db_bom_request: Callable[..., dict | None] = _default_fetch_db_bom_request,
     finish_db_bom_request: Callable[[int, str, int, dict], None] = _default_finish_db_bom_request,
     record_sync_run: Callable[..., int | None] = record_tplus_sync_run_if_configured,
+    read_sync_config: Callable[[], dict | None] = _default_read_sync_config,
     sleep: Callable[[int], None] = time.sleep,
     max_runs: int | None = None,
 ) -> int:
     logger = get_logger("tplus_datahub.worker_loop", "output/logs/worker_loop.log")
-    interval_seconds = _read_positive_int("TPLUS_SYNC_INTERVAL_SECONDS", 86400)
     run_count = 0
     last_exit_code = 0
 
     while True:
         run_count += 1
-        logger.info("T+ sync run started: run=%s", run_count)
-        try:
-            outcome = sync_once()
-        except Exception:
-            logger.exception("T+ sync run failed with unexpected exception: run=%s", run_count)
-            outcome = 1
-        if hasattr(outcome, "exit_code"):
-            last_exit_code = int(outcome.exit_code or 0)
-            export_files = list(getattr(outcome, "export_files", []) or [])
-            diff_summary = getattr(outcome, "diff_summary", None)
-            full_snapshot_id = getattr(outcome, "full_snapshot_id", None)
-        else:
-            last_exit_code = int(outcome or 0)
-            export_files = []
-            diff_summary = None
-            full_snapshot_id = None
+        # 每轮热读配置：关掉只跳过定时全量同步（手动/订阅照常）；间隔改了下一轮即生效。
+        enabled, interval_seconds = _resolve_sync_config(read_sync_config)
+        if enabled:
+            logger.info("T+ sync run started: run=%s", run_count)
+            try:
+                outcome = sync_once()
+            except Exception:
+                logger.exception("T+ sync run failed with unexpected exception: run=%s", run_count)
+                outcome = 1
+            if hasattr(outcome, "exit_code"):
+                last_exit_code = int(outcome.exit_code or 0)
+                export_files = list(getattr(outcome, "export_files", []) or [])
+                diff_summary = getattr(outcome, "diff_summary", None)
+                full_snapshot_id = getattr(outcome, "full_snapshot_id", None)
+            else:
+                last_exit_code = int(outcome or 0)
+                export_files = []
+                diff_summary = None
+                full_snapshot_id = None
 
-        if last_exit_code == 0:
-            logger.info("T+ sync run finished: run=%s status=success", run_count)
-            status = "success"
-        else:
-            logger.error("T+ sync run finished: run=%s status=failed exit_code=%s", run_count, last_exit_code)
-            status = "failed"
+            if last_exit_code == 0:
+                logger.info("T+ sync run finished: run=%s status=success", run_count)
+                status = "success"
+            else:
+                logger.error("T+ sync run finished: run=%s status=failed exit_code=%s", run_count, last_exit_code)
+                status = "failed"
 
-        try:
-            record_sync_run(
-                module="all",
-                mode="scheduled_full",
-                status=status,
-                row_count=0,
-                exit_code=last_exit_code,
-                detail_json={"run": run_count, "export_files": export_files,
-                             "diff_summary": diff_summary, "full_snapshot_id": full_snapshot_id},
-                error_json={},
-            )
-        except Exception:
-            logger.exception("Failed to record T+ sync run status: run=%s", run_count)
+            try:
+                record_sync_run(
+                    module="all",
+                    mode="scheduled_full",
+                    status=status,
+                    row_count=0,
+                    exit_code=last_exit_code,
+                    detail_json={"run": run_count, "export_files": export_files,
+                                 "diff_summary": diff_summary, "full_snapshot_id": full_snapshot_id},
+                    error_json={},
+                )
+            except Exception:
+                logger.exception("Failed to record T+ sync run status: run=%s", run_count)
+        else:
+            logger.info("T+ scheduled sync disabled, skipping full sync: run=%s", run_count)
 
         if max_runs is not None and run_count >= max_runs:
             return last_exit_code

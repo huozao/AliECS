@@ -215,5 +215,56 @@ class WorkerLoopTests(unittest.TestCase):
         self.assertEqual([], recorded["detail_json"]["export_files"])
 
 
+    def test_run_forever_skips_full_sync_when_disabled(self):
+        calls = []
+        sleeps = []
+        result = run_forever(
+            sync_once=lambda: calls.append("sync") or 0,
+            record_sync_run=lambda **k: calls.append("record"),
+            read_sync_config=lambda: {"enabled": False, "interval_seconds": 5},
+            sleep=sleeps.append,
+            max_runs=2,
+        )
+        self.assertEqual(result, 0)
+        self.assertEqual(calls, [])      # 关掉后不跑定时全量、不记 run
+        self.assertEqual(sleeps, [5])    # 间隔仍取配置值（手动轮询照常）
+
+    def test_run_forever_uses_interval_from_config_hot(self):
+        sleeps = []
+        run_forever(
+            sync_once=lambda: 0,
+            record_sync_run=lambda **k: None,
+            read_sync_config=lambda: {"enabled": True, "interval_seconds": 11},
+            sleep=sleeps.append,
+            max_runs=2,
+        )
+        self.assertEqual(sleeps, [11])   # 间隔热生效，无需重启
+
+    def test_run_forever_falls_back_to_env_when_config_errors(self):
+        old = os.environ.get("TPLUS_SYNC_INTERVAL_SECONDS")
+        os.environ["TPLUS_SYNC_INTERVAL_SECONDS"] = "9"
+        calls = []
+        sleeps = []
+
+        def boom():
+            raise RuntimeError("db down")
+
+        try:
+            run_forever(
+                sync_once=lambda: calls.append("sync") or 0,
+                record_sync_run=lambda **k: None,
+                read_sync_config=boom,  # 读配置抛错 → 回退默认（enabled + env 间隔）
+                sleep=sleeps.append,
+                max_runs=2,
+            )
+        finally:
+            if old is None:
+                os.environ.pop("TPLUS_SYNC_INTERVAL_SECONDS", None)
+            else:
+                os.environ["TPLUS_SYNC_INTERVAL_SECONDS"] = old
+        self.assertEqual(calls, ["sync", "sync"])  # 回退后仍开启
+        self.assertEqual(sleeps, [9])              # 用 env 默认间隔
+
+
 if __name__ == "__main__":
     unittest.main()
