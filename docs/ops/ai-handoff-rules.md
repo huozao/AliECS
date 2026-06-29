@@ -48,6 +48,15 @@ Do not edit the wrong repository:
 - Changes to WebDock browser/API behavior belong in the WebDock repository.
 - Changes to OpenClaw itself are upstream/runtime maintenance, not AliECS app work.
 
+## AI Client Execution Policy
+
+- Codex desktop, Claude desktop, and Claude terminal follow the same `开发机` workflow in this project.
+- When the user explicitly asks for or authorizes commit, push, deploy, or verification, these clients may complete the corresponding GitHub and runtime steps themselves.
+- Do not stop at "ask the user to submit/deploy manually" after such authorization.
+- Before pushing, confirm git status, branch, remote URL, and that `.env`, `logs`, `browser_data`, `_references`, real secrets, browser state, and production runtime files are not being committed.
+- Run all `.git`-writing commands serially.
+- Documentation-only changes usually do not require a production deploy. If a push triggers GitHub Actions, or the user explicitly asks to deploy, continue through Actions and runtime verification.
+
 ## Non-Negotiable Boundaries
 
 - Do not move Chrome or ChatGPT browser state back to `服务器`.
@@ -60,10 +69,10 @@ Do not edit the wrong repository:
 ## Standard Development Loop
 
 ```text
-1. Edit code on 开发机.
+1. Edit code on 开发机 with Codex desktop, Claude desktop, Claude terminal, or a human operator.
 2. Validate locally with the smallest relevant command.
 3. Use local Docker validation for app, Docker, or deployment-impacting changes.
-4. Commit directly to main when the user asks to submit/push in this single-maintainer repo.
+4. Commit directly to main when the user asks or authorizes an AI client to submit/push in this single-maintainer repo.
 5. Push main to GitHub.
 6. GitHub Actions builds and deploys AliECS to 服务器.
 7. Verify AliECS health on 服务器.

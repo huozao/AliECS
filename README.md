@@ -4,7 +4,7 @@
 - **GitHub**：源码事实来源（仓库：`https://github.com/huozao/AliECS`）。
 - **GHCR**：镜像事实来源。
 - **阿里云 ECS**：运行节点。
-- **Codex**：协作入口（读仓库、提建议、给补丁），不是事实来源和自动上线入口。
+- **AI 客户端**：Codex 桌面版、Claude 桌面版、Claude 终端可作为开发机执行入口；当用户明确授权提交、推送或部署时，可按项目规则完成 commit、push、部署触发和验证。GitHub、GHCR、ECS 仍分别是源码、镜像和运行事实来源。
 
 ## 已完成范围（Phase 1）
 - 本地可运行：`public-web + admin-ui(占位) + backend-api + postgres`。

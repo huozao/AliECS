@@ -4,7 +4,7 @@
 
 Daily releases should follow one simple path:
 
-1. Codex or a human pushes code to a GitHub branch.
+1. Codex, Claude, or a human pushes code to a GitHub branch.
 2. A PR is created and merged into `main`.
 3. GitHub Actions builds images and pushes them to GHCR.
 4. GitHub Actions connects to ECS through SSH.
