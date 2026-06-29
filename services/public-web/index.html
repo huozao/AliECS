@@ -33,6 +33,11 @@
       <p class="muted">首页展示全部功能。第一行固定为原材料库存、成品库存、系统配方。</p>
       <div id="featuresGrid" class="grid"></div>
     </section>
+    <section id="toolsSection" class="card hidden">
+      <h2>工具 / 计算器</h2>
+      <p class="muted">独立的实验与计算工具，区别于上方的业务查询与录入功能。</p>
+      <div id="toolsGrid" class="grid"></div>
+    </section>
   </div>
   <div id="authModal" class="modal">
     <div class="panel">
@@ -87,10 +92,16 @@
       if(!feature.allowed)return `<button class="btn" type="button" onclick="showError('没登录没权限请登录')">打开入口</button>`;
       return `<a class="btn primary" href="${feature.url}" target="_blank" rel="noreferrer">打开入口</a>`;
     }
+    function featureCard(feature){
+      return `<article class="feature-card card"><div><h3>${feature.title}</h3><p>${feature.description||'暂无说明'}</p><div class="small muted">分类：${feature.category||'未分类'}<br/>权限：${feature.required_permission||'公开'}</div></div><div style="margin-top:14px;">${renderFeatureAction(feature)}</div></article>`;
+    }
     function renderFeatures(){
       const items=state.features||[];
-      if(!items.length){featuresGrid.innerHTML='<div class="muted">当前没有功能配置。</div>';return;}
-      featuresGrid.innerHTML=items.map((feature)=>`<article class="feature-card card"><div><h3>${feature.title}</h3><p>${feature.description||'暂无说明'}</p><div class="small muted">分类：${feature.category||'未分类'}<br/>权限：${feature.required_permission||'公开'}</div></div><div style="margin-top:14px;">${renderFeatureAction(feature)}</div></article>`).join('');
+      const tools=items.filter((feature)=>feature.category==='工具');
+      const rest=items.filter((feature)=>feature.category!=='工具');
+      featuresGrid.innerHTML=rest.length?rest.map(featureCard).join(''):'<div class="muted">当前没有功能配置。</div>';
+      if(tools.length){toolsGrid.innerHTML=tools.map(featureCard).join('');toolsSection.classList.remove('hidden');}
+      else{toolsSection.classList.add('hidden');}
     }
     async function loadFeatures(){
       clearMessage();
