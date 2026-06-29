@@ -11,6 +11,10 @@ from app.providers.wecom import (
     summarize_wecom_error,
 )
 from app.pipelines.managed_contacts import sync_managed_contact_from_row
+from app.pipelines.wecom_structure_backup import (
+    enqueue_copy_auto_structure_backup,
+    structure_backup_enabled,
+)
 from app.storage.postgres import build_record_snapshot, compose_source_name, open_store
 
 
@@ -345,6 +349,8 @@ def run_pending_sync_requests(limit: int = 10) -> int:
             # partial_failed（个别表受 API 限制）不视为请求失败。
             request_status = "success" if status in ("success", "partial_failed") else "failed"
             store.finish_sync_request(request_id, request_status, run_id, detail)
+            if structure_backup_enabled():
+                enqueue_copy_auto_structure_backup(store, request, request_status=request_status)
             if request_status != "success":
                 exit_code = 1
     finally:

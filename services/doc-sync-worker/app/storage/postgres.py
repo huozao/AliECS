@@ -330,6 +330,73 @@ class PostgresDocSyncStore:
         self.conn.commit()
         return int(row[0])
 
+    def upsert_structure_document(
+        self,
+        *,
+        provider: str,
+        env_profile: str,
+        source_type: str,
+        external_doc_id: str,
+        document_name: str,
+        source_url: str = "",
+    ) -> int:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO external_sources(
+                    provider, env_profile, source_name, source_type,
+                    external_doc_id, external_sheet_id, source_url,
+                    document_name, sheet_name, status, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, '', %s, %s, '', 'active', NOW())
+                ON CONFLICT(provider, env_profile, external_doc_id, external_sheet_id)
+                DO UPDATE SET
+                    source_name = EXCLUDED.source_name,
+                    source_type = EXCLUDED.source_type,
+                    source_url = EXCLUDED.source_url,
+                    document_name = EXCLUDED.document_name,
+                    status = 'active',
+                    updated_at = NOW()
+                RETURNING id
+                """,
+                (
+                    provider,
+                    env_profile,
+                    document_name,
+                    source_type,
+                    external_doc_id,
+                    source_url,
+                    document_name,
+                ),
+            )
+            row = cur.fetchone()
+        self.conn.commit()
+        return int(row[0])
+
+    def deactivate_missing_structure_sheets(
+        self,
+        *,
+        provider: str,
+        env_profile: str,
+        external_doc_id: str,
+        active_sheet_ids: list[str],
+    ) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE external_sources
+                SET status = 'inactive', updated_at = NOW()
+                WHERE provider = %s
+                  AND env_profile = %s
+                  AND external_doc_id = %s
+                  AND source_type = 'structure_backup_sheet'
+                  AND external_sheet_id <> ''
+                  AND external_sheet_id <> ALL(%s)
+                """,
+                (provider, env_profile, external_doc_id, active_sheet_ids),
+            )
+        self.conn.commit()
+
     def get_doc_modified(self, provider: str, env_profile: str, external_doc_id: str) -> str:
         with self.conn.cursor() as cur:
             cur.execute(
@@ -483,14 +550,295 @@ class PostgresDocSyncStore:
             )
         self.conn.commit()
 
+    def enqueue_structure_backup_job(self, source_id: int, trigger: str, event_key: str) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO wecom_structure_backup_jobs(source_id, event_key, trigger)
+                VALUES (%s, %s, %s)
+                ON CONFLICT(event_key) DO NOTHING
+                """,
+                (source_id, event_key, trigger),
+            )
+        self.conn.commit()
+
+    def pending_structure_backup_jobs(self, limit: int = 10) -> list[dict[str, Any]]:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, source_id, event_key, trigger, attempt_count, created_at
+                FROM wecom_structure_backup_jobs
+                WHERE status = 'pending' AND next_attempt_at <= NOW()
+                ORDER BY next_attempt_at ASC, id ASC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            rows = cur.fetchall()
+        return [
+            {
+                "id": row[0],
+                "source_id": row[1],
+                "event_key": row[2],
+                "trigger": row[3],
+                "attempt_count": row[4],
+                "created_at": str(row[5]),
+            }
+            for row in rows
+        ]
+
+    def claim_structure_backup_jobs(self, limit: int = 10) -> list[dict[str, Any]]:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                WITH ready AS (
+                    SELECT id
+                    FROM wecom_structure_backup_jobs
+                    WHERE (status = 'pending' AND next_attempt_at <= NOW())
+                       OR (status = 'running' AND started_at < NOW() - INTERVAL '15 minutes')
+                    ORDER BY next_attempt_at ASC, id ASC
+                    LIMIT %s
+                    FOR UPDATE SKIP LOCKED
+                )
+                UPDATE wecom_structure_backup_jobs AS jobs
+                SET status = 'running', started_at = NOW()
+                FROM ready
+                WHERE jobs.id = ready.id
+                RETURNING jobs.id, jobs.source_id, jobs.event_key, jobs.trigger,
+                          jobs.attempt_count, jobs.created_at
+                """,
+                (limit,),
+            )
+            rows = cur.fetchall()
+        self.conn.commit()
+        return [
+            {
+                "id": row[0],
+                "source_id": row[1],
+                "event_key": row[2],
+                "trigger": row[3],
+                "attempt_count": row[4],
+                "created_at": str(row[5]),
+            }
+            for row in rows
+        ]
+
+    def mark_structure_backup_job_running(self, job_id: int) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE wecom_structure_backup_jobs
+                SET status = 'running', started_at = NOW()
+                WHERE id = %s AND status = 'pending'
+                """,
+                (job_id,),
+            )
+        self.conn.commit()
+
+    def retry_structure_backup_job(self, job_id: int, error: str, delay_seconds: int) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE wecom_structure_backup_jobs
+                SET status = 'pending',
+                    attempt_count = attempt_count + 1,
+                    last_error = %s,
+                    next_attempt_at = NOW() + (%s * INTERVAL '1 second'),
+                    started_at = NULL
+                WHERE id = %s
+                """,
+                (str(error)[:2000], max(1, int(delay_seconds)), job_id),
+            )
+        self.conn.commit()
+
+    def finish_structure_backup_job(self, job_id: int) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE wecom_structure_backup_jobs
+                SET status = 'success', finished_at = NOW(), last_error = ''
+                WHERE id = %s
+                """,
+                (job_id,),
+            )
+        self.conn.commit()
+
+    def list_wecom_document_structures(self, source_id: int | None = None) -> list[dict[str, Any]]:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    d.id, d.env_profile, d.external_doc_id, d.document_name,
+                    d.source_url, d.source_type, d.status, d.external_modified_at,
+                    d.last_sync_at,
+                    (
+                        SELECT MAX(r.requested_at)
+                        FROM sync_requests r
+                        WHERE r.source_id = d.id AND r.requested_by = 'copy-auto'
+                    ) AS copy_requested_at,
+                    s.id, s.external_sheet_id, s.sheet_name, s.source_type, s.last_sync_at,
+                    f.id, f.external_field_id, f.field_title, f.field_type, f.raw_json
+                FROM external_sources d
+                LEFT JOIN external_sources s
+                    ON s.provider = d.provider
+                   AND s.env_profile = d.env_profile
+                   AND s.external_doc_id = d.external_doc_id
+                   AND s.external_sheet_id <> ''
+                   AND s.status = 'active'
+                LEFT JOIN external_fields f ON f.source_id = s.id
+                WHERE d.provider = 'wecom'
+                  AND d.external_sheet_id = ''
+                  AND d.status = 'active'
+                  AND (CAST(%s AS BIGINT) IS NULL OR d.id = %s)
+                ORDER BY d.id, s.id, f.id
+                """,
+                (source_id, source_id),
+            )
+            rows = cur.fetchall()
+
+        documents: dict[int, dict[str, Any]] = {}
+        sheets: dict[tuple[int, int], dict[str, Any]] = {}
+        for row in rows:
+            document_id = int(row[0])
+            document = documents.setdefault(
+                document_id,
+                {
+                    "id": document_id,
+                    "provider": "wecom",
+                    "env_profile": row[1] or "",
+                    "external_doc_id": row[2] or "",
+                    "document_name": row[3] or "",
+                    "source_url": row[4] or "",
+                    "source_type": row[5] or "",
+                    "status": row[6] or "",
+                    "external_modified_at": row[7],
+                    "last_sync_at": row[8],
+                    "copy_requested_at": row[9],
+                    "sheets": [],
+                },
+            )
+            if row[10] is None:
+                continue
+            sheet_source_id = int(row[10])
+            sheet_key = (document_id, sheet_source_id)
+            sheet = sheets.get(sheet_key)
+            if sheet is None:
+                sheet = {
+                    "source_id": sheet_source_id,
+                    "external_sheet_id": row[11] or "",
+                    "sheet_name": row[12] or "",
+                    "source_type": row[13] or "",
+                    "last_sync_at": row[14],
+                    "fields": [],
+                }
+                sheets[sheet_key] = sheet
+                document["sheets"].append(sheet)
+            if row[15] is not None:
+                sheet["fields"].append(
+                    {
+                        "order": len(sheet["fields"]) + 1,
+                        "external_field_id": row[16] or "",
+                        "field_title": row[17] or "",
+                        "field_type": row[18] or "",
+                        "raw_json": row[19] if isinstance(row[19], dict) else {},
+                    }
+                )
+        return list(documents.values())
+
+    def list_feishu_document_structures(self, source_id: int | None = None) -> list[dict[str, Any]]:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    d.id, d.env_profile, d.external_doc_id, d.document_name,
+                    d.source_url, d.source_type, d.status, d.last_sync_at,
+                    s.id, s.external_sheet_id, s.sheet_name, s.source_type, s.last_sync_at,
+                    f.id, f.external_field_id, f.field_title, f.field_type, f.raw_json
+                FROM external_sources d
+                LEFT JOIN external_sources s
+                    ON s.provider = d.provider
+                   AND s.env_profile = d.env_profile
+                   AND s.external_doc_id = d.external_doc_id
+                   AND s.source_type = 'bitable_table'
+                   AND s.external_sheet_id <> ''
+                   AND s.status = 'active'
+                LEFT JOIN external_fields f ON f.source_id = s.id
+                WHERE d.provider = 'feishu'
+                  AND d.source_type = 'bitable_app'
+                  AND d.external_sheet_id = ''
+                  AND d.status = 'active'
+                  AND (CAST(%s AS BIGINT) IS NULL OR d.id = %s)
+                ORDER BY d.id, s.id, f.id
+                """,
+                (source_id, source_id),
+            )
+            rows = cur.fetchall()
+
+        documents: dict[int, dict[str, Any]] = {}
+        sheets: dict[tuple[int, int], dict[str, Any]] = {}
+        for row in rows:
+            document_id = int(row[0])
+            document = documents.setdefault(
+                document_id,
+                {
+                    "id": document_id,
+                    "provider": "feishu",
+                    "env_profile": row[1] or "",
+                    "external_doc_id": row[2] or "",
+                    "document_name": row[3] or "",
+                    "source_url": row[4] or "",
+                    "source_type": row[5] or "",
+                    "status": row[6] or "",
+                    "external_modified_at": "",
+                    "last_sync_at": row[7],
+                    "copy_requested_at": None,
+                    "sheets": [],
+                },
+            )
+            if row[8] is None:
+                continue
+            table_source_id = int(row[8])
+            sheet_key = (document_id, table_source_id)
+            sheet = sheets.get(sheet_key)
+            if sheet is None:
+                sheet = {
+                    "source_id": table_source_id,
+                    "external_sheet_id": row[9] or "",
+                    "sheet_name": row[10] or "",
+                    "source_type": row[11] or "",
+                    "last_sync_at": row[12],
+                    "fields": [],
+                }
+                sheets[sheet_key] = sheet
+                document["sheets"].append(sheet)
+            if row[13] is not None:
+                sheet["fields"].append(
+                    {
+                        "order": len(sheet["fields"]) + 1,
+                        "external_field_id": row[14] or "",
+                        "field_title": row[15] or "",
+                        "field_type": row[16] or "",
+                        "raw_json": row[17] if isinstance(row[17], dict) else {},
+                    }
+                )
+        return list(documents.values())
+
     def replace_fields(self, source_id: int, fields: list[dict[str, Any]]) -> dict[str, str]:
         field_titles: dict[str, str] = {}
+        current_field_ids: list[str] = []
         with self.conn.cursor() as cur:
             for field in fields:
                 field_id = str(field.get("field_id") or field.get("id") or field.get("key") or "")
                 if not field_id:
                     continue
-                title = str(field.get("field_title") or field.get("title") or field.get("name") or field_id)
+                current_field_ids.append(field_id)
+                title = str(
+                    field.get("field_title")
+                    or field.get("field_name")
+                    or field.get("title")
+                    or field.get("name")
+                    or field_id
+                )
                 field_titles[field_id] = title
                 cur.execute(
                     """
@@ -511,6 +859,13 @@ class PostgresDocSyncStore:
                         Jsonb(field),
                     ),
                 )
+            cur.execute(
+                """
+                DELETE FROM external_fields
+                WHERE source_id = %s AND external_field_id <> ALL(%s)
+                """,
+                (source_id, current_field_ids),
+            )
         self.conn.commit()
         return field_titles
 

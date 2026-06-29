@@ -7,6 +7,10 @@ from collections.abc import Callable
 from app.pipelines.backfill_smartsheet_images import run_backfill_images
 from app.pipelines.sync_feishu_full import run_sync_feishu_full
 from app.pipelines.sync_wecom_full import run_pending_sync_requests, run_sync_wecom_full
+from app.pipelines.wecom_structure_backup import (
+    run_enqueue_daily_structure_backup_jobs,
+    run_pending_structure_backup_jobs,
+)
 
 
 def _read_positive_int(name: str, default: int) -> int:
@@ -43,10 +47,20 @@ def run_worker_loop(
             run_sync_feishu_full()
         except Exception as exc:  # noqa: BLE001 - 飞书未配置源时不拖垮 wecom 周期
             print(f"[文档同步循环] 飞书全量跳过：{exc}")
+        try:
+            run_enqueue_daily_structure_backup_jobs()
+            run_pending_structure_backup_jobs(limit=1000)
+        except Exception as exc:  # noqa: BLE001 - 备份失败由持久化任务重试，不拖垮源同步。
+            print(f"[文档同步循环] 企微结构备份异常：{exc}")
         return code
 
+    def _default_consume_requests() -> int:
+        code = run_pending_sync_requests(limit=10)
+        backup_code = run_pending_structure_backup_jobs(limit=10)
+        return code or backup_code
+
     run_full = full_sync or _default_full_sync
-    run_pending = consume_requests or (lambda: run_pending_sync_requests(limit=10))
+    run_pending = consume_requests or _default_consume_requests
 
     cycles = 0
     while True:
