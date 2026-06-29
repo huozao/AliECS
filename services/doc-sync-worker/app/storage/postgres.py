@@ -49,6 +49,8 @@ def connect() -> psycopg.Connection:
 
 
 _URL_KEYS = ("image_url", "url", "file_url", "download_url")
+_CELL_TEXT_KEYS = ("text", "name", "value")
+_CELL_LINK_KEYS = ("link", "url", "href")
 
 
 def _cell_urls(items: list[Any]) -> list[str]:
@@ -64,6 +66,24 @@ def _cell_urls(items: list[Any]) -> list[str]:
     return urls
 
 
+def _cell_link_text(item: dict[str, Any]) -> str | None:
+    text = ""
+    for key in _CELL_TEXT_KEYS:
+        if key in item:
+            text = str(item.get(key) or "").strip()
+            break
+    link = ""
+    for key in _CELL_LINK_KEYS:
+        link = str(item.get(key) or "").strip()
+        if link:
+            break
+    if not link:
+        return text if text else None
+    if not text or text == link:
+        return link
+    return f"{text} <{link}>"
+
+
 def first_text_cell(value: Any) -> str:
     if value is None:
         return ""
@@ -72,18 +92,18 @@ def first_text_cell(value: Any) -> str:
             return ""
         first = value[0]
         if isinstance(first, dict):
-            for key in ("text", "name", "value"):
-                if key in first:
-                    return str(first.get(key) or "").strip()
+            link_text = _cell_link_text(first)
+            if link_text is not None:
+                return link_text
             # 图片/附件类元素没有文本键：提取全部 URL（如智能表格图片字段的 image_url）。
             urls = _cell_urls(value)
             if urls:
                 return "; ".join(urls)
         return str(first).strip()
     if isinstance(value, dict):
-        for key in ("text", "name", "value"):
-            if key in value:
-                return str(value.get(key) or "").strip()
+        link_text = _cell_link_text(value)
+        if link_text is not None:
+            return link_text
     return str(value).strip()
 
 
@@ -497,12 +517,14 @@ class PostgresDocSyncStore:
     def upsert_record(self, source_id: int, snapshot: RecordSnapshot) -> UpsertDecision:
         with self.conn.cursor() as cur:
             cur.execute(
-                "SELECT record_hash FROM external_records WHERE source_id = %s AND external_record_id = %s",
+                "SELECT record_hash, normalized_json FROM external_records WHERE source_id = %s AND external_record_id = %s",
                 (source_id, snapshot.external_record_id),
             )
             row = cur.fetchone()
             existing_hash = str(row[0]) if row else None
             decision = decide_record_upsert(existing_hash, snapshot)
+            if row and decision.action == "unchanged" and row[1] != snapshot.normalized_json:
+                decision = UpsertDecision(action="update", should_write=True)
             if decision.action == "create":
                 cur.execute(
                     """
@@ -563,6 +585,113 @@ class PostgresDocSyncStore:
             deleted_count = int(cur.rowcount or 0)
         self.conn.commit()
         return deleted_count
+
+    def disable_missing_sheets(
+        self, provider: str, env_profile: str, external_doc_id: str, seen_sheet_ids: list[str]
+    ) -> int:
+        if not seen_sheet_ids:
+            return 0
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE external_sources
+                SET status = 'disabled',
+                    updated_at = NOW()
+                WHERE provider = %s
+                  AND env_profile = %s
+                  AND external_doc_id = %s
+                  AND external_sheet_id <> ''
+                  AND status = 'active'
+                  AND NOT (external_sheet_id = ANY(%s))
+                """,
+                (provider, env_profile, external_doc_id, seen_sheet_ids),
+            )
+            disabled_count = int(cur.rowcount or 0)
+        self.conn.commit()
+        return disabled_count
+
+    def list_image_backfill_targets(self, profiles: list[str] | None = None) -> list[dict[str, Any]]:
+        profiles = [str(item).strip() for item in (profiles or []) if str(item).strip()]
+        params: list[Any] = []
+        profile_filter = ""
+        if profiles:
+            profile_filter = "AND env_profile = ANY(%s)"
+            params.append(profiles)
+        with self.conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT id, provider, env_profile, external_doc_id, sheet_title,
+                       attachment_field_title, image_field_title
+                FROM image_backfill_targets
+                WHERE enabled = TRUE
+                  AND provider = 'wecom'
+                  {profile_filter}
+                ORDER BY id
+                """,
+                params,
+            )
+            rows = cur.fetchall()
+        return [
+            {
+                "id": row[0],
+                "provider": row[1],
+                "env_profile": row[2],
+                "external_doc_id": row[3],
+                "sheet_title": row[4],
+                "attachment_field_title": row[5],
+                "image_field_title": row[6],
+            }
+            for row in rows
+        ]
+
+    def get_image_backfill_status(self, external_doc_id: str, sheet_id: str, record_id: str) -> str:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT status
+                FROM image_backfill_log
+                WHERE external_doc_id = %s AND sheet_id = %s AND record_id = %s
+                """,
+                (external_doc_id, sheet_id, record_id),
+            )
+            row = cur.fetchone()
+        return str(row[0] or "") if row else ""
+
+    def upsert_image_backfill_log(
+        self,
+        *,
+        provider: str,
+        env_profile: str,
+        external_doc_id: str,
+        sheet_id: str,
+        record_id: str,
+        sp_no: str,
+        status: str,
+        image_count: int = 0,
+        error: str = "",
+    ) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO image_backfill_log(
+                    provider, env_profile, external_doc_id, sheet_id, record_id,
+                    sp_no, status, image_count, error, attempted_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                ON CONFLICT(external_doc_id, sheet_id, record_id)
+                DO UPDATE SET
+                    provider = EXCLUDED.provider,
+                    env_profile = EXCLUDED.env_profile,
+                    sp_no = EXCLUDED.sp_no,
+                    status = EXCLUDED.status,
+                    image_count = EXCLUDED.image_count,
+                    error = EXCLUDED.error,
+                    attempted_at = NOW(),
+                    updated_at = NOW()
+                """,
+                (provider, env_profile, external_doc_id, sheet_id, record_id, sp_no, status, image_count, error),
+            )
+        self.conn.commit()
 
     def upsert_managed_contact(self, contact: dict[str, Any]) -> None:
         with self.conn.cursor() as cur:

@@ -80,6 +80,8 @@ class BackendExportsTests(unittest.TestCase):
         self.assertIn("暂未配置说明", items["unknown_module"]["description"])
 
     def test_exports_catalog_includes_doc_rows_before_sheet_sync(self) -> None:
+        executed_sql: list[str] = []
+
         class FakeCursor:
             def __init__(self) -> None:
                 self.rows = []
@@ -91,6 +93,7 @@ class BackendExportsTests(unittest.TestCase):
                 return None
 
             def execute(self, sql: str, params=None) -> None:
+                executed_sql.append(sql)
                 if "WHERE s.external_sheet_id <> '' AND s.status" in sql:
                     self.rows = []
                 else:
@@ -117,6 +120,7 @@ class BackendExportsTests(unittest.TestCase):
             self.main._latest_tplus_exports = old_latest
 
         wecom_a = next(tab for tab in catalog["tabs"] if tab["key"] == "wecom_company_a")
+        self.assertIn("MAX(s.document_name) FILTER (WHERE s.external_sheet_id = '')", executed_sql[0])
         self.assertEqual(
             [
                 {

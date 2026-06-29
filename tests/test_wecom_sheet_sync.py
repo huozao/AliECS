@@ -73,6 +73,122 @@ class WeComSheetSyncTests(WorkerImportTestCase):
         self.assertEqual(839, store.synced_source_id)
         self.assertEqual(1, counts["deleted_count"])
 
+    def test_doc_sync_disables_sources_for_sheets_missing_from_complete_pull(self) -> None:
+        from app.pipelines.sync_wecom_full import _sync_doc
+        from app.storage.postgres import UpsertDecision
+
+        class FakeClient:
+            def get_doc_base(self, docid: str) -> dict:
+                return {"doc_name": "登记表-副本", "modify_time": "m2"}
+
+            def get_sheets(self, docid: str) -> list[dict]:
+                return [{"sheet_id": "sheet-live", "title": "配色&样品需求单"}]
+
+            def get_fields(self, docid: str, sheet_id: str) -> dict:
+                return {"fields": [{"field_id": "f1", "field_title": "字段"}]}
+
+            def get_records(self, docid: str, sheet_id: str) -> dict:
+                return {"records": [], "page_count": 1}
+
+        class FakeStore:
+            def __init__(self) -> None:
+                self.disabled_missing: tuple[str, str, str, list[str]] | None = None
+
+            def get_doc_modified(self, provider: str, env_profile: str, external_doc_id: str) -> str:
+                return ""
+
+            def ensure_source(self, **kwargs) -> int:
+                return 10
+
+            def replace_fields(self, source_id: int, fields: list[dict]) -> dict[str, str]:
+                return {"f1": "字段"}
+
+            def upsert_record(self, source_id: int, snapshot) -> UpsertDecision:
+                return UpsertDecision(action="unchanged", should_write=False)
+
+            def delete_missing_records(self, source_id: int, external_record_ids: list[str]) -> int:
+                return 0
+
+            def mark_source_synced(self, source_id: int) -> None:
+                return None
+
+            def disable_missing_sheets(
+                self, provider: str, env_profile: str, external_doc_id: str, seen_sheet_ids: list[str]
+            ) -> int:
+                self.disabled_missing = (provider, env_profile, external_doc_id, list(seen_sheet_ids))
+                return 1
+
+            def upsert_doc_source(self, **kwargs) -> int:
+                return 11
+
+        store = FakeStore()
+        counts = {"sheet_count": 0, "record_count": 0, "created_count": 0, "updated_count": 0, "error_count": 0}
+        errors: list[dict] = []
+
+        _sync_doc(
+            store,
+            FakeClient(),
+            profile="COMPANY_B",
+            docid="doc1",
+            fallback_name="fallback",
+            source_url="",
+            counts=counts,
+            errors=errors,
+            skip_unchanged=False,
+        )
+
+        self.assertEqual(("wecom", "COMPANY_B", "doc1", ["sheet-live"]), store.disabled_missing)
+
+    def test_doc_sync_does_not_disable_missing_sheets_for_empty_or_partial_pull(self) -> None:
+        from app.pipelines.sync_wecom_full import _sync_doc
+
+        class EmptyClient:
+            def get_doc_base(self, docid: str) -> dict:
+                return {"doc_name": "登记表-副本", "modify_time": "m2"}
+
+            def get_sheets(self, docid: str) -> list[dict]:
+                return []
+
+        class FailingSheetClient(EmptyClient):
+            def get_sheets(self, docid: str) -> list[dict]:
+                return [{"sheet_id": "sheet-live", "title": "配色&样品需求单"}]
+
+            def get_fields(self, docid: str, sheet_id: str) -> dict:
+                raise RuntimeError("field api failed")
+
+        class FakeStore:
+            def __init__(self) -> None:
+                self.disable_calls = 0
+
+            def get_doc_modified(self, provider: str, env_profile: str, external_doc_id: str) -> str:
+                return ""
+
+            def ensure_source(self, **kwargs) -> int:
+                return 10
+
+            def disable_missing_sheets(self, *args) -> int:
+                self.disable_calls += 1
+                return 0
+
+            def upsert_doc_source(self, **kwargs) -> int:
+                return 11
+
+        for client in (EmptyClient(), FailingSheetClient()):
+            store = FakeStore()
+            counts = {"sheet_count": 0, "record_count": 0, "created_count": 0, "updated_count": 0, "error_count": 0}
+            _sync_doc(
+                store,
+                client,
+                profile="COMPANY_B",
+                docid="doc1",
+                fallback_name="fallback",
+                source_url="",
+                counts=counts,
+                errors=[],
+                skip_unchanged=False,
+            )
+            self.assertEqual(0, store.disable_calls)
+
 
 if __name__ == "__main__":
     unittest.main()

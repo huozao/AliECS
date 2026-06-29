@@ -109,6 +109,49 @@ class ExternalRecordHashTests(WorkerImportTestCase):
         self.assertEqual("update", decision.action)
         self.assertTrue(decision.should_write)
 
+    def test_upsert_record_updates_when_normalized_json_changes_without_raw_hash_change(self) -> None:
+        from app.storage.postgres import PostgresDocSyncStore, build_record_snapshot
+
+        class FakeCursor:
+            def __init__(self) -> None:
+                self.executed: list[str] = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args) -> None:
+                return None
+
+            def execute(self, sql: str, params=None) -> None:
+                self.executed.append(sql)
+
+            def fetchone(self):
+                return (snapshot.record_hash, {"附件": "1个附件"})
+
+        class FakeConn:
+            def __init__(self) -> None:
+                self.cursor_obj = FakeCursor()
+                self.commits = 0
+
+            def cursor(self):
+                return self.cursor_obj
+
+            def commit(self) -> None:
+                self.commits += 1
+
+        snapshot = build_record_snapshot(
+            {"record_id": "r1", "values": {"f1": [{"text": "1个附件", "link": "https://example.com/detail"}]}},
+            {"f1": "附件"},
+        )
+        conn = FakeConn()
+
+        decision = PostgresDocSyncStore(conn).upsert_record(10, snapshot)
+
+        self.assertEqual("update", decision.action)
+        self.assertTrue(decision.should_write)
+        self.assertTrue(any("UPDATE external_records" in sql for sql in conn.cursor_obj.executed))
+        self.assertEqual(1, conn.commits)
+
 
 class SourceUrlTests(WorkerImportTestCase):
     def test_build_smartsheet_open_url_prefers_source_url(self) -> None:
@@ -151,9 +194,23 @@ class ImageCellTests(WorkerImportTestCase):
     def test_text_cell_behavior_unchanged_for_link_fields(self) -> None:
         from app.storage.postgres import first_text_cell
 
-        self.assertEqual("官网", first_text_cell([{"text": "官网", "url": "https://example.com"}]))
+        self.assertEqual("官网 <https://example.com>", first_text_cell([{"text": "官网", "url": "https://example.com"}]))
         self.assertEqual("", first_text_cell([]))
         self.assertEqual("plain", first_text_cell("plain"))
+
+    def test_url_cell_preserves_display_text_and_real_link(self) -> None:
+        from app.storage.postgres import build_record_snapshot, first_text_cell
+
+        cell = [{"link": "https://example.com/detail?sp_no=202603240010", "text": "1个附件", "type": "url"}]
+        snapshot = build_record_snapshot({"record_id": "r1", "values": {"f1": cell}}, {"f1": "附件"})
+
+        self.assertEqual("1个附件 <https://example.com/detail?sp_no=202603240010>", first_text_cell(cell))
+        self.assertEqual("1个附件 <https://example.com/detail?sp_no=202603240010>", snapshot.normalized_json["附件"])
+
+    def test_url_cell_with_matching_text_and_link_returns_link_once(self) -> None:
+        from app.storage.postgres import first_text_cell
+
+        self.assertEqual("https://example.com/a", first_text_cell([{"link": "https://example.com/a", "text": "https://example.com/a", "type": "url"}]))
 
 
 class WorkerLoopTests(WorkerImportTestCase):

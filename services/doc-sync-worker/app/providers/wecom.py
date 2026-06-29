@@ -4,6 +4,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
+from mimetypes import guess_type
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -330,3 +331,21 @@ class WeComSmartsheetClient:
         merged["fetched_count"] = len(records)
         merged["page_count"] = page_count
         return merged
+
+    def update_records(self, docid: str, sheet_id: str, records: list[dict[str, Any]]) -> dict[str, Any]:
+        return self._post("/wedoc/smartsheet/update_records", {"docid": docid, "sheet_id": sheet_id, "records": records})
+
+    def upload_image(self, filename: str, content: bytes) -> str:
+        content_type = guess_type(filename)[0] or "application/octet-stream"
+        data = self._request_json(
+            "POST",
+            f"{BASE}/media/uploadimg",
+            params={"access_token": self.access_token()},
+            files={"media": (filename, content, content_type)},
+        )
+        if data.get("errcode") != 0:
+            raise RuntimeError(f"/media/uploadimg failed: {data}")
+        url = str(data.get("url") or "").strip()
+        if not url:
+            raise RuntimeError(f"/media/uploadimg missing url: {data}")
+        return url

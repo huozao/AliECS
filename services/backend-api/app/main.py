@@ -2306,7 +2306,11 @@ def exports_catalog(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any
             cur.execute(
                 """
                 SELECT s.provider, s.env_profile, s.external_doc_id,
-                       COALESCE(MAX(NULLIF(s.document_name, '')), MAX(NULLIF(s.source_name, ''))) AS document_name,
+                       COALESCE(
+                           MAX(s.document_name) FILTER (WHERE s.external_sheet_id = ''),
+                           MAX(NULLIF(s.document_name, '')),
+                           MAX(NULLIF(s.source_name, ''))
+                       ) AS document_name,
                        COALESCE(MIN(s.id) FILTER (WHERE s.external_sheet_id = ''), MIN(s.id)) AS first_source_id,
                        COUNT(DISTINCT s.id) FILTER (WHERE s.external_sheet_id <> '') AS sheet_count,
                        COUNT(r.id) FILTER (WHERE s.external_sheet_id <> '') AS row_count,

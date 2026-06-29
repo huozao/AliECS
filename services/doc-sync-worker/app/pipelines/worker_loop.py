@@ -4,6 +4,7 @@ import os
 import time
 from collections.abc import Callable
 
+from app.pipelines.backfill_smartsheet_images import run_backfill_images
 from app.pipelines.sync_feishu_full import run_sync_feishu_full
 from app.pipelines.sync_wecom_full import run_pending_sync_requests, run_sync_wecom_full
 
@@ -29,6 +30,15 @@ def run_worker_loop(
 
     def _default_full_sync() -> int:
         code = run_sync_wecom_full()
+        try:
+            result = run_backfill_images()
+            print(
+                "[文档同步循环] 图片回填完成："
+                f"targets={result.target_count} scanned={result.scanned_count} "
+                f"updated={result.updated_count} errors={result.error_count}"
+            )
+        except Exception as exc:  # noqa: BLE001 - 图片回填不拖垮文档同步周期
+            print(f"[文档同步循环] 图片回填跳过：{exc}")
         try:
             run_sync_feishu_full()
         except Exception as exc:  # noqa: BLE001 - 飞书未配置源时不拖垮 wecom 周期

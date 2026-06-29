@@ -92,12 +92,15 @@ def _sync_doc(
             return
 
     sheets = client.get_sheets(docid)
+    initial_error_count = int(counts.get("error_count", 0) or 0)
+    seen_sheet_ids: list[str] = []
     if not sheets:
         print(f"[企业微信同步] {profile} docid={docid} 未返回 sheet。")
     for sheet in sheets:
         sheet_id = _sheet_id(sheet)
         if not sheet_id:
             continue
+        seen_sheet_ids.append(sheet_id)
         sheet_name = _sheet_name(sheet)
         source_id = store.ensure_source(
             provider="wecom",
@@ -130,6 +133,13 @@ def _sync_doc(
                 f"[企业微信同步] {profile} docid={docid} "
                 f"sheet={sheet_name} 同步失败（已跳过，继续其余表）：{sheet_exc}"
             )
+    if (
+        seen_sheet_ids
+        and int(counts.get("error_count", 0) or 0) == initial_error_count
+        and hasattr(store, "disable_missing_sheets")
+    ):
+        disabled_count = store.disable_missing_sheets("wecom", profile, docid, seen_sheet_ids)
+        counts["disabled_sheet_count"] = counts.get("disabled_sheet_count", 0) + int(disabled_count or 0)
     # 全簿处理完才登记 modify_time，半途失败下轮不会被跳过。
     store.upsert_doc_source(
         provider="wecom",
