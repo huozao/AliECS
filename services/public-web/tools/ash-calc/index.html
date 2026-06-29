@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>分段灰分 / 炭黑填料半定量计算器</title>
+<style>
+:root{--bg:#f6f7fb;--card:#fff;--text:#111827;--muted:#6b7280;--line:#e5e7eb;--line2:#cfd6e0;--blue:#2563eb;--red:#dc2626;--green:#059669;--amber:#d97706;--shadow:0 10px 30px rgba(15,23,42,.08);--r:16px}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#f8fafc,#eef3f8);color:var(--text);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans SC","Microsoft YaHei",Arial,sans-serif}
+header{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.94);border-bottom:1px solid var(--line)}
+.header{max-width:1480px;margin:auto;padding:10px 18px;display:block}
+.header h1{margin:0;font-size:18px;line-height:1.25;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+main{max-width:1480px;margin:auto;padding:18px}.grid{display:grid;grid-template-columns:minmax(680px,1.08fr) minmax(460px,.92fr);gap:16px;align-items:start}
+@media(max-width:1180px){.grid{grid-template-columns:1fr}.header{display:block}.pills{justify-content:flex-start;min-width:0;margin-top:12px}.resultcard{position:static}.global{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:760px){main{padding:12px}.head{display:block}.tools{margin-top:10px}.global{grid-template-columns:1fr}.wrap{overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;width:100%;max-width:100%;display:block;touch-action:pan-x}.samplecol{min-width:220px}.rowhead{min-width:138px}.header h1{font-size:17px}.card{border-radius:14px}.body{padding:12px}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}.head{padding:15px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:12px;align-items:center}.head h2{margin:0;font-size:17px}.body{padding:16px}.hint{font-size:12px;color:var(--muted)}
+button{border:0;border-radius:10px;padding:9px 12px;font:inherit;font-weight:800;cursor:pointer}.small{font-size:12px;padding:7px 10px}.primary{background:var(--blue);color:#fff}.secondary{background:#eef2ff;color:#3730a3}.ghost{background:#f3f4f6;color:#374151}.danger{background:#fef2f2;color:var(--red)}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.tab{border:1px solid var(--line2);border-radius:999px;background:#fff;color:#374151;font-size:13px}.tab.active{background:#111827;color:#fff;border-color:#111827}.section{display:none}.section.active{display:block}
+label{display:block;margin-bottom:4px;color:#374151;font-size:12px;font-weight:700}input,select{width:100%;padding:9px 10px;border:1px solid var(--line2);border-radius:10px;background:#fff;color:var(--text);font:inherit;outline:none}input:focus,select:focus{border-color:#93c5fd;box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+.global{display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:12px}.box{border:1px solid var(--line);border-radius:14px;background:#fff;padding:14px;margin-bottom:14px}.box h3{margin:0 0 10px;font-size:15px}.note{padding:10px 12px;border:1px dashed var(--line2);border-radius:12px;background:#fbfcfe;color:#475569;font-size:13px;margin-top:12px}
+.wrap{overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;touch-action:pan-x;width:100%;max-width:100%;display:block;border:1px solid var(--line);border-radius:14px}table{width:100%;border-collapse:separate;border-spacing:0;background:#fff}th,td{padding:10px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);vertical-align:middle}th{background:#f8fafc;color:#374151;font-size:12px;font-weight:800;white-space:nowrap}tr:last-child td,tr:last-child th{border-bottom:0}th:last-child,td:last-child{border-right:0}.rowhead{min-width:170px;background:#fcfcfd;font-weight:800;color:#374151}.samplecol{min-width:250px}.samplehead{display:flex;flex-direction:column;gap:8px}.topline{display:flex;justify-content:space-between;gap:8px;align-items:center}.badge{display:inline-flex;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:999px;padding:2px 8px;font-size:12px;font-weight:800}.readonly{padding:9px 10px;border:1px solid var(--line2);border-radius:10px;background:#f9fafb;font-weight:700;color:#374151}.center{text-align:center}.center input{width:auto;transform:scale(1.1)}
+.stack{display:grid;gap:14px}.resultcard{position:static}.sub{font-size:12px;color:var(--muted);margin-bottom:8px}.wrap table{min-width:max-content}.wrap::-webkit-scrollbar{height:8px}.wrap::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:999px}.num{text-align:right;font-variant-numeric:tabular-nums}.high{font-weight:900}.low{font-style:italic;color:#4b5563}.mid,.normal{font-weight:400}.plus{color:var(--red);font-weight:900}.minus{color:var(--blue);font-weight:900}
+.warns{display:grid;gap:8px}.warn{display:flex;gap:8px;padding:10px 12px;border-radius:12px;border:1px solid}.info{background:#eff6ff;border-color:#bfdbfe;color:#1e40af}.good{background:#ecfdf5;border-color:#bbf7d0;color:#065f46}.risk{background:#fff7ed;border-color:#fed7aa;color:#9a3412}.bad{background:#fef2f2;border-color:#fecaca;color:#991b1b}
+.formula{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:#f3f4f6;border-radius:8px;padding:8px;margin:7px 0}.used{font-size:12px;color:#1d4ed8;font-weight:800}.tools{display:flex;gap:8px;flex-wrap:wrap}.library-tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+
+/* v5: compact top bar, compact test-condition inputs, reliable horizontal table scrolling */
+.global{grid-template-columns:repeat(4,minmax(62px,1fr)) !important;gap:8px !important}
+.global label{font-size:11px;white-space:nowrap}
+.global input{padding:7px 5px;text-align:center;min-width:0}
+@media(max-width:420px){.global{grid-template-columns:repeat(2,minmax(0,1fr)) !important}}
+.wrap{overflow-x:scroll !important;overflow-y:hidden !important;-webkit-overflow-scrolling:touch;touch-action:pan-x;width:100%;max-width:100%;display:block}
+.wrap table{width:max-content !important;min-width:100% !important}
+th,td{white-space:nowrap}
+.resultcard .wrap table{min-width:860px !important}
+#process .wrap table{min-width:920px !important}
+#compare .wrap table{min-width:1040px !important}
+.resultcard th,.resultcard td{padding:8px 7px;font-size:12px}
+.resultcard .hint{font-size:11px}
+
+
+/* v6 fixes: prevent result panel clipping and keep tables scrollable */
+.grid>*{min-width:0}
+.card,.body,.box,.resultcard{min-width:0}
+.resultcard .box{overflow:hidden}
+.resultcard .wrap{display:block;width:100%;max-width:100%;overflow-x:auto !important;overflow-y:hidden !important;-webkit-overflow-scrolling:touch;padding-bottom:4px}
+.resultcard table{width:max-content !important;min-width:100% !important}
+#process table{min-width:820px !important}
+#compare table{min-width:940px !important}
+.resultcard th,.resultcard td{padding:7px 6px;font-size:12px;line-height:1.35}
+
+
+/* v8 safe patch: restore full rows/columns; only improve scrolling and compactness */
+.grid>*{min-width:0}
+.card,.body,.box,.resultcard{min-width:0}
+.resultcard .box{overflow:hidden}
+.wrap{overflow-x:auto !important;overflow-y:hidden !important;-webkit-overflow-scrolling:touch;touch-action:pan-x;max-width:100%}
+.wrap table{min-width:max-content}
+#process table{min-width:820px}
+#compare table{min-width:860px}
+.resultcard th,.resultcard td{padding:7px 6px;font-size:12px;line-height:1.35}
+.resultcard td.num,.resultcard th.num{white-space:nowrap}
+#compare th:first-child,#compare td:first-child{min-width:92px}
+
+
+/* v9 column-width tuning: keep full structure, reduce wasted width */
+/* 样品平行输入：样品列固定窄宽，适合数字录入；下拉内容点击后仍可展开查看 */
+#sampleTable .samplecol{width:112px !important;min-width:112px !important;max-width:112px !important}
+#sampleTable td:not(.rowhead){width:112px !important;min-width:112px !important;max-width:112px !important}
+#sampleTable input,#sampleTable select{font-size:12px;padding:7px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#sampleTable .samplehead{gap:6px}
+#sampleTable .badge{max-width:4.5em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#sampleTable .rowhead{width:7.5em !important;min-width:7.5em !important;max-width:7.5em !important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* 基础称重与残留率：样品列只保留约4个汉字宽度，多余隐藏 */
+#process table{table-layout:fixed !important;width:100% !important;min-width:650px !important}
+#process th,#process td{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#process th:nth-child(1),#process td:nth-child(1){width:4.8em !important;max-width:4.8em !important}
+#process th:nth-child(2),#process td:nth-child(2){width:3.8em !important}
+#process th:nth-child(3),#process td:nth-child(3){width:4.5em !important}
+#process th:nth-child(4),#process td:nth-child(4){width:7em !important}
+#process th:nth-child(5),#process td:nth-child(5){width:7em !important}
+#process th:nth-child(n+6),#process td:nth-child(n+6){width:5.5em !important}
+
+/* 成分估算结果：项目列保留约6个汉字宽度，多余隐藏 */
+#compare table{table-layout:fixed !important;width:100% !important;min-width:0 !important}
+#compare th,#compare td{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#compare th:first-child,#compare td:first-child{width:6.5em !important;min-width:6.5em !important;max-width:6.5em !important}
+#compare th:not(:first-child),#compare td:not(:first-child){width:5.8em !important;min-width:5.8em !important;max-width:5.8em !important}
+#compare .hint{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+
+/* v10 display fixes */
+.float-tip{
+  position:fixed;
+  z-index:9999;
+  max-width:min(320px, calc(100vw - 24px));
+  background:#111827;
+  color:#fff;
+  border-radius:10px;
+  padding:8px 10px;
+  font-size:13px;
+  line-height:1.45;
+  box-shadow:0 12px 30px rgba(15,23,42,.22);
+  pointer-events:none;
+  word-break:break-word;
+}
+#sampleTable .rowhead,
+#compare th,
+#compare td,
+#process th,
+#process td{
+  cursor:default;
+}
+#sampleTable .rowhead{
+  position:relative;
+}
+
+/* 基础称重与残留率：压缩列宽；默认滚动到原样g */
+#process table{
+  table-layout:fixed !important;
+  width:max-content !important;
+  min-width:660px !important;
+}
+#process th,#process td{
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+#process th:nth-child(1),#process td:nth-child(1){width:4.5em !important;max-width:4.5em !important}
+#process th:nth-child(2),#process td:nth-child(2){width:3.5em !important;max-width:3.5em !important}
+#process th:nth-child(3),#process td:nth-child(3){width:4em !important;max-width:4em !important}
+#process th:nth-child(4),#process td:nth-child(4){width:6.5em !important;max-width:6.5em !important}
+#process th:nth-child(5),#process td:nth-child(5){width:6.5em !important;max-width:6.5em !important}
+#process th:nth-child(6),#process td:nth-child(6),
+#process th:nth-child(7),#process td:nth-child(7),
+#process th:nth-child(8),#process td:nth-child(8),
+#process th:nth-child(9),#process td:nth-child(9),
+#process th:nth-child(10),#process td:nth-child(10){width:5.2em !important;max-width:5.2em !important}
+
+/* 成分估算结果：与样品输入类似，固定窄列宽，完整文字点击浮层显示 */
+#compare table{
+  table-layout:fixed !important;
+  width:max-content !important;
+  min-width:0 !important;
+}
+#compare th,#compare td{
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+#compare th:first-child,#compare td:first-child{
+  width:6.5em !important;
+  min-width:6.5em !important;
+  max-width:6.5em !important;
+}
+#compare th:not(:first-child),#compare td:not(:first-child){
+  width:5.8em !important;
+  min-width:5.8em !important;
+  max-width:5.8em !important;
+}
+#compare .hint{
+  display:block;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+
+/* v12 compare/process width reset: exact table widths from JS, no wasted columns */
+#process .wrap,
+#compare .wrap{
+  overflow-x:auto !important;
+  overflow-y:hidden !important;
+  max-width:100%;
+  -webkit-overflow-scrolling:touch;
+}
+#process table,
+#compare table{
+  table-layout:fixed !important;
+  width:var(--tw) !important;
+  min-width:var(--tw) !important;
+  max-width:var(--tw) !important;
+}
+#process th,#process td,
+#compare th,#compare td{
+  white-space:nowrap !important;
+  overflow:hidden !important;
+  text-overflow:ellipsis !important;
+  padding:7px 6px !important;
+  font-size:12px !important;
+  line-height:1.35 !important;
+}
+#process td.num,#process th.num,
+#compare td.num,#compare th.num{
+  text-align:right;
+}
+#compare td .subcell{
+  display:block;
+  font-size:11px;
+  color:#64748b;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+#compare td .maincell{
+  display:block;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+
+/* v13: compare table width follows fixed columns; overrides old #compare .wrap table 1040px rule */
+#compare .wrap table{
+  table-layout:fixed !important;
+  width:var(--tw) !important;
+  min-width:var(--tw) !important;
+  max-width:var(--tw) !important;
+}
+#compare th,
+#compare td{
+  white-space:nowrap !important;
+  overflow:hidden !important;
+  text-overflow:ellipsis !important;
+}
+#compare td .maincell{
+  display:block;
+  color:inherit;
+  font-weight:inherit;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+#compare td .subcell{
+  display:block;
+  color:#94a3b8 !important;
+  font-weight:400 !important;
+  font-size:11px;
+  line-height:1.15;
+  margin-top:2px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+/* v14: 打印 / 导出 PDF 报告样式 */
+.report-root{display:none}
+.rpt-meta-box .rgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+@media(max-width:760px){.rpt-meta-box .rgrid{grid-template-columns:1fr 1fr}}
+@media screen{.report-root{display:none}}
+@media print{
+  header,main,.float-tip,.tools,.tabs{display:none !important}
+  .report-root{display:block !important}
+  @page{size:A4;margin:14mm}
+  body{background:#fff !important;margin:0;color:#111;font-size:12px}
+  .report-root *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+}
+.report-root{color:#111;font:12px/1.5 -apple-system,"Segoe UI","Noto Sans SC","Microsoft YaHei",Arial,sans-serif;padding:0 2mm}
+.report-root .rpt-title{text-align:center;font-size:20px;font-weight:900;margin:0 0 2px}
+.report-root .rpt-sub{text-align:center;color:#555;font-size:11px;margin:0 0 12px}
+.report-root h4{font-size:13px;margin:16px 0 6px;border-left:4px solid #111;padding-left:8px}
+.report-root table{width:100%;border-collapse:collapse;margin:4px 0;table-layout:auto}
+.report-root th,.report-root td{border:1px solid #999;padding:5px 6px;font-size:11px;vertical-align:middle}
+.report-root th{background:#f0f0f0;font-weight:800;text-align:center}
+.report-root td.num{text-align:right;font-variant-numeric:tabular-nums}
+.report-root .meta-tbl td{padding:5px 8px}
+.report-root .meta-tbl td.k{background:#f6f6f6;font-weight:800;width:14%;white-space:nowrap}
+.report-root .rpt-note{font-size:10.5px;color:#444;line-height:1.6;margin:6px 0}
+.report-root .rpt-note ol{margin:4px 0;padding-left:18px}
+.report-root .pos{color:#b91c1c}.report-root .neg{color:#1d4ed8}
+.report-root .rpt-warn{font-size:10.5px;margin:3px 0;padding:5px 8px;border:1px solid #ccc;border-radius:4px}
+.report-root .rpt-warn.bad{background:#fdeceb;border-color:#f3b4ad}
+.report-root .rpt-warn.risk{background:#fdf3e7;border-color:#f0cd9a}
+.report-root .rpt-warn.info{background:#eef3fb;border-color:#bcd0ee}
+.report-root .rpt-warn.good{background:#eef7f0;border-color:#bcdcc5}
+.report-root .sign{display:flex;justify-content:space-between;margin-top:26px;font-size:11px}
+.report-root .sign div{width:30%}
+.report-root .sign .line{border-bottom:1px solid #333;height:26px;margin-bottom:4px}
+.report-root .rpt-foot{margin-top:18px;border-top:1px solid #ccc;padding-top:6px;font-size:10px;color:#777;text-align:center}
+/* v14: 示例（未编辑）输入显示为灰色占位风格，点击聚焦后恢复正常色 */
+input.ex{color:#9ca3af}
+input.ex:focus{color:var(--text)}
+</style>
+</head>
+<body>
+<header><div class="header"><h1>分段灰分 / 填料半定量计算器</h1></div></header>
+<main><div class="grid">
+<section class="card"><div class="head"><h2>一、样品录入</h2><div class="tools"><button class="small secondary" id="addSample">增加目标样品</button><button class="small ghost" id="calc">重新计算</button><button class="small ghost" id="copy">复制报告</button><button class="small ghost" id="csv">导出CSV</button><button class="small primary" id="pdf">打印/导出PDF报告</button><button class="small danger" id="reset">恢复示例</button></div></div><div class="body">
+<div class="tabs"><button class="tab active" data-tab="input">称重数据</button><button class="tab" data-tab="logic">计算逻辑</button><button class="tab" data-tab="library">填料库</button></div>
+
+<div id="input" class="section active">
+<div class="box rpt-meta-box"><h3>0）报告信息（用于导出PDF，可留空）</h3><div class="rgrid"><div><label>报告标题</label><input id="rptTitle" placeholder="分段灰分 / 填料半定量分析报告"></div><div><label>报告编号</label><input id="rptNo" placeholder="如 ASH-2026-001"></div><div><label>委托/送样单位</label><input id="rptClient" placeholder="选填"></div><div><label>样品来源/项目</label><input id="rptProject" placeholder="选填"></div><div><label>检测员</label><input id="rptOperator" placeholder="选填"></div><div><label>审核</label><input id="rptReviewer" placeholder="选填"></div><div><label>检测/报告日期</label><input id="rptDate" type="date"></div><div style="grid-column:1/-1"><label>备注</label><input id="rptRemark" placeholder="选填，如仪器型号、方法标准等"></div></div></div>
+<div class="box"><h3>1）统一测试条件</h3><div class="global"><div><label>低温 / ℃</label><input id="lowTemp" type="number" step="1" value="400"></div><div><label>低温时间 / h</label><input id="lowTime" type="number" step="0.1" value="2"></div><div><label>高温 / ℃</label><input id="highTemp" type="number" step="1" value="850"></div><div><label>高温时间 / h</label><input id="highTime" type="number" step="0.1" value="2"></div></div><div class="note">同一批样品默认共用同一组低温/高温分段条件，不在每个样品中重复选择。</div></div>
+<div class="box"><h3>2）样品平行输入</h3><div class="sub">每个样品必须选择“基准”或“目标编号”。只允许一个基准，其余样品可自由分配为目标1、目标2、目标3等。</div><div class="wrap"><table id="sampleTable"></table></div></div>
+</div>
+
+<div id="logic" class="section">
+<div class="box"><h3>1）基础称重</h3><div class="formula">原样净重 m₀ = W₁ - W₀</div><div class="formula">低温残留 m低 = W低 - W₀</div><div class="formula">高温残留 m高 = W高 - W₀</div><p class="hint">W低、W高分别对应页面顶部统一设置的低温阶段与高温阶段。</p></div>
+<div class="box"><h3>2）填料库如何参与计算</h3><div class="formula">修正后填料量 m填料 = m高 ÷ k</div><p class="hint">k 来自填料库“高温残留系数”。例如 CaCO₃ → CaO，k=0.560；BaSO₄、TiO₂ 高温基本稳定，k≈1.000。修改填料库 k 后，计算会直接引用新值。</p></div>
+<div class="box"><h3>3）材料类型与默认模型</h3><div class="formula">黑色母：单一填料 + 炭黑 / 有机组分</div><div class="formula">白色母：单一填料 + 钛白粉 / 有机组分</div><div class="formula">其他色母：单一填料 + 色粉 / 有机组分</div><div class="formula">改性料：单一填料 + 色粉 / 有机组分</div><p class="hint">黑色母可通过“低温残留 - 修正后填料”估算炭黑。白色母、其他色母、改性料中，若钛白粉/色粉与填料同样高温稳定，仅靠分段灰分不能唯一拆分两者；页面先输出可计算的粉体/填料折算结果，并提示风险。</p></div>
+<div class="box"><h3>4）差异计算</h3><div class="formula">差值 Δ = 目标 - 基准</div><div class="formula">变化幅度 = (目标 - 基准) ÷ 基准 × 100%</div><p class="hint">正值表示目标高于基准，负值表示目标低于基准。</p></div>
+</div>
+
+<div id="library" class="section"><div class="library-tools"><button class="small secondary" id="addFiller">新增填料</button><span class="hint">填料库中的高温残留系数 k 会被直接引用参与计算。</span></div><div class="wrap"><table id="fillerTable"></table></div><p class="hint">滑石粉、高岭土、ATH、MDH 等材料的 k 值受条件影响较大，建议按实际实验修正。</p></div>
+</div></section>
+
+<section class="card resultcard"><div class="head"><h2>二、自动计算结果</h2><span class="hint">差值方向：目标 - 基准</span></div><div class="body"><div class="stack"><div class="box"><h3>1）基础称重与残留率</h3><div class="sub">表格较宽时可左右拖动查看。</div><div id="process"></div></div><div class="box"><h3>2）成分估算结果</h3><div class="sub">表格较宽时可左右拖动查看。3个及以上样品：最大值粗体，最小值斜体，中间值正常。2个样品：较大值粗体，较小值正常。</div><div id="compare"></div></div><div class="box"><h3>3）校验与风险提示</h3><div id="warnings" class="warns"></div></div></div></div></section>
+</div></main>
+
+<div id="reportRoot" class="report-root"></div>
+
+<script>
+let fillers=[],samples=[],seq=0,last=[],userEdited=new Set();
+const baseFillers=[
+{id:'CaCO3',name:'碳酸钙 CaCO₃',residue:0.560,high:'CaO',note:'850℃后按 CaCO₃ → CaO 修正'},
+{id:'BaSO4',name:'硫酸钡 BaSO₄',residue:1.000,high:'BaSO₄',note:'850℃基本稳定'},
+{id:'TiO2',name:'钛白粉 TiO₂',residue:1.000,high:'TiO₂',note:'850℃基本稳定'},
+{id:'SiO2',name:'二氧化硅 SiO₂',residue:1.000,high:'SiO₂',note:'基本稳定'},
+{id:'GlassFiber',name:'玻璃纤维',residue:1.000,high:'玻璃残留',note:'近似按1.000'},
+{id:'MgCO3',name:'碳酸镁 MgCO₃',residue:0.478,high:'MgO',note:'高温后按 MgCO₃ → MgO 修正'},
+{id:'ATH',name:'氢氧化铝 ATH',residue:0.654,high:'Al₂O₃',note:'会脱水，计算需谨慎'},
+{id:'MDH',name:'氢氧化镁 MDH',residue:0.691,high:'MgO',note:'会脱水，计算需谨慎'},
+{id:'Talc',name:'滑石粉',residue:0.950,high:'硅酸盐残留',note:'近似值，建议修正'},
+{id:'Kaolin',name:'高岭土',residue:0.860,high:'偏高岭土/莫来石等',note:'近似值，建议修正'}
+];
+const demo=[
+{name:'旧481',type:'black',mode:'singleCarbon',role:'base',filler:'BaSO4',w0:78.49,w1:88.48,wlow:84.64,whigh:81.96,constant:true,blackResidue:false},
+{name:'新481',type:'black',mode:'singleCarbon',role:'target1',filler:'CaCO3',w0:78.71,w1:88.71,wlow:84.97,whigh:81.17,constant:true,blackResidue:false}
+];
+function $(id){return document.getElementById(id)}
+function n(v){const x=parseFloat(v);return Number.isFinite(x)?x:NaN}
+function f(x,d=2){return Number.isFinite(x)?x.toFixed(d):'—'}
+function p(x,d=1){return Number.isFinite(x)?x.toFixed(d)+'%':'—'}
+function clone(x){return JSON.parse(JSON.stringify(x))}
+function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function id(){seq++;return 'S'+seq}
+function filler(id){return fillers.find(x=>x.id===id)||fillers[0]||{id:'',name:'未定义',residue:1,high:'—',note:''}}
+function typeLabel(x){return {black:'黑色母',white:'白色母',otherColor:'其他色母',compound:'改性料'}[x]||x}
+function defaultMode(t){return {black:'singleCarbon',white:'singleTiO2',otherColor:'singlePigment',compound:'singlePigment'}[t]||'singlePigment'}
+function modeLabel(m){return {singleCarbon:'单一填料 + 炭黑 / 有机组分',singleTiO2:'单一填料 + 钛白粉 / 有机组分',singlePigment:'单一填料 + 色粉 / 有机组分',singleFiller:'单一填料 / 有机组分',ashOnly:'只算总灰分'}[m]||'模式'}
+function modeOpts(s){let opts=[['singleCarbon','单一填料 + 炭黑 / 有机组分'],['singleTiO2','单一填料 + 钛白粉 / 有机组分'],['singlePigment','单一填料 + 色粉 / 有机组分'],['singleFiller','单一填料 / 有机组分'],['ashOnly','只算总灰分']];return opts.map(([v,t])=>'<option value="'+v+'" '+((s.mode||defaultMode(s.type))===v?'selected':'')+'>'+t+'</option>').join('')}
+function pigmentLabel(x){let m=x.mode||defaultMode(x.type);return {singleCarbon:'炭黑',singleTiO2:'钛白粉/白色功能粉体',singlePigment:'色粉',singleFiller:'功能粉体',ashOnly:'—'}[m]||'功能粉体'}
+function roleLabel(x){if(x==='base')return '基准';let m=String(x).match(/^target(\d+)$/);return m?'目标'+m[1]:x}
+function roleOrder(x){if(x==='base')return 0;let m=String(x).match(/^target(\d+)$/);return m?+m[1]:999}
+function initState(){fillers=baseFillers.map(x=>({...x}));seq=0;userEdited=new Set();samples=demo.map(x=>({sid:id(),...clone(x)}));$('lowTemp').value=400;$('lowTime').value=2;$('highTemp').value=850;$('highTime').value=2}
+function globalCond(){return {lowTemp:n($('lowTemp').value),lowTime:n($('lowTime').value),highTemp:n($('highTemp').value),highTime:n($('highTime').value)}}
+function nextTarget(){let used=new Set(samples.map(s=>s.role));for(let i=1;i<=20;i++){if(!used.has('target'+i))return 'target'+i}return 'target'+(samples.length+1)}
+function ensureBase(changed){let bases=samples.filter(s=>s.role==='base');if(!bases.length&&samples[0])samples[0].role='base';if(bases.length>1)samples.forEach(s=>{if(s.sid!==changed&&s.role==='base')s.role=nextTarget()})}
+function typeDefaultFiller(t,cur){if(t==='white')return 'TiO2';return cur||'CaCO3'}
+function addSample(){samples.push({sid:id(),name:'目标样品'+samples.length,type:samples[0]?.type||'black',mode:defaultMode(samples[0]?.type||'black'),role:nextTarget(),filler:'CaCO3',w0:'',w1:'',wlow:'',whigh:'',constant:true,blackResidue:false});renderSamples();calc()}
+function removeSample(sid){if(samples.length<=2){alert('至少保留1个基准和1个目标样品。');return}samples=samples.filter(s=>s.sid!==sid);ensureBase();renderSamples();calc()}
+function updateSample(sid,key,val){let s=samples.find(x=>x.sid===sid);if(!s)return;if(['name','w0','w1','wlow','whigh'].indexOf(key)>=0)userEdited.add(sid+'|'+key);if(key==='role'){s.role=val;ensureBase(sid)}else if(key==='type'){s.type=val;s.mode=defaultMode(val);s.filler=typeDefaultFiller(val,s.filler)}else s[key]=val;renderSamples();calc()}
+function roleOpts(s){let a=['<option value="base" '+(s.role==='base'?'selected':'')+'>基准</option>'];for(let i=1;i<=Math.max(6,samples.length+3);i++){let v='target'+i;a.push('<option value="'+v+'" '+(s.role===v?'selected':'')+'>目标'+i+'</option>')}return a.join('')}
+function typeOpts(s){return [['black','黑色母'],['white','白色母'],['otherColor','其他色母'],['compound','改性料']].map(([v,t])=>'<option value="'+v+'" '+(s.type===v?'selected':'')+'>'+t+'</option>').join('')}
+function fillerOpts(s){return fillers.map(x=>'<option value="'+x.id+'" '+(s.filler===x.id?'selected':'')+'>'+x.name+' / k='+f(x.residue,3)+'</option>').join('')}
+function inp(s,key,type='text',extra=''){var isEx=(s[key]!==''&&s[key]!=null&&!userEdited.has(s.sid+'|'+key));return '<input data-sid="'+s.sid+'" data-key="'+key+'" type="'+type+'"'+(isEx?' class="ex"':'')+' '+extra+' value="'+esc(s[key])+'">'}
+function sel(s,key,opts){return '<select data-sid="'+s.sid+'" data-key="'+key+'">'+opts+'</select>'}
+function renderSamples(){ensureBase();let head='<tr><th>项目</th>'+samples.map((s,i)=>'<th class="samplecol"><div class="samplehead"><div class="topline"><span class="badge">样品 '+(i+1)+'</span><button class="small ghost del" data-sid="'+s.sid+'">删</button></div>'+inp(s,'name')+sel(s,'role',roleOpts(s))+'</div></th>').join('')+'</tr>';
+let rows=[
+['材料类型',samples.map(s=>sel(s,'type',typeOpts(s)))],
+['自动计算模式',samples.map(s=>sel(s,'mode',modeOpts(s)))],
+['主要填料（引用填料库k）',samples.map(s=>sel(s,'filler',fillerOpts(s)))],
+['空坩埚 W₀ / g',samples.map(s=>inp(s,'w0','number','step="0.0001"'))],
+['坩埚 + 原样 W₁ / g',samples.map(s=>inp(s,'w1','number','step="0.0001"'))],
+['低温后总重 W低 / g',samples.map(s=>inp(s,'wlow','number','step="0.0001"'))],
+['高温后总重 W高 / g',samples.map(s=>inp(s,'whigh','number','step="0.0001"'))],
+['高温后已确认恒重',samples.map(s=>'<div class="center"><input data-sid="'+s.sid+'" data-key="constant" type="checkbox" '+(s.constant?'checked':'')+'></div>')],
+['高温后仍有黑色残留',samples.map(s=>'<div class="center"><input data-sid="'+s.sid+'" data-key="blackResidue" type="checkbox" '+(s.blackResidue?'checked':'')+'></div>')]
+];
+$('sampleTable').innerHTML=head+rows.map(([l,c])=>'<tr><td class="rowhead">'+l+'</td>'+c.map(x=>'<td>'+x+'</td>').join('')+'</tr>').join('');
+document.querySelectorAll('#sampleTable input,#sampleTable select').forEach(el=>el.onchange=e=>{let sid=e.target.dataset.sid,key=e.target.dataset.key;if(!sid||!key)return;let val=e.target.type==='checkbox'?e.target.checked:(e.target.type==='number'?(e.target.value===''?'':Number(e.target.value)):e.target.value);updateSample(sid,key,val)});
+document.querySelectorAll('.del').forEach(b=>b.onclick=()=>removeSample(b.dataset.sid))
+}
+function renderFillers(){let used=new Set(samples.map(s=>s.filler));$('fillerTable').innerHTML='<tr><th>填料ID</th><th>填料名称</th><th>高温主要残留物</th><th class="num">系数k</th><th>说明</th><th>引用状态</th></tr>'+fillers.map((x,i)=>'<tr><td><input data-i="'+i+'" data-k="id" value="'+esc(x.id)+'"></td><td><input data-i="'+i+'" data-k="name" value="'+esc(x.name)+'"></td><td><input data-i="'+i+'" data-k="high" value="'+esc(x.high)+'"></td><td><input data-i="'+i+'" data-k="residue" type="number" step="0.001" value="'+x.residue+'"></td><td><input data-i="'+i+'" data-k="note" value="'+esc(x.note)+'"></td><td>'+(used.has(x.id)?'<span class="used">已被引用</span>':'<span class="hint">未引用</span>')+'</td></tr>').join('');
+document.querySelectorAll('#fillerTable input').forEach(el=>el.onchange=e=>{let i=+e.target.dataset.i,k=e.target.dataset.k;if(!fillers[i])return;fillers[i][k]=k==='residue'?Number(e.target.value):e.target.value;renderFillers();renderSamples();calc()})
+}
+function addFiller(){fillers.push({id:'NewFiller'+(fillers.length+1),name:'新填料',residue:1,high:'—',note:'请填写'});renderFillers();renderSamples();calc()}
+function calcOne(s,g){let fl=filler(s.filler),warn=[],w0=n(s.w0),w1=n(s.w1),wl=n(s.wlow),wh=n(s.whigh),m0=w1-w0,ml=wl-w0,mh=wh-w0,lp=ml/m0*100,hp=mh/m0*100;
+if(![w0,w1,wl,wh].every(Number.isFinite))warn.push(['bad','存在未填写或非数字称重数据。']);if(m0<=0)warn.push(['bad','原样净重≤0。']);if(ml<0||mh<0)warn.push(['bad','残留净重为负。']);if(ml>m0)warn.push(['bad','低温残留大于原样净重。']);if(mh>ml)warn.push(['risk','高温残留大于低温残留，可能称重异常或吸湿/增重。']);if((s.mode||defaultMode(s.type))==='singleCarbon'&&g.lowTemp>=450)warn.push(['risk','黑色母低温阶段≥450℃，炭黑可能部分氧化。']);if((s.mode||defaultMode(s.type))!=='singleCarbon'&&g.lowTemp<450)warn.push(['info','非黑色母可考虑450℃以更充分去有机。']);if((s.mode||defaultMode(s.type))==='singleCarbon'&&m0>3)warn.push(['risk','黑色母称样量偏大，建议1–2g并摊薄。']);if(s.blackResidue)warn.push(['bad','高温后仍有黑色残留，填料可能被高估。']);if(!s.constant)warn.push(['risk','未确认恒重，结果仅为半定量估算。']);
+let r={...s,fillerObj:fl,m0,mLow:ml,mHigh:mh,lowPct:lp,highPct:hp,warnings:warn,organicPct:NaN,pigmentPct:NaN,fillerPct:NaN,powderPct:NaN,closure:NaN};if(!Number.isFinite(m0)||m0<=0)return r;
+if((s.mode||defaultMode(s.type))==='singleCarbon'){let fm=mh/fl.residue,pm=ml-fm,om=m0-ml;r.fillerPct=fm/m0*100;r.pigmentPct=pm/m0*100;r.organicPct=om/m0*100;r.powderPct=(fm+pm)/m0*100;r.closure=(fm+pm+om)/m0*100;if(pm<0)warn.push(['bad','炭黑计算为负，模型或数据不成立。']);if(fm>ml)warn.push(['bad','修正后填料量大于低温残留。'])}
+else{let powder=mh/fl.residue,om=m0-powder;r.fillerPct=powder/m0*100;r.organicPct=om/m0*100;r.powderPct=powder/m0*100;r.closure=(powder+om)/m0*100;warn.push(['info',typeLabel(s.type)+'当前模式为“'+modeLabel(s.mode||defaultMode(s.type))+'”。若'+pigmentLabel(s)+'与填料同时高温稳定，仅靠分段灰分不能唯一拆分；当前按所选填料系数折算粉体/填料总量。']);let gap=(ml-powder)/m0*100;if(Number.isFinite(gap)&&Math.abs(gap)>2)warn.push(['risk','低温残留与修正后粉体量相差 '+f(gap,1)+' 个百分点。'])}
+if(r.fillerPct>100)warn.push(['bad','修正后粉体/填料量大于原样净重。']);return r}
+function ordered(rs){let base=rs.find(r=>r.role==='base')||rs[0],targets=rs.filter(r=>r!==base).sort((a,b)=>roleOrder(a.role)-roleOrder(b.role));return {base,targets,all:[base,...targets]}}
+function cls(vals,i){let finite=vals.filter(Number.isFinite);if(finite.length<=1)return 'normal';if(finite.length===2)return vals[i]===Math.max(...finite)?'high':'normal';let min=Math.min(...finite),max=Math.max(...finite);return vals[i]===max?'high':(vals[i]===min?'low':'mid')}
+function processTable(rs){let {all}=ordered(rs),tw=650;return '<div class="wrap" style="--tw:'+tw+'px"><table><colgroup><col style="width:54px"><col style="width:44px"><col style="width:48px"><col style="width:102px"><col style="width:98px"><col style="width:62px"><col style="width:62px"><col style="width:62px"><col style="width:58px"><col style="width:58px"></colgroup><tr><th>样品</th><th>角色</th><th>类型</th><th>模式</th><th>填料</th><th class="num">原样g</th><th class="num">低温g</th><th class="num">高温g</th><th class="num">低温%</th><th class="num">高温%</th></tr>'+all.map(r=>'<tr><td>'+esc(r.name)+'</td><td>'+roleLabel(r.role)+'</td><td>'+typeLabel(r.type)+'</td><td>'+modeLabel(r.mode||defaultMode(r.type))+'</td><td>'+esc(r.fillerObj.id)+'<div class="hint">k='+f(r.fillerObj.residue,3)+'</div></td><td class="num">'+f(r.m0,4)+'</td><td class="num">'+f(r.mLow,4)+'</td><td class="num">'+f(r.mHigh,4)+'</td><td class="num">'+p(r.lowPct,2)+'</td><td class="num">'+p(r.highPct,2)+'</td></tr>').join('')+'</table></div>'}
+function pigmentRowLabel(rs){let ms=[...new Set(rs.map(r=>r.mode||defaultMode(r.type)))];if(ms.length===1){return {singleCarbon:'炭黑',singleTiO2:'钛白粉',singlePigment:'色粉',singleFiller:'功能粉体',ashOnly:'—'}[ms[0]]||'功能粉体'}return '色粉/功能粉体'}
+function compareTable(rs){let {base,targets,all}=ordered(rs),tw=96+112+targets.length*270,cols='<colgroup><col style="width:96px"><col style="width:112px">'+targets.map(()=>'<col style="width:112px"><col style="width:82px"><col style="width:76px">').join('')+'</colgroup>',heads=['<th>项目</th>','<th>'+esc(base.name)+'<div class="hint">基准</div></th>'];targets.forEach(t=>{heads.push('<th>'+esc(t.name)+'<div class="hint">'+roleLabel(t.role)+'</div></th>','<th class="num">'+roleLabel(t.role)+'-基准<br>差值</th>','<th class="num">幅度</th>')});
+function numCell(v,clsName,d,u){return '<td class="num '+clsName+'">'+(Number.isFinite(v)?f(v,d)+u:'—')+'</td>'}
+function row(label,key,d=1,u='%'){let vals=all.map(r=>Number.isFinite(r[key])?r[key]:NaN),bv=Number.isFinite(base[key])?base[key]:NaN,cells=numCell(bv,cls(vals,0),d,u);targets.forEach(t=>{let idx=all.indexOf(t),tv=Number.isFinite(t[key])?t[key]:NaN,diff=NaN,rate=NaN;if(Number.isFinite(tv)&&Number.isFinite(bv)){diff=tv-bv;rate=bv!==0?diff/bv*100:NaN}cells+=numCell(tv,cls(vals,idx),d,u)+'<td class="num '+(diff>=0?'plus':'minus')+'">'+(Number.isFinite(diff)?(diff>=0?'+':'')+f(diff,d)+u:'—')+'</td><td class="num '+(rate>=0?'plus':'minus')+'">'+(Number.isFinite(rate)?(rate>=0?'+':'')+f(rate,1)+'%':'—')+'</td>'});return '<tr><td>'+label+'</td>'+cells+'</tr>'}
+function fillerRow(){let vals=all.map(r=>Number.isFinite(r.fillerPct)?r.fillerPct:NaN),bv=Number.isFinite(base.fillerPct)?base.fillerPct:NaN,cells='<td class="num '+cls(vals,0)+'"><span class="maincell">'+(Number.isFinite(bv)?f(bv,1)+'%':'—')+'</span><span class="subcell">'+esc(base.fillerObj?base.fillerObj.id:'—')+'</span></td>';targets.forEach(t=>{let idx=all.indexOf(t),tv=Number.isFinite(t.fillerPct)?t.fillerPct:NaN,diff=NaN,rate=NaN;if(Number.isFinite(tv)&&Number.isFinite(bv)){diff=tv-bv;rate=bv!==0?diff/bv*100:NaN}cells+='<td class="num '+cls(vals,idx)+'"><span class="maincell">'+(Number.isFinite(tv)?f(tv,1)+'%':'—')+'</span><span class="subcell">'+esc(t.fillerObj?t.fillerObj.id:'—')+'</span></td><td class="num '+(diff>=0?'plus':'minus')+'">'+(Number.isFinite(diff)?(diff>=0?'+':'')+f(diff,1)+'%':'—')+'</td><td class="num '+(rate>=0?'plus':'minus')+'">'+(Number.isFinite(rate)?(rate>=0?'+':'')+f(rate,1)+'%':'—')+'</td>'});return '<tr><td>填料</td>'+cells+'</tr>'}
+return '<div class="wrap" style="--tw:'+tw+'px"><table>'+cols+'<tr>'+heads.join('')+'</tr>'+row('有机组分','organicPct')+row(pigmentRowLabel(all),'pigmentPct')+fillerRow()+row('粉体合计','powderPct')+row('低温残留','lowPct')+row('高温灰分','highPct')+row('闭合率','closure')+'</table></div>'}
+function renderWarn(rs){let list=[];rs.forEach(r=>r.warnings.forEach(w=>list.push([w[0],esc(r.name)+'：'+w[1]])));if(!list.length)list.push(['good','基础校验未发现明显异常。']);$('warnings').innerHTML=list.map(([t,x])=>'<div class="warn '+t+'"><strong>'+(t==='bad'?'风险':t==='risk'?'提示':t==='good'?'通过':'说明')+'</strong><span>'+x+'</span></div>').join('')}
+function calc(){ensureBase();let g=globalCond();last=samples.map(s=>calcOne(s,g));$('process').innerHTML=processTable(last);$('compare').innerHTML=compareTable(last);renderWarn(last);enhanceTooltips();setTimeout(scrollProcessToData,0)}
+function report(){if(!last.length)calc();let g=globalCond(),{base,targets}=ordered(last),lines=['分段灰分 / 炭黑填料半定量计算结果','统一测试条件：低温 '+f(g.lowTemp,0)+'℃/'+f(g.lowTime,1)+'h；高温 '+f(g.highTemp,0)+'℃/'+f(g.highTime,1)+'h','基准样品：'+base.name];targets.forEach(t=>lines.push(roleLabel(t.role)+'：'+t.name));last.forEach(r=>{lines.push('\n【'+r.name+'｜'+roleLabel(r.role)+'】');lines.push('材料类型：'+typeLabel(r.type)+'；自动模式：'+modeLabel(r.mode||defaultMode(r.type))+'；填料：'+r.fillerObj.name+'（k='+f(r.fillerObj.residue,3)+'）');lines.push('有机组分：'+f(r.organicPct,1)+'%；'+pigmentLabel(r)+'：'+f(r.pigmentPct,1)+'%；填料/粉体折算：'+f(r.fillerPct,1)+'%；粉体合计：'+f(r.powderPct,1)+'%')});return lines.join('\n')}
+function exportCSV(){if(!last.length)calc();let rows=[['样品','角色','材料类型','模式','填料','k','原样净重g','低温残留率%','高温残留率%','有机组分%','炭黑/钛白粉/色粉%','填料/粉体折算%','粉体合计%']];last.forEach(r=>rows.push([r.name,roleLabel(r.role),typeLabel(r.type),modeLabel(r.mode||defaultMode(r.type)),r.fillerObj.name,f(r.fillerObj.residue,3),f(r.m0,4),f(r.lowPct,2),f(r.highPct,2),f(r.organicPct,2),f(r.pigmentPct,2),f(r.fillerPct,2),f(r.powderPct,2)]));let csv='﻿'+rows.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\r\n'),blob=new Blob([csv],{type:'text/csv;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='ash_calculation_result.csv';a.click();URL.revokeObjectURL(url)}
+
+function gv(id){var el=$(id);return el?String(el.value||'').trim():''}
+function rcell(v,d,u){return Number.isFinite(v)?f(v,d)+u:'—'}
+function buildReport(){
+  if(!last.length)calc();
+  var g=globalCond(),o=ordered(last),base=o.base,targets=o.targets,all=o.all;
+  var title=esc(gv('rptTitle')||'分段灰分 / 填料半定量分析报告');
+  var date=gv('rptDate')||new Date().toISOString().slice(0,10);
+  var meta=[['报告编号',esc(gv('rptNo')||'—')],['报告日期',esc(date)],['委托/送样单位',esc(gv('rptClient')||'—')],['样品来源/项目',esc(gv('rptProject')||'—')],['检测员',esc(gv('rptOperator')||'—')],['审核',esc(gv('rptReviewer')||'—')],['测试条件','低温 '+f(g.lowTemp,0)+'℃ / '+f(g.lowTime,1)+'h　→　高温 '+f(g.highTemp,0)+'℃ / '+f(g.highTime,1)+'h'],['备注',esc(gv('rptRemark')||'—')]];
+  var metaRows='';for(var i=0;i<meta.length;i+=2){var a=meta[i],b=meta[i+1];metaRows+='<tr><td class="k">'+a[0]+'</td><td>'+a[1]+'</td>'+(b?'<td class="k">'+b[0]+'</td><td>'+b[1]+'</td>':'<td></td><td></td>')+'</tr>'}
+  var basics='<table><tr><th>样品</th><th>角色</th><th>材料类型</th><th>主要填料 (k)</th><th>原样净重 m₀/g</th><th>低温残留/g</th><th>高温残留/g</th><th>低温残留率</th><th>高温灰分</th></tr>';
+  all.forEach(function(r){basics+='<tr><td>'+esc(r.name)+'</td><td>'+roleLabel(r.role)+'</td><td>'+typeLabel(r.type)+'</td><td>'+esc(r.fillerObj.id)+' (k='+f(r.fillerObj.residue,3)+')</td><td class="num">'+f(r.m0,4)+'</td><td class="num">'+f(r.mLow,4)+'</td><td class="num">'+f(r.mHigh,4)+'</td><td class="num">'+p(r.lowPct,2)+'</td><td class="num">'+p(r.highPct,2)+'</td></tr>'});
+  basics+='</table>';
+  var eh='<table><tr><th>项目</th><th>'+esc(base.name)+'<br>(基准)</th>';
+  targets.forEach(function(t){eh+='<th>'+esc(t.name)+'<br>('+roleLabel(t.role)+')</th><th>差值</th><th>幅度</th>'});
+  eh+='</tr>';
+  function erow(label,key,d,u){d=(d==null?1:d);u=(u==null?'%':u);var bv=Number.isFinite(base[key])?base[key]:NaN;var s='<tr><td>'+label+'</td><td class="num">'+rcell(bv,d,u)+'</td>';targets.forEach(function(t){var tv=Number.isFinite(t[key])?t[key]:NaN,diff=NaN,rate=NaN;if(Number.isFinite(tv)&&Number.isFinite(bv)){diff=tv-bv;rate=bv!==0?diff/bv*100:NaN}s+='<td class="num">'+rcell(tv,d,u)+'</td><td class="num '+(diff>=0?'pos':'neg')+'">'+(Number.isFinite(diff)?(diff>=0?'+':'')+f(diff,d)+u:'—')+'</td><td class="num '+(rate>=0?'pos':'neg')+'">'+(Number.isFinite(rate)?(rate>=0?'+':'')+f(rate,1)+'%':'—')+'</td>'});return s+'</tr>'}
+  var pl=pigmentRowLabel(all);
+  var est=eh+erow('有机组分','organicPct')+erow(pl,'pigmentPct')+erow('填料折算','fillerPct')+erow('粉体合计','powderPct')+erow('低温残留率','lowPct')+erow('高温灰分','highPct')+erow('闭合率','closure')+'</table>';
+  var wl=[];last.forEach(function(r){r.warnings.forEach(function(w){wl.push('<div class="rpt-warn '+w[0]+'">'+esc(r.name)+'：'+w[1]+'</div>')})});
+  if(!wl.length)wl.push('<div class="rpt-warn good">基础校验未发现明显异常。</div>');
+  return '<div class="rpt-title">'+title+'</div>'
+    +'<div class="rpt-sub">分段灼烧（低温去有机 + 高温灰化）半定量估算结果，仅供配方比对参考，非标准检测报告。</div>'
+    +'<table class="meta-tbl">'+metaRows+'</table>'
+    +'<h4>一、样品基础称重数据</h4>'+basics
+    +'<h4>二、成分半定量估算结果（差值方向：目标 − 基准）</h4>'+est
+    +'<h4>三、校验与风险提示</h4>'+wl.join('')
+    +'<h4>四、方法说明与局限</h4><div class="rpt-note"><ol>'
+    +'<li>原样净重 m₀ = W₁ − W₀；低温残留 m低 = W低 − W₀；高温残留 m高 = W高 − W₀。</li>'
+    +'<li>修正后填料量 = 高温残留 ÷ 填料高温残留系数 k（k 取自填料库）。</li>'
+    +'<li>黑色母按「低温残留 − 修正后填料」估算炭黑；白/其他色母/改性料中，若功能粉体与填料同样高温稳定，分段灰分无法唯一拆分两者，相应数值为折算总量。</li>'
+    +'<li>本结果为半定量估算，受恒重、吸湿、称量误差及填料 k 取值影响；未确认恒重或高温后仍有黑色残留时偏差更大。</li>'
+    +'</ol></div>'
+    +'<div class="sign"><div><div class="line"></div>检测员：'+esc(gv('rptOperator')||'')+'</div><div><div class="line"></div>审核：'+esc(gv('rptReviewer')||'')+'</div><div><div class="line"></div>日期：'+esc(date)+'</div></div>'
+    +'<div class="rpt-foot">本报告由「分段灰分 / 填料半定量计算器」自动生成 · 生成时间 '+new Date().toLocaleString()+'</div>';
+}
+function printReport(){$('reportRoot').innerHTML=buildReport();window.print();}
+function cellText(el){
+  if(!el)return '';
+  let txt=el.getAttribute('data-full')||el.innerText||el.textContent||'';
+  return txt.trim();
+}
+let tipTimer=null;
+function hideTip(){
+  document.querySelectorAll('.float-tip').forEach(x=>x.remove());
+  if(tipTimer){clearTimeout(tipTimer);tipTimer=null}
+}
+function showTip(el){
+  const txt=cellText(el);
+  if(!txt)return;
+  hideTip();
+  const tip=document.createElement('div');
+  tip.className='float-tip';
+  tip.textContent=txt;
+  document.body.appendChild(tip);
+  const r=el.getBoundingClientRect(),pad=8;
+  let left=Math.min(Math.max(r.left,pad),window.innerWidth-tip.offsetWidth-pad);
+  let top=r.bottom+6;
+  if(top+tip.offsetHeight>window.innerHeight-pad)top=Math.max(pad,r.top-tip.offsetHeight-6);
+  tip.style.left=left+'px';
+  tip.style.top=top+'px';
+  tipTimer=setTimeout(hideTip,2600);
+}
+function enhanceTooltips(){
+  document.querySelectorAll('#sampleTable .rowhead,#compare th,#compare td,#process th,#process td').forEach(el=>{
+    const txt=cellText(el);
+    if(txt){
+      el.setAttribute('title',txt);
+      el.onclick=e=>{e.stopPropagation();showTip(el)};
+    }
+  });
+}
+function scrollProcessToData(){
+  const wrap=document.querySelector('#process .wrap');
+  const th=document.querySelector('#process table th:nth-child(6)');
+  if(wrap&&th)wrap.scrollLeft=Math.max(0,th.offsetLeft-8);
+}
+
+function bind(){
+document.addEventListener('focusin',e=>{const t=e.target;if(t&&t.tagName==='INPUT'&&t.type!=='checkbox'&&t.type!=='date'){t._sel=true;setTimeout(()=>{if(t._sel){try{t.select()}catch(_){}}},0)}});
+document.addEventListener('mouseup',e=>{const t=e.target;if(t&&t.tagName==='INPUT'&&t._sel){e.preventDefault();t._sel=false;try{t.select()}catch(_){}}});
+document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.section').forEach(x=>x.classList.remove('active'));b.classList.add('active');$(b.dataset.tab).classList.add('active')});['lowTemp','lowTime','highTemp','highTime'].forEach(x=>$(x).onchange=calc);$('addSample').onclick=addSample;$('addFiller').onclick=addFiller;$('calc').onclick=calc;$('reset').onclick=()=>{initState();renderSamples();renderFillers();calc()};$('csv').onclick=exportCSV;$('pdf').onclick=printReport;if($('rptDate')&&!$('rptDate').value)$('rptDate').value=new Date().toISOString().slice(0,10);$('copy').onclick=async()=>{let t=report();try{await navigator.clipboard.writeText(t);alert('报告文本已复制')}catch(e){alert(t)}};document.addEventListener('click',e=>{if(!e.target.closest('#sampleTable .rowhead,#compare th,#compare td,#process th,#process td'))hideTip()})}
+document.addEventListener('DOMContentLoaded',()=>{initState();renderSamples();renderFillers();bind();calc()});
+</script>
+</body></html>
