@@ -335,6 +335,18 @@ class WeComSmartsheetClient:
     def update_records(self, docid: str, sheet_id: str, records: list[dict[str, Any]]) -> dict[str, Any]:
         return self._post("/wedoc/smartsheet/update_records", {"docid": docid, "sheet_id": sheet_id, "records": records})
 
+    def add_records(self, docid: str, sheet_id: str, records: list[dict[str, Any]]) -> dict[str, Any]:
+        return self._post("/wedoc/smartsheet/add_records", {"docid": docid, "sheet_id": sheet_id, "records": records})
+
+    def add_sheet(self, docid: str, title: str) -> dict[str, Any]:
+        return self._post("/wedoc/smartsheet/add_sheet", {"docid": docid, "properties": {"title": title}})
+
+    def add_fields(self, docid: str, sheet_id: str, fields: list[dict[str, Any]]) -> dict[str, Any]:
+        return self._post("/wedoc/smartsheet/add_fields", {"docid": docid, "sheet_id": sheet_id, "fields": fields})
+
+    def update_fields(self, docid: str, sheet_id: str, fields: list[dict[str, Any]]) -> dict[str, Any]:
+        return self._post("/wedoc/smartsheet/update_fields", {"docid": docid, "sheet_id": sheet_id, "fields": fields})
+
     def upload_image(self, docid: str, content: bytes) -> str:
         # 走文档专用上传（/wedoc/image_upload），落到文档 CDN（wdcdn.qpic.cn）并自带尺寸，
         # 客户端可内联直显；不要用通用 /media/uploadimg（返回 wework.qpic.cn 外链、无尺寸、需点击加载）。

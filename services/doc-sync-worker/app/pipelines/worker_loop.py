@@ -7,6 +7,7 @@ from collections.abc import Callable
 
 from app.pipelines.backfill_smartsheet_images import run_backfill_images
 from app.pipelines.group_message_listener import resolve_groupbot_profile, run_group_listener
+from app.pipelines.rnd_record_writer import run_write_rnd_records
 from app.pipelines.sync_feishu_full import run_sync_feishu_full
 from app.pipelines.sync_wecom_full import run_pending_sync_requests, run_sync_wecom_full
 from app.pipelines.wecom_structure_backup import (
@@ -77,6 +78,12 @@ def run_worker_loop(
     def _default_consume_requests() -> int:
         code = run_pending_sync_requests(limit=10)
         backup_code = run_pending_structure_backup_jobs(limit=10)
+        try:
+            written = run_write_rnd_records()
+            if written:
+                print(f"[文档同步循环] 研发过程记录写入 {written} 条。")
+        except Exception as exc:  # noqa: BLE001 - 写表失败不拖垮轮询
+            print(f"[文档同步循环] 研发过程记录写入异常：{exc}")
         return code or backup_code
 
     run_full = full_sync or _default_full_sync
