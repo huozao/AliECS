@@ -299,7 +299,7 @@ def run_backfill_images(
                                         image_field_id,
                                         str(target.get("image_field_title") or ""),
                                     ): [
-                                        {"image_url": sheet_client.upload_image(image.title, image.content), "title": image.title}
+                                        {"image_url": sheet_client.upload_image(docid, image.content), "title": image.title}
                                         for image in images
                                     ]
                                 },

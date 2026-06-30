@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import base64
 import os
 import re
 import time
 from dataclasses import dataclass
-from mimetypes import guess_type
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -335,17 +335,14 @@ class WeComSmartsheetClient:
     def update_records(self, docid: str, sheet_id: str, records: list[dict[str, Any]]) -> dict[str, Any]:
         return self._post("/wedoc/smartsheet/update_records", {"docid": docid, "sheet_id": sheet_id, "records": records})
 
-    def upload_image(self, filename: str, content: bytes) -> str:
-        content_type = guess_type(filename)[0] or "application/octet-stream"
-        data = self._request_json(
-            "POST",
-            f"{BASE}/media/uploadimg",
-            params={"access_token": self.access_token()},
-            files={"media": (filename, content, content_type)},
+    def upload_image(self, docid: str, content: bytes) -> str:
+        # 走文档专用上传（/wedoc/image_upload），落到文档 CDN（wdcdn.qpic.cn）并自带尺寸，
+        # 客户端可内联直显；不要用通用 /media/uploadimg（返回 wework.qpic.cn 外链、无尺寸、需点击加载）。
+        data = self._post(
+            "/wedoc/image_upload",
+            {"docid": docid, "base64_content": base64.b64encode(content).decode("ascii")},
         )
-        if data.get("errcode") != 0:
-            raise RuntimeError(f"/media/uploadimg failed: {data}")
         url = str(data.get("url") or "").strip()
         if not url:
-            raise RuntimeError(f"/media/uploadimg missing url: {data}")
+            raise RuntimeError(f"/wedoc/image_upload missing url: {data}")
         return url
