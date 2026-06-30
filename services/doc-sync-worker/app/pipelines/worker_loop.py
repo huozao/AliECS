@@ -6,14 +6,13 @@ import time
 from collections.abc import Callable
 
 from app.pipelines.backfill_smartsheet_images import run_backfill_images
-from app.pipelines.group_message_listener import run_group_listener
+from app.pipelines.group_message_listener import resolve_groupbot_profile, run_group_listener
 from app.pipelines.sync_feishu_full import run_sync_feishu_full
 from app.pipelines.sync_wecom_full import run_pending_sync_requests, run_sync_wecom_full
 from app.pipelines.wecom_structure_backup import (
     run_enqueue_daily_structure_backup_jobs,
     run_pending_structure_backup_jobs,
 )
-from app.providers.wecom import env_profiles, get_profiled_env
 
 
 def _read_positive_int(name: str, default: int) -> int:
@@ -26,11 +25,8 @@ def _read_positive_int(name: str, default: int) -> int:
 
 def _maybe_start_group_listener() -> None:
     """配了群机器人长连接凭据时，起一个常驻守护线程接收群@消息（与同步周期互不阻塞）。"""
-    profiles = env_profiles("")
-    if not profiles:
-        return
-    profile = profiles[0]
-    if not (get_profiled_env("GROUPBOT_ID", "WECOM", profile) and get_profiled_env("GROUPBOT_SECRET", "WECOM", profile)):
+    profile = resolve_groupbot_profile("")
+    if not profile:
         print("[文档同步循环] 未配置群机器人长连接凭据，跳过群监听。")
         return
 
