@@ -173,9 +173,9 @@ class WeComImageBackfillTests(WorkerImportTestCase):
                 self.updated_records.extend(records)
                 return {"errcode": 0}
 
-            def upload_image(self, filename: str, content: bytes) -> str:
-                self.uploaded_images.append((filename, content))
-                return f"https://p.qpic.cn/{filename}"
+            def upload_image(self, docid: str, content: bytes) -> str:
+                self.uploaded_images.append((docid, content))
+                return f"https://wdcdn.qpic.cn/{docid}"
 
         class FakeApprovalClient:
             def get_approval_detail(self, sp_no: str) -> dict:
@@ -200,9 +200,9 @@ class WeComImageBackfillTests(WorkerImportTestCase):
         self.assertEqual(0, result.exit_code)
         self.assertEqual(1, result.updated_count)
         self.assertEqual("r1", sheet_client.updated_records[0]["record_id"])
-        self.assertEqual([("a.jpg", b"\xff\xd8\xff\xe0jpeg-bytes")], sheet_client.uploaded_images)
+        self.assertEqual([("doc1", b"\xff\xd8\xff\xe0jpeg-bytes")], sheet_client.uploaded_images)
         self.assertEqual(
-            {"image_url": "https://p.qpic.cn/a.jpg", "title": "a.jpg"},
+            {"image_url": "https://wdcdn.qpic.cn/doc1", "title": "a.jpg"},
             sheet_client.updated_records[0]["values"]["图片"][0],
         )
         self.assertEqual("done", store.logs[0]["status"])
