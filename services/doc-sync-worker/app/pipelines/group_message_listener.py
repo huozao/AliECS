@@ -189,6 +189,14 @@ def _default_groupbot_factory(profile: str) -> WeComGroupBotClient:
     return WeComGroupBotClient(bot_id, secret)
 
 
+def resolve_groupbot_profile(profiles_arg: str = "") -> str:
+    """在候选 profile 里挑出配了 GROUPBOT 凭据的那个（凭据可能只在 COMPANY_B）。"""
+    for profile in env_profiles(profiles_arg):
+        if get_profiled_env("GROUPBOT_ID", "WECOM", profile) and get_profiled_env("GROUPBOT_SECRET", "WECOM", profile):
+            return profile
+    return ""
+
+
 def _default_smartsheet_factory(profile: str) -> WeComSmartsheetClient:
     credentials = credentials_for_profile(profile)
     if not credentials:
@@ -211,10 +219,9 @@ def run_group_listener(
     max_frames: int | None = None,
 ) -> int:
     """常驻：连长连接收群@消息→绑定/入库；断线指数退避重连。返回处理帧数。"""
-    profiles = env_profiles(profiles_arg)
-    profile = profiles[0] if profiles else ""
+    profile = resolve_groupbot_profile(profiles_arg)
     if not profile:
-        print("[群监听] 未配置 WECOM_ENV_PROFILES / --profiles。")
+        print("[群监听] 未找到配置了 GROUPBOT 凭据的公司配置，跳过群监听。")
         return 0
 
     owned_store = store is None
