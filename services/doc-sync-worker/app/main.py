@@ -6,6 +6,7 @@ import sys
 
 from app.pipelines.backfill_smartsheet_images import run_backfill_images, run_backfill_probe
 from app.pipelines.group_message_listener import run_group_listener
+from app.pipelines.rnd_record_writer import run_write_rnd_records
 from app.pipelines.sync_feishu_full import run_sync_feishu_full
 from app.pipelines.sync_wecom_full import run_pending_sync_requests, run_sync_wecom_full, run_sync_wecom_source
 from app.pipelines.worker_loop import run_worker_loop
@@ -71,6 +72,9 @@ def main(argv: list[str] | None = None) -> int:
     listener_parser.add_argument("--profiles", default="", help="企业微信公司配置，默认取 WECOM_ENV_PROFILES 第一个。")
     listener_parser.add_argument("--max-seconds", type=float, default=None, help="运行时长上限（秒），调试用；默认常驻。")
 
+    rnd_parser = subparsers.add_parser("write-rnd-records", help="把已标节点的群消息写入「研发过程记录」子表")
+    rnd_parser.add_argument("--profiles", default="", help="企业微信公司配置，默认自动选有 GROUPBOT 凭据的。")
+
     subparsers.add_parser("run-loop", help="常驻循环：周期全量 + 轮询消费手动同步请求")
 
     args = parser.parse_args(argv)
@@ -97,6 +101,10 @@ def main(argv: list[str] | None = None) -> int:
         return run_pending_structure_backup_jobs(limit=args.limit, force=True)
     if args.command == "group-listener":
         run_group_listener(profiles_arg=args.profiles, max_seconds=args.max_seconds)
+        return 0
+    if args.command == "write-rnd-records":
+        written = run_write_rnd_records(profiles_arg=args.profiles)
+        print(f"[研发记录] 写入 {written} 条。")
         return 0
     if args.command == "run-loop":
         return run_worker_loop()

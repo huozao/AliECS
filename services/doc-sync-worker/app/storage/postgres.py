@@ -1221,7 +1221,7 @@ class PostgresDocSyncStore:
             cur.execute(
                 """
                 SELECT msgid, chatid, from_userid, msgtype, text_content, node_category,
-                       node_summary, media_paths, record_id, ts
+                       node_summary, media_paths, record_id, quote_json, created_at
                 FROM group_messages
                 WHERE is_node = TRUE AND written_to_sheet = FALSE AND COALESCE(record_id, '') <> ''
                 ORDER BY id
@@ -1241,7 +1241,8 @@ class PostgresDocSyncStore:
                 "node_summary": r[6],
                 "media_paths": r[7] or [],
                 "record_id": r[8],
-                "ts": r[9],
+                "quote_json": r[9] or {},
+                "created_at": r[10],
             }
             for r in rows
         ]
