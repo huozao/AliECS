@@ -5,6 +5,7 @@ import json
 import sys
 
 from app.pipelines.backfill_smartsheet_images import run_backfill_images, run_backfill_probe
+from app.pipelines.group_message_listener import run_group_listener
 from app.pipelines.sync_feishu_full import run_sync_feishu_full
 from app.pipelines.sync_wecom_full import run_pending_sync_requests, run_sync_wecom_full, run_sync_wecom_source
 from app.pipelines.worker_loop import run_worker_loop
@@ -66,6 +67,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     backup_pending_parser.add_argument("--limit", type=int, default=10, help="本次最多消费多少条备份任务")
 
+    listener_parser = subparsers.add_parser("group-listener", help="常驻：长连接接收群@消息并绑定/入库")
+    listener_parser.add_argument("--profiles", default="", help="企业微信公司配置，默认取 WECOM_ENV_PROFILES 第一个。")
+    listener_parser.add_argument("--max-seconds", type=float, default=None, help="运行时长上限（秒），调试用；默认常驻。")
+
     subparsers.add_parser("run-loop", help="常驻循环：周期全量 + 轮询消费手动同步请求")
 
     args = parser.parse_args(argv)
@@ -90,6 +95,9 @@ def main(argv: list[str] | None = None) -> int:
         return run_pending_structure_backup_jobs(limit=args.limit, force=True)
     if args.command == "consume-structure-backup-jobs":
         return run_pending_structure_backup_jobs(limit=args.limit, force=True)
+    if args.command == "group-listener":
+        run_group_listener(profiles_arg=args.profiles, max_seconds=args.max_seconds)
+        return 0
     if args.command == "run-loop":
         return run_worker_loop()
 

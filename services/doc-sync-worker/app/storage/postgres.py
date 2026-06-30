@@ -1091,6 +1091,166 @@ class PostgresDocSyncStore:
             cur.execute("UPDATE external_sources SET last_sync_at = NOW(), updated_at = NOW() WHERE id = %s", (source_id,))
         self.conn.commit()
 
+    # --- 群研发过程记录：群↔需求绑定 + 群消息入库 ---
+    def upsert_group_binding(
+        self,
+        *,
+        provider: str,
+        env_profile: str,
+        chatid: str,
+        external_doc_id: str,
+        sheet_title: str,
+        record_id: str,
+        requirement_key: str,
+        bound_by: str = "",
+    ) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO group_record_map(
+                    provider, env_profile, chatid, external_doc_id, sheet_title,
+                    record_id, requirement_key, bound_by, bound_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                ON CONFLICT(chatid) DO UPDATE SET
+                    provider = EXCLUDED.provider,
+                    env_profile = EXCLUDED.env_profile,
+                    external_doc_id = EXCLUDED.external_doc_id,
+                    sheet_title = EXCLUDED.sheet_title,
+                    record_id = EXCLUDED.record_id,
+                    requirement_key = EXCLUDED.requirement_key,
+                    bound_by = EXCLUDED.bound_by,
+                    updated_at = NOW()
+                """,
+                (provider, env_profile, chatid, external_doc_id, sheet_title, record_id, requirement_key, bound_by),
+            )
+        self.conn.commit()
+
+    def get_group_binding(self, chatid: str) -> dict[str, Any] | None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT chatid, external_doc_id, sheet_title, record_id, requirement_key
+                FROM group_record_map WHERE chatid = %s
+                """,
+                (chatid,),
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "chatid": row[0],
+            "external_doc_id": row[1],
+            "sheet_title": row[2],
+            "record_id": row[3],
+            "requirement_key": row[4],
+        }
+
+    def insert_group_message(
+        self,
+        *,
+        msgid: str,
+        chatid: str,
+        from_userid: str,
+        msgtype: str,
+        text_content: str,
+        quote_json: Any,
+        media_paths: Any,
+        record_id: str,
+        ts: Any,
+        raw_json: Any,
+    ) -> bool:
+        """入库一条群消息；按 msgid 幂等。返回 True=新插入，False=已存在（重推跳过）。"""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO group_messages(
+                    msgid, chatid, from_userid, msgtype, text_content,
+                    quote_json, media_paths, record_id, ts, raw_json
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT(msgid) DO NOTHING
+                RETURNING id
+                """,
+                (
+                    msgid,
+                    chatid,
+                    from_userid,
+                    msgtype,
+                    text_content,
+                    Jsonb(quote_json or {}),
+                    Jsonb(media_paths or []),
+                    record_id,
+                    ts,
+                    Jsonb(raw_json or {}),
+                ),
+            )
+            row = cur.fetchone()
+        self.conn.commit()
+        return row is not None
+
+    def assign_chat_messages_to_record(self, chatid: str, record_id: str) -> int:
+        """绑定后，把该群此前未归属的消息回填 record_id。返回回填条数。"""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "UPDATE group_messages SET record_id = %s WHERE chatid = %s AND COALESCE(record_id, '') = ''",
+                (record_id, chatid),
+            )
+            count = int(cur.rowcount or 0)
+        self.conn.commit()
+        return count
+
+    def mark_message_node(self, msgid: str, category: str = "", summary: str = "") -> bool:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE group_messages
+                SET is_node = TRUE, node_category = %s, node_summary = %s
+                WHERE msgid = %s
+                RETURNING id
+                """,
+                (category, summary, msgid),
+            )
+            row = cur.fetchone()
+        self.conn.commit()
+        return row is not None
+
+    def list_pending_node_messages(self, limit: int = 50) -> list[dict[str, Any]]:
+        """已标节点、有归属需求、尚未写入子表的消息。"""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT msgid, chatid, from_userid, msgtype, text_content, node_category,
+                       node_summary, media_paths, record_id, ts
+                FROM group_messages
+                WHERE is_node = TRUE AND written_to_sheet = FALSE AND COALESCE(record_id, '') <> ''
+                ORDER BY id
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            rows = cur.fetchall()
+        return [
+            {
+                "msgid": r[0],
+                "chatid": r[1],
+                "from_userid": r[2],
+                "msgtype": r[3],
+                "text_content": r[4],
+                "node_category": r[5],
+                "node_summary": r[6],
+                "media_paths": r[7] or [],
+                "record_id": r[8],
+                "ts": r[9],
+            }
+            for r in rows
+        ]
+
+    def mark_message_written(self, msgid: str) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute("UPDATE group_messages SET written_to_sheet = TRUE WHERE msgid = %s", (msgid,))
+        self.conn.commit()
+
 
 def open_store() -> PostgresDocSyncStore:
     return PostgresDocSyncStore.open()
