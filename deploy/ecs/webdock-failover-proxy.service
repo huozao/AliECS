@@ -1,0 +1,19 @@
+[Unit]
+Description=AliECS WebDock active-standby failover proxy
+After=network-online.target ssh.service
+Wants=network-online.target
+ConditionPathExists=/opt/aliecs/webdock-failover-proxy.py
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/webdock-failover-proxy
+ExecStart=/usr/bin/python3 /opt/aliecs/webdock-failover-proxy.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
