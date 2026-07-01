@@ -116,6 +116,7 @@ DEFAULT_FEATURES: list[dict[str, Any]] = [
     {"id": 11, "code": "personal_section", "title": "个人板块", "description": "个人工具入口", "url": "https://doc.weixin.qq.com/smartsheet/form/1_wp7hSPEQAAT1c_JcnLpU1STlUJOXWRPA_0c521a", "category": "个人", "required_permission": "personal.access", "status": "active", "sort_order": 110},
     {"id": 12, "code": "admin_ui", "title": "Admin UI", "description": "管理后台入口", "url": "/admin/", "category": "系统", "required_permission": "admin.access", "status": "active", "sort_order": 120},
     {"id": 13, "code": "ash_calculator", "title": "分段灰分/填料计算器", "description": "分段灼烧灰分与炭黑/填料半定量计算，支持导出PDF报告", "url": "/tools/ash-calc/", "category": "工具", "required_permission": None, "status": "active", "sort_order": 130},
+    {"id": 14, "code": "ai_file_transfer", "title": "AI 文件中转", "description": "上传临时文件，生成公开下载链接。", "url": "https://files.hydwang.xyz", "category": "工具", "required_permission": None, "status": "active", "sort_order": 140},
 ]
 
 

@@ -139,6 +139,30 @@ class BackendOpsStatusTests(unittest.TestCase):
         self.assertEqual("/formula/", active[2]["url"])
         self.assertEqual("formula.read", active[2]["required_permission"])
 
+    def test_default_features_include_public_ai_file_transfer_entry(self) -> None:
+        from app.main import DEFAULT_FEATURES
+
+        feature = next((item for item in DEFAULT_FEATURES if item["code"] == "ai_file_transfer"), None)
+
+        self.assertIsNotNone(feature)
+        self.assertEqual("AI 文件中转", feature["title"])
+        self.assertEqual("上传临时文件，生成公开下载链接。", feature["description"])
+        self.assertEqual("https://files.hydwang.xyz", feature["url"])
+        self.assertEqual("工具", feature["category"])
+        self.assertIsNone(feature["required_permission"])
+        self.assertEqual("active", feature["status"])
+
+    def test_migration_inserts_public_ai_file_transfer_entry(self) -> None:
+        migration = Path(__file__).resolve().parents[1] / "db" / "migrations" / "0023_gokapi_file_transfer_feature.sql"
+        sql = migration.read_text(encoding="utf-8")
+
+        self.assertIn("'ai_file_transfer'", sql)
+        self.assertIn("'AI 文件中转'", sql)
+        self.assertIn("'上传临时文件，生成公开下载链接。'", sql)
+        self.assertIn("'https://files.hydwang.xyz'", sql)
+        self.assertIn("'工具'", sql)
+        self.assertIn("required_permission = EXCLUDED.required_permission", sql)
+
     def test_tplus_recent_requests_include_detail_payload_for_manual_check(self) -> None:
         from app import main as main_module
 
