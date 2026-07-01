@@ -1078,6 +1078,30 @@ def feishu_send_image_message(details: dict[str, Any], message_id: str, image_ke
     )
 
 
+def feishu_send_interactive_message(details: dict[str, Any], message_id: str, card: dict[str, Any], auth_token: str) -> None:
+    """Deliver an interactive card (text + images interleaved) as one message,
+    replying to the user's message when we have its id."""
+    content = json.dumps(card, ensure_ascii=False)
+    if message_id:
+        feishu_post_json(
+            f"/im/v1/messages/{urllib.parse.quote(message_id)}/reply",
+            {"msg_type": "interactive", "content": content},
+            auth_token=auth_token,
+        )
+        return
+    if feishu_is_group_message(details):
+        receive_id, receive_id_type = feishu_chat_id(details), "chat_id"
+    else:
+        receive_id, receive_id_type = feishu_open_id(details), "open_id"
+    if not receive_id:
+        raise RuntimeError("no Feishu receive_id for card delivery")
+    feishu_post_json(
+        f"/im/v1/messages?receive_id_type={receive_id_type}",
+        {"receive_id": receive_id, "msg_type": "interactive", "content": content},
+        auth_token=auth_token,
+    )
+
+
 def fetch_outbound_file_bytes(url: str) -> bytes:
     """Fetch a file referenced by a FILE marker. WebDock ``/media/<token>`` URLs are
     pulled over the internal WebDock base (reverse tunnel) rather than the public
@@ -2125,6 +2149,52 @@ def split_media_markers(text: str) -> tuple[str, list[str]]:
     return body, urls
 
 
+def split_ordered_segments(text: str) -> list[tuple[str, str]]:
+    """Split a reply into ordered ('text', md) / ('image', url) segments by the
+    position of each MEDIA: marker, preserving document order (unlike
+    split_media_markers, which collects every url separately at the end)."""
+    segments: list[tuple[str, str]] = []
+    idx = 0
+    for match in MEDIA_MARKER_RE.finditer(text or ""):
+        pre = (text[idx:match.start()] or "").strip()
+        if pre:
+            segments.append(("text", pre))
+        segments.append(("image", match.group("url")))
+        idx = match.end()
+    tail = (text[idx:] or "").strip()
+    if tail:
+        segments.append(("text", tail))
+    return segments
+
+
+def build_feishu_card(segments: list[tuple[str, str]]) -> dict[str, Any]:
+    """Build a Feishu interactive card whose elements interleave markdown text and
+    images in document order — a single coherent message instead of separate image
+    bubbles. Image segments must already be resolved to image_keys; empty text is
+    dropped."""
+    elements: list[dict[str, Any]] = []
+    for kind, value in segments:
+        if kind == "image":
+            elements.append(
+                {
+                    "tag": "img",
+                    "img_key": value,
+                    "alt": {"tag": "plain_text", "content": "图片"},
+                    "mode": "fit_horizontal",
+                    "preview": True,
+                }
+            )
+        elif value.strip():
+            elements.append({"tag": "div", "text": {"tag": "lark_md", "content": _lark_md(value)}})
+    return {"config": {"wide_screen_mode": True}, "elements": elements}
+
+
+def _lark_md(text: str) -> str:
+    """Adapt markdown to Feishu lark_md: ATX headings (## X) render as literal text,
+    so turn them into bold, which lark_md does render."""
+    return re.sub(r"(?m)^[ \t]{0,3}#{1,6}[ \t]+(.+?)[ \t]*$", r"**\1**", text)
+
+
 def visible_media_fallback(body: str, urls: list[str]) -> str:
     parts = [body] if body else []
     parts.extend(f"图片链接：{url}" for url in urls)
@@ -2179,43 +2249,52 @@ def deliver_feishu_files(reply: str, details: dict[str, Any]) -> str:
 
 
 def deliver_feishu_media(reply: str, details: dict[str, Any]) -> str:
-    """Send legacy ``MEDIA:`` image markers as native Feishu image messages."""
-    body, urls = split_media_markers(reply)
-    if not urls:
+    """Deliver ``MEDIA:`` image markers as ONE Feishu interactive card whose text and
+    images interleave in document order (a single coherent message, matching the web
+    layout) instead of separate image bubbles sent before the text.
+
+    Returns NO_REPLY once the card is sent so OpenClaw does not also emit the text.
+    Falls back to visible link text (via OpenClaw) when credentials/token are missing
+    or every image upload fails, so an image is never silently lost."""
+    segments = split_ordered_segments(reply)
+    if not any(kind == "image" for kind, _ in segments):
         return reply
     metadata = details.get("metadata") or {}
     if metadata.get("channel") != "feishu":
         return reply
+    body, urls = split_media_markers(reply)
     if not feishu_app_credentials()[0]:
         return visible_media_fallback(body, urls)
     try:
         auth_token = feishu_tenant_access_token()
     except Exception as exc:
-        log_line(f"feishu image delivery: token error: {exc}")
+        log_line(f"feishu card delivery: token error: {exc}")
         auth_token = ""
     if not auth_token:
         return visible_media_fallback(body, urls)
-    message_id = feishu_message_id(details)
-    failed: list[str] = []
+    resolved: list[tuple[str, str]] = []
     delivered = 0
-    for url in urls:
+    for kind, value in segments:
+        if kind != "image":
+            resolved.append((kind, value))
+            continue
         try:
-            data = fetch_outbound_file_bytes(url)
+            data = fetch_outbound_file_bytes(value)
             if not data or len(data) > FEISHU_MAX_FILE_BYTES:
                 raise RuntimeError(f"invalid image size {len(data) if data else 0}")
-            image_key = feishu_upload_image(data, auth_token)
-            feishu_send_image_message(details, message_id, image_key, auth_token)
+            resolved.append(("image", feishu_upload_image(data, auth_token)))
             delivered += 1
         except Exception as exc:
-            log_line(f"feishu image delivery failed for {url}: {exc}")
-            failed.append(url)
-    parts = [body] if body else []
-    parts.extend(f"图片链接：{url}" for url in failed)
-    if parts:
-        return "\n".join(parts).strip()
-    if delivered:
-        return "🖼️ 图片已发送"
-    return visible_media_fallback(body, urls)
+            log_line(f"feishu image upload failed for {value}: {exc}")
+            resolved.append(("text", f"图片链接：{value}"))
+    if not delivered:
+        return visible_media_fallback(body, urls)
+    try:
+        feishu_send_interactive_message(details, feishu_message_id(details), build_feishu_card(resolved), auth_token)
+        return NO_REPLY
+    except Exception as exc:
+        log_line(f"feishu card delivery failed: {exc}")
+        return visible_media_fallback(body, urls)
 
 
 def media_proxy_headers(headers: Any) -> dict[str, str]:
