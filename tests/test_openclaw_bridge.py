@@ -1712,39 +1712,81 @@ def test_parse_media_marker():
     assert media == ["http://webdock/media/image-1"]
 
 
-def test_deliver_feishu_media_sends_native_image_and_strips_marker(monkeypatch):
-    bridge = load_bridge()
-    sent = []
+def _patch_feishu_card_send(monkeypatch, bridge, cards, *, upload=None):
     monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("cli_x", "sec"))
     monkeypatch.setattr(bridge, "feishu_tenant_access_token", lambda: "tok")
-    monkeypatch.setattr(bridge, "fetch_outbound_file_bytes", lambda url: b"PNGDATA")
-    monkeypatch.setattr(bridge, "feishu_upload_image", lambda data, token: "img_key")
+    monkeypatch.setattr(bridge, "fetch_outbound_file_bytes", lambda url: url.encode())
+    monkeypatch.setattr(bridge, "feishu_upload_image", upload or (lambda data, token: "key:" + data.decode()))
     monkeypatch.setattr(
         bridge,
-        "feishu_send_image_message",
-        lambda details, mid, key, token: sent.append((mid, key)),
+        "feishu_send_interactive_message",
+        lambda details, mid, card, token: cards.append((mid, card)),
     )
 
-    details = {"metadata": {"channel": "feishu", "message_id": "om_1"}}
-    out = bridge.deliver_feishu_media(
-        "图片已生成\nMEDIA: http://h/media/image-1", details
-    )
 
-    assert out == "图片已生成"
-    assert sent == [("om_1", "img_key")]
-
-
-def test_deliver_feishu_media_caption_when_text_empty(monkeypatch):
+def test_deliver_feishu_media_sends_ordered_card_and_returns_no_reply(monkeypatch):
     bridge = load_bridge()
-    monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("cli_x", "sec"))
-    monkeypatch.setattr(bridge, "feishu_tenant_access_token", lambda: "tok")
-    monkeypatch.setattr(bridge, "fetch_outbound_file_bytes", lambda url: b"PNGDATA")
-    monkeypatch.setattr(bridge, "feishu_upload_image", lambda data, token: "img_key")
-    monkeypatch.setattr(bridge, "feishu_send_image_message", lambda *args: None)
+    cards = []
+    _patch_feishu_card_send(monkeypatch, bridge, cards)
 
     details = {"metadata": {"channel": "feishu", "message_id": "om_1"}}
+    reply = "说明\nMEDIA: http://h/media/img1\n结论\nMEDIA: http://h/media/img2"
+    out = bridge.deliver_feishu_media(reply, details)
 
-    assert bridge.deliver_feishu_media("MEDIA: http://h/media/image-1", details) == "🖼️ 图片已发送"
+    assert out == bridge.NO_REPLY
+    assert len(cards) == 1
+    mid, card = cards[0]
+    assert mid == "om_1"
+    assert [e["tag"] for e in card["elements"]] == ["div", "img", "div", "img"]
+    assert card["elements"][1]["img_key"] == "key:http://h/media/img1"
+    assert card["elements"][3]["img_key"] == "key:http://h/media/img2"
+
+
+def test_deliver_feishu_media_image_only_sends_card(monkeypatch):
+    bridge = load_bridge()
+    cards = []
+    _patch_feishu_card_send(monkeypatch, bridge, cards)
+
+    details = {"metadata": {"channel": "feishu", "message_id": "om_1"}}
+    out = bridge.deliver_feishu_media("MEDIA: http://h/media/x", details)
+
+    assert out == bridge.NO_REPLY
+    assert [e["tag"] for e in cards[0][1]["elements"]] == ["img"]
+
+
+def test_deliver_feishu_media_partial_failure_keeps_link_in_card(monkeypatch):
+    bridge = load_bridge()
+    cards = []
+
+    def flaky_upload(data, token):
+        if data.decode().endswith("bad"):
+            raise RuntimeError("upload failed")
+        return "key:" + data.decode()
+
+    _patch_feishu_card_send(monkeypatch, bridge, cards, upload=flaky_upload)
+    details = {"metadata": {"channel": "feishu", "message_id": "om_1"}}
+    reply = "说明\nMEDIA: http://h/media/ok\nMEDIA: http://h/media/bad"
+    out = bridge.deliver_feishu_media(reply, details)
+
+    assert out == bridge.NO_REPLY
+    els = cards[0][1]["elements"]
+    assert [e["tag"] for e in els] == ["div", "img", "div"]
+    assert "图片链接：http://h/media/bad" in els[2]["text"]["content"]
+
+
+def test_deliver_feishu_media_all_images_fail_falls_back_to_link(monkeypatch):
+    bridge = load_bridge()
+    cards = []
+
+    def boom(data, token):
+        raise RuntimeError("upload failed")
+
+    _patch_feishu_card_send(monkeypatch, bridge, cards, upload=boom)
+    details = {"metadata": {"channel": "feishu", "message_id": "om_1"}}
+    out = bridge.deliver_feishu_media("说明\nMEDIA: http://h/media/x", details)
+
+    assert cards == []
+    assert out == "说明\n图片链接：http://h/media/x"
 
 
 def test_deliver_feishu_media_falls_back_to_visible_link(monkeypatch):
@@ -2092,3 +2134,59 @@ def test_feishu_group_policy_cache_ttl_reads_env_at_import(monkeypatch):
     monkeypatch.setenv("OPENCLAW_BRIDGE_FEISHU_POLICY_CACHE_SECONDS", "1800")
     bridge2 = load_bridge()
     assert bridge2.FEISHU_GROUP_POLICY_CACHE_SECONDS == 1800.0
+
+
+def test_split_ordered_segments_preserves_document_order():
+    bridge = load_bridge()
+    reply = (
+        "前言段落\n"
+        "MEDIA: http://h/media/img1\n"
+        "中间段落\n"
+        "MEDIA: http://h/media/img2\n"
+        "结尾段落"
+    )
+    assert bridge.split_ordered_segments(reply) == [
+        ("text", "前言段落"),
+        ("image", "http://h/media/img1"),
+        ("text", "中间段落"),
+        ("image", "http://h/media/img2"),
+        ("text", "结尾段落"),
+    ]
+
+
+def test_split_ordered_segments_text_only():
+    bridge = load_bridge()
+    assert bridge.split_ordered_segments("只有文字") == [("text", "只有文字")]
+
+
+def test_split_ordered_segments_image_only():
+    bridge = load_bridge()
+    assert bridge.split_ordered_segments("MEDIA: http://h/media/x") == [("image", "http://h/media/x")]
+
+
+def test_build_feishu_card_interleaves_text_and_images():
+    bridge = load_bridge()
+    card = bridge.build_feishu_card(
+        [("text", "说明"), ("image", "img_key_1"), ("text", "结论")]
+    )
+    els = card["elements"]
+    assert [e["tag"] for e in els] == ["div", "img", "div"]
+    assert els[0]["text"]["content"] == "说明"
+    assert els[1]["img_key"] == "img_key_1"
+    assert els[2]["text"]["content"] == "结论"
+
+
+def test_build_feishu_card_skips_empty_text():
+    bridge = load_bridge()
+    card = bridge.build_feishu_card([("text", "  "), ("image", "k")])
+    assert [e["tag"] for e in card["elements"]] == ["img"]
+
+
+def test_build_feishu_card_converts_headings_to_bold():
+    bridge = load_bridge()
+    card = bridge.build_feishu_card([("text", "## 当前时间\n你在 Vernon"), ("image", "k")])
+    # Feishu lark_md does not render ATX headings; they must become bold.
+    content = card["elements"][0]["text"]["content"]
+    assert "## 当前时间" not in content
+    assert "**当前时间**" in content
+    assert "你在 Vernon" in content
