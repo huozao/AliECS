@@ -1,0 +1,62 @@
+name: bridge-cutover
+
+# 一键切换 ECS 上 openclaw-bridge 的运行镜像（构建仍由 release-deploy 完成）。
+# 人工触发：Actions → bridge-cutover → 填 bridge_tag（如 V20260701211）。
+# 失败自动回滚到切换前 tag。bridge 是微信/飞书链路咽喉，永远保持人工扣扳机。
+
+on:
+  workflow_dispatch:
+    inputs:
+      bridge_tag:
+        description: "openclaw-bridge image tag (e.g. V20260701211)"
+        required: true
+        type: string
+
+concurrency:
+  group: bridge-cutover
+  cancel-in-progress: false
+
+jobs:
+  cutover:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cut over openclaw-bridge on ECS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ECS_HOST }}
+          username: ${{ secrets.ECS_USER }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          command_timeout: 15m
+          script: |
+            set -euo pipefail
+            TAG="${{ inputs.bridge_tag }}"
+            ENV_FILE=/root/infra/server/.env
+            COMPOSE=/root/infra/server/compose.bridge.yml
+            PREV="$(grep -E '^OPENCLAW_BRIDGE_TAG=' "$ENV_FILE" | cut -d= -f2)"
+            echo "[cutover] ${PREV} -> ${TAG}"
+
+            # pull first: a bad tag fails before any live service is touched
+            docker pull "ghcr.io/huozao/openclaw-bridge:${TAG}"
+
+            cp -a "$ENV_FILE" "${ENV_FILE}.bak.cutover"
+            sed -i "s/^OPENCLAW_BRIDGE_TAG=.*/OPENCLAW_BRIDGE_TAG=${TAG}/" "$ENV_FILE"
+            docker rm -f openclaw-bridge >/dev/null 2>&1 || true
+            docker compose -f "$COMPOSE" --env-file "$ENV_FILE" up -d
+
+            ok=0
+            for i in $(seq 1 12); do
+              if curl -fsS -m 5 http://127.0.0.1:18080/v1/models >/dev/null 2>&1; then
+                ok=1; break
+              fi
+              sleep 5
+            done
+            if [ "$ok" = "1" ]; then
+              echo "[cutover] bridge :18080 healthy on ${TAG}"
+              docker ps --format '{{.Names}}|{{.Image}}|{{.Status}}' | grep openclaw-bridge
+            else
+              echo "[cutover] HEALTH FAILED — rolling back to ${PREV}"
+              sed -i "s/^OPENCLAW_BRIDGE_TAG=.*/OPENCLAW_BRIDGE_TAG=${PREV}/" "$ENV_FILE"
+              docker rm -f openclaw-bridge >/dev/null 2>&1 || true
+              docker compose -f "$COMPOSE" --env-file "$ENV_FILE" up -d
+              exit 1
+            fi
