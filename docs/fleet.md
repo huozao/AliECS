@@ -86,6 +86,17 @@ bridge/openclaw 容器
 
 铁律：任何热补丁（docker cp、容器内改、runtime 配置改）验证成功后**必须回灌 git**，否则下次 release 重建镜像会覆盖丢失。
 
+## 环境变量与密钥统一（2026-07-02 起）
+
+全部设备的 env/密钥以 **infra 仓库 `secrets/`（SOPS+age 加密，键名明文可读）** 为单一事实源，非密钥配置在 `infra/config/` 明文。详见 `infra/secrets/README.md`。
+
+- 每台主机一把 age 私钥（`~/.config/sops/age/keys.txt`），只解自己的文件；devbox 私钥可解全部（编辑入口）。
+- 改密钥 = devbox 上 `sops set` → commit/push infra → 目标设备 `git pull && ./scripts/render.sh <设备名>` → 按提示重建容器。
+- **`release-meta.env` / bridge `webdock.env` / openclaw `.env` / webdock 两节点 `.env` 都是渲染产物，不要在主机上直接长期修改**（应急热改后必须回灌 sops 源，否则下次 render 覆盖）。
+- 设备侧同步通道：各机本地 bare 仓（aliecs `/root/infra.git`、webdock1/2 `~/infra.git`），由 devbox `git push device-*` 推送（设备未配 GitHub 私仓访问；三把备用 deploy 公钥已生成在各机 `~/.ssh/github_infra_deploy.pub`，需要时人工添加）。
+- aliecs `/root/infra` 自 2026-07-02 起是真 git 克隆（旧手工拷贝备份在 `/root/infra.legacy-20260702`）。
+- bridge 换镜像：Actions 手动触发 `bridge-cutover` workflow（填 tag，失败自动回滚），替代登机手工 runbook。
+
 ## 新增设备流程
 
 1. 按"角色+序号"起逻辑名（如 `webdock3`）。
