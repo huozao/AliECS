@@ -36,7 +36,7 @@ class InventoryCurrentStockTests(unittest.TestCase):
             if name == "app" or name.startswith("app."):
                 del sys.modules[name]
         sys.path.insert(0, str(BACKEND_ROOT))
-        from app import main as main_module
+        from app.routers import exports as main_module
 
         cls.main = main_module
 

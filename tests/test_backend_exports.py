@@ -17,7 +17,7 @@ class BackendExportsTests(unittest.TestCase):
             if name == "app" or name.startswith("app."):
                 del sys.modules[name]
         sys.path.insert(0, str(BACKEND_ROOT))
-        from app import main as main_module
+        from app.routers import exports as main_module
 
         cls.main = main_module
 
@@ -136,7 +136,7 @@ class BackendExportsTests(unittest.TestCase):
         )
 
     def test_match_export_files_buckets_to_first_run_at_or_after_file_time(self):
-        from app.main import _match_export_files_to_runs
+        from app.routers.exports import _match_export_files_to_runs
         runs = [(252, "2026-06-24T10:10:00"), (251, "2026-06-24T10:08:00"), (250, "2026-06-24T09:00:00")]
         files = ["bom_20260624_100751.xlsx", "current_stock_20260624_100752.xlsx", "bom_20260624_085500.xlsx"]
         mapping = _match_export_files_to_runs(runs, files)
@@ -149,7 +149,7 @@ class BackendExportsTests(unittest.TestCase):
         # psycopg returns timestamptz columns as tz-aware datetimes; file timestamps
         # parse to naive datetimes. Comparing the two must not raise TypeError.
         from datetime import datetime, timezone
-        from app.main import _match_export_files_to_runs
+        from app.routers.exports import _match_export_files_to_runs
         aware = datetime(2026, 6, 23, 22, 42, 2, 746980, tzinfo=timezone.utc)
         mapping = _match_export_files_to_runs([(253, aware)], ["bom_20260623_224150.xlsx"])
         self.assertEqual(["bom_20260623_224150.xlsx"], mapping[253])

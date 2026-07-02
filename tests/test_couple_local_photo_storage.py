@@ -25,7 +25,7 @@ def load_main():
     backend_root = str(BACKEND_ROOT)
     sys.path[:] = [item for item in sys.path if item != backend_root]
     sys.path.insert(0, backend_root)
-    from app import main
+    from app.routers import couple as main
 
     return main
 
@@ -66,7 +66,9 @@ class CoupleLocalPhotoStorageTests(unittest.TestCase):
             upload_dir = Path(tmp) / "uploads"
             with patch.dict(os.environ, {"LOCAL_UPLOAD_DIR": str(upload_dir)}, clear=False):
                 saved = asyncio.run(main.LocalPhotoStorage().save(upload_file("served.jpeg")))
-                response = TestClient(main.app).get(saved["display_url"])
+                from app.main import app
+
+                response = TestClient(app).get(saved["display_url"])
 
             self.assertEqual(200, response.status_code)
             self.assertEqual(JPEG_BYTES, response.content)

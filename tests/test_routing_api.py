@@ -15,9 +15,11 @@ class RoutingApiTests(unittest.TestCase):
             if name == "app" or name.startswith("app."):
                 del sys.modules[name]
         sys.path.insert(0, str(BACKEND_ROOT))
-        from app import main as main_module
+        from app.routers import auth_admin as admin_module
+        from app.routers import exports as main_module
 
         cls.main = main_module
+        cls.admin = admin_module
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -57,22 +59,22 @@ class RoutingApiTests(unittest.TestCase):
 
     def test_admin_contacts_can_upsert_contact(self) -> None:
         conn = FakeAdminConn()
-        old_conn = self.main._conn
-        old_audit = self.main._audit
-        self.main._conn = lambda: conn
-        self.main._audit = lambda *args, **kwargs: None
+        old_conn = self.admin._conn
+        old_audit = self.admin._audit
+        self.admin._conn = lambda: conn
+        self.admin._audit = lambda *args, **kwargs: None
         try:
-            body = self.main.ManagedContactUpsertRequest(
+            body = self.admin.ManagedContactUpsertRequest(
                 channel="wechat",
                 peer_id="wxid_a",
                 display_name="张三",
                 enabled=False,
                 project_url="https://chatgpt.com/g/p2/project",
             )
-            self.main.admin_upsert_contact(body, actor={"sub": "admin"})
+            self.admin.admin_upsert_contact(body, actor={"sub": "admin"})
         finally:
-            self.main._conn = old_conn
-            self.main._audit = old_audit
+            self.admin._conn = old_conn
+            self.admin._audit = old_audit
 
         self.assertEqual("wechat", conn.params[0])
         self.assertEqual("wxid_a", conn.params[1])

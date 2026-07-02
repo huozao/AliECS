@@ -70,7 +70,7 @@ class BackendOpsStatusTests(unittest.TestCase):
 
     def test_sync_config_update_model_enforces_hour_bounds(self) -> None:
         from pydantic import ValidationError
-        from app.main import SyncConfigUpdate
+        from app.routers.ops import SyncConfigUpdate
 
         SyncConfigUpdate(enabled=True, interval_hours=1)  # 下限可取
         with self.assertRaises(ValidationError):
@@ -103,7 +103,7 @@ class BackendOpsStatusTests(unittest.TestCase):
         self.assertIn("AliECS Public Web", names)
 
     def test_default_webdock_host_uses_ecs_ssh_tunnel_not_tailscale(self) -> None:
-        from app.main import _ops_http_targets
+        from app.routers.ops import _ops_http_targets
 
         targets = _ops_http_targets()
         webdock_api = next(item for item in targets if item["name"] == "WebDock API")
@@ -130,7 +130,7 @@ class BackendOpsStatusTests(unittest.TestCase):
         self.assertIn("last_checked_at", data)
 
     def test_default_features_put_inventory_and_system_formula_first(self) -> None:
-        from app.main import DEFAULT_FEATURES
+        from app.core import DEFAULT_FEATURES
 
         active = [item for item in sorted(DEFAULT_FEATURES, key=lambda x: x["sort_order"]) if item["status"] == "active"]
 
@@ -140,7 +140,7 @@ class BackendOpsStatusTests(unittest.TestCase):
         self.assertEqual("formula.read", active[2]["required_permission"])
 
     def test_default_features_include_public_ai_file_transfer_entry(self) -> None:
-        from app.main import DEFAULT_FEATURES
+        from app.core import DEFAULT_FEATURES
 
         feature = next((item for item in DEFAULT_FEATURES if item["code"] == "ai_file_transfer"), None)
 
@@ -164,7 +164,7 @@ class BackendOpsStatusTests(unittest.TestCase):
         self.assertIn("required_permission = EXCLUDED.required_permission", sql)
 
     def test_tplus_recent_requests_include_detail_payload_for_manual_check(self) -> None:
-        from app import main as main_module
+        from app.routers import ops as main_module
 
         old_conn = main_module._conn
         main_module._conn = lambda: _FakeTplusStatusConn()
@@ -181,7 +181,7 @@ class BackendOpsStatusTests(unittest.TestCase):
         self.assertEqual(88, request["sync_run_id"])
 
     def test_tplus_runs_include_request_context_for_origin_labels(self) -> None:
-        from app import main as main_module
+        from app.routers import ops as main_module
 
         old_conn = main_module._conn
         main_module._conn = lambda: _FakeTplusRunsConn()
@@ -195,7 +195,7 @@ class BackendOpsStatusTests(unittest.TestCase):
         self.assertEqual("10728331-569a-443f-89ad-b8b22df7a591", run["reason_event_id"])
 
     def test_tplus_timeline_merges_runs_and_orphan_requests(self) -> None:
-        from app import main as main_module
+        from app.routers import ops as main_module
         import pathlib
         old_conn = main_module._conn
         old_dir = main_module._tplus_export_dir
@@ -222,7 +222,7 @@ class BackendOpsStatusTests(unittest.TestCase):
     def test_tplus_timeline_matches_ondisk_excel_with_tzaware_run_time(self) -> None:
         # Production scenario: psycopg returns event_time as tz-aware datetime and the
         # export dir has files -> the time-match fallback must not raise (regression for 500).
-        from app import main as main_module
+        from app.routers import ops as main_module
         import pathlib
         import tempfile
         old_conn = main_module._conn
@@ -484,8 +484,9 @@ class BackendOpsDatabaseActionTests(unittest.TestCase):
         os.environ["DATABASE_URL"] = "postgresql://unit-test/not-used"
 
         from fastapi.testclient import TestClient
-        from app import main as main_module
-        from app.main import _encode_token, app
+        from app.routers import ops as main_module
+        from app.core import _encode_token
+        from app.main import app
 
         self.diff = {
             "id": 1,
