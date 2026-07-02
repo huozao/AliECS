@@ -24,7 +24,7 @@ def load_main():
     backend_root = str(BACKEND_ROOT)
     sys.path[:] = [item for item in sys.path if item != backend_root]
     sys.path.insert(0, backend_root)
-    from app import main
+    from app.routers import couple as main
 
     return main
 
@@ -101,7 +101,9 @@ class WebDockPhotoStorageTests(unittest.TestCase):
             "WEBDOCK_PHOTO_API_TOKEN": "secret-token",
         }
         with patch.dict(os.environ, env, clear=False), patch.object(main.urllib.request, "urlopen", fake_urlopen):
-            response = TestClient(main.app).get("/v1/photos/content/abc123.png")
+            from app.main import app
+
+            response = TestClient(app).get("/v1/photos/content/abc123.png")
 
         self.assertEqual(200, response.status_code)
         self.assertEqual(b"\x89PNG\r\n\x1a\nphoto", response.content)

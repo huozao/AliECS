@@ -71,7 +71,6 @@ bridge/openclaw 容器
 - 别名：开发机、本机。Windows 11，工作区 `C:\Users\ishel\Desktop\编程总库\AliECS-WebDock`。
 - 持有：AliECS、webdock、infra 三个仓库克隆；`gh` 已认证（nihil7）；`~/.ssh/config` 定义全部设备别名。
 - 不运行生产代码。
-- 遗留：工作区里 `AliECS-health-deploy`、`AliECS-login-ux`、`AliECS-main-merge`、`AliECS-mcp-worktree`、`AliECS-mcp2-worktree` 为旧 worktree，待清理。
 
 ## 仓库 ↔ 设备映射
 
@@ -108,7 +107,5 @@ bridge/openclaw 容器
 
 ## 已知遗留问题（记录未处理）
 
-- webdock1 上残留旧的 `-R 127.0.0.1:11800` 隧道 unit，端口已被 failover 代理占用，永远绑不上，属死配置，待清理。
 - webdock2 Tailscale 直连 18000 返回 502（仅影响外部直连调试）。
-- devbox 工作区的 5 个旧 worktree 文件夹待清理。
 - MEDIA 图片 token 存储在生成它的那台 webdock 本机：主备切换后，切换前发出的旧图片链接会 404（图片链接本就短期使用，暂接受）。

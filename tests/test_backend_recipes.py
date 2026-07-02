@@ -41,7 +41,8 @@ class BackendRecipeRouteTests(unittest.TestCase):
         os.environ["RECIPE_EXPORT_DIR"] = str(self.tmp_path / "exports")
         os.environ["TPLUS_BOM_SYNC_REQUEST_DIR"] = str(self.tmp_path / "tplus-sync-requests")
 
-        from app.main import _encode_token, app
+        from app.core import _encode_token
+        from app.main import app
 
         self._encode_token = _encode_token
         self.client = TestClient(app)
@@ -60,7 +61,7 @@ class BackendRecipeRouteTests(unittest.TestCase):
 
     def test_warm_recipe_caches_populates_detail_cache(self) -> None:
         # 后台预热：解析进缓存，使用户请求永不撞冷解析；价格表缺失时优雅跳过、不抛异常。
-        from app.main import warm_recipe_caches
+        from app.routers.recipes import warm_recipe_caches
         from app.recipes import bom_query as bq
 
         bq._DETAIL_CACHE.clear()

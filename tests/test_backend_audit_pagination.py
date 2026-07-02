@@ -17,7 +17,7 @@ def load_main():
     backend_root = str(BACKEND_ROOT)
     sys.path[:] = [item for item in sys.path if item != backend_root]
     sys.path.insert(0, backend_root)
-    from app import main
+    from app.routers import auth_admin as main
 
     return main
 

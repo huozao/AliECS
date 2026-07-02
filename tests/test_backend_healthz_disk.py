@@ -31,8 +31,10 @@ class HealthzDiskTests(unittest.TestCase):
         main = load_main()
         client = TestClient(main.app)
 
-        usage = main.shutil._ntuple_diskusage(total=1000, used=900, free=100)
-        with patch.object(main.shutil, "disk_usage", return_value=usage):
+        from app.routers import couple
+
+        usage = couple.shutil._ntuple_diskusage(total=1000, used=900, free=100)
+        with patch.object(couple.shutil, "disk_usage", return_value=usage):
             os.environ.pop("DATABASE_URL", None)
             resp = client.get("/healthz")
 
