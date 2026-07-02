@@ -2190,3 +2190,41 @@ def test_build_feishu_card_converts_headings_to_bold():
     assert "## 当前时间" not in content
     assert "**当前时间**" in content
     assert "你在 Vernon" in content
+
+
+def test_build_feishu_card_appends_footer_note():
+    bridge = load_bridge()
+    card = bridge.build_feishu_card([("text", "正文"), ("image", "k")], footer="设备: webdock1(主) | 耗时: 12s")
+    els = card["elements"]
+    assert [e["tag"] for e in els] == ["div", "img", "note"]
+    assert els[2]["elements"][0] == {"tag": "plain_text", "content": "设备: webdock1(主) | 耗时: 12s"}
+
+
+def test_build_feishu_card_no_footer_when_empty():
+    bridge = load_bridge()
+    card = bridge.build_feishu_card([("text", "正文")], footer="  ")
+    assert [e["tag"] for e in card["elements"]] == ["div"]
+
+
+def test_format_card_footer_full_info():
+    bridge = load_bridge()
+    details = {
+        "webdock_footer": {"device": "webdock1", "route": "primary", "elapsed_seconds": 129},
+        "metadata": {
+            "chatgpt_project_url": "https://chatgpt.com/g/g-p-6a2ffe0bac248191988612d9081dd6b1-lark-hao/project"
+        },
+    }
+    assert bridge.format_card_footer(details) == "设备: webdock1(主) | 项目: lark-hao | 耗时: 129s"
+
+
+def test_format_card_footer_standby_route():
+    bridge = load_bridge()
+    details = {"webdock_footer": {"device": "webdock2", "route": "standby", "elapsed_seconds": 8}}
+    assert bridge.format_card_footer(details) == "设备: webdock2(备) | 耗时: 8s"
+
+
+def test_format_card_footer_missing_info_degrades():
+    bridge = load_bridge()
+    # Old proxy without headers: only elapsed is known.
+    assert bridge.format_card_footer({"webdock_footer": {"elapsed_seconds": 5}}) == "耗时: 5s"
+    assert bridge.format_card_footer({}) == ""

@@ -145,9 +145,17 @@ FEISHU_GROUP_POLICY_CACHE_SECONDS = float(
 
 
 class WebDockResult:
-    def __init__(self, reply: str, metadata: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        reply: str,
+        metadata: dict[str, Any] | None = None,
+        footer: dict[str, Any] | None = None,
+    ) -> None:
         self.reply = reply
         self.metadata = metadata or {}
+        # Developer-facing delivery info (device/route/elapsed) for the card footer;
+        # kept out of `metadata` so it never leaks into session/bitable records.
+        self.footer = footer or {}
 
 
 class PendingBatch:
@@ -2167,11 +2175,11 @@ def split_ordered_segments(text: str) -> list[tuple[str, str]]:
     return segments
 
 
-def build_feishu_card(segments: list[tuple[str, str]]) -> dict[str, Any]:
+def build_feishu_card(segments: list[tuple[str, str]], footer: str = "") -> dict[str, Any]:
     """Build a Feishu interactive card whose elements interleave markdown text and
     images in document order — a single coherent message instead of separate image
     bubbles. Image segments must already be resolved to image_keys; empty text is
-    dropped."""
+    dropped. A non-empty ``footer`` renders as a gray note element at the bottom."""
     elements: list[dict[str, Any]] = []
     for kind, value in segments:
         if kind == "image":
@@ -2186,7 +2194,34 @@ def build_feishu_card(segments: list[tuple[str, str]]) -> dict[str, Any]:
             )
         elif value.strip():
             elements.append({"tag": "div", "text": {"tag": "lark_md", "content": _lark_md(value)}})
+    if footer.strip():
+        elements.append({"tag": "note", "elements": [{"tag": "plain_text", "content": footer.strip()}]})
     return {"config": {"wide_screen_mode": True}, "elements": elements}
+
+
+PROJECT_SLUG_RE = re.compile(r"/g/g-p-[0-9a-f]+-([^/?#]+)")
+
+
+def format_card_footer(details: dict[str, Any]) -> str:
+    """Developer footer for the Feishu card, in the OpenClaw gray-tail style:
+    ``设备: webdock1(主) | 项目: lark-hao | 耗时: 129s``. Parts whose info is
+    missing are dropped; returns "" when nothing is known."""
+    info = details.get("webdock_footer") or {}
+    parts: list[str] = []
+    device = str(info.get("device") or "").strip()
+    if device:
+        route = str(info.get("route") or "").strip()
+        route_label = {"primary": "(主)", "standby": "(备)"}.get(route, "")
+        parts.append(f"设备: {device}{route_label}")
+    metadata = details.get("metadata") or {}
+    url = str(metadata.get("chatgpt_project_url") or metadata.get("chatgpt_conversation_url") or "")
+    slug = PROJECT_SLUG_RE.search(url)
+    if slug:
+        parts.append(f"项目: {slug.group(1)}")
+    elapsed = info.get("elapsed_seconds")
+    if isinstance(elapsed, (int, float)) and elapsed > 0:
+        parts.append(f"耗时: {int(elapsed)}s")
+    return " | ".join(parts)
 
 
 def _lark_md(text: str) -> str:
@@ -2290,7 +2325,8 @@ def deliver_feishu_media(reply: str, details: dict[str, Any]) -> str:
     if not delivered:
         return visible_media_fallback(body, urls)
     try:
-        feishu_send_interactive_message(details, feishu_message_id(details), build_feishu_card(resolved), auth_token)
+        card = build_feishu_card(resolved, footer=format_card_footer(details))
+        feishu_send_interactive_message(details, feishu_message_id(details), card, auth_token)
         return NO_REPLY
     except Exception as exc:
         log_line(f"feishu card delivery failed: {exc}")
@@ -2336,11 +2372,20 @@ def call_webdock(body: dict[str, Any]) -> WebDockResult:
         },
         method="POST",
     )
+    started = time.monotonic()
     with urllib.request.urlopen(request, timeout=webdock_timeout()) as response:
         payload = json.loads(response.read().decode("utf-8"))
+        device = str(response.headers.get("X-Webdock-Device") or "").strip()
+        route = str(response.headers.get("X-Webdock-Route") or "").strip()
+    footer: dict[str, Any] = {"elapsed_seconds": round(time.monotonic() - started)}
+    if device:
+        footer["device"] = device
+    if route:
+        footer["route"] = route
     return WebDockResult(
         normalize_reply(extract_assistant_reply(payload)) or FALLBACK_MESSAGE,
         extract_webdock_metadata(payload),
+        footer,
     )
 
 
@@ -2370,7 +2415,9 @@ def build_reply(body: dict[str, Any]) -> str:
             return NO_REPLY  # merged into a batch leader; the leader emits chain_result
         write_details = request_details(batched_body)
         write_details["request_id"] = details.get("request_id")
-        reply, response_metadata = unpack_webdock_result(call_webdock(batched_body))
+        result = call_webdock(batched_body)
+        reply, response_metadata = unpack_webdock_result(result)
+        write_details["webdock_footer"] = dict(getattr(result, "footer", None) or {})
         if response_metadata:
             write_details.setdefault("metadata", {}).update(response_metadata)
         reply = deliver_feishu_files(reply, write_details)
