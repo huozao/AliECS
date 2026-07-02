@@ -2333,6 +2333,37 @@ def deliver_feishu_media(reply: str, details: dict[str, Any]) -> str:
         return visible_media_fallback(body, urls)
 
 
+def deliver_feishu_text_card(reply: str, details: dict[str, Any]) -> str:
+    """Send text-only Feishu replies as an interactive card too, so they carry the
+    same gray developer footer as media cards. Any missing prerequisite (channel,
+    footer info, credentials) or send failure falls back to the plain OpenClaw
+    path, so a reply is never lost."""
+    if reply == NO_REPLY or not (reply or "").strip() or reply == FALLBACK_MESSAGE:
+        return reply
+    metadata = details.get("metadata") or {}
+    if metadata.get("channel") != "feishu":
+        return reply
+    footer = format_card_footer(details)
+    if not footer:
+        return reply
+    if not feishu_app_credentials()[0]:
+        return reply
+    try:
+        auth_token = feishu_tenant_access_token()
+    except Exception as exc:
+        log_line(f"feishu text card delivery: token error: {exc}")
+        return reply
+    if not auth_token:
+        return reply
+    try:
+        card = build_feishu_card([("text", reply)], footer=footer)
+        feishu_send_interactive_message(details, feishu_message_id(details), card, auth_token)
+        return NO_REPLY
+    except Exception as exc:
+        log_line(f"feishu text card delivery failed: {exc}")
+        return reply
+
+
 def media_proxy_headers(headers: Any) -> dict[str, str]:
     out = {"Content-Type": headers.get("Content-Type", "application/octet-stream")}
     content_disposition = headers.get("Content-Disposition")
@@ -2422,6 +2453,7 @@ def build_reply(body: dict[str, Any]) -> str:
             write_details.setdefault("metadata", {}).update(response_metadata)
         reply = deliver_feishu_files(reply, write_details)
         reply = deliver_feishu_media(reply, write_details)
+        reply = deliver_feishu_text_card(reply, write_details)
         trace_chain_result(details, started, reply=reply)
         append_feishu_session_console_records_async(write_details, reply, "已回复")
         return reply

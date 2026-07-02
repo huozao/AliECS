@@ -1724,6 +1724,76 @@ def _patch_feishu_card_send(monkeypatch, bridge, cards, *, upload=None):
     )
 
 
+def test_deliver_feishu_text_card_sends_card_with_footer(monkeypatch):
+    bridge = load_bridge()
+    cards = []
+    _patch_feishu_card_send(monkeypatch, bridge, cards)
+
+    details = {
+        "metadata": {"channel": "feishu", "message_id": "om_1"},
+        "webdock_footer": {"device": "webdock2", "route": "primary", "elapsed_seconds": 9},
+    }
+    out = bridge.deliver_feishu_text_card("纯文字回复", details)
+
+    assert out == bridge.NO_REPLY
+    assert len(cards) == 1
+    mid, card = cards[0]
+    assert mid == "om_1"
+    assert [e["tag"] for e in card["elements"]] == ["div", "note"]
+    assert card["elements"][0]["text"]["content"] == "纯文字回复"
+    assert card["elements"][1]["elements"][0]["content"] == "设备: webdock2(主) | 耗时: 9s"
+
+
+def test_deliver_feishu_text_card_skips_non_feishu(monkeypatch):
+    bridge = load_bridge()
+    cards = []
+    _patch_feishu_card_send(monkeypatch, bridge, cards)
+
+    details = {"metadata": {"channel": "wechat"}, "webdock_footer": {"device": "webdock2"}}
+    assert bridge.deliver_feishu_text_card("文字", details) == "文字"
+    assert cards == []
+
+
+def test_deliver_feishu_text_card_skips_without_footer_info(monkeypatch):
+    bridge = load_bridge()
+    cards = []
+    _patch_feishu_card_send(monkeypatch, bridge, cards)
+
+    details = {"metadata": {"channel": "feishu", "message_id": "om_1"}}
+    assert bridge.deliver_feishu_text_card("文字", details) == "文字"
+    assert cards == []
+
+
+def test_deliver_feishu_text_card_skips_no_reply_empty_and_fallback(monkeypatch):
+    bridge = load_bridge()
+    cards = []
+    _patch_feishu_card_send(monkeypatch, bridge, cards)
+
+    details = {
+        "metadata": {"channel": "feishu", "message_id": "om_1"},
+        "webdock_footer": {"device": "webdock2"},
+    }
+    assert bridge.deliver_feishu_text_card(bridge.NO_REPLY, details) == bridge.NO_REPLY
+    assert bridge.deliver_feishu_text_card("  ", details) == "  "
+    assert bridge.deliver_feishu_text_card(bridge.FALLBACK_MESSAGE, details) == bridge.FALLBACK_MESSAGE
+    assert cards == []
+
+
+def test_deliver_feishu_text_card_falls_back_when_send_fails(monkeypatch):
+    bridge = load_bridge()
+    _patch_feishu_card_send(monkeypatch, bridge, [])
+
+    def boom(details, mid, card, token):
+        raise RuntimeError("send failed")
+
+    monkeypatch.setattr(bridge, "feishu_send_interactive_message", boom)
+    details = {
+        "metadata": {"channel": "feishu", "message_id": "om_1"},
+        "webdock_footer": {"device": "webdock2"},
+    }
+    assert bridge.deliver_feishu_text_card("文字", details) == "文字"
+
+
 def test_deliver_feishu_media_sends_ordered_card_and_returns_no_reply(monkeypatch):
     bridge = load_bridge()
     cards = []
