@@ -2324,3 +2324,19 @@ def test_send_interactive_message_returns_created_id(monkeypatch):
     )
     assert mid == "om_created"
     assert captured["path"] == "/im/v1/messages/om_user/reply"
+
+
+def test_feishu_patch_card_calls_patch_endpoint(monkeypatch):
+    bridge = load_bridge()
+    captured = {}
+
+    def fake_post(path, payload, *, auth_token=None, method="POST"):
+        captured.update(path=path, payload=payload, method=method, auth=auth_token)
+        return {"code": 0, "data": {}}
+
+    monkeypatch.setattr(bridge, "feishu_post_json", fake_post)
+    bridge.feishu_patch_card("om_x", {"config": {}, "elements": []}, "tok")
+    assert captured["path"] == "/im/v1/messages/om_x"
+    assert captured["method"] == "PATCH"
+    assert captured["auth"] == "tok"
+    assert json.loads(captured["payload"]["content"]) == {"config": {}, "elements": []}

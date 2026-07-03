@@ -1112,6 +1112,17 @@ def feishu_send_interactive_message(details: dict[str, Any], message_id: str, ca
     return str((resp.get("data") or {}).get("message_id") or "")
 
 
+def feishu_patch_card(message_id: str, card: dict[str, Any], auth_token: str) -> None:
+    """Update an already-sent interactive card in place (the placeholder becomes the
+    final answer). Requires the card to have been sent with config.update_multi=true."""
+    feishu_post_json(
+        f"/im/v1/messages/{urllib.parse.quote(message_id)}",
+        {"content": json.dumps(card, ensure_ascii=False)},
+        auth_token=auth_token,
+        method="PATCH",
+    )
+
+
 def fetch_outbound_file_bytes(url: str) -> bytes:
     """Fetch a file referenced by a FILE marker. WebDock ``/media/<token>`` URLs are
     pulled over the internal WebDock base (reverse tunnel) rather than the public
