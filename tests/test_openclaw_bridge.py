@@ -2374,3 +2374,53 @@ def test_feishu_put_card_falls_back_to_send_when_patch_fails(monkeypatch):
     details = {"metadata": {"channel": "feishu", "message_id": "om_user"}, "feishu_placeholder_msg_id": "om_ph"}
     bridge.feishu_put_card(details, {"config": {}, "elements": []}, "tok")
     assert calls == [("send", "om_user")]
+
+
+def test_inflight_counter_detects_overlap_and_resets():
+    bridge = load_bridge()
+    key = "feishu:om_peer"
+    assert bridge._enter_inflight(key) is False   # 第一条，非 overlap
+    assert bridge._enter_inflight(key) is True    # 第二条，overlap
+    bridge._exit_inflight(key)
+    bridge._exit_inflight(key)
+    assert key not in bridge._inflight_counts      # 归零后清空
+    assert bridge._enter_inflight(key) is False    # 归零后又是第一条
+    bridge._exit_inflight(key)
+
+
+def test_inflight_counter_empty_key_is_noop():
+    bridge = load_bridge()
+    assert bridge._enter_inflight("") is False
+    bridge._exit_inflight("")  # 不抛异常
+
+
+def test_processing_card_flag_default_off(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.delenv("OPENCLAW_BRIDGE_PROCESSING_CARD", raising=False)
+    assert bridge.processing_card_enabled() is False
+    monkeypatch.setenv("OPENCLAW_BRIDGE_PROCESSING_CARD", "1")
+    assert bridge.processing_card_enabled() is True
+
+
+def test_send_processing_card_returns_none_without_credentials(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("", ""))
+    assert bridge.send_processing_card({"metadata": {"channel": "feishu"}}, "…") is None
+
+
+def test_send_processing_card_sends_and_returns_id(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("app", "sec"))
+    monkeypatch.setattr(bridge, "feishu_tenant_access_token", lambda: "tok")
+    seen = {}
+
+    def fake_send(details, mid, card, tok):
+        seen["mid"] = mid
+        seen["card"] = card
+        return "om_ph"
+
+    monkeypatch.setattr(bridge, "feishu_send_interactive_message", fake_send)
+    out = bridge.send_processing_card({"metadata": {"channel": "feishu", "message_id": "om_user"}}, "正在处理")
+    assert out == "om_ph"
+    assert seen["mid"] == "om_user"
+    assert seen["card"]["elements"][0]["text"]["content"].find("正在处理") >= 0

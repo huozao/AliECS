@@ -2022,6 +2022,76 @@ def trace_chain_result(
     print("bridge_request_trace " + json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
 
 
+# --- 飞书"处理中"单卡片：在飞计数器 + 配置/文案 + 占位卡发送器 ---------------
+
+_inflight_counts: dict[str, int] = {}
+_inflight_lock = Lock()
+
+DEFAULT_PROCESSING_ACK_TEXT = "⏳ 正在处理你的问题（通常 20–60 秒），收到回复后再继续提问哦～"
+DEFAULT_PROCESSING_REMIND_TEXT = "⚠️ 上一条还在处理中，这条已排队；请等回复后再问，连续提问会让每条都变慢。"
+DEFAULT_PROCESSING_EMPTY_TEXT = "本次没有生成内容，请稍后重试。"
+
+
+def _enter_inflight(lane_key: str) -> bool:
+    """Register one in-flight webdock call for this lane. Returns True when another
+    call was already in flight (i.e. this is a follow-up question)."""
+    if not lane_key:
+        return False
+    with _inflight_lock:
+        prior = _inflight_counts.get(lane_key, 0)
+        _inflight_counts[lane_key] = prior + 1
+        return prior > 0
+
+
+def _exit_inflight(lane_key: str) -> None:
+    """Deregister one in-flight call; drops the key at zero. Empty key is a no-op."""
+    if not lane_key:
+        return
+    with _inflight_lock:
+        n = _inflight_counts.get(lane_key, 1) - 1
+        if n <= 0:
+            _inflight_counts.pop(lane_key, None)
+        else:
+            _inflight_counts[lane_key] = n
+
+
+def processing_card_enabled() -> bool:
+    return os.getenv("OPENCLAW_BRIDGE_PROCESSING_CARD", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def processing_ack_text() -> str:
+    return os.getenv("OPENCLAW_BRIDGE_PROCESSING_ACK_TEXT", DEFAULT_PROCESSING_ACK_TEXT)
+
+
+def processing_remind_text() -> str:
+    return os.getenv("OPENCLAW_BRIDGE_PROCESSING_REMIND_TEXT", DEFAULT_PROCESSING_REMIND_TEXT)
+
+
+def processing_empty_fallback_text() -> str:
+    return os.getenv("OPENCLAW_BRIDGE_PROCESSING_EMPTY_TEXT", DEFAULT_PROCESSING_EMPTY_TEXT)
+
+
+def send_processing_card(details: dict[str, Any], text: str) -> str | None:
+    """Send a footer-less '正在处理' placeholder card as a reply to the user's message.
+    Returns the placeholder message_id, or None if any prerequisite/step fails
+    (best-effort: a failure here must never affect the real answer)."""
+    if not feishu_app_credentials()[0]:
+        return None
+    try:
+        auth_token = feishu_tenant_access_token()
+    except Exception as exc:
+        log_line(f"processing card: token error: {exc}")
+        return None
+    if not auth_token:
+        return None
+    try:
+        card = build_feishu_card([("text", text)], footer="")
+        return feishu_send_interactive_message(details, feishu_message_id(details), card, auth_token) or None
+    except Exception as exc:
+        log_line(f"processing card send failed: {exc}")
+        return None
+
+
 def lane_batch_key(metadata: dict[str, Any]) -> str:
     peer_id = metadata.get("peer_id")
     if not peer_id:
