@@ -49,6 +49,7 @@
       <input id="modalUsername" placeholder="用户名"/>
       <input id="modalPassword" type="password" placeholder="密码"/>
       <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button id="modalSso" class="btn" type="button">使用统一登录（SSO）</button>
         <button id="submitAuthBtn" class="btn primary" type="button">提交</button>
       </div>
     </div>
@@ -145,6 +146,7 @@
       topLogoutBtn.onclick=logout;
       closeModal.onclick=closeAuthModal;
       submitAuthBtn.onclick=()=>handleAuthSubmit().catch((error)=>showError(error.message));
+      modalSso.onclick=()=>{location.href=`${API_BASE}/v1/auth/oidc/login`;};
       modalPassword.onkeydown=(event)=>{if(event.key==='Enter')handleAuthSubmit().catch((error)=>showError(error.message));};
       authModal.onclick=(event)=>{if(event.target===authModal)closeAuthModal();};
       loadFeatures().catch((error)=>showError(`加载功能入口失败：${error.message}`));
