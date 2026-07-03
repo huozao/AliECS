@@ -2298,3 +2298,13 @@ def test_format_card_footer_missing_info_degrades():
     # Old proxy without headers: only elapsed is known.
     assert bridge.format_card_footer({"webdock_footer": {"elapsed_seconds": 5}}) == "耗时: 5s"
     assert bridge.format_card_footer({}) == ""
+
+
+# --- 飞书"处理中"单卡片方案 -----------------------------------------------
+
+
+def test_build_feishu_card_marks_update_multi():
+    bridge = load_bridge()
+    card = bridge.build_feishu_card([("text", "hi")], footer="")
+    assert card["config"]["update_multi"] is True
+    assert card["config"]["wide_screen_mode"] is True

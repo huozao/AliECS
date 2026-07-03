@@ -2196,7 +2196,7 @@ def build_feishu_card(segments: list[tuple[str, str]], footer: str = "") -> dict
             elements.append({"tag": "div", "text": {"tag": "lark_md", "content": _lark_md(value)}})
     if footer.strip():
         elements.append({"tag": "note", "elements": [{"tag": "plain_text", "content": footer.strip()}]})
-    return {"config": {"wide_screen_mode": True}, "elements": elements}
+    return {"config": {"wide_screen_mode": True, "update_multi": True}, "elements": elements}
 
 
 PROJECT_SLUG_RE = re.compile(r"/g/g-p-[0-9a-f]+-([^/?#]+)")
