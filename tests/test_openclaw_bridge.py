@@ -2424,3 +2424,99 @@ def test_send_processing_card_sends_and_returns_id(monkeypatch):
     assert out == "om_ph"
     assert seen["mid"] == "om_user"
     assert seen["card"]["elements"][0]["text"]["content"].find("正在处理") >= 0
+
+
+def _feishu_body(text, message_id="om_user"):
+    return {
+        "messages": [{"role": "user", "content": text}],
+        "metadata": {"channel": "feishu", "chat_type": "p2p", "open_id": "om_peer",
+                     "peer_id": "om_peer", "message_id": message_id},
+    }
+
+
+def _enable_processing(monkeypatch):
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "0")   # 关闭 batching, 直通
+    monkeypatch.setenv("OPENCLAW_BRIDGE_PROCESSING_CARD", "1")
+
+
+def test_build_reply_sends_placeholder_then_patches_answer(monkeypatch):
+    bridge = load_bridge()
+    _enable_processing(monkeypatch)
+    monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("app", "sec"))
+    monkeypatch.setattr(bridge, "feishu_tenant_access_token", lambda: "tok")
+    events = []
+    monkeypatch.setattr(bridge, "send_processing_card",
+                        lambda details, text: events.append(("placeholder", text)) or "om_ph")
+    monkeypatch.setattr(bridge, "call_webdock",
+                        lambda body: bridge.WebDockResult("成都今天多云 18~27℃", {}))
+    monkeypatch.setattr(bridge, "feishu_patch_card",
+                        lambda mid, card, tok: events.append(("patch", mid)))
+    monkeypatch.setattr(bridge, "feishu_send_interactive_message",
+                        lambda d, mid, card, tok: events.append(("send", mid)) or "om_x")
+    out = bridge.build_reply(_feishu_body("成都天气"))
+    assert out == bridge.NO_REPLY                      # 卡片已自投递
+    assert ("placeholder", bridge.processing_ack_text()) in events
+    assert ("patch", "om_ph") in events               # 占位被就地更新成答案
+    assert not any(e[0] == "send" for e in events)    # 没有第二条新消息
+    assert bridge._inflight_counts.get("feishu:om_peer") in (None, 0)
+
+
+def test_build_reply_second_message_uses_remind_text(monkeypatch):
+    bridge = load_bridge()
+    _enable_processing(monkeypatch)
+    monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("app", "sec"))
+    monkeypatch.setattr(bridge, "feishu_tenant_access_token", lambda: "tok")
+    monkeypatch.setattr(bridge, "feishu_patch_card", lambda mid, card, tok: None)
+    monkeypatch.setattr(bridge, "feishu_send_interactive_message", lambda d, mid, card, tok: "om_x")
+    texts = []
+    monkeypatch.setattr(bridge, "send_processing_card",
+                        lambda details, text: texts.append(text) or "om_ph")
+    # 第一条卡住在 webdock 里, 制造 overlap
+    gate = threading.Event()
+
+    def slow_webdock(body):
+        gate.wait(2.0)
+        return bridge.WebDockResult("ans", {})
+
+    monkeypatch.setattr(bridge, "call_webdock", slow_webdock)
+    t1 = threading.Thread(target=lambda: bridge.build_reply(_feishu_body("Q1", "om_u1")))
+    t1.start()
+    time.sleep(0.2)                                   # 确保 t1 已进入 inflight
+    monkeypatch.setattr(bridge, "call_webdock", lambda body: bridge.WebDockResult("ans2", {}))
+    bridge.build_reply(_feishu_body("Q2", "om_u2"))   # overlap
+    gate.set()
+    t1.join(3.0)
+    assert bridge.processing_ack_text() in texts
+    assert bridge.processing_remind_text() in texts
+
+
+def test_build_reply_patches_placeholder_with_fallback_on_empty(monkeypatch):
+    bridge = load_bridge()
+    _enable_processing(monkeypatch)
+    monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("app", "sec"))
+    monkeypatch.setattr(bridge, "feishu_tenant_access_token", lambda: "tok")
+    monkeypatch.setattr(bridge, "send_processing_card", lambda details, text: "om_ph")
+    monkeypatch.setattr(bridge, "call_webdock", lambda body: bridge.WebDockResult("", {}))
+    patched = {}
+    monkeypatch.setattr(bridge, "feishu_patch_card",
+                        lambda mid, card, tok: patched.update(mid=mid, card=card))
+    out = bridge.build_reply(_feishu_body("空返回场景"))
+    assert out == bridge.NO_REPLY
+    assert patched["mid"] == "om_ph"
+    assert bridge.processing_empty_fallback_text() in json.dumps(patched["card"], ensure_ascii=False)
+
+
+def test_build_reply_no_placeholder_when_flag_off(monkeypatch):
+    bridge = load_bridge()
+    _enable_processing(monkeypatch)
+    monkeypatch.setenv("OPENCLAW_BRIDGE_PROCESSING_CARD", "0")   # 关
+    monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("app", "sec"))
+    monkeypatch.setattr(bridge, "feishu_tenant_access_token", lambda: "tok")
+    called = []
+    monkeypatch.setattr(bridge, "send_processing_card", lambda d, t: called.append(t) or "om_ph")
+    monkeypatch.setattr(bridge, "feishu_send_interactive_message", lambda d, mid, card, tok: "om_x")
+    monkeypatch.setattr(bridge, "call_webdock", lambda body: bridge.WebDockResult("ans", {}))
+    bridge.build_reply(_feishu_body("关开关"))
+    assert called == []                                 # 开关关: 不发占位

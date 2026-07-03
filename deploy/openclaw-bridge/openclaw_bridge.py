@@ -2461,6 +2461,26 @@ def deliver_feishu_text_card(reply: str, details: dict[str, Any]) -> str:
         return reply
 
 
+def finalize_placeholder(reply: str, details: dict[str, Any]) -> str:
+    """Guarantee a sent processing-card placeholder is always resolved. If the
+    delivery chain already patched it, ``reply`` is NO_REPLY and this is a no-op.
+    Otherwise patch the placeholder with the final text (or an empty-reply fallback)
+    so it never stays stuck on '正在处理'. Best-effort: patch failure leaves ``reply``
+    to be emitted the normal way."""
+    placeholder_id = details.get("feishu_placeholder_msg_id")
+    if not placeholder_id or reply == NO_REPLY:
+        return reply
+    text = (reply or "").strip() or processing_empty_fallback_text()
+    try:
+        auth_token = feishu_tenant_access_token()
+        card = build_feishu_card([("text", text)], footer=format_card_footer(details))
+        feishu_patch_card(placeholder_id, card, auth_token)
+        return NO_REPLY
+    except Exception as exc:
+        log_line(f"feishu placeholder finalize failed: {exc}")
+        return reply
+
+
 def media_proxy_headers(headers: Any) -> dict[str, str]:
     out = {"Content-Type": headers.get("Content-Type", "application/octet-stream")}
     content_disposition = headers.get("Content-Disposition")
@@ -2532,6 +2552,7 @@ def build_reply(body: dict[str, Any]) -> str:
     if not webdock_configured():
         return f"已收到你的微信消息：{user_text}" if user_text else "已收到你的微信消息。"
     details = request_details(body)  # peer_id/channel for chain_result tracing
+    write_details = details  # defensive: except branches reference it before reassignment
     started = time.monotonic()
     try:
         if details.get("metadata", {}).get("channel") == "feishu" and not feishu_should_send_chatgpt(details):
@@ -2543,17 +2564,29 @@ def build_reply(body: dict[str, Any]) -> str:
             return NO_REPLY  # merged into a batch leader; the leader emits chain_result
         write_details = request_details(batched_body)
         write_details["request_id"] = details.get("request_id")
-        result = call_webdock(batched_body)
-        reply, response_metadata = unpack_webdock_result(result)
-        write_details["webdock_footer"] = dict(getattr(result, "footer", None) or {})
-        if response_metadata:
-            write_details.setdefault("metadata", {}).update(response_metadata)
-        reply = deliver_feishu_files(reply, write_details)
-        reply = deliver_feishu_media(reply, write_details)
-        reply = deliver_feishu_text_card(reply, write_details)
-        trace_chain_result(details, started, reply=reply)
-        append_feishu_session_console_records_async(write_details, reply, "已回复")
-        return reply
+        lane_key = lane_batch_key(write_details.get("metadata") or {})
+        is_overlap = _enter_inflight(lane_key)
+        try:
+            if write_details.get("metadata", {}).get("channel") == "feishu" and processing_card_enabled():
+                # Placeholder is best-effort; a failure here must never block the answer.
+                text = processing_remind_text() if is_overlap else processing_ack_text()
+                placeholder_id = send_processing_card(write_details, text)
+                if placeholder_id:
+                    write_details["feishu_placeholder_msg_id"] = placeholder_id
+            result = call_webdock(batched_body)
+            reply, response_metadata = unpack_webdock_result(result)
+            write_details["webdock_footer"] = dict(getattr(result, "footer", None) or {})
+            if response_metadata:
+                write_details.setdefault("metadata", {}).update(response_metadata)
+            reply = deliver_feishu_files(reply, write_details)
+            reply = deliver_feishu_media(reply, write_details)
+            reply = deliver_feishu_text_card(reply, write_details)
+            reply = finalize_placeholder(reply, write_details)
+            trace_chain_result(details, started, reply=reply)
+            append_feishu_session_console_records_async(write_details, reply, "已回复")
+            return reply
+        finally:
+            _exit_inflight(lane_key)
     except urllib.error.HTTPError as exc:
         if exc.code == 429:
             reply = diagnostic_message(
@@ -2570,6 +2603,7 @@ def build_reply(body: dict[str, Any]) -> str:
                 f"bridge -> WebDock 已联通；WebDock 返回 HTTP {exc.code}: {parse_http_error_message(exc)}",
                 "WebDock API",
             )
+        reply = finalize_placeholder(reply, write_details)
         trace_chain_result(details, started, http_code=exc.code)
         append_feishu_session_console_records_async(details, reply, "失败")
         return reply
@@ -2590,6 +2624,7 @@ def build_reply(body: dict[str, Any]) -> str:
                 f"bridge -> WebDock 未联通或连接失败：{exc}",
                 "ECS tunnel or WebDock API",
             )
+        reply = finalize_placeholder(reply, write_details)
         trace_chain_result(details, started, error=exc)
         append_feishu_session_console_records_async(details, reply, "失败")
         return reply
