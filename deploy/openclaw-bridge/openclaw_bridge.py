@@ -1086,28 +1086,30 @@ def feishu_send_image_message(details: dict[str, Any], message_id: str, image_ke
     )
 
 
-def feishu_send_interactive_message(details: dict[str, Any], message_id: str, card: dict[str, Any], auth_token: str) -> None:
+def feishu_send_interactive_message(details: dict[str, Any], message_id: str, card: dict[str, Any], auth_token: str) -> str:
     """Deliver an interactive card (text + images interleaved) as one message,
-    replying to the user's message when we have its id."""
+    replying to the user's message when we have its id. Returns the created
+    message's id ("" if unavailable)."""
     content = json.dumps(card, ensure_ascii=False)
     if message_id:
-        feishu_post_json(
+        resp = feishu_post_json(
             f"/im/v1/messages/{urllib.parse.quote(message_id)}/reply",
             {"msg_type": "interactive", "content": content},
             auth_token=auth_token,
         )
-        return
+        return str((resp.get("data") or {}).get("message_id") or "")
     if feishu_is_group_message(details):
         receive_id, receive_id_type = feishu_chat_id(details), "chat_id"
     else:
         receive_id, receive_id_type = feishu_open_id(details), "open_id"
     if not receive_id:
         raise RuntimeError("no Feishu receive_id for card delivery")
-    feishu_post_json(
+    resp = feishu_post_json(
         f"/im/v1/messages?receive_id_type={receive_id_type}",
         {"receive_id": receive_id, "msg_type": "interactive", "content": content},
         auth_token=auth_token,
     )
+    return str((resp.get("data") or {}).get("message_id") or "")
 
 
 def fetch_outbound_file_bytes(url: str) -> bytes:

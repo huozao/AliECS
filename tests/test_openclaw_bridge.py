@@ -2308,3 +2308,19 @@ def test_build_feishu_card_marks_update_multi():
     card = bridge.build_feishu_card([("text", "hi")], footer="")
     assert card["config"]["update_multi"] is True
     assert card["config"]["wide_screen_mode"] is True
+
+
+def test_send_interactive_message_returns_created_id(monkeypatch):
+    bridge = load_bridge()
+    captured = {}
+
+    def fake_post(path, payload, *, auth_token=None, method="POST"):
+        captured["path"] = path
+        return {"code": 0, "data": {"message_id": "om_created"}}
+
+    monkeypatch.setattr(bridge, "feishu_post_json", fake_post)
+    mid = bridge.feishu_send_interactive_message(
+        {"metadata": {"channel": "feishu"}}, "om_user", {"config": {}, "elements": []}, "tok"
+    )
+    assert mid == "om_created"
+    assert captured["path"] == "/im/v1/messages/om_user/reply"
