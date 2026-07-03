@@ -46,7 +46,7 @@ backend-api 不动**。业务权限跟业务代码走，将来换 IdP 不伤业�
   → auth.hydwang.xyz (aliecs nginx, TLS)
       → 127.0.0.1:9091  Authelia 容器（OIDC 提供方 + 密码/MFA）
           → lldap 容器 :3890（用户唯一事实源）
-              lldap web 管理 UI :17170（经 nginx 暴露，仅管理员组）
+              lldap web 管理 UI :17170（只绑本机，管理员经 ssh -L 隧道访问，不暴露公网）
 
 各应用 = OIDC RP：
   hydwang.xyz 网站 (backend-api) ─┐
@@ -69,7 +69,7 @@ backend-api 不动**。业务权限跟业务代码走，将来换 IdP 不伤业�
 |---|---|
 | 用户身份：用户名/邮箱/密码/分组 | lldap（唯一事实源，web UI 管理） |
 | 登录/MFA/签发 OIDC token | Authelia |
-| 网站业务角色与权限（RBAC 表、功能入口） | backend-api 不动：OIDC email/sub 匹配本地 users 记录 |
+| 网站业务角色与权限（RBAC 表、功能入口） | backend-api 不动：OIDC sub/username 匹配本地 users 记录（users 表无 email 列，lldap 用户名与网站 username 一致建号） |
 | 各应用准入 | lldap 组（website_users / files_users / family…），Authelia 按组限制 |
 
 - backend-api users 表**保留但卸掉密码职责**（password_hash 停用）；
@@ -117,13 +117,13 @@ backend-api 不动**。业务权限跟业务代码走，将来换 IdP 不伤业�
   端到端跑「lldap 建号 → OIDC 登录 → backend 发 token → 权限正确」。
 - CI：OIDC 回调逻辑单测（mock IdP、sub 匹配、未匹配用户拒绝）。
 - 生产：每步迁移用测试账号实登验证。
-  账号映射错误零容忍：`oidc_sub` 唯一约束，email 匹配仅限首次绑定。
+  账号映射错误零容忍：`oidc_sub` 唯一约束，username 匹配仅限首次绑定。
 
 ## 安全要点
 
 - 授权码流程 + PKCE；client secret 全部 SOPS 管理，不进明文。
-- `oidc_sub` 为绑定权威标识；email 仅用于首次绑定匹配，绑定后不再作为查找键
-  （防 email 变更/重用导致串号）。
+- `oidc_sub` 为绑定权威标识；username 仅用于首次绑定匹配，绑定后不再作为查找键
+  （防用户名重建/重用导致串号）。
 - 未在 users 表中匹配到且无自动供应规则的 OIDC 用户，拒绝登录（默认拒绝）。
 - lldap 管理 UI 仅 `lldap_admin` 组可用；对接服务用只读/密码管理账号，
   不给全量管理员权限。
