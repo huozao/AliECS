@@ -1086,28 +1086,55 @@ def feishu_send_image_message(details: dict[str, Any], message_id: str, image_ke
     )
 
 
-def feishu_send_interactive_message(details: dict[str, Any], message_id: str, card: dict[str, Any], auth_token: str) -> None:
+def feishu_send_interactive_message(details: dict[str, Any], message_id: str, card: dict[str, Any], auth_token: str) -> str:
     """Deliver an interactive card (text + images interleaved) as one message,
-    replying to the user's message when we have its id."""
+    replying to the user's message when we have its id. Returns the created
+    message's id ("" if unavailable)."""
     content = json.dumps(card, ensure_ascii=False)
     if message_id:
-        feishu_post_json(
+        resp = feishu_post_json(
             f"/im/v1/messages/{urllib.parse.quote(message_id)}/reply",
             {"msg_type": "interactive", "content": content},
             auth_token=auth_token,
         )
-        return
+        return str((resp.get("data") or {}).get("message_id") or "")
     if feishu_is_group_message(details):
         receive_id, receive_id_type = feishu_chat_id(details), "chat_id"
     else:
         receive_id, receive_id_type = feishu_open_id(details), "open_id"
     if not receive_id:
         raise RuntimeError("no Feishu receive_id for card delivery")
-    feishu_post_json(
+    resp = feishu_post_json(
         f"/im/v1/messages?receive_id_type={receive_id_type}",
         {"receive_id": receive_id, "msg_type": "interactive", "content": content},
         auth_token=auth_token,
     )
+    return str((resp.get("data") or {}).get("message_id") or "")
+
+
+def feishu_patch_card(message_id: str, card: dict[str, Any], auth_token: str) -> None:
+    """Update an already-sent interactive card in place (the placeholder becomes the
+    final answer). Requires the card to have been sent with config.update_multi=true."""
+    feishu_post_json(
+        f"/im/v1/messages/{urllib.parse.quote(message_id)}",
+        {"content": json.dumps(card, ensure_ascii=False)},
+        auth_token=auth_token,
+        method="PATCH",
+    )
+
+
+def feishu_put_card(details: dict[str, Any], card: dict[str, Any], auth_token: str) -> None:
+    """Deliver a card: patch the pending processing-card placeholder if one exists,
+    otherwise send a fresh reply. Patch failure degrades to a fresh reply so the
+    answer is never lost."""
+    placeholder_id = details.get("feishu_placeholder_msg_id")
+    if placeholder_id:
+        try:
+            feishu_patch_card(placeholder_id, card, auth_token)
+            return
+        except Exception as exc:
+            log_line(f"feishu card patch failed, sending new reply: {exc}")
+    feishu_send_interactive_message(details, feishu_message_id(details), card, auth_token)
 
 
 def fetch_outbound_file_bytes(url: str) -> bytes:
@@ -1995,6 +2022,76 @@ def trace_chain_result(
     print("bridge_request_trace " + json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
 
 
+# --- 飞书"处理中"单卡片：在飞计数器 + 配置/文案 + 占位卡发送器 ---------------
+
+_inflight_counts: dict[str, int] = {}
+_inflight_lock = Lock()
+
+DEFAULT_PROCESSING_ACK_TEXT = "⏳ 正在处理你的问题（通常 20–60 秒），收到回复后再继续提问哦～"
+DEFAULT_PROCESSING_REMIND_TEXT = "⚠️ 上一条还在处理中，这条已排队；请等回复后再问，连续提问会让每条都变慢。"
+DEFAULT_PROCESSING_EMPTY_TEXT = "本次没有生成内容，请稍后重试。"
+
+
+def _enter_inflight(lane_key: str) -> bool:
+    """Register one in-flight webdock call for this lane. Returns True when another
+    call was already in flight (i.e. this is a follow-up question)."""
+    if not lane_key:
+        return False
+    with _inflight_lock:
+        prior = _inflight_counts.get(lane_key, 0)
+        _inflight_counts[lane_key] = prior + 1
+        return prior > 0
+
+
+def _exit_inflight(lane_key: str) -> None:
+    """Deregister one in-flight call; drops the key at zero. Empty key is a no-op."""
+    if not lane_key:
+        return
+    with _inflight_lock:
+        n = _inflight_counts.get(lane_key, 1) - 1
+        if n <= 0:
+            _inflight_counts.pop(lane_key, None)
+        else:
+            _inflight_counts[lane_key] = n
+
+
+def processing_card_enabled() -> bool:
+    return os.getenv("OPENCLAW_BRIDGE_PROCESSING_CARD", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def processing_ack_text() -> str:
+    return os.getenv("OPENCLAW_BRIDGE_PROCESSING_ACK_TEXT", DEFAULT_PROCESSING_ACK_TEXT)
+
+
+def processing_remind_text() -> str:
+    return os.getenv("OPENCLAW_BRIDGE_PROCESSING_REMIND_TEXT", DEFAULT_PROCESSING_REMIND_TEXT)
+
+
+def processing_empty_fallback_text() -> str:
+    return os.getenv("OPENCLAW_BRIDGE_PROCESSING_EMPTY_TEXT", DEFAULT_PROCESSING_EMPTY_TEXT)
+
+
+def send_processing_card(details: dict[str, Any], text: str) -> str | None:
+    """Send a footer-less '正在处理' placeholder card as a reply to the user's message.
+    Returns the placeholder message_id, or None if any prerequisite/step fails
+    (best-effort: a failure here must never affect the real answer)."""
+    if not feishu_app_credentials()[0]:
+        return None
+    try:
+        auth_token = feishu_tenant_access_token()
+    except Exception as exc:
+        log_line(f"processing card: token error: {exc}")
+        return None
+    if not auth_token:
+        return None
+    try:
+        card = build_feishu_card([("text", text)], footer="")
+        return feishu_send_interactive_message(details, feishu_message_id(details), card, auth_token) or None
+    except Exception as exc:
+        log_line(f"processing card send failed: {exc}")
+        return None
+
+
 def lane_batch_key(metadata: dict[str, Any]) -> str:
     peer_id = metadata.get("peer_id")
     if not peer_id:
@@ -2196,7 +2293,7 @@ def build_feishu_card(segments: list[tuple[str, str]], footer: str = "") -> dict
             elements.append({"tag": "div", "text": {"tag": "lark_md", "content": _lark_md(value)}})
     if footer.strip():
         elements.append({"tag": "note", "elements": [{"tag": "plain_text", "content": footer.strip()}]})
-    return {"config": {"wide_screen_mode": True}, "elements": elements}
+    return {"config": {"wide_screen_mode": True, "update_multi": True}, "elements": elements}
 
 
 PROJECT_SLUG_RE = re.compile(r"/g/g-p-[0-9a-f]+-([^/?#]+)")
@@ -2326,7 +2423,7 @@ def deliver_feishu_media(reply: str, details: dict[str, Any]) -> str:
         return visible_media_fallback(body, urls)
     try:
         card = build_feishu_card(resolved, footer=format_card_footer(details))
-        feishu_send_interactive_message(details, feishu_message_id(details), card, auth_token)
+        feishu_put_card(details, card, auth_token)
         return NO_REPLY
     except Exception as exc:
         log_line(f"feishu card delivery failed: {exc}")
@@ -2357,10 +2454,30 @@ def deliver_feishu_text_card(reply: str, details: dict[str, Any]) -> str:
         return reply
     try:
         card = build_feishu_card([("text", reply)], footer=footer)
-        feishu_send_interactive_message(details, feishu_message_id(details), card, auth_token)
+        feishu_put_card(details, card, auth_token)
         return NO_REPLY
     except Exception as exc:
         log_line(f"feishu text card delivery failed: {exc}")
+        return reply
+
+
+def finalize_placeholder(reply: str, details: dict[str, Any]) -> str:
+    """Guarantee a sent processing-card placeholder is always resolved. If the
+    delivery chain already patched it, ``reply`` is NO_REPLY and this is a no-op.
+    Otherwise patch the placeholder with the final text (or an empty-reply fallback)
+    so it never stays stuck on '正在处理'. Best-effort: patch failure leaves ``reply``
+    to be emitted the normal way."""
+    placeholder_id = details.get("feishu_placeholder_msg_id")
+    if not placeholder_id or reply == NO_REPLY:
+        return reply
+    text = (reply or "").strip() or processing_empty_fallback_text()
+    try:
+        auth_token = feishu_tenant_access_token()
+        card = build_feishu_card([("text", text)], footer=format_card_footer(details))
+        feishu_patch_card(placeholder_id, card, auth_token)
+        return NO_REPLY
+    except Exception as exc:
+        log_line(f"feishu placeholder finalize failed: {exc}")
         return reply
 
 
@@ -2435,6 +2552,7 @@ def build_reply(body: dict[str, Any]) -> str:
     if not webdock_configured():
         return f"已收到你的微信消息：{user_text}" if user_text else "已收到你的微信消息。"
     details = request_details(body)  # peer_id/channel for chain_result tracing
+    write_details = details  # defensive: except branches reference it before reassignment
     started = time.monotonic()
     try:
         if details.get("metadata", {}).get("channel") == "feishu" and not feishu_should_send_chatgpt(details):
@@ -2446,17 +2564,29 @@ def build_reply(body: dict[str, Any]) -> str:
             return NO_REPLY  # merged into a batch leader; the leader emits chain_result
         write_details = request_details(batched_body)
         write_details["request_id"] = details.get("request_id")
-        result = call_webdock(batched_body)
-        reply, response_metadata = unpack_webdock_result(result)
-        write_details["webdock_footer"] = dict(getattr(result, "footer", None) or {})
-        if response_metadata:
-            write_details.setdefault("metadata", {}).update(response_metadata)
-        reply = deliver_feishu_files(reply, write_details)
-        reply = deliver_feishu_media(reply, write_details)
-        reply = deliver_feishu_text_card(reply, write_details)
-        trace_chain_result(details, started, reply=reply)
-        append_feishu_session_console_records_async(write_details, reply, "已回复")
-        return reply
+        lane_key = lane_batch_key(write_details.get("metadata") or {})
+        is_overlap = _enter_inflight(lane_key)
+        try:
+            if write_details.get("metadata", {}).get("channel") == "feishu" and processing_card_enabled():
+                # Placeholder is best-effort; a failure here must never block the answer.
+                text = processing_remind_text() if is_overlap else processing_ack_text()
+                placeholder_id = send_processing_card(write_details, text)
+                if placeholder_id:
+                    write_details["feishu_placeholder_msg_id"] = placeholder_id
+            result = call_webdock(batched_body)
+            reply, response_metadata = unpack_webdock_result(result)
+            write_details["webdock_footer"] = dict(getattr(result, "footer", None) or {})
+            if response_metadata:
+                write_details.setdefault("metadata", {}).update(response_metadata)
+            reply = deliver_feishu_files(reply, write_details)
+            reply = deliver_feishu_media(reply, write_details)
+            reply = deliver_feishu_text_card(reply, write_details)
+            reply = finalize_placeholder(reply, write_details)
+            trace_chain_result(details, started, reply=reply)
+            append_feishu_session_console_records_async(write_details, reply, "已回复")
+            return reply
+        finally:
+            _exit_inflight(lane_key)
     except urllib.error.HTTPError as exc:
         if exc.code == 429:
             reply = diagnostic_message(
@@ -2473,6 +2603,7 @@ def build_reply(body: dict[str, Any]) -> str:
                 f"bridge -> WebDock 已联通；WebDock 返回 HTTP {exc.code}: {parse_http_error_message(exc)}",
                 "WebDock API",
             )
+        reply = finalize_placeholder(reply, write_details)
         trace_chain_result(details, started, http_code=exc.code)
         append_feishu_session_console_records_async(details, reply, "失败")
         return reply
@@ -2493,6 +2624,7 @@ def build_reply(body: dict[str, Any]) -> str:
                 f"bridge -> WebDock 未联通或连接失败：{exc}",
                 "ECS tunnel or WebDock API",
             )
+        reply = finalize_placeholder(reply, write_details)
         trace_chain_result(details, started, error=exc)
         append_feishu_session_console_records_async(details, reply, "失败")
         return reply
