@@ -2340,3 +2340,37 @@ def test_feishu_patch_card_calls_patch_endpoint(monkeypatch):
     assert captured["method"] == "PATCH"
     assert captured["auth"] == "tok"
     assert json.loads(captured["payload"]["content"]) == {"config": {}, "elements": []}
+
+
+def test_feishu_put_card_patches_when_placeholder_present(monkeypatch):
+    bridge = load_bridge()
+    calls = []
+    monkeypatch.setattr(bridge, "feishu_patch_card", lambda mid, card, tok: calls.append(("patch", mid)))
+    monkeypatch.setattr(bridge, "feishu_send_interactive_message", lambda d, mid, card, tok: calls.append(("send", mid)) or "om_new")
+    details = {"metadata": {"channel": "feishu", "message_id": "om_user"}, "feishu_placeholder_msg_id": "om_ph"}
+    bridge.feishu_put_card(details, {"config": {}, "elements": []}, "tok")
+    assert calls == [("patch", "om_ph")]
+
+
+def test_feishu_put_card_sends_when_no_placeholder(monkeypatch):
+    bridge = load_bridge()
+    calls = []
+    monkeypatch.setattr(bridge, "feishu_patch_card", lambda mid, card, tok: calls.append(("patch", mid)))
+    monkeypatch.setattr(bridge, "feishu_send_interactive_message", lambda d, mid, card, tok: calls.append(("send", mid)) or "om_new")
+    details = {"metadata": {"channel": "feishu", "message_id": "om_user"}}
+    bridge.feishu_put_card(details, {"config": {}, "elements": []}, "tok")
+    assert calls == [("send", "om_user")]
+
+
+def test_feishu_put_card_falls_back_to_send_when_patch_fails(monkeypatch):
+    bridge = load_bridge()
+    calls = []
+
+    def boom(mid, card, tok):
+        raise RuntimeError("patch 429")
+
+    monkeypatch.setattr(bridge, "feishu_patch_card", boom)
+    monkeypatch.setattr(bridge, "feishu_send_interactive_message", lambda d, mid, card, tok: calls.append(("send", mid)) or "om_new")
+    details = {"metadata": {"channel": "feishu", "message_id": "om_user"}, "feishu_placeholder_msg_id": "om_ph"}
+    bridge.feishu_put_card(details, {"config": {}, "elements": []}, "tok")
+    assert calls == [("send", "om_user")]

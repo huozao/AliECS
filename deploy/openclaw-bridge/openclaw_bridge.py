@@ -1123,6 +1123,20 @@ def feishu_patch_card(message_id: str, card: dict[str, Any], auth_token: str) ->
     )
 
 
+def feishu_put_card(details: dict[str, Any], card: dict[str, Any], auth_token: str) -> None:
+    """Deliver a card: patch the pending processing-card placeholder if one exists,
+    otherwise send a fresh reply. Patch failure degrades to a fresh reply so the
+    answer is never lost."""
+    placeholder_id = details.get("feishu_placeholder_msg_id")
+    if placeholder_id:
+        try:
+            feishu_patch_card(placeholder_id, card, auth_token)
+            return
+        except Exception as exc:
+            log_line(f"feishu card patch failed, sending new reply: {exc}")
+    feishu_send_interactive_message(details, feishu_message_id(details), card, auth_token)
+
+
 def fetch_outbound_file_bytes(url: str) -> bytes:
     """Fetch a file referenced by a FILE marker. WebDock ``/media/<token>`` URLs are
     pulled over the internal WebDock base (reverse tunnel) rather than the public
@@ -2339,7 +2353,7 @@ def deliver_feishu_media(reply: str, details: dict[str, Any]) -> str:
         return visible_media_fallback(body, urls)
     try:
         card = build_feishu_card(resolved, footer=format_card_footer(details))
-        feishu_send_interactive_message(details, feishu_message_id(details), card, auth_token)
+        feishu_put_card(details, card, auth_token)
         return NO_REPLY
     except Exception as exc:
         log_line(f"feishu card delivery failed: {exc}")
@@ -2370,7 +2384,7 @@ def deliver_feishu_text_card(reply: str, details: dict[str, Any]) -> str:
         return reply
     try:
         card = build_feishu_card([("text", reply)], footer=footer)
-        feishu_send_interactive_message(details, feishu_message_id(details), card, auth_token)
+        feishu_put_card(details, card, auth_token)
         return NO_REPLY
     except Exception as exc:
         log_line(f"feishu text card delivery failed: {exc}")
