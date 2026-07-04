@@ -2634,6 +2634,7 @@ def test_ensure_rule_record_creates_with_new_fields(monkeypatch):
     bridge = load_bridge()
     monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
     monkeypatch.setattr(bridge, "find_feishu_bitable_record", lambda t, f, e: None)
+    monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields", lambda t, names: None)
     captured = {}
     monkeypatch.setattr(bridge, "create_feishu_bitable_record",
                         lambda t, fields: captured.update(fields=fields) or {"data": {"record": {"record_id": "r1"}}})
@@ -2643,17 +2644,45 @@ def test_ensure_rule_record_creates_with_new_fields(monkeypatch):
     assert captured["fields"]["调试尾注"] is True
 
 
+def test_ensure_rule_record_creates_missing_columns_before_create(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record", lambda t, f, e: None)
+    monkeypatch.setattr(bridge, "create_feishu_bitable_record",
+                        lambda t, fields: {"data": {"record": {"record_id": "r1"}}})
+    monkeypatch.setattr(bridge, "bitable_created_record_id", lambda r: "r1")
+    ensured = []
+    monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields",
+                        lambda t, names: ensured.append((t, list(names))))
+    bridge.ensure_feishu_default_rule_record()
+    assert ensured == [("tbl_rule", ["处理中卡片", "调试尾注"])]
+
+
 def test_ensure_rule_record_backfills_missing_fields(monkeypatch):
     bridge = load_bridge()
     monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
     monkeypatch.setattr(bridge, "find_feishu_bitable_record",
                         lambda t, f, e: {"record_id": "r1", "fields": {"规则编号": "global-default"}})
+    monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields", lambda t, names: None)
     updated = {}
     monkeypatch.setattr(bridge, "update_feishu_bitable_record",
                         lambda t, rid, fields: updated.update(rid=rid, fields=fields))
     bridge.ensure_feishu_default_rule_record()
     assert updated["rid"] == "r1"
     assert updated["fields"] == {"处理中卡片": True, "调试尾注": True}
+
+
+def test_ensure_rule_record_creates_missing_columns_before_backfill(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record",
+                        lambda t, f, e: {"record_id": "r1", "fields": {"处理中卡片": False}})
+    monkeypatch.setattr(bridge, "update_feishu_bitable_record", lambda t, rid, fields: None)
+    ensured = []
+    monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields",
+                        lambda t, names: ensured.append((t, list(names))))
+    bridge.ensure_feishu_default_rule_record()
+    assert ensured == [("tbl_rule", ["调试尾注"])]   # only the actually-missing key
 
 
 def test_ensure_rule_record_no_update_when_present(monkeypatch):
@@ -2664,8 +2693,52 @@ def test_ensure_rule_record_no_update_when_present(monkeypatch):
     called = []
     monkeypatch.setattr(bridge, "update_feishu_bitable_record",
                         lambda t, rid, fields: called.append(1))
+    ensure_called = []
+    monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields",
+                        lambda t, names: ensure_called.append(1))
     bridge.ensure_feishu_default_rule_record()
     assert called == []   # both fields already present -> no backfill (don't overwrite)
+    assert ensure_called == []   # nothing missing -> no need to touch table schema
+
+
+def test_ensure_feishu_bitable_fields_creates_missing_only(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "list_feishu_bitable_fields",
+                        lambda t: [{"field_name": "处理中卡片"}])
+    created = []
+    monkeypatch.setattr(bridge, "create_feishu_bitable_field",
+                        lambda t, name, field_type=7: created.append((t, name, field_type)))
+    bridge.ensure_feishu_bitable_fields("tbl_rule", ["处理中卡片", "调试尾注"])
+    assert created == [("tbl_rule", "调试尾注", 7)]   # existing field skipped, missing one created
+
+
+def test_ensure_feishu_bitable_fields_noop_when_table_id_empty(monkeypatch):
+    bridge = load_bridge()
+    called = []
+    monkeypatch.setattr(bridge, "list_feishu_bitable_fields", lambda t: called.append(1) or [])
+    bridge.ensure_feishu_bitable_fields("", ["调试尾注"])
+    assert called == []
+
+
+def test_ensure_feishu_bitable_fields_list_failure_is_best_effort(monkeypatch):
+    bridge = load_bridge()
+    def boom(t):
+        raise RuntimeError("bitable down")
+    monkeypatch.setattr(bridge, "list_feishu_bitable_fields", boom)
+    created = []
+    monkeypatch.setattr(bridge, "create_feishu_bitable_field",
+                        lambda t, name, field_type=7: created.append(name))
+    bridge.ensure_feishu_bitable_fields("tbl_rule", ["调试尾注"])   # must not raise
+    assert created == []   # can't tell what's missing -> skip creating, don't guess
+
+
+def test_ensure_feishu_bitable_fields_create_failure_is_best_effort(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "list_feishu_bitable_fields", lambda t: [])
+    def boom(t, name, field_type=7):
+        raise RuntimeError("permission denied")
+    monkeypatch.setattr(bridge, "create_feishu_bitable_field", boom)
+    bridge.ensure_feishu_bitable_fields("tbl_rule", ["处理中卡片", "调试尾注"])   # must not raise
 
 
 def test_build_feishu_trailer_done_marker_when_off(monkeypatch):

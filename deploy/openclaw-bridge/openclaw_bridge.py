@@ -1205,6 +1205,54 @@ def list_feishu_bitable_records(table_id: str) -> list[dict[str, Any]]:
     return records
 
 
+FEISHU_BITABLE_FIELD_TYPE_CHECKBOX = 7
+
+
+def list_feishu_bitable_fields(table_id: str) -> list[dict[str, Any]]:
+    app_token = feishu_session_console_app_token()
+    if not app_token or not table_id:
+        return []
+    data = feishu_get_json(
+        f"/bitable/v1/apps/{urllib.parse.quote(app_token)}/tables/{urllib.parse.quote(table_id)}/fields?page_size=100"
+    )
+    return (data.get("data") or {}).get("items") or []
+
+
+def create_feishu_bitable_field(
+    table_id: str, field_name: str, field_type: int = FEISHU_BITABLE_FIELD_TYPE_CHECKBOX
+) -> dict[str, Any]:
+    app_token = feishu_session_console_app_token()
+    if not app_token or not table_id:
+        return {}
+    return feishu_post_json(
+        f"/bitable/v1/apps/{urllib.parse.quote(app_token)}/tables/{urllib.parse.quote(table_id)}/fields",
+        {"field_name": field_name, "type": field_type},
+    )
+
+
+def ensure_feishu_bitable_fields(table_id: str, field_names: list[str]) -> None:
+    """Best-effort: create any bitable columns that don't exist yet, so a later
+    write to those field names doesn't fail with FieldNameNotFound (unlike
+    WeCom smartsheets, Feishu Bitable requires a column to exist before a
+    record write can set its value). Any failure (permission, API error, or
+    being unable to list existing fields) is logged and skipped — never
+    raises, matching the best-effort contract of its callers."""
+    if not table_id or not field_names:
+        return
+    try:
+        existing = {str(field.get("field_name") or "") for field in list_feishu_bitable_fields(table_id)}
+    except Exception as exc:
+        log_line(f"list_feishu_bitable_fields failed: {exc}")
+        return
+    for name in field_names:
+        if name in existing:
+            continue
+        try:
+            create_feishu_bitable_field(table_id, name)
+        except Exception as exc:
+            log_line(f"create_feishu_bitable_field({name}) failed: {exc}")
+
+
 def bitable_url_value(url: str) -> dict[str, str]:
     return {"text": url, "link": url}
 
@@ -1298,10 +1346,12 @@ def ensure_feishu_default_rule_record() -> str:
         missing = {k: True for k in ("处理中卡片", "调试尾注") if k not in current}
         if missing and record_id:
             try:
+                ensure_feishu_bitable_fields(table_id, list(missing))
                 update_feishu_bitable_record(table_id, record_id, missing)
             except Exception as exc:
                 log_line(f"ensure_rule_record backfill failed: {exc}")
         return record_id
+    ensure_feishu_bitable_fields(table_id, ["处理中卡片", "调试尾注"])
     fields = {
         "规则编号": "global-default",
         "规则名称": "默认飞书会话规则",
