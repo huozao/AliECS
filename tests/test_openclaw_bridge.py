@@ -2722,7 +2722,9 @@ def test_processing_ack_text_new_default(monkeypatch):
 def test_processing_remind_text_new_default(monkeypatch):
     bridge = load_bridge()
     monkeypatch.delenv("OPENCLAW_BRIDGE_PROCESSING_REMIND_TEXT", raising=False)
-    assert "已排队" in bridge.processing_remind_text()
+    text = bridge.processing_remind_text()
+    assert "已排队" in text
+    assert "拖慢每一条" in text
 
 
 def test_processing_ack_text_env_override_still_wins(monkeypatch):
