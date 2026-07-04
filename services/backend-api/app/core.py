@@ -215,6 +215,15 @@ def _bootstrap_admin_if_needed() -> None:
             password = os.getenv("ADMIN_BOOTSTRAP_PASSWORD", "admin123")
             display_name = os.getenv("ADMIN_BOOTSTRAP_DISPLAY_NAME", "系统管理员")
 
+            # 生产禁止用弱/默认口令播种首个管理员：若 users 表在生产被清空触发重建，
+            # 绝不能落一个 admin/admin123 的可登录账号。dev/测试保留默认便于起步。
+            if os.getenv("ENV", "dev") == "prod":
+                if not os.getenv("ADMIN_BOOTSTRAP_PASSWORD") or password in {"admin123", "replace_with_secure_password"}:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="ADMIN_BOOTSTRAP_PASSWORD must be set to a strong value in production",
+                    )
+
             cur.execute(
                 """
                 INSERT INTO users(username, display_name, password_hash, is_admin, status)
