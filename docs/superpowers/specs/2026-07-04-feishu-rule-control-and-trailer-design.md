@@ -2,7 +2,7 @@
 
 日期：2026-07-04
 状态：设计稿（已评审通过，待写实现计划）
-范围：`AliECS/deploy/openclaw-bridge/openclaw_bridge.py`（bridge，单文件为主）+ `AliECS/deploy/openclaw-bridge/compose.bridge.yml`（1 行）
+范围：`AliECS/deploy/openclaw-bridge/openclaw_bridge.py`（bridge，单文件，走 AliECS PR）+ **infra 仓** `infra/server/compose.bridge.yml`（1 行，独立小改，可选）
 关联：延续 [[feishu-processing-card-plan]]（占位卡已上线，开关 ON）。本设计解决占位卡上线后暴露的「空泡」观感问题，并把飞书运行时开关收进多维表。
 
 ## 1. 背景与要解决的问题
@@ -114,13 +114,15 @@ if (write_details.get("metadata") or {}).get("channel") == "feishu" and reply ==
 
 env 覆盖键不变：`OPENCLAW_BRIDGE_PROCESSING_ACK_TEXT` / `..._REMIND_TEXT`。
 
-### 4.4 compose 附带改动（为尾注显示 tag）
+### 4.4 compose 附带改动（infra 仓，可选，为尾注显示 tag）
 
-`compose.bridge.yml` 的 `environment:` 块加一行：
+⚠️ `compose.bridge.yml` **在 infra 仓**（`infra/server/compose.bridge.yml`），不在 AliECS。这是一个独立的小改，**可选**：`build_feishu_trailer` 读不到 `OPENCLAW_BRIDGE_TAG` 时优雅降级为 `bridge=unknown`，不报错、不阻断。
+
+infra 仓 `compose.bridge.yml` 的 `environment:` 块加一行让 bridge 进程读到自己运行标签：
 ```yaml
       OPENCLAW_BRIDGE_TAG: ${OPENCLAW_BRIDGE_TAG:-unknown}
 ```
-让 bridge 进程能读到自己的运行标签。缺失时尾注显示 `bridge=unknown`（不报错）。
+此改动**不进 AliECS PR**，作为部署收尾在 infra 仓单独提交（推三 remote），随下次 bridge cutover 生效。AliECS 侧代码对该 env 缺失完全容错。
 
 ## 5. 数据流（一条飞书回复，处理中卡片+调试尾注 均 ON）
 
