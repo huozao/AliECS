@@ -2675,6 +2675,8 @@ def build_reply(body: dict[str, Any]) -> str:
             reply = deliver_feishu_media(reply, write_details)
             reply = deliver_feishu_text_card(reply, write_details)
             reply = finalize_placeholder(reply, write_details)
+            if (write_details.get("metadata") or {}).get("channel") == "feishu" and reply == NO_REPLY:
+                reply = build_feishu_trailer(write_details)
             trace_chain_result(details, started, reply=reply)
             append_feishu_session_console_records_async(write_details, reply, "已回复")
             return reply

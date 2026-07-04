@@ -2456,8 +2456,9 @@ def test_build_reply_sends_placeholder_then_patches_answer(monkeypatch):
                         lambda mid, card, tok: events.append(("patch", mid)))
     monkeypatch.setattr(bridge, "feishu_send_interactive_message",
                         lambda d, mid, card, tok: events.append(("send", mid)) or "om_x")
+    monkeypatch.setattr(bridge, "build_feishu_trailer", lambda details: "TRAILER")
     out = bridge.build_reply(_feishu_body("成都天气"))
-    assert out == bridge.NO_REPLY                      # 卡片已自投递
+    assert out == "TRAILER"                             # 卡片已自投递, NO_REPLY 换成尾注
     assert ("placeholder", bridge.processing_ack_text()) in events
     assert ("patch", "om_ph") in events               # 占位被就地更新成答案
     assert not any(e[0] == "send" for e in events)    # 没有第二条新消息
@@ -2503,8 +2504,9 @@ def test_build_reply_patches_placeholder_with_fallback_on_empty(monkeypatch):
     patched = {}
     monkeypatch.setattr(bridge, "feishu_patch_card",
                         lambda mid, card, tok: patched.update(mid=mid, card=card))
+    monkeypatch.setattr(bridge, "build_feishu_trailer", lambda details: "TRAILER")
     out = bridge.build_reply(_feishu_body("空返回场景"))
-    assert out == bridge.NO_REPLY
+    assert out == "TRAILER"                             # NO_REPLY 换成尾注
     assert patched["mid"] == "om_ph"
     assert bridge.processing_empty_fallback_text() in json.dumps(patched["card"], ensure_ascii=False)
 
@@ -2521,6 +2523,35 @@ def test_build_reply_no_placeholder_when_flag_off(monkeypatch):
     monkeypatch.setattr(bridge, "call_webdock", lambda body: bridge.WebDockResult("ans", {}))
     bridge.build_reply(_feishu_body("关开关"))
     assert called == []                                 # 开关关: 不发占位
+
+
+def test_build_reply_replaces_no_reply_with_trailer_on_feishu(monkeypatch):
+    bridge = load_bridge()
+    _enable_processing(monkeypatch)
+    monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("app", "sec"))
+    monkeypatch.setattr(bridge, "feishu_tenant_access_token", lambda: "tok")
+    monkeypatch.setattr(bridge, "send_processing_card", lambda d, t: "om_ph")
+    monkeypatch.setattr(bridge, "call_webdock", lambda body: bridge.WebDockResult("答案", {}))
+    monkeypatch.setattr(bridge, "feishu_patch_card", lambda mid, card, tok: None)  # patch ok -> NO_REPLY
+    monkeypatch.setattr(bridge, "build_feishu_trailer", lambda details: "TRAILER")
+    out = bridge.build_reply(_feishu_body("天气"))
+    assert out == "TRAILER"              # NO_REPLY success exit replaced by trailer
+
+
+def test_build_reply_no_trailer_when_reply_is_text(monkeypatch):
+    bridge = load_bridge()
+    _enable_processing(monkeypatch)
+    monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("app", "sec"))
+    monkeypatch.setattr(bridge, "feishu_tenant_access_token", lambda: "tok")
+    monkeypatch.setattr(bridge, "send_processing_card", lambda d, t: None)   # no placeholder
+    monkeypatch.setattr(bridge, "call_webdock", lambda body: bridge.WebDockResult("答案", {}))
+    # No footer -> deliver_feishu_text_card returns the raw reply (not NO_REPLY)
+    monkeypatch.setattr(bridge, "format_card_footer", lambda details: "")
+    called = []
+    monkeypatch.setattr(bridge, "build_feishu_trailer", lambda details: called.append(1) or "TRAILER")
+    out = bridge.build_reply(_feishu_body("天气"))
+    assert out == "答案"                 # text reply passes through
+    assert called == []                  # trailer NOT applied when reply != NO_REPLY
 
 
 def test_feishu_global_rule_policy_falls_back_to_env_without_table(monkeypatch):
