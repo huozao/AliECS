@@ -2635,3 +2635,46 @@ def test_ensure_rule_record_no_update_when_present(monkeypatch):
                         lambda t, rid, fields: called.append(1))
     bridge.ensure_feishu_default_rule_record()
     assert called == []   # both fields already present -> no backfill (don't overwrite)
+
+
+def test_build_feishu_trailer_done_marker_when_off(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "debug_trailer_enabled", lambda: False)
+    assert bridge.build_feishu_trailer({"metadata": {"channel": "feishu"}}) == "🌿 回复完毕"
+
+
+def test_build_feishu_trailer_done_marker_env_override(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "debug_trailer_enabled", lambda: False)
+    monkeypatch.setenv("OPENCLAW_BRIDGE_DONE_MARKER", "· 已送达 ·")
+    assert bridge.build_feishu_trailer({"metadata": {"channel": "feishu"}}) == "· 已送达 ·"
+
+
+def test_build_feishu_trailer_diagnostic_when_on(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "debug_trailer_enabled", lambda: True)
+    monkeypatch.setenv("OPENCLAW_BRIDGE_TAG", "V20260703218")
+    monkeypatch.setenv("WEB_DOCK_MODEL", "browser-chatgpt")
+    details = {
+        "request_id": "8da08f41",
+        "feishu_placeholder_msg_id": "om_ph",
+        "metadata": {"channel": "feishu", "peer_id": "oc_b39",
+                     "chatgpt_conversation_url": "https://chatgpt.com/g/g-p/c/abc123"},
+    }
+    out = bridge.build_feishu_trailer(details)
+    assert out.startswith("🔧")
+    assert "bridge=V20260703218" in out
+    assert "req=8da08f41" in out
+    assert "conv=abc123" in out          # tail segment only
+    assert "model=browser-chatgpt" in out
+    assert "patched=yes" in out
+    assert "lane=feishu:oc_b39" in out
+
+
+def test_build_feishu_trailer_tag_unknown_when_missing(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "debug_trailer_enabled", lambda: True)
+    monkeypatch.delenv("OPENCLAW_BRIDGE_TAG", raising=False)
+    out = bridge.build_feishu_trailer({"request_id": "r", "metadata": {"channel": "feishu"}})
+    assert "bridge=unknown" in out
+    assert "patched=no" in out           # no placeholder id

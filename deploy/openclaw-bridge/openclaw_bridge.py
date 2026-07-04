@@ -2167,6 +2167,39 @@ def lane_batch_key(metadata: dict[str, Any]) -> str:
     )
 
 
+DEFAULT_DONE_MARKER = "🌿 回复完毕"
+
+
+def done_marker_text() -> str:
+    return os.getenv("OPENCLAW_BRIDGE_DONE_MARKER", DEFAULT_DONE_MARKER)
+
+
+def build_feishu_trailer(details: dict[str, Any]) -> str:
+    """Content for OpenClaw's mandatory final-reply bubble (posted after the bridge's
+    card). Debug-trailer ON -> a one-line link diagnostic; OFF -> a calm done marker.
+    Never raises: any failure degrades to the done marker."""
+    if not debug_trailer_enabled():
+        return done_marker_text()
+    try:
+        metadata = details.get("metadata") or {}
+        lane = lane_batch_key(metadata)
+        busy = _inflight_counts.get(lane, 0)
+        conv = str(metadata.get("chatgpt_conversation_url") or "")
+        conv_tail = conv.rsplit("/", 1)[-1] if conv else "-"
+        req = str(details.get("request_id") or "-")
+        tag = os.getenv("OPENCLAW_BRIDGE_TAG") or "unknown"
+        patched = "yes" if details.get("feishu_placeholder_msg_id") else "no"
+        model = os.getenv("WEB_DOCK_MODEL", "browser-chatgpt")
+        return (
+            f"🔧 bridge={tag} req={req} conv={conv_tail} | "
+            f"busy={busy} lane={lane or '-'} | "
+            f"model={model} timeout={webdock_timeout()}s patched={patched}"
+        )
+    except Exception as exc:
+        log_line(f"feishu trailer build failed: {exc}")
+        return done_marker_text()
+
+
 def maybe_batch_request(body: dict[str, Any]) -> dict[str, Any] | str:
     details = request_details(body)
     wait_seconds = bridge_batch_seconds(details)
