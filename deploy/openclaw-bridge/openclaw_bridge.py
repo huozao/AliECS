@@ -1293,7 +1293,15 @@ def ensure_feishu_default_rule_record() -> str:
         return ""
     existing = find_feishu_bitable_record(table_id, "规则编号", "global-default")
     if existing:
-        return str(existing.get("record_id") or "")
+        record_id = str(existing.get("record_id") or "")
+        current = existing.get("fields") or {}
+        missing = {k: True for k in ("处理中卡片", "调试尾注") if k not in current}
+        if missing and record_id:
+            try:
+                update_feishu_bitable_record(table_id, record_id, missing)
+            except Exception as exc:
+                log_line(f"ensure_rule_record backfill failed: {exc}")
+        return record_id
     fields = {
         "规则编号": "global-default",
         "规则名称": "默认飞书会话规则",
@@ -1306,6 +1314,8 @@ def ensure_feishu_default_rule_record() -> str:
         "是否需要审核": False,
         "每日最大请求数": 0,
         "敏感群标记": False,
+        "处理中卡片": True,
+        "调试尾注": True,
         "备注": "openclaw-bridge 自动维护",
     }
     return bitable_created_record_id(create_feishu_bitable_record(table_id, fields))

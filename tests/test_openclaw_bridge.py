@@ -2597,3 +2597,41 @@ def test_invalidate_endpoint_also_clears_global_rule_cache(monkeypatch):
 
     assert captured["status"] == 200
     assert bridge._feishu_global_rule_cache == {}
+
+
+def test_ensure_rule_record_creates_with_new_fields(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record", lambda t, f, e: None)
+    captured = {}
+    monkeypatch.setattr(bridge, "create_feishu_bitable_record",
+                        lambda t, fields: captured.update(fields=fields) or {"data": {"record": {"record_id": "r1"}}})
+    monkeypatch.setattr(bridge, "bitable_created_record_id", lambda r: "r1")
+    bridge.ensure_feishu_default_rule_record()
+    assert captured["fields"]["处理中卡片"] is True
+    assert captured["fields"]["调试尾注"] is True
+
+
+def test_ensure_rule_record_backfills_missing_fields(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record",
+                        lambda t, f, e: {"record_id": "r1", "fields": {"规则编号": "global-default"}})
+    updated = {}
+    monkeypatch.setattr(bridge, "update_feishu_bitable_record",
+                        lambda t, rid, fields: updated.update(rid=rid, fields=fields))
+    bridge.ensure_feishu_default_rule_record()
+    assert updated["rid"] == "r1"
+    assert updated["fields"] == {"处理中卡片": True, "调试尾注": True}
+
+
+def test_ensure_rule_record_no_update_when_present(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record",
+                        lambda t, f, e: {"record_id": "r1", "fields": {"处理中卡片": False, "调试尾注": True}})
+    called = []
+    monkeypatch.setattr(bridge, "update_feishu_bitable_record",
+                        lambda t, rid, fields: called.append(1))
+    bridge.ensure_feishu_default_rule_record()
+    assert called == []   # both fields already present -> no backfill (don't overwrite)
