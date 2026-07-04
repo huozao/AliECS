@@ -44,6 +44,7 @@ bridge/openclaw 容器
 - 运行容器：backend-api / public-web / admin-ui / doc-sync-worker / tplus-sync-worker / mcp-coding-server（同一 V-tag，来自 AliECS release）、postgres:16、`openclaw-bridge`（独立 V-tag，手动 cutover）、openclaw 网关（上游官方镜像，配置在主机 `/root/.openclaw`，不进 git，restic 备份）、sing-box。
 - 主机层：nginx（配置入 infra 仓库；**MCP OAuth 的 `/.well-known/*` 路由是手工加的，重建会丢**）、三个隧道代理 systemd 服务（webdock-failover-proxy、webdock-tunnel-proxy、immich-tunnel-proxy，脚本在 `/opt/aliecs/`）。
 - 隧道端口（127.0.0.1）：11811←webdock1 主、11810←webdock2 备、12283←webdock1 Immich、18015/18016←webdock1 AdventureLog，另有 Gokapi/Authentik 隧道（端口见 webdock1 各 unit 的 env）。
+- 远程控制台（2026-07-04，`https://hydwang.xyz/console/`）：nginx `/console/*` 七路 location（认证=Authelia `two_factor` + lldap `console_admins` 组，成对 deny 兜底；**VNC 层免密设计**，2FA 是唯一闸门）；本机组件 ttyd 7681（unit `ttyd-console`，⚠️ apt 自带 `ttyd.service` 抢端口须 disable）、webtop 3000 按需启停（`/opt/aliecs/aliecs-temp-desktop.sh`，2G 内存用完必须 stop）；ECS `authorized_keys` permitlisten 新增四条 160xx（16080/16081←webdock1、16090/16091←webdock2，与生产 118xx 隔离）。详见 infra `console/README.md`。
 - 部署：push AliECS main → release-deploy 自动构建部署业务镜像；bridge 镜像同流程构建但 **cutover 永远手动**（改 `/root/infra/server/.env` 的 `OPENCLAW_BRIDGE_TAG`，先 `docker rm -f openclaw-bridge` 再 compose up）。
 - 排障：`docker ps`、bridge 日志 `docker logs openclaw-bridge`、部署尖峰时 health 告警多为瞬时（2G 内存超卖）。
 
@@ -52,6 +53,7 @@ bridge/openclaw 容器
 - 别名：旧电脑；ssh alias `webdock` / `webdock1` / `WebDock01`；tailscale/hostname `webdock-laptop`；用户 `webdock`。
 - 运行：`webdock` 容器（ghcr.io/huozao/webdock:sha-xxx）+ Chrome/ChatGPT 登录态（browser_data 卷，**登录必须人工做，红线**）、noVNC `http://100.97.176.57:6080/`、Immich(2283)、AdventureLog(8015/8016)、Gokapi、Authentik。
 - 反向隧道 unit（systemd）：`-R 11811`（webdock API，备）、`-R 12283`（Immich）、`-R 18015/18016`（AdventureLog）、Gokapi/Authentik（env 参数化）。
+- 远程控制台：x11vnc :5900（`-nopw`，回环）+ noVNC/websockify 6081（**只绑 Tailscale IP** 100.97.176.57）+ `console-ecs-tunnel`（`-R 16080`←容器 noVNC 6080、`-R 16081`←桌面 6081）；unit：`x11vnc-desktop` / `novnc-desktop` / `console-ecs-tunnel`；GDM 已切 Xorg（`WaylandEnable=false`，自动登录）。
 - 部署：拉新镜像 + `systemctl restart webdock`（卷不丢登录态）。webdock 仓库小改可直推 main（**直推前本地 pytest**，CI 不跑直推）。
 - 日志：消息存档 `/var/log/webdock/archive/<UTC日期>.jsonl`（收发全文+lane+status）；容器内 `/app/logs/`。
 - 验证：`ssh webdock1 'curl -fsS http://100.97.176.57:18000/healthz'`。
@@ -63,6 +65,7 @@ bridge/openclaw 容器
 - 结构：**SSH 登录进的是 Windows（PowerShell）**，WebDock 跑在 WSL2 发行版 `Ubuntu-24.04-WebDock` 内的 docker 里。Linux 命令一律 `ssh webdock2 "wsl -d Ubuntu-24.04-WebDock -- <cmd>"`。
 - 运行：仅 `webdock` 容器（与 webdock1 同镜像同 tag）。Immich / AdventureLog / Gokapi 暂不部署（按需再拉）。
 - 反向隧道：WSL 内 `-R 127.0.0.1:11810:127.0.0.1:18000`（主）。
+- 远程控制台：Windows TightVNC :5900 服务模式（`UseVncAuthentication=0` 免密，防火墙只放行 172.16.0.0/12+100.64.0.0/10，MSI 自建全放行规则已 Disable）+ WSL noVNC 6091（`novnc-desktop`，启动时动态解析 WSL 网关）+ WSL `console-ecs-tunnel`（`-R 16090`←容器 noVNC 6080、`-R 16091`←桌面 6091）。
 - noVNC：`http://100.67.38.52:6080/` 可用。⚠️ 已知怪癖：Tailscale 直连 `100.67.38.52:18000` 返回 502（Windows→WSL 端口转发问题），**生产链路不受影响**（隧道从 WSL 内 localhost 拉出）；从 ECS 探 `127.0.0.1:11810/healthz` 才是有效健康检查。
 - 日志：WSL 内 `/var/log/webdock/archive/`。
 
