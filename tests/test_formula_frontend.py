@@ -107,7 +107,8 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertIn('input[type="checkbox"],input[type="radio"]{width:16px', self.html)
 
     def test_compare_cell_shows_qty_primary_without_unit_and_ratio_secondary(self) -> None:
-        self.assertIn('<span class="ratio-main">${formatQty(cell.qty)}</span>', self.html)
+        self.assertIn("const mainText=state.view.qty?formatQty(cell.qty):ratio(cell.ratio);", self.html)
+        self.assertIn('<span class="ratio-main">${mainText}</span>', self.html)
         self.assertIn('<div class="qty-line">${ratio(cell.ratio)}</div>', self.html)
 
     def test_compare_cell_bar_is_flush_to_cell_edges(self) -> None:
@@ -151,11 +152,47 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertNotIn("设为目标版本", self.html)
         self.assertNotIn("最大占比", self.html)
 
-    def test_spec_column_can_be_toggled(self) -> None:
-        self.assertIn('id="toggleSpecBtn"', self.html)
-        self.assertIn("showSpec:true", self.html)
-        self.assertIn("${state.showSpec?'<th class=\"col-spec\">规格型号</th>':''}", self.html)
-        self.assertIn("state.showSpec=!state.showSpec", self.html)
+    def test_spec_column_toggled_via_view_menu(self) -> None:
+        self.assertIn('id="viewOptions"', self.html)
+        self.assertIn('data-view="spec"', self.html)
+        self.assertIn("${state.view.spec?'<th class=\"col-spec\">规格型号</th>':''}", self.html)
+        self.assertNotIn("toggleSpecBtn", self.html)
+
+    def test_toolbar_grouped_into_hover_dropdowns(self) -> None:
+        # 快速选择/下载/视图 三个悬浮下拉；筛选 pill 保持外露
+        self.assertIn(".dropdown:hover .drop-menu,.dropdown.open .drop-menu{display:block}", self.html)
+        for mode in ("all", "none", "invert", "default", "activeDefault"):
+            self.assertIn(f'data-quick-select="{mode}"', self.html)
+        self.assertIn("全不选", self.html)
+        self.assertIn("反选", self.html)
+        self.assertIn("只选默认BOM", self.html)
+        self.assertIn("function applyQuickSelect(", self.html)
+        self.assertIn('id="compareFilters"', self.html)
+
+    def test_download_menu_has_human_sheet_option(self) -> None:
+        self.assertIn("只下载「配方表_人眼版」", self.html)
+        self.assertIn('id="downloadHumanBtn"', self.html)
+        self.assertIn("?sheet=human", self.html)
+        self.assertIn("配方查询_人眼版_${state.fileId}.xlsx", self.html)
+
+    def test_view_options_persist_with_qty_pct_guard(self) -> None:
+        self.assertIn("const VIEW_KEY='formula_display_options';", self.html)
+        self.assertIn("const VIEW_DEFAULTS={spec:true,qty:true,pct:true,arrow:true,newTag:true,bar:true};", self.html)
+        self.assertIn("if(!state.view.qty&&!state.view.pct){", self.html)
+        self.assertIn("至少保留一项", self.html)
+        for key in ("spec", "qty", "pct", "arrow", "newTag", "bar"):
+            self.assertIn(f'data-view="{key}"', self.html)
+
+    def test_compare_excel_export_uses_scheme_b_layout(self) -> None:
+        # 方案B：状态分组排序、格内多行(mso-data-placement)、底色深浅、缺失「—」、差异统计
+        self.assertIn("br{mso-data-placement:same-cell;}", self.html)
+        self.assertIn("const EXPORT_ST_ORDER={replace:0,add:1,del:2,change:3,same:4,history:5};", self.html)
+        self.assertIn("function exportHeat(", self.html)
+        self.assertIn("配方比例对比表", self.html)
+        self.assertIn("差异统计", self.html)
+        self.assertIn('<td class="miss">—</td>', self.html)
+        self.assertIn("★ 基准", self.html)
+        self.assertNotIn("barBg", self.html)
 
     def test_version_card_shows_parent_name_on_top_without_label(self) -> None:
         self.assertIn('<div class="v-name" title="${escapeHtml(version.parentName)}">', self.html)
@@ -210,7 +247,7 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertIn("function downloadRawResult()", self.html)
         self.assertIn("/v1/recipes/download/${state.fileId}", self.html)
         self.assertIn("function downloadHtmlAsXls(", self.html)
-        self.assertIn("对比的配方_比例对比表", self.html)
+        self.assertIn("配方比例对比表_${filenamePart(queryInput.value.trim())}.xls", self.html)
         self.assertIn("application/vnd.ms-excel", self.html)
 
 

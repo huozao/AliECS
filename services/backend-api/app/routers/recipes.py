@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.core import _conn, require_login, require_permission
-from app.recipes.bom_query import calculate_recipe_costs, export_path_for_id, load_detail_from_workbook, locate_recipe_source, new_export_path, query_recipe_workbook, recipe_cost_export_filename, recipe_raw_export_filename, save_recipe_cost_workbook, save_recipe_workbook
+from app.recipes.bom_query import calculate_recipe_costs, export_path_for_id, load_detail_from_workbook, locate_recipe_source, new_export_path, query_recipe_workbook, recipe_cost_export_filename, recipe_raw_export_filename, save_recipe_cost_workbook, save_recipe_human_workbook, save_recipe_workbook
 from app.recipes.price_lookup import latest_purchase_prices, latest_sales_prices
 
 
@@ -265,10 +265,13 @@ def recipe_sync_bom(user: dict[str, Any] = Depends(require_login)) -> dict[str, 
 
 
 @router.get("/v1/recipes/download/{file_id}")
-def recipe_download(file_id: str, user: dict[str, Any] = Depends(require_login)) -> FileResponse:
+def recipe_download(file_id: str, sheet: str | None = None, user: dict[str, Any] = Depends(require_login)) -> FileResponse:
     require_permission("formula.read", user)
+    if sheet not in (None, "", "human"):
+        raise HTTPException(status_code=400, detail="不支持的 sheet 参数，目前仅支持 human。")
+    human_only = sheet == "human"
     try:
-        path = export_path_for_id(file_id)
+        path = export_path_for_id(file_id, variant="human" if human_only else "")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     context = _RECIPE_QUERY_CONTEXT.get(file_id)
@@ -283,10 +286,13 @@ def recipe_download(file_id: str, user: dict[str, Any] = Depends(require_login))
                 default_bom=context["default_bom"],
                 include_disabled=bool(context["include_disabled"]),
             )
-            save_recipe_workbook(path, result)
+            if human_only:
+                save_recipe_human_workbook(path, result)
+            else:
+                save_recipe_workbook(path, result)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"导出文件生成失败：{type(exc).__name__}") from exc
-    filename = recipe_raw_export_filename(str(context["query"]) if context else None)
+    filename = recipe_raw_export_filename(str(context["query"]) if context else None, human_only=human_only)
     return FileResponse(
         path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

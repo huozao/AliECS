@@ -232,10 +232,12 @@ def new_export_path() -> tuple[str, Path]:
     return file_id, recipe_export_dir() / f"{file_id}.xlsx"
 
 
-def export_path_for_id(file_id: str) -> Path:
+def export_path_for_id(file_id: str, *, variant: str = "") -> Path:
+    """variant 用于同一 file_id 的不同导出形态（如 human 单表版），与全量导出分开缓存。"""
     if not re.fullmatch(r"[a-f0-9]{32}", file_id):
         raise ValueError("invalid file id")
-    return recipe_export_dir() / f"{file_id}.xlsx"
+    suffix = f"_{variant}" if variant else ""
+    return recipe_export_dir() / f"{file_id}{suffix}.xlsx"
 
 
 def _normalize_key(series: pd.Series) -> pd.Series:
@@ -614,14 +616,15 @@ def _safe_filename_part(value: object, *, max_len: int = 42) -> str:
     return text[:max_len] or "未命名"
 
 
-def recipe_raw_export_filename(query_text: str | None, *, now: datetime | None = None) -> str:
+def recipe_raw_export_filename(query_text: str | None, *, human_only: bool = False, now: datetime | None = None) -> str:
     """原始明细下载文件名：带上查询的编码，便于辨认查的是什么。
     多编码用空格连接（原分隔符 , ， ; ； 、 不适合文件名）；去掉文件系统非法字符。"""
     stamp = (now or datetime.now()).strftime("%Y%m%d-%H%M%S")
     codes = parse_codes_text(query_text or "")
     cleaned = [re.sub(r'[\\/:*?"<>|\r\n\t]+', "", code).strip() for code in codes]
     label = re.sub(r"\s+", " ", " ".join(part for part in cleaned if part)).strip()[:80]
-    return f"配方查询_{label or '全部'}_{stamp}.xlsx"
+    prefix = "配方查询_人眼版" if human_only else "配方查询"
+    return f"{prefix}_{label or '全部'}_{stamp}.xlsx"
 
 
 def recipe_cost_export_filename(
@@ -880,6 +883,15 @@ def _write_matrix_sheet(wb, detail: pd.DataFrame) -> None:
             ws.cell(row, col).number_format = "0.00%"
     ws.freeze_panes = "C3"
     ws.sheet_view.showGridLines = False
+
+
+def save_recipe_human_workbook(output_path: Path, result: RecipeQueryResult) -> None:
+    """只写「配方表_人眼版」单工作表（前端下载菜单的人眼版选项）。"""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    wb = Workbook()
+    wb.remove(wb.active)
+    _write_human_review_sheet(wb, result.detail, result.codes)
+    wb.save(output_path)
 
 
 def save_recipe_workbook(output_path: Path, result: RecipeQueryResult) -> None:
