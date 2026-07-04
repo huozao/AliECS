@@ -2580,3 +2580,20 @@ def test_invalidate_global_rule_cache_clears(monkeypatch):
     assert "value" in bridge._feishu_global_rule_cache
     bridge.invalidate_global_rule_cache()
     assert bridge._feishu_global_rule_cache == {}
+
+
+def test_invalidate_endpoint_also_clears_global_rule_cache(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("OPENCLAW_BRIDGE_ADMIN_SECRET", "abc")
+    monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record", lambda t, f, e: {"fields": {}})
+    bridge.feishu_global_rule_policy()  # populate the global rule cache
+    assert "value" in bridge._feishu_global_rule_cache
+
+    handler, captured = _make_invalidate_handler(
+        bridge, headers={"X-Admin-Secret": "abc", "Content-Length": "2"}, body="{}"
+    )
+    handler._handle_invalidate_feishu_group_policy()
+
+    assert captured["status"] == 200
+    assert bridge._feishu_global_rule_cache == {}
