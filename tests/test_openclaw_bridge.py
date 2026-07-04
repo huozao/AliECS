@@ -2399,6 +2399,7 @@ def test_processing_card_flag_default_off(monkeypatch):
     monkeypatch.delenv("OPENCLAW_BRIDGE_PROCESSING_CARD", raising=False)
     assert bridge.processing_card_enabled() is False
     monkeypatch.setenv("OPENCLAW_BRIDGE_PROCESSING_CARD", "1")
+    bridge.invalidate_global_rule_cache()
     assert bridge.processing_card_enabled() is True
 
 
@@ -2520,3 +2521,52 @@ def test_build_reply_no_placeholder_when_flag_off(monkeypatch):
     monkeypatch.setattr(bridge, "call_webdock", lambda body: bridge.WebDockResult("ans", {}))
     bridge.build_reply(_feishu_body("关开关"))
     assert called == []                                 # 开关关: 不发占位
+
+
+def test_feishu_global_rule_policy_falls_back_to_env_without_table(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_PROCESSING_CARD", "1")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_DEBUG_TRAILER", "0")
+    policy = bridge.feishu_global_rule_policy()
+    assert policy == {"处理中卡片": True, "调试尾注": False}
+
+
+def test_feishu_global_rule_policy_table_value_wins(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_PROCESSING_CARD", "0")   # env says off...
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record",
+                        lambda t, f, e: {"fields": {"处理中卡片": True, "调试尾注": False}})
+    policy = bridge.feishu_global_rule_policy()
+    assert policy["处理中卡片"] is True   # ...table wins
+    assert policy["调试尾注"] is False
+
+
+def test_feishu_global_rule_policy_read_failure_falls_back(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_DEBUG_TRAILER", "1")
+    def boom(t, f, e):
+        raise RuntimeError("bitable down")
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record", boom)
+    assert bridge.feishu_global_rule_policy()["调试尾注"] is True
+
+
+def test_feishu_global_rule_policy_caches(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
+    calls = []
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record",
+                        lambda t, f, e: calls.append(1) or {"fields": {}})
+    bridge.feishu_global_rule_policy()
+    bridge.feishu_global_rule_policy()
+    assert len(calls) == 1   # second call served from cache
+
+
+def test_processing_card_and_debug_trailer_reflect_policy(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_global_rule_policy",
+                        lambda: {"处理中卡片": False, "调试尾注": True})
+    assert bridge.processing_card_enabled() is False
+    assert bridge.debug_trailer_enabled() is True

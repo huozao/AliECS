@@ -2026,6 +2026,8 @@ def trace_chain_result(
 
 _inflight_counts: dict[str, int] = {}
 _inflight_lock = Lock()
+_feishu_global_rule_cache: dict[str, tuple[float, dict[str, bool]]] = {}
+_feishu_global_rule_cache_lock = Lock()
 
 DEFAULT_PROCESSING_ACK_TEXT = "⏳ 正在处理你的问题（通常 20–60 秒），收到回复后再继续提问哦～"
 DEFAULT_PROCESSING_REMIND_TEXT = "⚠️ 上一条还在处理中，这条已排队；请等回复后再问，连续提问会让每条都变慢。"
@@ -2055,8 +2057,56 @@ def _exit_inflight(lane_key: str) -> None:
             _inflight_counts[lane_key] = n
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def feishu_global_rule_policy() -> dict[str, bool]:
+    """Global feishu switches, sourced from the rule bitable's ``global-default`` row
+    with a short TTL cache. Any failure (no table / no creds / read error / missing
+    field) falls back to env so a broken or absent table never changes behavior."""
+    env_defaults = {
+        "处理中卡片": _env_flag("OPENCLAW_BRIDGE_PROCESSING_CARD", False),
+        "调试尾注": _env_flag("OPENCLAW_BRIDGE_DEBUG_TRAILER", True),
+    }
+    now = time.monotonic()
+    with _feishu_global_rule_cache_lock:
+        cached = _feishu_global_rule_cache.get("value")
+        if cached and now - cached[0] < FEISHU_GROUP_POLICY_CACHE_SECONDS:
+            return dict(cached[1])
+    result = dict(env_defaults)
+    table_id = feishu_session_console_table_id("rule")
+    if table_id:
+        try:
+            record = find_feishu_bitable_record(table_id, "规则编号", "global-default")
+            fields = (record or {}).get("fields") or {}
+            for key in ("处理中卡片", "调试尾注"):
+                if key in fields:
+                    result[key] = bitable_truthy(fields.get(key))
+        except Exception as exc:
+            log_line(
+                "feishu_global_rule_read_failed "
+                + json.dumps({"error": str(exc)}, ensure_ascii=False, sort_keys=True)
+            )
+    with _feishu_global_rule_cache_lock:
+        _feishu_global_rule_cache["value"] = (now, dict(result))
+    return result
+
+
+def invalidate_global_rule_cache() -> None:
+    with _feishu_global_rule_cache_lock:
+        _feishu_global_rule_cache.clear()
+
+
 def processing_card_enabled() -> bool:
-    return os.getenv("OPENCLAW_BRIDGE_PROCESSING_CARD", "0").strip().lower() in {"1", "true", "yes", "on"}
+    return bool(feishu_global_rule_policy().get("处理中卡片"))
+
+
+def debug_trailer_enabled() -> bool:
+    return bool(feishu_global_rule_policy().get("调试尾注"))
 
 
 def processing_ack_text() -> str:
