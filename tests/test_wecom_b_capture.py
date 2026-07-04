@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+from fastapi import HTTPException
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1] / "services" / "backend-api"
@@ -27,8 +31,8 @@ class WecomBCaptureTests(unittest.TestCase):
         backend_root = str(BACKEND_ROOT)
         sys.path[:] = [item for item in sys.path if item != backend_root]
 
-    def test_wecom_b_capture_message_persists_forward_message(self) -> None:
-        payload = {
+    def _payload(self) -> dict:
+        return {
             "cmd": "aibot_msg_callback",
             "body": {
                 "msgid": "msg-1",
@@ -40,11 +44,16 @@ class WecomBCaptureTests(unittest.TestCase):
                 "text": {"content": "@机器人 你好"},
             },
         }
+
+    def test_wecom_b_capture_message_persists_forward_message(self) -> None:
         conn = FakeConn()
         old_conn = self.main._conn
         self.main._conn = lambda: conn
         try:
-            result = self.main.wecom_b_capture_message(payload)
+            with patch.dict(os.environ, {"WECOM_B_CAPTURE_TOKEN": "s3cret"}, clear=False):
+                result = self.main.wecom_b_capture_message(
+                    self._payload(), x_wecom_capture_token="s3cret"
+                )
         finally:
             self.main._conn = old_conn
 
@@ -57,6 +66,19 @@ class WecomBCaptureTests(unittest.TestCase):
         self.assertEqual("text", conn.params[5])
         self.assertEqual("@机器人 你好", conn.params[6])
         self.assertTrue(conn.committed)
+
+    def test_capture_disabled_when_token_unset(self) -> None:
+        env = {k: v for k, v in os.environ.items() if k != "WECOM_B_CAPTURE_TOKEN"}
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(HTTPException) as ctx:
+                self.main.wecom_b_capture_message(self._payload(), x_wecom_capture_token="anything")
+        self.assertEqual(ctx.exception.status_code, 503)
+
+    def test_capture_rejects_wrong_token(self) -> None:
+        with patch.dict(os.environ, {"WECOM_B_CAPTURE_TOKEN": "s3cret"}, clear=False):
+            with self.assertRaises(HTTPException) as ctx:
+                self.main.wecom_b_capture_message(self._payload(), x_wecom_capture_token="wrong")
+        self.assertEqual(ctx.exception.status_code, 403)
 
 
 class FakeConn:

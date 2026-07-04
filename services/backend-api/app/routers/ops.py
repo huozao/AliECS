@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hmac
 import json
 import os
 import psycopg
@@ -885,8 +886,12 @@ def wecom_b_capture_message(
     payload: dict[str, Any],
     x_wecom_capture_token: str | None = Header(default=None),
 ) -> dict[str, str]:
+    # Fail-closed: this endpoint writes to wecom_b_messages, so an unset token must
+    # NOT mean "accept anything" — that would be an unauthenticated public DB-write.
     expected = os.getenv("WECOM_B_CAPTURE_TOKEN", "").strip()
-    if expected and x_wecom_capture_token != expected:
+    if not expected:
+        raise HTTPException(status_code=503, detail="capture endpoint disabled: WECOM_B_CAPTURE_TOKEN not set")
+    if not hmac.compare_digest(x_wecom_capture_token or "", expected):
         raise HTTPException(status_code=403, detail="invalid capture token")
     message = _extract_wecom_b_message(payload)
     with closing(_conn()) as conn:
