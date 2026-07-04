@@ -2833,6 +2833,7 @@ class Handler(BaseHTTPRequestHandler):
             "feishu_group_policy_invalidated "
             + json.dumps({"cleared": cleared}, ensure_ascii=False, sort_keys=True)
         )
+        invalidate_global_rule_cache()
         return self._json(200, {"ok": True, "cleared": cleared})
 
     def do_GET(self) -> None:

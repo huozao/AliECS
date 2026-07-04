@@ -2570,3 +2570,13 @@ def test_processing_card_and_debug_trailer_reflect_policy(monkeypatch):
                         lambda: {"处理中卡片": False, "调试尾注": True})
     assert bridge.processing_card_enabled() is False
     assert bridge.debug_trailer_enabled() is True
+
+
+def test_invalidate_global_rule_cache_clears(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record", lambda t, f, e: {"fields": {}})
+    bridge.feishu_global_rule_policy()                      # populate cache
+    assert "value" in bridge._feishu_global_rule_cache
+    bridge.invalidate_global_rule_cache()
+    assert bridge._feishu_global_rule_cache == {}
