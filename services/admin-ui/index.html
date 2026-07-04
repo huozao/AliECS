@@ -260,20 +260,11 @@
       <h2>登录</h2>
       <div class="notice">
         只有系统管理员或具备 <code>admin.access</code> 权限的用户可以进入后台。
-      </div>
-      <div class="grid two">
-        <div>
-          <label for="usernameInput">用户名</label>
-          <input id="usernameInput" autocomplete="username" placeholder="admin" />
-        </div>
-        <div>
-          <label for="passwordInput">密码</label>
-          <input id="passwordInput" type="password" autocomplete="current-password" placeholder="请输入密码" />
-        </div>
+        统一走单点登录（Authelia SSO）。
       </div>
       <div class="row" style="margin-top:14px;">
-        <button id="loginBtn" class="primary" type="button">登录</button>
-        <span id="loginHint" class="muted small">登录后加载后台数据。</span>
+        <button id="loginBtn" class="primary" type="button">使用统一登录（SSO）</button>
+        <span id="loginHint" class="muted small">跳转 Authelia 完成登录后自动返回后台。</span>
       </div>
     </section>
 
@@ -720,25 +711,8 @@
       await loadAuditLogs(1);
     }
 
-    async function login() {
-      clearMessage();
-      const username = $("usernameInput").value.trim();
-      const password = $("passwordInput").value;
-
-      if (!username || !password) {
-        showError("请输入用户名和密码。");
-        return;
-      }
-
-      const data = await api("/v1/auth/login", {
-        method: "POST",
-        body: JSON.stringify({ username, password })
-      });
-
-      state.token = data.token;
-      setAuthToken(state.token);
-      showSuccess("登录成功。");
-      await loadAll();
+    function ssoLogin() {
+      location.href = `${API_BASE}/v1/auth/oidc/login`;
     }
 
     function logout() {
@@ -903,16 +877,13 @@
     window.editFeature = editFeature;
 
     document.addEventListener("DOMContentLoaded", async () => {
-      $("loginBtn").addEventListener("click", () => login().catch((e) => showError(e.message)));
+      $("loginBtn").addEventListener("click", ssoLogin);
       $("logoutBtn").addEventListener("click", logout);
       $("refreshAllBtn").addEventListener("click", () => loadAll().catch((e) => showError(e.message)));
       $("auditPrevBtn").addEventListener("click", () => loadAuditLogs(state.auditLogs.page - 1).catch((e) => showError(e.message)));
       $("auditNextBtn").addEventListener("click", () => loadAuditLogs(state.auditLogs.page + 1).catch((e) => showError(e.message)));
       $("createUserBtn").addEventListener("click", () => createUser().catch((e) => showError(e.message)));
       $("createFeatureBtn").addEventListener("click", () => createFeature().catch((e) => showError(e.message)));
-      $("passwordInput").addEventListener("keydown", (e) => {
-        if (e.key === "Enter") login().catch((err) => showError(err.message));
-      });
 
       syncTokenState();
       renderAuth();

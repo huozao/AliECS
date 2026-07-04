@@ -21,8 +21,7 @@
         <a class="btn" href="/health/">API Health</a>
         <a id="adminLink" class="btn" href="/admin/">Admin UI</a>
         <button id="refreshBtn" class="btn subtle" type="button">刷新数据</button>
-        <button id="topLoginBtn" class="btn" type="button">登录</button>
-        <button id="topRegisterBtn" class="btn" type="button">注册</button>
+        <button id="topLoginBtn" class="btn primary" type="button">登录（SSO）</button>
         <button id="topLogoutBtn" class="btn hidden" type="button">退出登录</button>
       </nav>
     </header>
@@ -39,25 +38,11 @@
       <div id="toolsGrid" class="grid"></div>
     </section>
   </div>
-  <div id="authModal" class="modal">
-    <div class="panel">
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <h3 id="modalTitle" style="margin:0">登录</h3>
-        <button id="closeModal" class="btn" type="button">关闭</button>
-      </div>
-      <p class="small muted" id="modalHint">请输入账号密码。</p>
-      <input id="modalUsername" placeholder="用户名"/>
-      <input id="modalPassword" type="password" placeholder="密码"/>
-      <div style="display:flex;gap:8px;justify-content:flex-end">
-        <button id="modalSso" class="btn" type="button">使用统一登录（SSO）</button>
-        <button id="submitAuthBtn" class="btn primary" type="button">提交</button>
-      </div>
-    </div>
-  </div>
   <script>
     const API_BASE=location.port==='8080'?'http://localhost:8000':'/api';
     const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
-    const state={token:'',user:null,features:[],rbac:[],mode:'login'};
+    const state={token:'',user:null,features:[],rbac:[]};
+    const ssoLogin=()=>{location.href=`${API_BASE}/v1/auth/oidc/login`;};
     const getAuthToken=()=>AUTH_KEYS.map((key)=>localStorage.getItem(key)||'').find(Boolean)||'';
     const setAuthToken=(token)=>AUTH_KEYS.forEach((key)=>localStorage.setItem(key,token));
     const clearAuthToken=()=>AUTH_KEYS.forEach((key)=>localStorage.removeItem(key));
@@ -82,7 +67,6 @@
     function renderAuth(){
       const logged=Boolean(state.token&&state.user&&state.user.username!=='guest');
       topLoginBtn.classList.toggle('hidden',logged);
-      topRegisterBtn.classList.toggle('hidden',logged);
       topLogoutBtn.classList.toggle('hidden',!logged);
       topLogoutBtn.textContent=logged?`退出登录（${state.user.username}）`:'退出登录';
     }
@@ -90,7 +74,7 @@
     function renderFeatureAction(feature){
       if(!feature.url||feature.status!=='active')return '<span class="btn subtle">暂不可用</span>';
       if(isInternal(feature.url))return `<button class="btn primary" type="button" onclick="location.assign('${feature.url}')">打开入口</button>`;
-      if(!feature.allowed)return `<button class="btn" type="button" onclick="showError('没登录没权限请登录')">打开入口</button>`;
+      if(!feature.allowed)return `<button class="btn" type="button" onclick="showError('未登录或无权限，请点右上角「登录（SSO）」')">打开入口</button>`;
       return `<a class="btn primary" href="${feature.url}" target="_blank" rel="noreferrer">打开入口</a>`;
     }
     function featureCard(feature){
@@ -113,42 +97,12 @@
       renderAuth();
       renderFeatures();
     }
-    function openModal(mode){state.mode=mode;modalTitle.textContent=mode==='login'?'登录':'注册';modalHint.textContent=mode==='login'?'请输入账号密码。':'请输入新账号信息（注册请求）。';authModal.classList.add('show');}
-    function closeAuthModal(){authModal.classList.remove('show');modalUsername.value='';modalPassword.value='';}
-    async function handleAuthSubmit(){
-      if(submitAuthBtn.disabled)return;
-      const username=modalUsername.value.trim(),password=modalPassword.value;
-      if(!username||!password){showError('请输入用户名和密码。');return;}
-      const isLogin=state.mode==='login';
-      const originalLabel=submitAuthBtn.textContent;
-      submitAuthBtn.disabled=true;
-      submitAuthBtn.textContent=isLogin?'登录中…':'提交中…';
-      modalHint.textContent=isLogin?'已提交，正在登录，请稍候…':'已提交注册请求，请稍候…';
-      try{
-        if(isLogin){
-          const data=await api('/v1/auth/login',{method:'POST',body:JSON.stringify({username,password})});
-          setAuthToken(data.token);syncTokenState();showSuccess('登录成功。');closeAuthModal();await loadFeatures();
-        }else{
-          await api('/v1/auth/register',{method:'POST',body:JSON.stringify({username,password,note:'portal'})});
-          showSuccess('注册请求已提交，请联系管理员开通。');closeAuthModal();
-        }
-      }finally{
-        submitAuthBtn.disabled=false;
-        submitAuthBtn.textContent=originalLabel;
-      }
-    }
     function logout(){clearAuthToken();syncTokenState();state.user=null;showSuccess('已退出登录。');loadFeatures().catch((error)=>showError(error.message));}
     document.addEventListener('DOMContentLoaded',()=>{
       syncTokenState();
       refreshBtn.onclick=()=>loadFeatures().catch((error)=>showError(error.message));
-      topLoginBtn.onclick=()=>openModal('login');
-      topRegisterBtn.onclick=()=>openModal('register');
+      topLoginBtn.onclick=ssoLogin;
       topLogoutBtn.onclick=logout;
-      closeModal.onclick=closeAuthModal;
-      submitAuthBtn.onclick=()=>handleAuthSubmit().catch((error)=>showError(error.message));
-      modalSso.onclick=()=>{location.href=`${API_BASE}/v1/auth/oidc/login`;};
-      modalPassword.onkeydown=(event)=>{if(event.key==='Enter')handleAuthSubmit().catch((error)=>showError(error.message));};
-      authModal.onclick=(event)=>{if(event.target===authModal)closeAuthModal();};
       loadFeatures().catch((error)=>showError(`加载功能入口失败：${error.message}`));
     });
   </script>
