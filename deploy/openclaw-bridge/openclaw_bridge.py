@@ -2039,8 +2039,8 @@ _inflight_lock = Lock()
 _feishu_global_rule_cache: dict[str, tuple[float, dict[str, bool]]] = {}
 _feishu_global_rule_cache_lock = Lock()
 
-DEFAULT_PROCESSING_ACK_TEXT = "⏳ 正在处理你的问题（通常 20–60 秒），收到回复后再继续提问哦～"
-DEFAULT_PROCESSING_REMIND_TEXT = "⚠️ 上一条还在处理中，这条已排队；请等回复后再问，连续提问会让每条都变慢。"
+DEFAULT_PROCESSING_ACK_TEXT = "📨 已投递到 ChatGPT，正在生成（约 20–60 秒）。答案会直接更新到这张卡片，请勿重复提问 🙏"
+DEFAULT_PROCESSING_REMIND_TEXT = "⚠️ 上一条还在 ChatGPT 处理中，这条已排队。请等上面那张卡片出结果再问，连续提问会拖慢每一条。"
 DEFAULT_PROCESSING_EMPTY_TEXT = "本次没有生成内容，请稍后重试。"
 
 

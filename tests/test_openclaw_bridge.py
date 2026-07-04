@@ -2709,3 +2709,23 @@ def test_build_feishu_trailer_tag_unknown_when_missing(monkeypatch):
     out = bridge.build_feishu_trailer({"request_id": "r", "metadata": {"channel": "feishu"}})
     assert "bridge=unknown" in out
     assert "patched=no" in out           # no placeholder id
+
+
+def test_processing_ack_text_new_default(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.delenv("OPENCLAW_BRIDGE_PROCESSING_ACK_TEXT", raising=False)
+    text = bridge.processing_ack_text()
+    assert "已投递到 ChatGPT" in text
+    assert "请勿重复提问" in text
+
+
+def test_processing_remind_text_new_default(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.delenv("OPENCLAW_BRIDGE_PROCESSING_REMIND_TEXT", raising=False)
+    assert "已排队" in bridge.processing_remind_text()
+
+
+def test_processing_ack_text_env_override_still_wins(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("OPENCLAW_BRIDGE_PROCESSING_ACK_TEXT", "自定义")
+    assert bridge.processing_ack_text() == "自定义"
