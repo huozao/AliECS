@@ -13,10 +13,10 @@
   <div class="wrap">
     <header class="topbar">
       <div><h1>API Health</h1><p class="subtitle">服务器、同步任务与需要人工关注的状态。</p></div>
-      <nav class="actions"><a class="btn" href="/">首页</a><a id="jsonHealthLink" class="btn hidden" href="/api/healthz" target="_blank">JSON Health</a><button id="coupleEntryBtn" class="btn hidden" type="button" title="Couple">💗</button><button id="addWechatBtn" class="btn hidden" type="button">添加新微信</button><button id="loginBtn" class="btn" type="button">登录</button><button id="logoutBtn" class="btn hidden" type="button">退出登录</button><button id="refreshBtn" class="btn primary hidden" type="button">刷新</button></nav>
+      <nav class="actions"><a class="btn" href="/">首页</a><a id="jsonHealthLink" class="btn hidden" href="/api/healthz" target="_blank">JSON Health</a><button id="coupleEntryBtn" class="btn hidden" type="button" title="Couple">💗</button><button id="addWechatBtn" class="btn hidden" type="button">添加新微信</button><button id="loginBtn" class="btn" type="button">登录（SSO）</button><button id="logoutBtn" class="btn hidden" type="button">退出登录</button><button id="refreshBtn" class="btn primary hidden" type="button">刷新</button></nav>
     </header>
     <div id="msg" class="attention" style="display:none;margin-bottom:14px"></div>
-    <div id="gateHint" class="band">此页面仅管理员可见。请点右上角「登录」。</div>
+    <div id="gateHint" class="band">此页面仅管理员可见。请点右上角「登录（SSO）」。</div>
     <div id="adminContent" class="hidden">
       <!-- 区1 设备与服务状态 -->
       <section class="band">
@@ -61,14 +61,6 @@
       <div id="modalBody" style="margin-top:12px"></div>
     </div>
   </div>
-  <div id="authModal" class="modal">
-    <div class="modal-panel" style="width:min(420px,100%)">
-      <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">管理员登录</h3><button id="closeAuthBtn" class="btn" type="button">关闭</button></div>
-      <input id="usernameInput" placeholder="用户名" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-top:10px;font:inherit"/>
-      <input id="passwordInput" type="password" placeholder="密码" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-top:8px;font:inherit"/>
-      <div style="display:flex;justify-content:flex-end;margin-top:10px"><button id="submitLoginBtn" class="btn primary" type="button">提交</button></div>
-    </div>
-  </div>
   <div id="wechatQrModal" class="modal">
     <div class="modal-panel" style="width:min(460px,100%)">
       <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">添加新微信</h3><button id="closeWechatQrBtn" class="btn" type="button">关闭</button></div>
@@ -102,7 +94,7 @@
     async function fetchMe(){if(!token())return null;try{return await api('/v1/auth/me');}catch{return null;}}
     const isAdminUser=(me)=>!!me&&(((me.roles||[]).includes('admin'))||((me.permissions||[]).includes('admin.access')));
     function applyGate(me){const admin=isAdminUser(me);$('loginBtn').classList.toggle('hidden',admin);$('logoutBtn').classList.toggle('hidden',!token());$('adminContent').classList.toggle('hidden',!admin);$('gateHint').classList.toggle('hidden',admin);$('refreshBtn').classList.toggle('hidden',!admin);$('jsonHealthLink').classList.toggle('hidden',!admin);$('coupleEntryBtn').classList.toggle('hidden',!admin);$('addWechatBtn').classList.toggle('hidden',!admin);if(admin){refresh();}}
-    async function login(){clearMessage();const username=$('usernameInput').value.trim(),password=$('passwordInput').value;if(!username||!password){showError('请输入用户名和密码。');return;}const data=await api('/v1/auth/login',{method:'POST',body:JSON.stringify({username,password})});setAuthToken(data.token);$('authModal').classList.remove('show');const me=await fetchMe();applyGate(me);if(isAdminUser(me))showSuccess('登录成功。');else showError('当前账号不是管理员，无法查看此页面。');}
+    const ssoLogin=()=>{location.href=`${API_BASE}/v1/auth/oidc/login`;};
     function renderSummary(data){
       const sys=data.system||{},db=data.database||{},t=data.tplus||{},r=data.reconciliation||{},hosts=data.hosts||[];
       summary.innerHTML=[
@@ -154,12 +146,8 @@
       finally{refreshBtn.disabled=false}
     }
     refreshBtn.onclick=refresh;closeModalBtn.onclick=closeModal;detailModal.onclick=(event)=>{if(event.target===detailModal)closeModal();};
-    loginBtn.onclick=()=>authModal.classList.add('show');
+    loginBtn.onclick=ssoLogin;
     logoutBtn.onclick=()=>{clearAuthToken();applyGate(null);showSuccess('已退出登录。');};
-    closeAuthBtn.onclick=()=>authModal.classList.remove('show');
-    submitLoginBtn.onclick=()=>login().catch((e)=>showError(e.message));
-    passwordInput.onkeydown=(e)=>{if(e.key==='Enter')login().catch((err)=>showError(err.message));};
-    authModal.onclick=(event)=>{if(event.target===authModal)authModal.classList.remove('show');};
     coupleEntryBtn.onclick=()=>location.assign('/couple/');
     addWechatBtn.onclick=openWechatQr;addWechatPanelBtn.onclick=openWechatQr;closeWechatQrBtn.onclick=closeWechatQr;refreshWechatQrBtn.onclick=loadWechatLoginQr;wechatQrModal.onclick=(event)=>{if(event.target===wechatQrModal)closeWechatQr();};
     (async()=>{applyGate(await fetchMe());})();

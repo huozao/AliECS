@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 import uuid
 
@@ -15,6 +16,14 @@ from app.core import DEFAULT_FEATURES, _audit, _bootstrap_admin_if_needed, _conn
 
 
 router = APIRouter()
+
+
+def _local_login_enabled() -> bool:
+    """本地账号密码登录总开关。默认开启（fail-safe：缺失 env 绝不把人锁在外面，
+    充当 break-glass 应急通道）；生产在 SSO cutover 后显式设 LOCAL_LOGIN_ENABLED=false
+    关闭，登录统一走 Authelia OIDC（见 auth_oidc.py）。"""
+    return os.getenv("LOCAL_LOGIN_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+
 
 class LoginRequest(BaseModel):
     username: str
@@ -100,6 +109,8 @@ class PatchFeatureRequest(BaseModel):
 
 @router.post("/v1/auth/login")
 def auth_login(body: LoginRequest) -> dict[str, Any]:
+    if not _local_login_enabled():
+        raise HTTPException(status_code=403, detail="local password login disabled; use SSO")
     _bootstrap_admin_if_needed()
 
     with closing(_conn()) as conn:
@@ -159,6 +170,8 @@ def auth_login(body: LoginRequest) -> dict[str, Any]:
 
 @router.post("/v1/auth/register")
 def auth_register(body: RegisterRequest) -> dict[str, Any]:
+    if not _local_login_enabled():
+        raise HTTPException(status_code=403, detail="local registration disabled; use SSO")
     _audit(body.username, "auth.register.request", detail={"note": body.note})
     return {
         "status": "pending_review",
