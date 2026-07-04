@@ -2399,6 +2399,7 @@ def test_processing_card_flag_default_off(monkeypatch):
     monkeypatch.delenv("OPENCLAW_BRIDGE_PROCESSING_CARD", raising=False)
     assert bridge.processing_card_enabled() is False
     monkeypatch.setenv("OPENCLAW_BRIDGE_PROCESSING_CARD", "1")
+    bridge.invalidate_global_rule_cache()
     assert bridge.processing_card_enabled() is True
 
 
@@ -2455,8 +2456,9 @@ def test_build_reply_sends_placeholder_then_patches_answer(monkeypatch):
                         lambda mid, card, tok: events.append(("patch", mid)))
     monkeypatch.setattr(bridge, "feishu_send_interactive_message",
                         lambda d, mid, card, tok: events.append(("send", mid)) or "om_x")
+    monkeypatch.setattr(bridge, "build_feishu_trailer", lambda details: "TRAILER")
     out = bridge.build_reply(_feishu_body("成都天气"))
-    assert out == bridge.NO_REPLY                      # 卡片已自投递
+    assert out == "TRAILER"                             # 卡片已自投递, NO_REPLY 换成尾注
     assert ("placeholder", bridge.processing_ack_text()) in events
     assert ("patch", "om_ph") in events               # 占位被就地更新成答案
     assert not any(e[0] == "send" for e in events)    # 没有第二条新消息
@@ -2502,8 +2504,9 @@ def test_build_reply_patches_placeholder_with_fallback_on_empty(monkeypatch):
     patched = {}
     monkeypatch.setattr(bridge, "feishu_patch_card",
                         lambda mid, card, tok: patched.update(mid=mid, card=card))
+    monkeypatch.setattr(bridge, "build_feishu_trailer", lambda details: "TRAILER")
     out = bridge.build_reply(_feishu_body("空返回场景"))
-    assert out == bridge.NO_REPLY
+    assert out == "TRAILER"                             # NO_REPLY 换成尾注
     assert patched["mid"] == "om_ph"
     assert bridge.processing_empty_fallback_text() in json.dumps(patched["card"], ensure_ascii=False)
 
@@ -2520,3 +2523,211 @@ def test_build_reply_no_placeholder_when_flag_off(monkeypatch):
     monkeypatch.setattr(bridge, "call_webdock", lambda body: bridge.WebDockResult("ans", {}))
     bridge.build_reply(_feishu_body("关开关"))
     assert called == []                                 # 开关关: 不发占位
+
+
+def test_build_reply_replaces_no_reply_with_trailer_on_feishu(monkeypatch):
+    bridge = load_bridge()
+    _enable_processing(monkeypatch)
+    monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("app", "sec"))
+    monkeypatch.setattr(bridge, "feishu_tenant_access_token", lambda: "tok")
+    monkeypatch.setattr(bridge, "send_processing_card", lambda d, t: "om_ph")
+    monkeypatch.setattr(bridge, "call_webdock", lambda body: bridge.WebDockResult("答案", {}))
+    monkeypatch.setattr(bridge, "feishu_patch_card", lambda mid, card, tok: None)  # patch ok -> NO_REPLY
+    monkeypatch.setattr(bridge, "build_feishu_trailer", lambda details: "TRAILER")
+    out = bridge.build_reply(_feishu_body("天气"))
+    assert out == "TRAILER"              # NO_REPLY success exit replaced by trailer
+
+
+def test_build_reply_no_trailer_when_reply_is_text(monkeypatch):
+    bridge = load_bridge()
+    _enable_processing(monkeypatch)
+    monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("app", "sec"))
+    monkeypatch.setattr(bridge, "feishu_tenant_access_token", lambda: "tok")
+    monkeypatch.setattr(bridge, "send_processing_card", lambda d, t: None)   # no placeholder
+    monkeypatch.setattr(bridge, "call_webdock", lambda body: bridge.WebDockResult("答案", {}))
+    # No footer -> deliver_feishu_text_card returns the raw reply (not NO_REPLY)
+    monkeypatch.setattr(bridge, "format_card_footer", lambda details: "")
+    called = []
+    monkeypatch.setattr(bridge, "build_feishu_trailer", lambda details: called.append(1) or "TRAILER")
+    out = bridge.build_reply(_feishu_body("天气"))
+    assert out == "答案"                 # text reply passes through
+    assert called == []                  # trailer NOT applied when reply != NO_REPLY
+
+
+def test_feishu_global_rule_policy_falls_back_to_env_without_table(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_PROCESSING_CARD", "1")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_DEBUG_TRAILER", "0")
+    policy = bridge.feishu_global_rule_policy()
+    assert policy == {"处理中卡片": True, "调试尾注": False}
+
+
+def test_feishu_global_rule_policy_table_value_wins(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_PROCESSING_CARD", "0")   # env says off...
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record",
+                        lambda t, f, e: {"fields": {"处理中卡片": True, "调试尾注": False}})
+    policy = bridge.feishu_global_rule_policy()
+    assert policy["处理中卡片"] is True   # ...table wins
+    assert policy["调试尾注"] is False
+
+
+def test_feishu_global_rule_policy_read_failure_falls_back(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_DEBUG_TRAILER", "1")
+    def boom(t, f, e):
+        raise RuntimeError("bitable down")
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record", boom)
+    assert bridge.feishu_global_rule_policy()["调试尾注"] is True
+
+
+def test_feishu_global_rule_policy_caches(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
+    calls = []
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record",
+                        lambda t, f, e: calls.append(1) or {"fields": {}})
+    bridge.feishu_global_rule_policy()
+    bridge.feishu_global_rule_policy()
+    assert len(calls) == 1   # second call served from cache
+
+
+def test_processing_card_and_debug_trailer_reflect_policy(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_global_rule_policy",
+                        lambda: {"处理中卡片": False, "调试尾注": True})
+    assert bridge.processing_card_enabled() is False
+    assert bridge.debug_trailer_enabled() is True
+
+
+def test_invalidate_global_rule_cache_clears(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record", lambda t, f, e: {"fields": {}})
+    bridge.feishu_global_rule_policy()                      # populate cache
+    assert "value" in bridge._feishu_global_rule_cache
+    bridge.invalidate_global_rule_cache()
+    assert bridge._feishu_global_rule_cache == {}
+
+
+def test_invalidate_endpoint_also_clears_global_rule_cache(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("OPENCLAW_BRIDGE_ADMIN_SECRET", "abc")
+    monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record", lambda t, f, e: {"fields": {}})
+    bridge.feishu_global_rule_policy()  # populate the global rule cache
+    assert "value" in bridge._feishu_global_rule_cache
+
+    handler, captured = _make_invalidate_handler(
+        bridge, headers={"X-Admin-Secret": "abc", "Content-Length": "2"}, body="{}"
+    )
+    handler._handle_invalidate_feishu_group_policy()
+
+    assert captured["status"] == 200
+    assert bridge._feishu_global_rule_cache == {}
+
+
+def test_ensure_rule_record_creates_with_new_fields(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record", lambda t, f, e: None)
+    captured = {}
+    monkeypatch.setattr(bridge, "create_feishu_bitable_record",
+                        lambda t, fields: captured.update(fields=fields) or {"data": {"record": {"record_id": "r1"}}})
+    monkeypatch.setattr(bridge, "bitable_created_record_id", lambda r: "r1")
+    bridge.ensure_feishu_default_rule_record()
+    assert captured["fields"]["处理中卡片"] is True
+    assert captured["fields"]["调试尾注"] is True
+
+
+def test_ensure_rule_record_backfills_missing_fields(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record",
+                        lambda t, f, e: {"record_id": "r1", "fields": {"规则编号": "global-default"}})
+    updated = {}
+    monkeypatch.setattr(bridge, "update_feishu_bitable_record",
+                        lambda t, rid, fields: updated.update(rid=rid, fields=fields))
+    bridge.ensure_feishu_default_rule_record()
+    assert updated["rid"] == "r1"
+    assert updated["fields"] == {"处理中卡片": True, "调试尾注": True}
+
+
+def test_ensure_rule_record_no_update_when_present(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record",
+                        lambda t, f, e: {"record_id": "r1", "fields": {"处理中卡片": False, "调试尾注": True}})
+    called = []
+    monkeypatch.setattr(bridge, "update_feishu_bitable_record",
+                        lambda t, rid, fields: called.append(1))
+    bridge.ensure_feishu_default_rule_record()
+    assert called == []   # both fields already present -> no backfill (don't overwrite)
+
+
+def test_build_feishu_trailer_done_marker_when_off(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "debug_trailer_enabled", lambda: False)
+    assert bridge.build_feishu_trailer({"metadata": {"channel": "feishu"}}) == "🌿 回复完毕"
+
+
+def test_build_feishu_trailer_done_marker_env_override(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "debug_trailer_enabled", lambda: False)
+    monkeypatch.setenv("OPENCLAW_BRIDGE_DONE_MARKER", "· 已送达 ·")
+    assert bridge.build_feishu_trailer({"metadata": {"channel": "feishu"}}) == "· 已送达 ·"
+
+
+def test_build_feishu_trailer_diagnostic_when_on(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "debug_trailer_enabled", lambda: True)
+    monkeypatch.setenv("OPENCLAW_BRIDGE_TAG", "V20260703218")
+    monkeypatch.setenv("WEB_DOCK_MODEL", "browser-chatgpt")
+    details = {
+        "request_id": "8da08f41",
+        "feishu_placeholder_msg_id": "om_ph",
+        "metadata": {"channel": "feishu", "peer_id": "oc_b39",
+                     "chatgpt_conversation_url": "https://chatgpt.com/g/g-p/c/abc123"},
+    }
+    out = bridge.build_feishu_trailer(details)
+    assert out.startswith("🔧")
+    assert "bridge=V20260703218" in out
+    assert "req=8da08f41" in out
+    assert "conv=abc123" in out          # tail segment only
+    assert "model=browser-chatgpt" in out
+    assert "patched=yes" in out
+    assert "lane=feishu:oc_b39" in out
+
+
+def test_build_feishu_trailer_tag_unknown_when_missing(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "debug_trailer_enabled", lambda: True)
+    monkeypatch.delenv("OPENCLAW_BRIDGE_TAG", raising=False)
+    out = bridge.build_feishu_trailer({"request_id": "r", "metadata": {"channel": "feishu"}})
+    assert "bridge=unknown" in out
+    assert "patched=no" in out           # no placeholder id
+
+
+def test_processing_ack_text_new_default(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.delenv("OPENCLAW_BRIDGE_PROCESSING_ACK_TEXT", raising=False)
+    text = bridge.processing_ack_text()
+    assert "已投递到 ChatGPT" in text
+    assert "请勿重复提问" in text
+
+
+def test_processing_remind_text_new_default(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.delenv("OPENCLAW_BRIDGE_PROCESSING_REMIND_TEXT", raising=False)
+    text = bridge.processing_remind_text()
+    assert "已排队" in text
+    assert "拖慢每一条" in text
+
+
+def test_processing_ack_text_env_override_still_wins(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("OPENCLAW_BRIDGE_PROCESSING_ACK_TEXT", "自定义")
+    assert bridge.processing_ack_text() == "自定义"

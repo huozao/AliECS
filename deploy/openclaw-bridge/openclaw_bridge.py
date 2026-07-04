@@ -1293,7 +1293,15 @@ def ensure_feishu_default_rule_record() -> str:
         return ""
     existing = find_feishu_bitable_record(table_id, "规则编号", "global-default")
     if existing:
-        return str(existing.get("record_id") or "")
+        record_id = str(existing.get("record_id") or "")
+        current = existing.get("fields") or {}
+        missing = {k: True for k in ("处理中卡片", "调试尾注") if k not in current}
+        if missing and record_id:
+            try:
+                update_feishu_bitable_record(table_id, record_id, missing)
+            except Exception as exc:
+                log_line(f"ensure_rule_record backfill failed: {exc}")
+        return record_id
     fields = {
         "规则编号": "global-default",
         "规则名称": "默认飞书会话规则",
@@ -1306,6 +1314,8 @@ def ensure_feishu_default_rule_record() -> str:
         "是否需要审核": False,
         "每日最大请求数": 0,
         "敏感群标记": False,
+        "处理中卡片": True,
+        "调试尾注": True,
         "备注": "openclaw-bridge 自动维护",
     }
     return bitable_created_record_id(create_feishu_bitable_record(table_id, fields))
@@ -2026,9 +2036,11 @@ def trace_chain_result(
 
 _inflight_counts: dict[str, int] = {}
 _inflight_lock = Lock()
+_feishu_global_rule_cache: dict[str, tuple[float, dict[str, bool]]] = {}
+_feishu_global_rule_cache_lock = Lock()
 
-DEFAULT_PROCESSING_ACK_TEXT = "⏳ 正在处理你的问题（通常 20–60 秒），收到回复后再继续提问哦～"
-DEFAULT_PROCESSING_REMIND_TEXT = "⚠️ 上一条还在处理中，这条已排队；请等回复后再问，连续提问会让每条都变慢。"
+DEFAULT_PROCESSING_ACK_TEXT = "📨 已投递到 ChatGPT，正在生成（约 20–60 秒）。答案会直接更新到这张卡片，请勿重复提问 🙏"
+DEFAULT_PROCESSING_REMIND_TEXT = "⚠️ 上一条还在 ChatGPT 处理中，这条已排队。请等上面那张卡片出结果再问，连续提问会拖慢每一条。"
 DEFAULT_PROCESSING_EMPTY_TEXT = "本次没有生成内容，请稍后重试。"
 
 
@@ -2055,8 +2067,56 @@ def _exit_inflight(lane_key: str) -> None:
             _inflight_counts[lane_key] = n
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def feishu_global_rule_policy() -> dict[str, bool]:
+    """Global feishu switches, sourced from the rule bitable's ``global-default`` row
+    with a short TTL cache. Any failure (no table / no creds / read error / missing
+    field) falls back to env so a broken or absent table never changes behavior."""
+    env_defaults = {
+        "处理中卡片": _env_flag("OPENCLAW_BRIDGE_PROCESSING_CARD", False),
+        "调试尾注": _env_flag("OPENCLAW_BRIDGE_DEBUG_TRAILER", True),
+    }
+    now = time.monotonic()
+    with _feishu_global_rule_cache_lock:
+        cached = _feishu_global_rule_cache.get("value")
+        if cached and now - cached[0] < FEISHU_GROUP_POLICY_CACHE_SECONDS:
+            return dict(cached[1])
+    result = dict(env_defaults)
+    table_id = feishu_session_console_table_id("rule")
+    if table_id:
+        try:
+            record = find_feishu_bitable_record(table_id, "规则编号", "global-default")
+            fields = (record or {}).get("fields") or {}
+            for key in ("处理中卡片", "调试尾注"):
+                if key in fields:
+                    result[key] = bitable_truthy(fields.get(key))
+        except Exception as exc:
+            log_line(
+                "feishu_global_rule_read_failed "
+                + json.dumps({"error": str(exc)}, ensure_ascii=False, sort_keys=True)
+            )
+    with _feishu_global_rule_cache_lock:
+        _feishu_global_rule_cache["value"] = (now, dict(result))
+    return result
+
+
+def invalidate_global_rule_cache() -> None:
+    with _feishu_global_rule_cache_lock:
+        _feishu_global_rule_cache.clear()
+
+
 def processing_card_enabled() -> bool:
-    return os.getenv("OPENCLAW_BRIDGE_PROCESSING_CARD", "0").strip().lower() in {"1", "true", "yes", "on"}
+    return bool(feishu_global_rule_policy().get("处理中卡片"))
+
+
+def debug_trailer_enabled() -> bool:
+    return bool(feishu_global_rule_policy().get("调试尾注"))
 
 
 def processing_ack_text() -> str:
@@ -2105,6 +2165,39 @@ def lane_batch_key(metadata: dict[str, Any]) -> str:
             str(peer_id),
         ]
     )
+
+
+DEFAULT_DONE_MARKER = "🌿 回复完毕"
+
+
+def done_marker_text() -> str:
+    return os.getenv("OPENCLAW_BRIDGE_DONE_MARKER", DEFAULT_DONE_MARKER)
+
+
+def build_feishu_trailer(details: dict[str, Any]) -> str:
+    """Content for OpenClaw's mandatory final-reply bubble (posted after the bridge's
+    card). Debug-trailer ON -> a one-line link diagnostic; OFF -> a calm done marker.
+    Never raises: any failure degrades to the done marker."""
+    if not debug_trailer_enabled():
+        return done_marker_text()
+    try:
+        metadata = details.get("metadata") or {}
+        lane = lane_batch_key(metadata)
+        busy = _inflight_counts.get(lane, 0)
+        conv = str(metadata.get("chatgpt_conversation_url") or "")
+        conv_tail = conv.rsplit("/", 1)[-1] if conv else "-"
+        req = str(details.get("request_id") or "-")
+        tag = os.getenv("OPENCLAW_BRIDGE_TAG") or "unknown"
+        patched = "yes" if details.get("feishu_placeholder_msg_id") else "no"
+        model = os.getenv("WEB_DOCK_MODEL", "browser-chatgpt")
+        return (
+            f"🔧 bridge={tag} req={req} conv={conv_tail} | "
+            f"busy={busy} lane={lane or '-'} | "
+            f"model={model} timeout={webdock_timeout()}s patched={patched}"
+        )
+    except Exception as exc:
+        log_line(f"feishu trailer build failed: {exc}")
+        return done_marker_text()
 
 
 def maybe_batch_request(body: dict[str, Any]) -> dict[str, Any] | str:
@@ -2582,6 +2675,8 @@ def build_reply(body: dict[str, Any]) -> str:
             reply = deliver_feishu_media(reply, write_details)
             reply = deliver_feishu_text_card(reply, write_details)
             reply = finalize_placeholder(reply, write_details)
+            if (write_details.get("metadata") or {}).get("channel") == "feishu" and reply == NO_REPLY:
+                reply = build_feishu_trailer(write_details)
             trace_chain_result(details, started, reply=reply)
             append_feishu_session_console_records_async(write_details, reply, "已回复")
             return reply
@@ -2783,6 +2878,7 @@ class Handler(BaseHTTPRequestHandler):
             "feishu_group_policy_invalidated "
             + json.dumps({"cleared": cleared}, ensure_ascii=False, sort_keys=True)
         )
+        invalidate_global_rule_cache()
         return self._json(200, {"ok": True, "cleared": cleared})
 
     def do_GET(self) -> None:
