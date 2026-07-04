@@ -164,6 +164,39 @@ class BackendRecipeRouteTests(unittest.TestCase):
         )
         self.assertGreater(len(download.content), 0)
 
+    def test_download_with_sheet_human_returns_single_human_sheet(self) -> None:
+        token = self._token(permissions=["formula.read"])
+        data = self.client.post(
+            "/v1/recipes/query",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"query": "3027"},
+        ).json()
+
+        download = self.client.get(
+            f"{data['download_url']}?sheet=human",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(200, download.status_code)
+        workbook = load_workbook(BytesIO(download.content))
+        self.assertEqual(["配方表_人眼版"], workbook.sheetnames)
+        self.assertIn(urllib.parse.quote("人眼版"), download.headers.get("content-disposition", ""))
+
+        # 全量下载不受 human 变体缓存影响，仍是多工作表
+        full = self.client.get(data["download_url"], headers={"Authorization": f"Bearer {token}"})
+        self.assertEqual(200, full.status_code)
+        full_workbook = load_workbook(BytesIO(full.content))
+        self.assertIn("配方表_人眼版", full_workbook.sheetnames)
+        self.assertGreater(len(full_workbook.sheetnames), 1)
+
+    def test_download_rejects_unknown_sheet_param(self) -> None:
+        token = self._token(permissions=["formula.read"])
+        response = self.client.get(
+            "/v1/recipes/download/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?sheet=matrix",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(400, response.status_code)
+
     def test_admin_user_can_query_recipe(self) -> None:
         token = self._token(roles=["admin"], permissions=["admin.access"])
 

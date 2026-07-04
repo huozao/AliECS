@@ -19,7 +19,8 @@
     .panel{background:rgba(255,253,248,.94);border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:var(--shadow);margin-bottom:16px}.form{display:grid;grid-template-columns:minmax(220px,1fr) 170px auto;gap:10px;align-items:end}.form label{display:grid;gap:6px;font-size:13px;color:var(--muted)}input,select,textarea{width:100%;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:#fff;color:var(--text);font:inherit}input[type="checkbox"],input[type="radio"]{width:16px;height:16px;min-width:16px;padding:0;margin:0;border-radius:4px;flex:0 0 auto;accent-color:var(--primary);cursor:pointer}.notice,.error,.success{border-radius:14px;padding:12px 14px;margin-bottom:14px}.notice{background:#f2eadc;color:var(--muted)}.error{display:none;background:#f5d7d3;color:var(--bad)}.success{display:none;background:#dfeee3;color:var(--good)}.hidden{display:none!important}.muted{color:var(--muted)}.small{font-size:12px}
     .table-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px;background:#fff}.data-table{width:100%;border-collapse:collapse;font-size:13px;min-width:1240px}.data-table th,.data-table td{border-bottom:1px solid var(--line);padding:9px 10px;text-align:left;vertical-align:middle}.data-table th{background:#f2eadc;position:sticky;top:0}
     .compare-panel{border:1px solid var(--line);background:rgba(255,253,249,.84);border-radius:16px;padding:14px;margin-top:14px}.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px}.section-title{font-size:18px;font-weight:850}.hint{color:var(--muted);font-size:13px;font-weight:500}.version-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.version-card{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:12px 13px 0;overflow:hidden;display:flex;flex-direction:column}.version-card.selected{border-color:#7aa46d;box-shadow:0 0 0 2px rgba(80,137,65,.08)}.version-card.base{border-color:#8a6a3b;box-shadow:0 0 0 2px rgba(138,106,59,.14)}.version-card.disabled-by-user{opacity:.55}.v-head{display:flex;align-items:flex-start;gap:10px;margin-bottom:10px}.v-title{min-width:0;flex:1}.v-name{font-weight:900;font-size:16px;line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.v-code{margin-top:5px;font-weight:700;font-size:13px;color:#5a5246;display:flex;align-items:center;gap:8px;flex-wrap:wrap}.v-version{margin-top:3px;color:#6f675b;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tag{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:999px;font-size:12px;font-weight:800;border:1px solid transparent}.tag.default{color:#a16207;background:#fff6d6;border-color:#ead38a}.tag.target{color:#2f7d3d;background:#eff9ee;border-color:#b7dcb3}.tag.rule{color:#68523a;background:#f4eadb;border-color:#e4d1b9}.v-meta{display:grid;grid-template-columns:70px 1fr;gap:7px 10px;padding:8px 0 10px;border-top:1px solid rgba(234,223,206,.62)}.m-key{color:var(--muted)}.m-val{text-align:right;font-weight:650;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:#858585}.status-dot.on{background:#2f7d3d}.set-row{display:flex;margin:auto -13px 0;border-top:1px solid var(--line)}.base-set{flex:1;min-width:0;height:40px;background:#fffaf3;display:flex;align-items:center;justify-content:center;padding:0 8px;gap:6px;color:#46392a;font-weight:700;font-size:13px;white-space:nowrap;cursor:pointer}.base-set.active{background:#f6f0e6;color:#63451f}.target-set{border-left:1px dashed var(--line)}.target-set.active{background:#eef7ee;color:#2f5d2f}
-    .compare-toolbar{display:grid;grid-template-columns:auto auto auto auto auto auto 1fr;gap:10px;align-items:center;margin:14px 0 12px}.export-btn{height:36px;padding:0 14px;border:1px solid #cdbba6;border-radius:10px;background:#fffaf3;color:#5a452d;font-weight:800}.export-btn:hover{background:#fff4e5}.pills{display:flex;gap:8px;flex-wrap:wrap}.pill{height:34px;padding:0 15px;border-radius:999px;border:1px solid var(--line-strong);background:var(--panel);color:#4a4137;font-weight:750}.pill.active{background:#7a5a35;color:#fff;border-color:#7a5a35}.legend{display:flex;gap:12px;flex-wrap:wrap;padding:10px 12px;border:1px dashed #dbcab5;background:#fffaf2;border-radius:12px;color:#675b4e;font-size:12px;margin-bottom:12px}.legend b{color:#342c24}.legend span{display:flex;align-items:center;gap:5px}.mini-box{width:26px;height:3px;border-radius:999px;background:rgba(126,89,45,.45);display:inline-block}.mini-box.low{width:10px;background:rgba(126,89,45,.24)}
+    .compare-toolbar{display:grid;grid-template-columns:auto auto auto auto 1fr;gap:10px;align-items:center;margin:14px 0 12px}.export-btn{height:36px;padding:0 14px;border:1px solid #cdbba6;border-radius:10px;background:#fffaf3;color:#5a452d;font-weight:800}.export-btn:hover{background:#fff4e5}
+    .dropdown{position:relative;display:inline-block}.drop-btn::after{content:" ▾";font-size:11px}.drop-menu{position:absolute;top:100%;left:0;padding-top:6px;display:none;z-index:40;min-width:216px}.dropdown:hover .drop-menu,.dropdown.open .drop-menu{display:block}.drop-inner{background:#fff;border:1px solid var(--line-strong);border-radius:12px;box-shadow:0 12px 26px rgba(69,56,38,.16);padding:6px}.drop-menu button{display:block;width:100%;text-align:left;background:none;border:0;border-radius:8px;padding:9px 12px;font-weight:650;color:#4a4137;font-size:13px}.drop-menu button:hover{background:#f6efe3}.drop-menu button:disabled{opacity:.45;cursor:not-allowed;background:none}.drop-menu label.view-item{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;font-size:13px;font-weight:650;color:#4a4137;cursor:pointer}.drop-menu label.view-item:hover{background:#f6efe3}.pills{display:flex;gap:8px;flex-wrap:wrap}.pill{height:34px;padding:0 15px;border-radius:999px;border:1px solid var(--line-strong);background:var(--panel);color:#4a4137;font-weight:750}.pill.active{background:#7a5a35;color:#fff;border-color:#7a5a35}.legend{display:flex;gap:12px;flex-wrap:wrap;padding:10px 12px;border:1px dashed #dbcab5;background:#fffaf2;border-radius:12px;color:#675b4e;font-size:12px;margin-bottom:12px}.legend b{color:#342c24}.legend span{display:flex;align-items:center;gap:5px}.mini-box{width:26px;height:3px;border-radius:999px;background:rgba(126,89,45,.45);display:inline-block}.mini-box.low{width:10px;background:rgba(126,89,45,.24)}
     .summary-grid{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));gap:12px;margin-bottom:12px}.stat{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:11px 14px;display:flex;align-items:center;gap:12px;min-height:64px}.icon{width:34px;height:34px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:17px}.icon.green{background:#eef8ef;color:var(--good)}.icon.orange{background:#fff3e6;color:var(--orange)}.icon.blue{background:#eef5fc;color:var(--blue)}.icon.purple{background:#f5efff;color:var(--purple)}.icon.gray{background:#f5f0e8;color:#7d6340}.s-label{font-size:13px;color:var(--muted);font-weight:650}.s-value{font-size:22px;font-weight:900;line-height:1;margin-top:4px}
     .compare-layout{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:14px;align-items:start}.compare-table-wrap{border:1px solid var(--line);border-radius:15px;overflow:auto;background:var(--panel);box-shadow:0 3px 16px rgba(45,30,12,.04);max-height:670px}.compare-table{width:100%;min-width:1120px;border-collapse:separate;border-spacing:0;font-size:13px}.compare-table th{position:sticky;top:0;z-index:3;background:#fbf5ea;border-bottom:1px solid var(--line);color:#2d2924;height:58px;font-weight:900;text-align:center;padding:8px 10px}.compare-table th,.compare-table td{border-right:1px solid var(--line);border-bottom:1px solid #f0e6d7}.compare-table th:last-child,.compare-table td:last-child{border-right:0}.compare-table tbody td{height:62px;padding:7px 10px;vertical-align:middle;background:#fffdf9;text-align:center}.compare-table tbody tr:hover td{background:#fffaf2}.col-status{width:78px}.col-code{width:1%;white-space:nowrap;font-variant-numeric:tabular-nums}.col-name{width:1%;white-space:nowrap;text-align:left!important}.col-spec{width:1%;white-space:nowrap;text-align:left!important}.col-unit{width:1%;white-space:nowrap}.version-col{width:155px;text-align:center}.vh-tags{display:flex;flex-wrap:wrap;justify-content:center;gap:4px;margin-bottom:5px}.vh-tag{display:inline-flex;align-items:center;height:16px;padding:0 6px;border-radius:999px;font-size:10px;font-weight:700;line-height:1;border:1px solid transparent}.vh-tag.bom{color:#9a7b2a;background:#fbf3df;border-color:#ecdcb4}.vh-tag.off{color:#9a6a62;background:#f6ebe9;border-color:#e6cfc9}.vh-tag.base{color:#7a634a;background:#f3ece1;border-color:#e1d3bf}.vh-tag.target{color:#4a7a54;background:#eef6ee;border-color:#cfe3cf}.cell-value{position:relative;text-align:center}.ratio-line{display:flex;align-items:center;justify-content:center;gap:6px;line-height:1.05}.ratio-main{font-size:15px;font-weight:900}.qty-line{margin-top:3px;color:#6d645a;font-size:12px}.flag{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;font-size:13px;font-weight:900}.flag.up{color:#c55537}.flag.down{color:#2e7d58}.flag.neutral{color:#89827a}.flag.new{font-size:11px;color:#6f54a7;background:#f0e8fb;padding:0 5px;border-radius:999px;min-width:auto}.flag.base{font-size:11px;color:#6b4a1e;background:#f7ead6;padding:0 5px;border-radius:999px;min-width:auto}.delta{margin-left:2px;font-size:11px;font-weight:800}.empty{color:#9a9287;font-weight:800;font-size:18px}.barLine{position:absolute;left:0;right:0;bottom:0;height:4px;margin:0;background:rgba(0,0,0,.05);border-radius:0;overflow:hidden}.barLine i{display:block;height:100%;border-radius:0;background:linear-gradient(90deg,rgba(126,89,45,.28),rgba(126,89,45,.58))}
     .status-badge{display:inline-flex;align-items:center;justify-content:center;height:24px;min-width:48px;padding:0 9px;border-radius:999px;font-size:12px;font-weight:850;border:1px solid transparent}.st-change{color:#c2681a;background:#fff4e7;border-color:#ffd9ad}.st-replace{color:#2f75b5;background:#edf6ff;border-color:#bedaf5}.st-add{color:#7a55aa;background:#f5efff;border-color:#d8c7f2}.st-del{color:#a94535;background:#fff0ec;border-color:#f5c0b5}.st-same{color:#6b675f;background:#f4f2ef;border-color:#ded9d1}.st-history{color:#7b6852;background:#f6efe6;border-color:#e6d7c5}.codeWarn{color:#a83d2f!important;background:#fff1eb!important;font-weight:950}.warn-dot{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;margin-left:4px;border-radius:50%;background:#d94a31;color:white;font-size:11px;font-weight:950;vertical-align:1px}.parent-warn{display:inline-flex;align-items:center;gap:5px;color:#a83d2f;background:#fff1eb;border:1px solid #f3b6a8;border-radius:8px;padding:2px 6px}
@@ -81,11 +82,35 @@
         <div id="versionGrid" class="version-grid"></div>
         <div class="compare-toolbar">
           <button id="renderCompareBtn" class="btn primary" type="button">生成对比</button>
-          <button id="selectAllVersionsBtn" class="btn subtle" type="button">全选</button>
-          <button id="selectActiveDefaultBtn" class="btn subtle" type="button">只选启用 + 默认BOM</button>
-          <button id="downloadRawBtn" class="export-btn hidden" type="button">下载原始明细</button>
-          <button id="downloadCompareBtn" class="export-btn hidden" type="button">下载对比表Excel</button>
-          <button id="toggleSpecBtn" class="btn subtle" type="button">隐藏规格列</button>
+          <div class="dropdown">
+            <button class="btn subtle drop-btn" type="button">快速选择</button>
+            <div class="drop-menu"><div class="drop-inner">
+              <button type="button" data-quick-select="all">全选</button>
+              <button type="button" data-quick-select="none">全不选</button>
+              <button type="button" data-quick-select="invert">反选</button>
+              <button type="button" data-quick-select="default">只选默认BOM</button>
+              <button type="button" data-quick-select="activeDefault">只选启用 + 默认BOM</button>
+            </div></div>
+          </div>
+          <div class="dropdown">
+            <button class="export-btn drop-btn" type="button">下载</button>
+            <div class="drop-menu"><div class="drop-inner">
+              <button id="downloadRawBtn" type="button" disabled>下载原始明细（全部工作表）</button>
+              <button id="downloadHumanBtn" type="button" disabled>只下载「配方表_人眼版」</button>
+              <button id="downloadCompareBtn" type="button" disabled>下载对比表Excel</button>
+            </div></div>
+          </div>
+          <div class="dropdown">
+            <button class="btn subtle drop-btn" type="button">视图</button>
+            <div class="drop-menu"><div class="drop-inner" id="viewOptions">
+              <label class="view-item"><input type="checkbox" data-view="spec" checked/>显示规格列</label>
+              <label class="view-item"><input type="checkbox" data-view="qty" checked/>显示数量</label>
+              <label class="view-item"><input type="checkbox" data-view="pct" checked/>显示百分比</label>
+              <label class="view-item"><input type="checkbox" data-view="arrow" checked/>显示±基准箭头</label>
+              <label class="view-item"><input type="checkbox" data-view="newTag" checked/>显示「新增」标记</label>
+              <label class="view-item"><input type="checkbox" data-view="bar" checked/>显示占比条</label>
+            </div></div>
+          </div>
           <div id="compareFilters" class="pills">
             <button class="pill active" data-filter="all" type="button">全部</button>
             <button class="pill" data-filter="diff" type="button">仅差异</button>
@@ -200,7 +225,11 @@
     const PRICE_KEY='formula_manual_prices';
     const PRICE_TIME_KEY='formula_manual_price_times';
     const SIM_QTY_KEY='formula_simulated_quantities';
-    const state={token:'',fileId:'',cost:null,selectedKey:'',manualPrices:{},priceTimes:{},simulatedQuantities:{},focusCode:'',focusSimCode:'',queryRows:[],versions:[],selectedKeys:new Set(),baseKey:'',targetKeys:new Set(),activeFilter:'all',showSpec:true,majorityParentCode:'',majorityItemLen:0,majorityItemPrefix:''};
+    const VIEW_KEY='formula_display_options';
+    const VIEW_DEFAULTS={spec:true,qty:true,pct:true,arrow:true,newTag:true,bar:true};
+    const state={token:'',fileId:'',cost:null,selectedKey:'',manualPrices:{},priceTimes:{},simulatedQuantities:{},focusCode:'',focusSimCode:'',queryRows:[],versions:[],selectedKeys:new Set(),baseKey:'',targetKeys:new Set(),activeFilter:'all',view:{...VIEW_DEFAULTS},majorityParentCode:'',majorityItemLen:0,majorityItemPrefix:''};
+    const loadViewOptions=()=>{try{return{...VIEW_DEFAULTS,...JSON.parse(localStorage.getItem(VIEW_KEY)||'{}')}}catch{return {...VIEW_DEFAULTS}}};
+    const saveViewOptions=()=>localStorage.setItem(VIEW_KEY,JSON.stringify(state.view));
     const getAuthToken=()=>AUTH_KEYS.map((key)=>localStorage.getItem(key)||'').find(Boolean)||'';
     const setAuthToken=(token)=>AUTH_KEYS.forEach((key)=>localStorage.setItem(key,token));
     const clearAuthToken=()=>AUTH_KEYS.forEach((key)=>localStorage.removeItem(key));
@@ -502,16 +531,18 @@
       const pct=max>0?Math.max(0,Math.min(1,cell.ratio/max)):0;
       let flag='';
       if(base&&version.key===base.key)flag='';
-      else if(isTarget&&!baseCell)flag='<span class="flag new">新增</span>';
-      else if(isTarget&&baseCell){
+      else if(isTarget&&!baseCell){if(state.view.newTag)flag='<span class="flag new">新增</span>';}
+      else if(isTarget&&baseCell&&state.view.arrow){
         const delta=cell.ratio-baseCell.ratio;
         if(delta>0.000001)flag=`<span class="flag up">↑<span class="delta">${fmtDelta(delta)}</span></span>`;
         else if(delta<-0.000001)flag=`<span class="flag down">↓<span class="delta">${fmtDelta(delta)}</span></span>`;
       }
+      const mainText=state.view.qty?formatQty(cell.qty):ratio(cell.ratio);
+      const subLine=(state.view.qty&&state.view.pct)?`<div class="qty-line">${ratio(cell.ratio)}</div>`:'';
       return `<td class="version-col cell-value ${isTarget?'current':''} ${base&&version.key===base.key?'base':''}">
-        <div class="ratio-line"><span class="ratio-main">${formatQty(cell.qty)}</span>${flag}</div>
-        <div class="qty-line">${ratio(cell.ratio)}</div>
-        <div class="barLine" title="本条长度 = 该物料比例 / 当前版本最大物料比例"><i style="width:${Math.round(pct*100)}%"></i></div>
+        <div class="ratio-line"><span class="ratio-main">${mainText}</span>${flag}</div>
+        ${subLine}
+        ${state.view.bar?`<div class="barLine" title="本条长度 = 该物料比例 / 当前版本最大物料比例"><i style="width:${Math.round(pct*100)}%"></i></div>`:''}
       </td>`;
     }
     function renderCompareTable(){
@@ -525,14 +556,14 @@
       compareTable.innerHTML=`<thead><tr>
         <th class="col-code">子件编码</th>
         <th class="col-name">子件名称</th>
-        ${state.showSpec?'<th class="col-spec">规格型号</th>':''}
+        ${state.view.spec?'<th class="col-spec">规格型号</th>':''}
         <th class="col-unit">单位</th>
         ${selected.map((version)=>`<th class="version-col"><div class="vh-tags">${version.defaultBOM==='1'?'<span class="vh-tag bom">默认BOM</span>':''}${rowDisabled(version)?'<span class="vh-tag off">停用</span>':''}${version.key===state.baseKey?'<span class="vh-tag base">基准</span>':''}${isTargetVersion(version)?'<span class="vh-tag target">目标</span>':''}</div><div title="${escapeHtml(version.parentName)}">${escapeHtml(version.parentName)}</div><div style="font-size:12px;color:#64594d;margin-top:4px">${escapeHtml(shortVersion(version.version))}</div></th>`).join('')}
         <th class="col-status">状态</th>
       </tr></thead><tbody>${rows.map((row)=>`<tr>
         <td class="col-code ${isSpecialItemCode(row.itemCode)?'codeWarn':''}" title="${isSpecialItemCode(row.itemCode)?codeTip(row.itemCode):''}">${escapeHtml(row.itemCode)}${isSpecialItemCode(row.itemCode)?'<span class="warn-dot">!</span>':''}</td>
         <td class="col-name">${escapeHtml(row.itemName)}</td>
-        ${state.showSpec?`<td class="col-spec">${escapeHtml(row.spec)}</td>`:''}
+        ${state.view.spec?`<td class="col-spec">${escapeHtml(row.spec)}</td>`:''}
         <td class="col-unit">${escapeHtml(row.unit)}</td>
         ${selected.map((version)=>renderCompareCell(row,version)).join('')}
         <td class="col-status"><span class="status-badge ${statusClass[row.st]}">${statusText[row.st]}</span></td>
@@ -586,6 +617,20 @@
         return `<div class="comp-target-title">${escapeHtml(targetLabel(target))}</div>${targetRows.map((row)=>`<div class="comp-row"><div title="${escapeHtml(row.itemName)}">${escapeHtml(row.itemName.length>6?row.itemName.slice(0,6)+'…':row.itemName)}</div><div class="comp-bar"><i style="width:${Math.round(row.ratio/max*100)}%"></i></div><div class="comp-val">${ratio(row.ratio)}</div></div>`).join('')}`;
       }).join('');
     }
+    function applyQuickSelect(mode){
+      const all=state.versions.map((version)=>version.key);
+      if(mode==='all')state.selectedKeys=new Set(all);
+      else if(mode==='none')state.selectedKeys=new Set();
+      else if(mode==='invert')state.selectedKeys=new Set(all.filter((key)=>!state.selectedKeys.has(key)));
+      else if(mode==='default')state.selectedKeys=new Set(state.versions.filter((version)=>version.defaultBOM==='1').map((version)=>version.key));
+      else if(mode==='activeDefault')state.selectedKeys=new Set(state.versions.filter((version)=>!rowDisabled(version)||version.defaultBOM==='1').map((version)=>version.key));
+      if(!state.selectedKeys.has(state.baseKey)){
+        const first=state.versions.find((version)=>state.selectedKeys.has(version.key));
+        state.baseKey=first?first.key:'';
+      }
+      normalizeTargets();
+      renderAllCompare();
+    }
     function renderAllCompare(){
       renderVersionCards();
       renderCompareTable();
@@ -598,7 +643,7 @@
       buildVersionsFromRows(state.queryRows);
       renderRawDetails(state.queryRows);
       comparePanel.classList.toggle('hidden',!state.queryRows.length);
-      downloadCompareBtn.classList.toggle('hidden',!state.queryRows.length);
+      downloadCompareBtn.disabled=!state.queryRows.length;
       if(state.queryRows.length)renderAllCompare();
       else{compareTable.innerHTML='';compareSummary.innerHTML='';insights.innerHTML='';compositionRows.innerHTML='';}
       return items.length;
@@ -618,7 +663,7 @@
       event.preventDefault();
       clearMessage();
       state.fileId='';state.cost=null;state.selectedKey='';state.queryRows=[];state.versions=[];state.selectedKeys=new Set();state.baseKey='';state.targetKeys=new Set();
-      downloadRawBtn.classList.add('hidden');downloadCompareBtn.classList.add('hidden');downloadHint.textContent='';comparePanel.classList.add('hidden');costPanel.classList.add('hidden');
+      downloadRawBtn.disabled=true;downloadHumanBtn.disabled=true;downloadCompareBtn.disabled=true;downloadHint.textContent='';comparePanel.classList.add('hidden');costPanel.classList.add('hidden');
       const query=queryInput.value.trim();
       if(!query){showError('请输入编号或父件编码。');return;}
       queryBtn.disabled=true;resultBox.classList.remove('hidden');resultBox.innerHTML='<span class="fmspin"></span>正在查询并核算成本…';
@@ -636,8 +681,8 @@
         const ss=data.source_sync;
         const syncNote=ss?` · 同步 #${ss.id}（${ss.finished_at?new Date(ss.finished_at).toLocaleString():''} · ${ss.status}）`:'';
         resultBox.textContent=`匹配 ${data.match_count||0} 条明细，配方 ${data.recipe_count||0} 个${filterNote}，来源：${data.source_file||'unknown'}${syncNote}`;
-        downloadRawBtn.classList.toggle('hidden',!state.fileId);
-        downloadHint.textContent=state.fileId?'原始明细 Excel 沿用原下载程序；对比表 Excel 按当前筛选和基准版本导出。':'';
+        downloadRawBtn.disabled=!state.fileId;downloadHumanBtn.disabled=!state.fileId;
+        downloadHint.textContent=state.fileId?'下载菜单：原始明细为服务端生成；对比表 Excel 按当前筛选、视图显示设置和基准版本导出。':'';
         const costLoading=document.createElement('span');
         costLoading.className='cost-loading';costLoading.innerHTML=' · <span class="fmspin"></span>成本核算中…';
         resultBox.appendChild(costLoading);
@@ -848,24 +893,38 @@
       const blob=await response.blob();
       saveBlob(blob,downloadNameFromDisposition(response.headers.get('content-disposition'),`配方查询_${state.fileId}.xlsx`));
     }
+    async function downloadHumanResult(){
+      if(!state.fileId)return;
+      const headers={};syncAuth();if(state.token)headers.Authorization=`Bearer ${state.token}`;
+      const response=await fetch(`${API_BASE}/v1/recipes/download/${state.fileId}?sheet=human`,{headers});
+      if(!response.ok){let message=`HTTP ${response.status}`;try{const data=await response.json();message=data.detail||message;}catch{}throw new Error(message);}
+      const blob=await response.blob();
+      saveBlob(blob,downloadNameFromDisposition(response.headers.get('content-disposition'),`配方查询_人眼版_${state.fileId}.xlsx`));
+    }
     function excelCss(){
       return `<style>
+        br{mso-data-placement:same-cell;}
         body{font-family:"Microsoft YaHei",Arial,sans-serif;}
         table{border-collapse:collapse;font-size:12px;}
-        th{background:#f4eadb;font-weight:bold;color:#2d2924;}
-        td,th{border:1px solid #d8c7b4;padding:6px 8px;vertical-align:middle;text-align:center;}
-        .title{font-size:18px;font-weight:bold;background:#fff4e5;text-align:left;}
-        .muted{color:#6b6258;}
-        .warn{background:#fff1eb;color:#a83d2f;font-weight:bold;}
-        .same{background:#f4f2ef;color:#6b675f;}
-        .change{background:#fff4e7;color:#c2681a;}
-        .replace{background:#edf6ff;color:#2f75b5;}
-        .add{background:#f5efff;color:#7a55aa;}
-        .del{background:#fff0ec;color:#a94535;}
-        .history{background:#f6efe6;color:#7b6852;}
-        .barBg{width:110px;height:8px;background:#eee;border-radius:8px;display:inline-block;vertical-align:middle;}
-        .barFill{height:8px;background:#9b7145;border-radius:8px;display:block;}
+        td,th{border:.5pt solid #d8ccb8;padding:4px 8px;vertical-align:middle;text-align:center;}
+        th{background:#4a3c28;color:#fff;font-weight:bold;border-color:#4a3c28;}
+        .title{font-size:20px;font-weight:bold;background:#fff;color:#2d2418;text-align:left;border:none;padding:10px 4px;}
+        .meta{background:#faf6ee;color:#6b6258;text-align:left;font-size:11px;border-color:#e8dfd0;}
+        .chip{font-weight:bold;font-size:12px;}
+        .miss{background:#f2f0ec;color:#b8b2a8;}
+        .name{text-align:left;}
+        .base-col{background:#f6efe2;}
+        .legend{background:#fff;border:none;color:#8a8172;text-align:left;font-size:10px;}
       </style>`;
+    }
+    // 对比表 Excel（方案B 紧凑式）：行按状态分组排序，每版本一列，格内比例/数量/±基准三行；
+    // 底色深浅=该配方内部占比（横条替代品）；跟随当前筛选与视图显示设置。
+    const EXPORT_ST_ORDER={replace:0,add:1,del:2,change:3,same:4,history:5};
+    const EXPORT_ST_COLOR={replace:['#dbeafe','#1d4ed8'],add:['#ede9fe','#6d28d9'],del:['#fee2e2','#b91c1c'],change:['#ffedd5','#c2410c'],same:['#f1f5f9','#64748b'],history:['#f5efe6','#7b6852']};
+    function exportHeat(value,max){
+      const p=max>0?Math.max(0,Math.min(1,value/max)):0;
+      const mix=(a,b)=>Math.round(a+(b-a)*p);
+      return `#${[mix(0xFF,0xE3),mix(0xFB,0xC9),mix(0xF3,0x9E)].map((part)=>part.toString(16).padStart(2,'0')).join('')}`;
     }
     function downloadHtmlAsXls(filename,tableHtml){
       const blob=new Blob([`<html><head><meta charset="utf-8">${excelCss()}</head><body>${tableHtml}</body></html>`],{type:"application/vnd.ms-excel;charset=utf-8"});
@@ -877,40 +936,64 @@
     function downloadCompareResult(){
       const selected=selectedVersions();
       if(!selected.length){showError('请选择配方查看详情。');return;}
-      const rowsAll=buildCompareMatrix();
-      const rows=rowsAll.map((row)=>({...row,st:rowStatus(row,rowsAll)})).filter((row)=>passCompareFilter(row.st));
       const base=baseVersion(), targets=targetVersions();
       if(!base||!targets.length){showError('没有可导出的对比数据。');return;}
-      const headers=['状态','子件编码','子件名称','规格型号','单位'].concat(selected.map((version)=>`${version.parentCode}｜${version.version}`));
-      const bodyRows=rows.map((row)=>`<tr>
-        <td class="${row.st}">${statusText[row.st]}</td>
-        <td class="${isSpecialItemCode(row.itemCode)?'warn':''}">${escapeHtml(row.itemCode)}</td>
-        <td>${escapeHtml(row.itemName)}</td>
-        <td>${escapeHtml(row.spec)}</td>
-        <td>${escapeHtml(row.unit)}</td>
-        ${selected.map((version)=>{
-          const cell=row.cells[version.key], baseCell=row.cells[base.key], isTarget=targets.some((target)=>target.key===version.key);
-          if(!cell)return '<td></td>';
-          const max=versionMaxRatio(version.key);
-          const pct=max>0?Math.max(0,Math.min(1,cell.ratio/max)):0;
-          let flag='';
-          if(version.key===base.key)flag='';
-          else if(isTarget&&!baseCell)flag='新增';
-          else if(isTarget&&baseCell){
-            const delta=cell.ratio-baseCell.ratio;
-            if(delta>0.000001)flag=`↑ ${fmtDelta(delta)}`;
-            else if(delta<-0.000001)flag=`↓ ${fmtDelta(delta)}`;
+      const rowsAll=buildCompareMatrix();
+      const rows=rowsAll.map((row)=>({...row,st:rowStatus(row,rowsAll)})).filter((row)=>passCompareFilter(row.st))
+        .sort((a,b)=>((EXPORT_ST_ORDER[a.st]??9)-(EXPORT_ST_ORDER[b.st]??9))||a.itemCode.localeCompare(b.itemCode,'zh-CN'));
+      const stats={};
+      rows.forEach((row)=>{const label=statusText[row.st];stats[label]=(stats[label]||0)+1;});
+      const filterLabels={all:'全部',diff:'仅差异',replace:'仅替换',adddel:'仅新增/删除',change:'仅比例变化',same:'仅一致'};
+      const showSpec=state.view.spec;
+      const cols=(showSpec?5:4)+selected.length;
+      const stampDate=(()=>{const d=new Date();const p=(n)=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;})();
+      const versionHead=(version)=>{
+        const baseTag=version.key===base.key?'<br><span style="font-size:10px;color:#ffd98a">★ 基准</span>':'';
+        return `${escapeHtml(version.parentCode)}<br><span style="font-size:10px;font-weight:normal;color:#d8ccb8">${escapeHtml(version.version||'-')}</span>${baseTag}`;
+      };
+      const infoHeads=[['状态',52],['子件编码',76],['子件名称',150]].concat(showSpec?[['规格型号',90]]:[]).concat([['单位',40]]);
+      const bodyRows=rows.map((row)=>{
+        const [stBg,stFg]=EXPORT_ST_COLOR[row.st]||['#fff','#333'];
+        const warnStyle=isSpecialItemCode(row.itemCode)?';color:#a83d2f;font-weight:bold':'';
+        const cells=selected.map((version)=>{
+          const cell=row.cells[version.key];
+          if(!cell)return '<td class="miss">—</td>';
+          const isBase=version.key===base.key;
+          const baseCell=row.cells[base.key];
+          const isTarget=targets.some((target)=>target.key===version.key);
+          const lines=[];
+          if(state.view.pct||!state.view.qty)lines.push(`<b>${ratio(cell.ratio)}</b>`);
+          if(state.view.qty)lines.push(`<span style="color:#777;font-size:10px">${formatQty(cell.qty)} ${escapeHtml(cell.unit)}</span>`);
+          if(!isBase&&isTarget){
+            if(!baseCell){
+              if(state.view.newTag)lines.push('<span style="color:#6d28d9;font-size:10px;font-weight:bold">新增</span>');
+            }else if(state.view.arrow){
+              const delta=cell.ratio-baseCell.ratio;
+              if(delta>0.000001)lines.push(`<span style="color:#c0392b;font-size:10px;font-weight:bold">↑ ${fmtDelta(delta)}</span>`);
+              else if(delta<-0.000001)lines.push(`<span style="color:#1e8449;font-size:10px;font-weight:bold">↓ ${fmtDelta(delta)}</span>`);
+            }
           }
-          return `<td><div><b>${ratio(cell.ratio)}</b> <span class="muted">${flag}</span></div><div class="muted">${formatQty(cell.qty)} ${escapeHtml(cell.unit)}</div><span class="barBg"><span class="barFill" style="width:${Math.round(pct*100)}%"></span></span></td>`;
-        }).join('')}
-      </tr>`).join('');
+          const bg=isBase?'#f6efe2':exportHeat(cell.ratio,versionMaxRatio(version.key));
+          return `<td class="${isBase?'base-col':''}" style="background:${bg}">${lines.join('<br>')}</td>`;
+        }).join('');
+        return `<tr style="height:44px">
+          <td style="background:${stBg};color:${stFg};font-weight:bold">${statusText[row.st]}</td>
+          <td style="font-family:Consolas,monospace${warnStyle}">${escapeHtml(row.itemCode)}</td>
+          <td class="name">${escapeHtml(row.itemName)}</td>
+          ${showSpec?`<td class="name" style="color:#777">${escapeHtml(row.spec)}</td>`:''}
+          <td>${escapeHtml(row.unit)}</td>
+          ${cells}
+        </tr>`;
+      }).join('');
       const html=`<table>
-        <tr><th class="title" colspan="${headers.length}">对比的配方｜比例对比表</th></tr>
-        <tr><td class="muted" colspan="${headers.length}">目标：${escapeHtml(targets.map((target)=>targetLabel(target)).join('、'))}；基准：${escapeHtml(targetLabel(base))}；横条=单本配方内部占比。</td></tr>
-        <tr>${headers.map((header)=>`<th>${escapeHtml(header)}</th>`).join('')}</tr>
+        <tr><td class="title" colspan=${cols}>配方比例对比表</td></tr>
+        <tr><td class="meta" colspan=${cols}>基准：${escapeHtml(targetLabel(base))}　|　目标：${escapeHtml(targets.map((target)=>targetLabel(target)).join('、'))}　|　导出：${stampDate}　|　筛选：${filterLabels[state.activeFilter]||state.activeFilter}</td></tr>
+        <tr><td class="meta chip" colspan=${cols}>差异统计：　${escapeHtml(Object.entries(stats).map(([key,value])=>`${key} ${value}`).join(' · '))}　（行按状态分组排序）</td></tr>
+        <tr>${infoHeads.map(([label,width])=>`<th style="width:${width}px">${label}</th>`).join('')}${selected.map((version)=>`<th style="width:108px">${versionHead(version)}</th>`).join('')}</tr>
         ${bodyRows}
+        <tr><td class="legend" colspan=${cols}>说明：每格=比例/数量/相对基准变化；红↑=比基准高、绿↓=低；「—」=该配方不含此物料；底色深浅=该配方内占比高低；★基准列米色底；红色编码=格式与多数物料不一致。</td></tr>
       </table>`;
-      downloadHtmlAsXls(`对比的配方_比例对比表_${filenamePart(queryInput.value.trim())}.xls`,html);
+      downloadHtmlAsXls(`配方比例对比表_${filenamePart(queryInput.value.trim())}.xls`,html);
     }
     async function downloadCostResult(){
       const query=queryInput.value.trim();
@@ -928,15 +1011,33 @@
       setAuthToken(data.token);syncAuth();authModal.classList.remove('show');showSuccess('登录成功。');
     }
     document.addEventListener('DOMContentLoaded',()=>{
-      state.manualPrices=loadManualPrices();state.priceTimes=loadPriceTimes();state.simulatedQuantities=loadSimulatedQuantities();syncAuth();
+      state.manualPrices=loadManualPrices();state.priceTimes=loadPriceTimes();state.simulatedQuantities=loadSimulatedQuantities();state.view=loadViewOptions();syncAuth();
       queryForm.onsubmit=(event)=>queryFormula(event).catch((error)=>showError(error.message));
       syncBtn.onclick=()=>syncBom().catch((error)=>showError(error.message));
       renderCompareBtn.onclick=()=>renderAllCompare();
-      toggleSpecBtn.onclick=()=>{state.showSpec=!state.showSpec;toggleSpecBtn.textContent=state.showSpec?'隐藏规格列':'显示规格列';renderCompareTable();};
-      selectAllVersionsBtn.onclick=()=>{state.selectedKeys=new Set(state.versions.map((version)=>version.key));normalizeTargets();renderAllCompare();};
-      selectActiveDefaultBtn.onclick=()=>{state.selectedKeys=new Set(state.versions.filter((version)=>!rowDisabled(version)||version.defaultBOM==='1').map((version)=>version.key));if(!state.selectedKeys.has(state.baseKey)){const first=state.versions.find((version)=>state.selectedKeys.has(version.key));state.baseKey=first?first.key:'';}normalizeTargets();renderAllCompare();};
+      document.querySelectorAll('[data-quick-select]').forEach((item)=>item.onclick=()=>applyQuickSelect(item.dataset.quickSelect));
+      document.querySelectorAll('.drop-btn').forEach((btn)=>btn.onclick=(event)=>{const dropdown=btn.parentElement;const wasOpen=dropdown.classList.contains('open');document.querySelectorAll('.dropdown.open').forEach((item)=>item.classList.remove('open'));if(!wasOpen)dropdown.classList.add('open');event.stopPropagation();});
+      document.addEventListener('click',(event)=>{if(!event.target.closest('.dropdown'))document.querySelectorAll('.dropdown.open').forEach((item)=>item.classList.remove('open'));});
+      const viewInputs=[...document.querySelectorAll('#viewOptions input[data-view]')];
+      viewInputs.forEach((input)=>{
+        input.checked=Boolean(state.view[input.dataset.view]);
+        input.addEventListener('change',()=>{
+          const key=input.dataset.view;
+          state.view[key]=input.checked;
+          if(!state.view.qty&&!state.view.pct){
+            const other=key==='qty'?'pct':'qty';
+            state.view[other]=true;
+            const otherInput=viewInputs.find((item)=>item.dataset.view===other);
+            if(otherInput)otherInput.checked=true;
+            showSuccess('「显示数量」和「显示百分比」至少保留一项，已自动保留另一项。');
+          }
+          saveViewOptions();
+          renderCompareTable();
+        });
+      });
       compareFilters.querySelectorAll('.pill').forEach((pill)=>pill.onclick=()=>{compareFilters.querySelectorAll('.pill').forEach((item)=>item.classList.remove('active'));pill.classList.add('active');state.activeFilter=pill.dataset.filter;renderCompareTable();});
       downloadRawBtn.onclick=()=>downloadRawResult().catch((error)=>showError(error.message));
+      downloadHumanBtn.onclick=()=>downloadHumanResult().catch((error)=>showError(error.message));
       downloadCompareBtn.onclick=()=>downloadCompareResult();
       exportCostBtn.onclick=()=>downloadCostResult().catch((error)=>showError(error.message));
       resetAllPricesBtn.onclick=()=>resetAllPrices().catch((error)=>showError(error.message));
