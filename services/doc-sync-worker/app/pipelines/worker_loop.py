@@ -4,16 +4,28 @@ import os
 import threading
 import time
 from collections.abc import Callable
+from datetime import datetime, timezone
+from typing import Any
 
 from app.pipelines.backfill_smartsheet_images import run_backfill_images
 from app.pipelines.group_message_listener import resolve_groupbot_profile, run_group_listener
 from app.pipelines.rnd_record_writer import run_write_rnd_records
 from app.pipelines.sync_feishu_full import run_sync_feishu_full
+from app.pipelines.sync_schedule import (
+    next_full_sync_due,
+    pull_config_from_bitable,
+    read_last_full_run,
+    read_schedule_config,
+)
 from app.pipelines.sync_wecom_full import run_pending_sync_requests, run_sync_wecom_full
 from app.pipelines.wecom_structure_backup import (
     run_enqueue_daily_structure_backup_jobs,
     run_pending_structure_backup_jobs,
 )
+
+
+CONFIG_PULL_MIN_SECONDS = 120
+DISABLED_RECHECK_MAX_SECONDS = 600
 
 
 def _read_positive_int(name: str, default: int) -> int:
@@ -48,10 +60,26 @@ def run_worker_loop(
     consume_requests: Callable[[], int] | None = None,
     sleep: Callable[[float], None] = time.sleep,
     max_cycles: int | None = None,
+    schedule_reader: Callable[[], dict[str, Any]] | None = None,
+    config_puller: Callable[[], str] | None = None,
+    now_fn: Callable[[], datetime] | None = None,
+    last_full_reader: Callable[[], datetime | None] | None = None,
 ) -> int:
-    """常驻循环：启动先全量一轮，之后每 poll 间隔消费手动同步请求，按 interval 周期重跑全量。"""
-    interval_seconds = _read_positive_int("DOC_SYNC_INTERVAL_SECONDS", 86400)
-    poll_seconds = min(_read_positive_int("DOC_SYNC_POLL_SECONDS", 30), interval_seconds)
+    """常驻循环：调度配置（开关/周期/起点时间）每大轮热读 DB，到点跑全量；
+    等待期每 poll 间隔消费手动同步请求并定期从飞书「配置表」拉配置。
+    重启时先看上次全量时间，没到点不重跑（修"重启即全量"）。"""
+    poll_seconds = _read_positive_int("DOC_SYNC_POLL_SECONDS", 30)
+    is_default_pipeline = full_sync is None and consume_requests is None
+    read_config = schedule_reader or read_schedule_config
+    now = now_fn or (lambda: datetime.now(timezone.utc))
+    read_last_full = last_full_reader or read_last_full_run
+    # 默认 puller 只在生产装配（未注入 full/consume）时启用，测试注入路径不碰网络/DB。
+    if config_puller is not None:
+        pull_config = config_puller
+    elif is_default_pipeline:
+        pull_config = pull_config_from_bitable
+    else:
+        pull_config = lambda: "noop"  # noqa: E731
 
     def _default_full_sync() -> int:
         code = run_sync_wecom_full()
@@ -91,14 +119,37 @@ def run_worker_loop(
 
     _maybe_start_group_listener()
 
+    try:
+        last_full = read_last_full()
+    except Exception:  # noqa: BLE001
+        last_full = None
+    last_pull_monotonic: float | None = None
     cycles = 0
     while True:
-        print(f"[文档同步循环] 开始全量同步（interval={interval_seconds}s poll={poll_seconds}s）")
-        try:
-            run_full()
-        except Exception as exc:  # noqa: BLE001
-            print(f"[文档同步循环] 全量同步异常：{exc}")
-        remaining = interval_seconds
+        config = read_config()
+        interval_seconds = max(int(config.get("interval_seconds") or 86400), 60)
+        anchor_time = str(config.get("anchor_time") or "")
+        enabled = bool(config.get("enabled", True))
+        current = now()
+        if not enabled:
+            print(f"[文档同步循环] 定时同步已关闭，仅消费手动请求（poll={poll_seconds}s）。")
+            remaining = float(min(interval_seconds, DISABLED_RECHECK_MAX_SECONDS))
+        else:
+            due = next_full_sync_due(current, last_full, interval_seconds, anchor_time)
+            if due <= current:
+                print(
+                    f"[文档同步循环] 开始全量同步（interval={interval_seconds}s poll={poll_seconds}s "
+                    f"anchor={anchor_time or '-'}）"
+                )
+                last_full = current
+                try:
+                    run_full()
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[文档同步循环] 全量同步异常：{exc}")
+                due = next_full_sync_due(current, last_full, interval_seconds, anchor_time)
+            else:
+                print(f"[文档同步循环] 上次全量未到期（下次 {due.isoformat()}），跳过启动全量。")
+            remaining = max((due - current).total_seconds(), 0.0)
         while remaining > 0:
             step = min(poll_seconds, remaining)
             sleep(step)
@@ -107,6 +158,15 @@ def run_worker_loop(
                 run_pending()
             except Exception as exc:  # noqa: BLE001
                 print(f"[文档同步循环] 消费手动请求异常：{exc}")
+            mono = time.monotonic()
+            if last_pull_monotonic is None or mono - last_pull_monotonic >= CONFIG_PULL_MIN_SECONDS:
+                last_pull_monotonic = mono
+                try:
+                    result = pull_config()
+                    if result and not result.startswith("noop"):
+                        print(f"[文档同步循环] 配置表拉取：{result}")
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[文档同步循环] 配置表拉取异常：{exc}")
         cycles += 1
         if max_cycles is not None and cycles >= max_cycles:
             return 0

@@ -262,6 +262,62 @@ class WorkerLoopTests(WorkerImportTestCase):
                     os.environ[key] = value
         self.assertEqual(0, code)
 
+    def test_loop_skips_full_sync_when_disabled_but_still_polls(self) -> None:
+        from app.pipelines.worker_loop import run_worker_loop
+
+        calls = {"full": 0, "pending": 0}
+        code = run_worker_loop(
+            full_sync=lambda: calls.__setitem__("full", calls["full"] + 1) or 0,
+            consume_requests=lambda: calls.__setitem__("pending", calls["pending"] + 1) or 0,
+            sleep=lambda s: None,
+            max_cycles=2,
+            schedule_reader=lambda: {"enabled": False, "interval_seconds": 90, "anchor_time": "", "pull_paused": False},
+        )
+        self.assertEqual(0, code)
+        self.assertEqual(0, calls["full"])
+        self.assertGreater(calls["pending"], 0)
+
+    def test_loop_restart_does_not_rerun_full_sync_within_interval(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        from app.pipelines.worker_loop import run_worker_loop
+
+        now = datetime(2026, 7, 6, 10, 0, tzinfo=timezone.utc)
+        calls = {"full": 0}
+        code = run_worker_loop(
+            full_sync=lambda: calls.__setitem__("full", calls["full"] + 1) or 0,
+            consume_requests=lambda: 0,
+            sleep=lambda s: None,
+            max_cycles=1,
+            schedule_reader=lambda: {"enabled": True, "interval_seconds": 86400, "anchor_time": "", "pull_paused": False},
+            now_fn=lambda: now,
+            last_full_reader=lambda: now - timedelta(hours=1),  # 1 小时前刚全量过
+        )
+        self.assertEqual(0, code)
+        self.assertEqual(0, calls["full"])
+
+    def test_loop_waits_until_anchor_due(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        from app.pipelines.worker_loop import run_worker_loop
+
+        # last=UTC 07-05 18:05（北京 02:05），锚 02:00+24h → due=07-06 18:00 UTC；now=10:00 → 需等 8h。
+        now = datetime(2026, 7, 6, 10, 0, tzinfo=timezone.utc)
+        slept: list[float] = []
+        calls = {"full": 0}
+        code = run_worker_loop(
+            full_sync=lambda: calls.__setitem__("full", calls["full"] + 1) or 0,
+            consume_requests=lambda: 0,
+            sleep=lambda s: slept.append(s),
+            max_cycles=1,
+            schedule_reader=lambda: {"enabled": True, "interval_seconds": 86400, "anchor_time": "02:00", "pull_paused": False},
+            now_fn=lambda: now,
+            last_full_reader=lambda: datetime(2026, 7, 5, 18, 5, tzinfo=timezone.utc),
+        )
+        self.assertEqual(0, code)
+        self.assertEqual(0, calls["full"])
+        self.assertEqual(8 * 3600, sum(slept))
+
 
 class SyncScheduleTests(WorkerImportTestCase):
     def test_parse_config_rows_accepts_valid_keys_and_rejects_invalid_values(self) -> None:
