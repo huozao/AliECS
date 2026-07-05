@@ -19,6 +19,17 @@
     <div id="gateHint" class="band">此页面仅管理员可见。请点右上角「登录」。</div>
     <div id="adminContent" class="hidden">
       <section class="band">
+        <div class="row" style="justify-content:space-between"><h2 style="margin:0">同步设置</h2><button id="docSyncSaveBtn" class="btn primary" type="button" onclick="saveDocSyncConfig()">保存</button></div>
+        <div class="row" style="margin-top:10px">
+          <label><input type="checkbox" id="docSyncEnabled"/> 启用定时同步</label>
+          <label>周期(小时) <input type="number" id="docSyncIntervalHours" min="1" max="168" step="0.5" style="width:90px;border:1px solid var(--line);border-radius:10px;padding:6px 8px"/></label>
+          <label>起点时间(北京) <input type="time" id="docSyncAnchorTime" style="border:1px solid var(--line);border-radius:10px;padding:6px 8px"/></label>
+          <label><input type="checkbox" id="docSyncPullPaused"/> 暂停表格拉取（应急覆盖）</label>
+        </div>
+        <div id="docSyncConfigStatus" class="muted" style="margin-top:8px"></div>
+        <div class="muted" style="margin-top:4px;font-size:12px">配置也可在飞书多维表格「配置表」中修改（配置键：文档同步开关 / 文档同步周期小时 / 文档同步起点时间），约 2 分钟内生效；此处保存视为手动覆盖，勾选「暂停表格拉取」可防止被表格值覆盖。</div>
+      </section>
+      <section class="band">
         <div class="row" style="justify-content:space-between"><h2 style="margin:0">数据导出</h2><button id="syncAllBtn" class="btn" type="button" onclick="syncAllExports(this)">同步数据列表</button></div>
         <div id="exportTabs" class="row" style="margin:10px 0"></div>
         <div id="exportList" class="muted">加载中...</div>
@@ -66,7 +77,30 @@
     function clearMessage(){const m=$('msg');if(m)m.style.display='none';}
     async function fetchMe(){if(!token())return null;try{return await api('/v1/auth/me');}catch{return null;}}
     const isAdminUser=(me)=>!!me&&(((me.roles||[]).includes('admin'))||((me.permissions||[]).includes('admin.access')));
-    function applyGate(me){const admin=isAdminUser(me);$('loginBtn').classList.toggle('hidden',admin);$('logoutBtn').classList.toggle('hidden',!token());$('adminContent').classList.toggle('hidden',!admin);$('gateHint').classList.toggle('hidden',admin);$('refreshBtn').classList.toggle('hidden',!admin);if(admin){loadExports().catch((e)=>{$('exportList').innerHTML=`<span class="chip failed">导出目录加载失败：${esc(e.message)}</span>`;});}}
+    function applyGate(me){const admin=isAdminUser(me);$('loginBtn').classList.toggle('hidden',admin);$('logoutBtn').classList.toggle('hidden',!token());$('adminContent').classList.toggle('hidden',!admin);$('gateHint').classList.toggle('hidden',admin);$('refreshBtn').classList.toggle('hidden',!admin);if(admin){loadDocSyncConfig();loadExports().catch((e)=>{$('exportList').innerHTML=`<span class="chip failed">导出目录加载失败：${esc(e.message)}</span>`;});}}
+    async function loadDocSyncConfig(){
+      try{
+        const c=await api('/v1/ops/doc-sync/sync-config');
+        $('docSyncEnabled').checked=!!c.enabled;
+        $('docSyncIntervalHours').value=(c.interval_hours!=null)?c.interval_hours:24;
+        $('docSyncAnchorTime').value=c.anchor_time||'';
+        $('docSyncPullPaused').checked=!!c.pull_paused;
+        $('docSyncConfigStatus').textContent=`来源：${c.source||'-'}${c.updated_at?(' · 更新：'+fmtTime(c.updated_at)):''}${c.updated_by?(' · '+c.updated_by):''}`;
+      }catch(e){$('docSyncConfigStatus').textContent='加载失败：'+e.message;}
+    }
+    async function saveDocSyncConfig(){
+      const enabled=$('docSyncEnabled').checked;
+      const interval_hours=Number($('docSyncIntervalHours').value);
+      const anchor_time=$('docSyncAnchorTime').value||'';
+      const pull_paused=$('docSyncPullPaused').checked;
+      if(!(interval_hours>=1)){showError('周期至少 1 小时。');return;}
+      $('docSyncConfigStatus').textContent='保存中…';
+      try{
+        await api('/v1/ops/doc-sync/sync-config',{method:'PUT',body:JSON.stringify({enabled,interval_hours,anchor_time,pull_paused})});
+        await loadDocSyncConfig();
+        showSuccess('文档同步设置已保存，下次循环生效。');
+      }catch(e){$('docSyncConfigStatus').textContent='';showError('保存失败：'+esc(e.message));}
+    }
     async function login(){clearMessage();const username=$('usernameInput').value.trim(),password=$('passwordInput').value;if(!username||!password){showError('请输入用户名和密码。');return;}const data=await api('/v1/auth/login',{method:'POST',body:JSON.stringify({username,password})});setAuthToken(data.token);$('authModal').classList.remove('show');const me=await fetchMe();applyGate(me);if(isAdminUser(me))showSuccess('登录成功。');else showError('当前账号不是管理员，无法查看此页面。');}
     let exportCatalog=null,activeExportTab='tplus';
     async function loadExports(){exportCatalog=await api('/v1/exports/catalog');renderExports();}

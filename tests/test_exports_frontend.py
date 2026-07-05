@@ -26,6 +26,14 @@ class ExportsFrontendTests(unittest.TestCase):
     def test_has_back_link_to_health(self) -> None:
         self.assertIn('href="/health/"', self.html)
 
+    def test_has_doc_sync_config_card(self) -> None:
+        self.assertIn("function loadDocSyncConfig(", self.html)
+        self.assertIn("function saveDocSyncConfig(", self.html)
+        self.assertIn("/v1/ops/doc-sync/sync-config", self.html)
+        self.assertIn('id="docSyncAnchorTime"', self.html)
+        self.assertIn('id="docSyncPullPaused"', self.html)
+        self.assertIn("loadDocSyncConfig()", self.html)  # applyGate 管理员分支触发加载
+
 
 if __name__ == "__main__":
     unittest.main()
