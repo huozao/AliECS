@@ -120,6 +120,101 @@ def ops_tplus_sync_config_put(
     return _sync_config_response(_read_sync_config_row())
 
 
+_DOC_SYNC_CONFIG_DEFAULTS = {"enabled": True, "interval_seconds": 86400, "anchor_time": "", "pull_paused": False}
+
+
+def _read_doc_sync_config_row() -> dict[str, Any]:
+    """读取文档同步调度配置行；DB 不可用 / 表列或行不存在一律回退默认（不报错）。"""
+    try:
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT enabled, interval_seconds, anchor_time, pull_paused, updated_at, updated_by "
+                    "FROM integration_sync_config WHERE provider = 'doc_sync'"
+                )
+                row = cur.fetchone()
+                if row:
+                    return {
+                        "enabled": bool(row[0]),
+                        "interval_seconds": int(row[1]),
+                        "anchor_time": str(row[2] or ""),
+                        "pull_paused": bool(row[3]),
+                        "updated_at": str(row[4]) if row[4] else None,
+                        "updated_by": str(row[5] or ""),
+                    }
+    except Exception:
+        pass
+    return {**_DOC_SYNC_CONFIG_DEFAULTS, "updated_at": None, "updated_by": ""}
+
+
+def _doc_sync_source_label(updated_by: str) -> str:
+    if updated_by == "feishu-config-table":
+        return "飞书配置表"
+    if not updated_by:
+        return "默认"
+    return "手动"
+
+
+def _doc_sync_config_response(row: dict[str, Any]) -> dict[str, Any]:
+    seconds = int(row.get("interval_seconds") or 86400)
+    updated_by = str(row.get("updated_by") or "")
+    return {
+        "enabled": bool(row.get("enabled", True)),
+        "interval_seconds": seconds,
+        "interval_hours": round(seconds / 3600, 4),
+        "anchor_time": str(row.get("anchor_time") or ""),
+        "pull_paused": bool(row.get("pull_paused", False)),
+        "updated_at": row.get("updated_at"),
+        "updated_by": updated_by,
+        "source": _doc_sync_source_label(updated_by),
+    }
+
+
+class DocSyncConfigUpdate(BaseModel):
+    enabled: bool
+    interval_hours: float = Field(ge=1, le=168)
+    anchor_time: str = Field(default="", pattern=r"^$|^([01]\d|2[0-3]):[0-5]\d$")  # 北京时间 HH:MM，空=不锚定
+    pull_paused: bool = False
+
+
+@router.get("/v1/ops/doc-sync/sync-config")
+def ops_doc_sync_config_get(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    """文档同步（企微+飞书）定时开关/周期/起点时间。worker 每轮热读同一张表；
+    updated_by=feishu-config-table 表示当前生效值来自飞书「配置表」。"""
+    return _doc_sync_config_response(_read_doc_sync_config_row())
+
+
+@router.put("/v1/ops/doc-sync/sync-config")
+def ops_doc_sync_config_put(
+    body: DocSyncConfigUpdate, user: dict[str, Any] = Depends(require_admin)
+) -> dict[str, Any]:
+    """管理页应急覆盖：写全字段（含 pull_paused）。pull_paused=true 时 worker 停止表格拉取，手动值不会被覆盖。"""
+    interval_seconds = int(round(body.interval_hours * 3600))
+    try:
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO integration_sync_config(provider, enabled, interval_seconds, anchor_time, pull_paused, updated_at, updated_by)
+                    VALUES ('doc_sync', %s, %s, %s, %s, NOW(), %s)
+                    ON CONFLICT (provider) DO UPDATE
+                    SET enabled = EXCLUDED.enabled,
+                        interval_seconds = EXCLUDED.interval_seconds,
+                        anchor_time = EXCLUDED.anchor_time,
+                        pull_paused = EXCLUDED.pull_paused,
+                        updated_at = NOW(),
+                        updated_by = EXCLUDED.updated_by
+                    """,
+                    (body.enabled, interval_seconds, body.anchor_time, body.pull_paused, str(user.get("sub") or "")),
+                )
+            conn.commit()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"保存文档同步配置失败：{type(exc).__name__}") from exc
+    return _doc_sync_config_response(_read_doc_sync_config_row())
+
+
 @router.get("/v1/ops/tplus/runs")
 def ops_tplus_runs(
     limit: int = Query(default=20, ge=1, le=200),

@@ -78,6 +78,32 @@ class BackendOpsStatusTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             SyncConfigUpdate(enabled=False, interval_hours=200)  # > 168h 拒绝
 
+    def test_doc_sync_config_get_returns_defaults_without_database(self) -> None:
+        result = self._call_get("/v1/ops/doc-sync/sync-config")
+        self.assertTrue(result["enabled"])
+        self.assertEqual(86400, result["interval_seconds"])
+        self.assertEqual("", result["anchor_time"])
+        self.assertFalse(result["pull_paused"])
+        self.assertEqual("默认", result["source"])
+
+    def test_doc_sync_config_update_model_validates_anchor_time(self) -> None:
+        from pydantic import ValidationError
+        from app.routers.ops import DocSyncConfigUpdate
+
+        DocSyncConfigUpdate(enabled=True, interval_hours=24, anchor_time="02:00")
+        DocSyncConfigUpdate(enabled=True, interval_hours=24, anchor_time="")  # 空=不锚定
+        with self.assertRaises(ValidationError):
+            DocSyncConfigUpdate(enabled=True, interval_hours=24, anchor_time="9:99")
+        with self.assertRaises(ValidationError):
+            DocSyncConfigUpdate(enabled=True, interval_hours=24, anchor_time="25:00")
+
+    def test_doc_sync_config_source_label(self) -> None:
+        from app.routers.ops import _doc_sync_source_label
+
+        self.assertEqual("飞书配置表", _doc_sync_source_label("feishu-config-table"))
+        self.assertEqual("默认", _doc_sync_source_label(""))
+        self.assertEqual("手动", _doc_sync_source_label("admin"))
+
     def test_ops_status_uses_default_external_hosts_when_env_is_empty(self) -> None:
         # WebDock API is always present (defaults to the in-host SSH tunnel),
         # but the public-facing Backend/Public-Web rows only appear once the
