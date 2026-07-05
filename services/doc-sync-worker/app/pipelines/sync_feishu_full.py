@@ -494,40 +494,102 @@ def run_sync_feishu_full(profiles_arg: str = "") -> int:
                             app_name=bootstrap_config.app_name,
                             folder_token=bootstrap_config.folder_token,
                         )
-                counts["source_count"] = len(sources)
-                if not sources:
+                registry_docs = (
+                    store.list_registry_doc_sources("feishu", profile)
+                    if hasattr(store, "list_registry_doc_sources")
+                    else []
+                )
+                if not sources and not registry_docs:
                     raise RuntimeError(
                         f"{profile} 未配置 FEISHU_{profile}_APP_TOKEN/TABLE_ID 或 WIKI_NODE_TOKEN，"
                         f"数据库也没有已登记 Bitable source；如需自动创建会话管理台，"
                         f"设置 FEISHU_{profile}_SESSION_CONSOLE_BOOTSTRAP=true 后运行一次同步。"
                     )
 
+                # 1) 汇总工作簿锚点：seed 源（env+已登记表级）+ doc 级登记行（/exports/ 添加的文档）。
+                anchors: dict[str, dict[str, Any]] = {}
                 for source in sources:
                     app_token = _resolve_app_token(client, source)
-                    document_name = source.document_name or source.source_name
-                    sheet_name = source.sheet_name or source.table_id
-                    ensure_bitable_app_anchor(store, profile, app_token, source)
-                    source_id = store.ensure_source(
+                    anchor = anchors.setdefault(
+                        app_token, {"document_name": "", "source_url": "", "view_ids": {}, "seeds": []}
+                    )
+                    if not anchor["document_name"]:
+                        anchor["document_name"] = source.document_name or source.source_name
+                    if not anchor["source_url"]:
+                        anchor["source_url"] = source.source_url
+                    if source.view_id:
+                        anchor["view_ids"][source.table_id] = source.view_id
+                    anchor["seeds"].append(source)
+                for row in registry_docs:
+                    token = str(row.get("external_doc_id") or "")
+                    if token and token not in anchors:
+                        anchors[token] = {
+                            "document_name": str(row.get("source_name") or ""),
+                            "source_url": str(row.get("source_url") or ""),
+                            "view_ids": {},
+                            "seeds": [],
+                        }
+
+                # 2) 每个工作簿：登记锚点 → 整簿重扫（失败回退 seed）→ 逐表同步（单表失败不拖垮整轮）。
+                counts["source_count"] = 0
+                for app_token, anchor in anchors.items():
+                    document_name = str(anchor["document_name"] or app_token)
+                    store.upsert_structure_document(
                         provider="feishu",
                         env_profile=profile,
-                        source_name=compose_source_name(document_name, sheet_name),
-                        source_type="bitable_table",
+                        source_type="bitable_app",
                         external_doc_id=app_token,
-                        external_sheet_id=source.table_id,
-                        source_url=source.source_url,
                         document_name=document_name,
-                        sheet_name=sheet_name,
+                        source_url=str(anchor["source_url"]),
                     )
-                    _sync_bitable_records(
-                        store,
-                        client,
-                        source_id,
-                        app_token,
-                        source.table_id,
-                        source.view_id,
-                        counts,
-                        source_name=sheet_name,
-                    )
+                    try:
+                        pairs, disabled = _rescan_app_tables(
+                            store,
+                            client,
+                            profile,
+                            app_token,
+                            document_name,
+                            source_url=str(anchor["source_url"]),
+                            view_ids=dict(anchor["view_ids"]),
+                        )
+                        if disabled:
+                            print(f"[飞书同步] app={app_token[:6]}*** 停用已删除数据表 {disabled} 个。")
+                    except Exception as exc:  # noqa: BLE001 - 重扫失败回退已登记源，别让整轮挂掉
+                        print(f"[飞书同步] 整簿重扫失败，回退已登记源：{exc}")
+                        pairs = []
+                        for seed in anchor["seeds"]:
+                            seed_id = store.ensure_source(
+                                provider="feishu",
+                                env_profile=profile,
+                                source_name=compose_source_name(
+                                    seed.document_name or seed.source_name, seed.sheet_name or seed.table_id
+                                ),
+                                source_type="bitable_table",
+                                external_doc_id=app_token,
+                                external_sheet_id=seed.table_id,
+                                source_url=seed.source_url,
+                                document_name=seed.document_name or seed.source_name,
+                                sheet_name=seed.sheet_name or seed.table_id,
+                            )
+                            pairs.append((seed_id, seed))
+                    counts["source_count"] += len(pairs)
+                    for table_source_id, table_source in pairs:
+                        try:
+                            _sync_bitable_records(
+                                store,
+                                client,
+                                table_source_id,
+                                app_token,
+                                table_source.table_id,
+                                table_source.view_id,
+                                counts,
+                                source_name=table_source.sheet_name or table_source.source_name,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            counts["error_count"] += 1
+                            errors.append(
+                                {"source_id": table_source_id, "table_id": table_source.table_id, "error": str(exc)}
+                            )
                 status = "success" if counts["error_count"] == 0 else "partial_failed"
             except Exception as exc:  # noqa: BLE001 - worker should persist one run row with diagnostics.
                 exit_code = 1

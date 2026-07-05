@@ -750,6 +750,90 @@ class FeishuBitableSyncTests(WorkerImportTestCase):
             store.disabled_args,
         )
 
+    def test_run_sync_feishu_full_discovers_new_tables_via_rescan(self) -> None:
+        import unittest.mock as mock
+
+        from app.pipelines import sync_feishu_full as module
+
+        class FakeClient:
+            def list_tables(self, app_token: str) -> list[dict]:
+                return [
+                    {"table_id": "tbl_sessions", "name": "会话索引表"},
+                    {"table_id": "tbl_new", "name": "cs cs cs"},
+                ]
+
+            def list_fields(self, app_token: str, table_id: str) -> list[dict]:
+                return []
+
+            def get_records(self, app_token: str, table_id: str, view_id: str = "") -> dict:
+                return {"records": [], "page_count": 1}
+
+        class FakeStore:
+            def __init__(self) -> None:
+                self.sources: list[dict] = []
+                self.finished: dict | None = None
+
+            def list_bitable_sources(self, provider: str, env_profile: str) -> list[dict]:
+                return [
+                    {
+                        "external_doc_id": "bascn_console",
+                        "external_sheet_id": "tbl_sessions",
+                        "document_name": "飞书 ChatGPT 会话管理台",
+                        "sheet_name": "会话索引表",
+                        "source_url": "https://feishu.cn/base/bascn_console",
+                    }
+                ]
+
+            def list_registry_doc_sources(self, provider: str, env_profile: str) -> list[dict]:
+                return []
+
+            def start_run(self, provider: str, env_profile: str, mode: str) -> int:
+                return 7
+
+            def finish_run(self, run_id: int, status: str, counts: dict, error_json: list) -> None:
+                self.finished = {"status": status, "counts": dict(counts)}
+
+            def upsert_structure_document(self, **kwargs: object) -> int:
+                return 999
+
+            def ensure_source(self, **kwargs: object) -> int:
+                self.sources.append(dict(kwargs))
+                return len(self.sources)
+
+            def disable_missing_sheets(self, provider: str, env_profile: str, doc: str, seen: list) -> int:
+                return 0
+
+            def replace_fields(self, source_id: int, fields: list) -> dict:
+                return {}
+
+            def upsert_record(self, source_id: int, snapshot: object) -> object:
+                raise AssertionError("no records to upsert")
+
+            def mark_source_synced(self, source_id: int) -> None:
+                return None
+
+            def close(self) -> None:
+                return None
+
+        class Cred:
+            app_id = "cli_x"
+            app_secret = "s"
+            api_base = "https://open.feishu.cn/open-apis"
+
+        store = FakeStore()
+        with mock.patch.object(module, "open_store", return_value=store), mock.patch.object(
+            module, "env_profiles", return_value=["COMPANY_A"]
+        ), mock.patch.object(module, "credentials_for_profile", return_value=[Cred()]), mock.patch.object(
+            module, "FeishuBitableClient", return_value=FakeClient()
+        ), mock.patch.object(module, "discover_profile_sources", return_value=[]):
+            exit_code = module.run_sync_feishu_full()
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual("success", store.finished["status"])
+        self.assertEqual(2, store.finished["counts"]["sheet_count"])
+        registered = {item["external_sheet_id"] for item in store.sources}
+        self.assertIn("tbl_new", registered)
+
 
 class FeishuBitableErrorTests(WorkerImportTestCase):
     def test_request_json_http_error_includes_status_without_secrets(self) -> None:
