@@ -2804,3 +2804,82 @@ def test_processing_ack_text_env_override_still_wins(monkeypatch):
     bridge = load_bridge()
     monkeypatch.setenv("OPENCLAW_BRIDGE_PROCESSING_ACK_TEXT", "自定义")
     assert bridge.processing_ack_text() == "自定义"
+
+
+def _mode_details(chat_type: str = "private", key: str = "ou_mode_default"):
+    if chat_type == "group":
+        return {
+            "user_text": "",
+            "metadata": {"channel": "feishu", "chat_type": "group", "peer_id": f"group:{key}"},
+            "raw_metadata": {"chat_id": key},
+        }
+    return {
+        "user_text": "",
+        "metadata": {"channel": "feishu", "chat_type": "private", "peer_id": f"user:{key}"},
+        "raw_metadata": {"open_id": key},
+    }
+
+
+def test_parse_feishu_mode_command():
+    bridge = load_bridge()
+    assert bridge.parse_feishu_mode_command("/模式 极速") == (True, "fast")
+    assert bridge.parse_feishu_mode_command("  /模式 高级 ") == (True, "advanced")
+    assert bridge.parse_feishu_mode_command("/模式均衡") == (True, "balanced")
+    assert bridge.parse_feishu_mode_command("/模式") == (True, "")
+    assert bridge.parse_feishu_mode_command("/模式 乱写") == (True, "")
+    assert bridge.parse_feishu_mode_command("普通消息") == (False, "")
+    assert bridge.parse_feishu_mode_command("/新对话") == (False, "")
+
+
+def test_feishu_chat_mode_memory_only_roundtrip(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.delenv("FEISHU_SESSION_CONSOLE_USER_TABLE_ID", raising=False)
+    details = _mode_details(key="ou_mode_mem_1")
+    assert bridge.feishu_chat_mode(details) == ""
+    assert bridge.set_feishu_chat_mode(details, "fast") is True
+    assert bridge.feishu_chat_mode(details) == "fast"
+
+
+def test_feishu_chat_mode_persists_to_group_table(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_GROUP_TABLE_ID", "tbl_group")
+    ensured, updated = [], []
+    monkeypatch.setattr(
+        bridge, "ensure_feishu_bitable_fields", lambda table, names: ensured.append((table, tuple(names)))
+    )
+    monkeypatch.setattr(bridge, "upsert_feishu_group_record", lambda details: "rec_1")
+    monkeypatch.setattr(
+        bridge, "update_feishu_bitable_record", lambda table, rid, fields: updated.append((table, rid, fields))
+    )
+    details = _mode_details("group", "oc_mode_group_1")
+    assert bridge.set_feishu_chat_mode(details, "advanced") is True
+    assert ensured == [("tbl_group", ("对话模式",))]
+    assert updated == [("tbl_group", "rec_1", {"对话模式": "高级"})]
+
+
+def test_feishu_chat_mode_reads_user_table(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_USER_TABLE_ID", "tbl_user")
+    monkeypatch.setattr(
+        bridge,
+        "find_feishu_bitable_record",
+        lambda table, field, key: {"fields": {"open_id": key, "对话模式": "极速"}},
+    )
+    details = _mode_details(key="ou_mode_read_1")
+    assert bridge.feishu_chat_mode(details) == "fast"
+
+
+def test_feishu_chat_mode_keeps_memory_when_bitable_down(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_USER_TABLE_ID", "tbl_user")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("bitable down")
+
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record", boom)
+    monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields", lambda *a: None)
+    monkeypatch.setattr(bridge, "upsert_feishu_user_record", boom)
+    details = _mode_details(key="ou_mode_fail_1")
+    assert bridge.set_feishu_chat_mode(details, "balanced") is True
+    monkeypatch.setattr(bridge, "FEISHU_CHAT_MODE_CACHE_SECONDS", 0.0)
+    assert bridge.feishu_chat_mode(details) == "balanced"
