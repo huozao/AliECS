@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from app.core import _conn, require_login, require_permission
 from app.recipes.bom_query import calculate_recipe_costs, export_path_for_id, load_detail_from_workbook, locate_recipe_source, new_export_path, query_recipe_workbook, recipe_cost_export_filename, recipe_raw_export_filename, save_recipe_cost_workbook, save_recipe_human_workbook, save_recipe_workbook
+from app.recipes.compare_export import compare_export_filename, save_compare_workbook
 from app.recipes.price_lookup import latest_purchase_prices, latest_sales_prices
 
 
@@ -32,6 +33,41 @@ class RecipeQueryRequest(BaseModel):
 class RecipeCostRequest(RecipeQueryRequest):
     manual_prices: dict[str, float] = Field(default_factory=dict)
     simulated_quantities: dict[str, float] = Field(default_factory=dict)
+
+
+class CompareCell(BaseModel):
+    ratio: float | None = None
+    qty: float | None = None
+    delta: float | None = None
+    is_new: bool = False
+
+
+class CompareVersion(BaseModel):
+    label: str = Field(max_length=200)
+    code: str = Field(default="", max_length=100)
+    version: str = Field(default="", max_length=100)
+    is_base: bool = False
+    is_target: bool = False
+
+
+class CompareRow(BaseModel):
+    status: str = Field(max_length=20)
+    item_code: str = Field(max_length=100)
+    item_name: str = Field(default="", max_length=200)
+    spec: str = Field(default="", max_length=200)
+    unit: str = Field(default="", max_length=40)
+    code_warn: bool = False
+    cells: list[CompareCell | None]
+
+
+class CompareExportRequest(BaseModel):
+    """对比表导出：前端把呈现态原样传来，后端只渲染 xlsx（对比逻辑唯一事实源在前端）。"""
+
+    query: str = Field(default="", max_length=100)
+    filter_label: str = Field(default="全部", max_length=20)
+    versions: list[CompareVersion] = Field(min_length=1, max_length=60)
+    rows: list[CompareRow] = Field(max_length=5000)
+    view: dict[str, bool] = Field(default_factory=dict)
 
 
 def _tplus_bom_sync_request_dir() -> Path:
@@ -247,6 +283,25 @@ def recipe_cost_export(body: RecipeCostRequest, user: dict[str, Any] = Depends(r
         filename=filename,
     )
 
+
+
+@router.post("/v1/recipes/compare/export")
+def recipe_compare_export(body: CompareExportRequest, user: dict[str, Any] = Depends(require_login)) -> FileResponse:
+    require_permission("formula.read", user)
+    for row in body.rows:
+        if len(row.cells) != len(body.versions):
+            raise HTTPException(status_code=400, detail="行的单元格数量与版本列数不一致。")
+    try:
+        _file_id, output_path = new_export_path()
+        save_compare_workbook(output_path, body.model_dump())
+        filename = compare_export_filename(body.query)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"对比表导出失败：{type(exc).__name__}") from exc
+    return FileResponse(
+        output_path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=filename,
+    )
 
 
 @router.post("/v1/recipes/sync-bom")
