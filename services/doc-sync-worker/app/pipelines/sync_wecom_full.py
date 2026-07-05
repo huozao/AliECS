@@ -11,6 +11,7 @@ from app.providers.wecom import (
     summarize_wecom_error,
 )
 from app.pipelines.managed_contacts import sync_managed_contact_from_row
+from app.pipelines.sync_feishu_full import sync_feishu_source
 from app.pipelines.wecom_structure_backup import (
     enqueue_copy_auto_structure_backup,
     structure_backup_enabled,
@@ -343,13 +344,18 @@ def run_pending_sync_requests(limit: int = 10) -> int:
         for request in requests:
             request_id = int(request["id"])
             source_id = int(request["source_id"])
-            print(f"[企业微信同步] 开始处理手动请求 request_id={request_id} source_id={source_id}")
+            provider = str(request.get("provider") or "")
+            print(f"[文档同步] 开始处理手动请求 request_id={request_id} source_id={source_id} provider={provider}")
             store.mark_sync_request_running(request_id)
-            status, run_id, detail = sync_wecom_source(store, source_id=source_id, mode="manual")
+            is_feishu = provider == "feishu"
+            if is_feishu:
+                status, run_id, detail = sync_feishu_source(store, source_id=source_id, mode="manual")
+            else:
+                status, run_id, detail = sync_wecom_source(store, source_id=source_id, mode="manual")
             # partial_failed（个别表受 API 限制）不视为请求失败。
             request_status = "success" if status in ("success", "partial_failed") else "failed"
             store.finish_sync_request(request_id, request_status, run_id, detail)
-            if structure_backup_enabled():
+            if structure_backup_enabled() and not is_feishu:
                 enqueue_copy_auto_structure_backup(store, request, request_status=request_status)
             if request_status != "success":
                 exit_code = 1
