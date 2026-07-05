@@ -1001,5 +1001,53 @@ class FeishuManualSyncTests(WorkerImportTestCase):
         self.assertEqual([], store.runs)
 
 
+class SyncRequestDispatchTests(WorkerImportTestCase):
+    def test_pending_requests_dispatch_by_provider(self) -> None:
+        import unittest.mock as mock
+
+        from app.pipelines import sync_wecom_full as module
+
+        class FakeStore:
+            def __init__(self) -> None:
+                self.finished: list[tuple] = []
+
+            def pending_sync_requests(self, limit: int) -> list[dict]:
+                return [
+                    {"id": 1, "source_id": 1619, "provider": "feishu", "env_profile": "COMPANY_A", "mode": "manual"},
+                    {"id": 2, "source_id": 100, "provider": "wecom", "env_profile": "COMPANY_B", "mode": "manual"},
+                ]
+
+            def mark_sync_request_running(self, request_id: int) -> None:
+                return None
+
+            def finish_sync_request(self, request_id: int, status: str, run_id: object, detail: dict) -> None:
+                self.finished.append((request_id, status))
+
+            def close(self) -> None:
+                return None
+
+        store = FakeStore()
+        calls: list[tuple[str, int]] = []
+
+        def fake_feishu(s: object, source_id: int, mode: str = "manual") -> tuple:
+            calls.append(("feishu", source_id))
+            return "success", 42, {}
+
+        def fake_wecom(s: object, source_id: int, mode: str = "manual") -> tuple:
+            calls.append(("wecom", source_id))
+            return "success", 43, {}
+
+        with mock.patch.object(module, "open_store", return_value=store), mock.patch.object(
+            module, "sync_feishu_source", side_effect=fake_feishu
+        ), mock.patch.object(module, "sync_wecom_source", side_effect=fake_wecom), mock.patch.object(
+            module, "structure_backup_enabled", return_value=False
+        ):
+            exit_code = module.run_pending_sync_requests(limit=10)
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual([("feishu", 1619), ("wecom", 100)], calls)
+        self.assertEqual([(1, "success"), (2, "success")], store.finished)
+
+
 if __name__ == "__main__":
     unittest.main()
