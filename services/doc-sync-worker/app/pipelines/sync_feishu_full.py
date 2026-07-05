@@ -370,6 +370,85 @@ def _sync_bitable_records(
     store.mark_source_synced(source_id)
 
 
+def sync_feishu_source(store: Any, source_id: int, mode: str = "manual") -> tuple[str, int | None, dict[str, Any]]:
+    """消费一条飞书手动同步请求：doc 级=整簿重扫+全表同步；table 级=单表同步。"""
+    source = store.get_source(source_id)
+    if not source:
+        return "failed", None, {"error": f"找不到同步源：{source_id}"}
+    if source["provider"] != "feishu":
+        return "failed", None, {"error": f"暂不支持该 provider：{source['provider']}"}
+    if not source["external_doc_id"]:
+        return "failed", None, {"error": "指定同步源缺少 app_token"}
+
+    profile = str(source["env_profile"])
+    run_id = store.start_run(provider="feishu", env_profile=profile, mode=mode)
+    counts = {
+        "source_count": 1,
+        "sheet_count": 0,
+        "record_count": 0,
+        "created_count": 0,
+        "updated_count": 0,
+        "error_count": 0,
+    }
+    errors: list[dict[str, Any]] = []
+    status = "failed"
+    try:
+        credentials = credentials_for_profile(profile)
+        if not credentials:
+            raise RuntimeError(f"{profile} 缺少 FEISHU_{profile}_APP_ID 或 FEISHU_{profile}_APP_SECRET。")
+        credential = credentials[0]
+        client = FeishuBitableClient(
+            app_id=credential.app_id,
+            app_secret=credential.app_secret,
+            api_base=credential.api_base,
+        )
+        app_token = str(source["external_doc_id"])
+        if not source["external_sheet_id"]:
+            pairs, _disabled = _rescan_app_tables(
+                store,
+                client,
+                profile,
+                app_token,
+                document_name=str(source.get("source_name") or ""),
+                source_url=str(source.get("source_url") or ""),
+            )
+            counts["source_count"] = len(pairs)
+            for table_source_id, table_source in pairs:
+                try:
+                    _sync_bitable_records(
+                        store,
+                        client,
+                        table_source_id,
+                        app_token,
+                        table_source.table_id,
+                        table_source.view_id,
+                        counts,
+                        source_name=table_source.sheet_name,
+                    )
+                except Exception as exc:  # noqa: BLE001 - 单表失败不拖垮整簿
+                    counts["error_count"] += 1
+                    errors.append({"source_id": table_source_id, "table_id": table_source.table_id, "error": str(exc)})
+        else:
+            _sync_bitable_records(
+                store,
+                client,
+                int(source["id"]),
+                app_token,
+                str(source["external_sheet_id"]),
+                "",
+                counts,
+                source_name=str(source.get("sheet_name") or source.get("source_name") or ""),
+            )
+        status = "success" if counts["error_count"] == 0 else "partial_failed"
+    except Exception as exc:  # noqa: BLE001
+        counts["error_count"] += 1
+        errors.append({"source_id": source_id, "error": str(exc)})
+        status = "failed"
+
+    store.finish_run(run_id, status=status, counts=counts, error_json=errors)
+    return status, run_id, {"errors": errors, "counts": counts}
+
+
 def run_sync_feishu_full(profiles_arg: str = "") -> int:
     profiles = env_profiles(profiles_arg)
     if not profiles:

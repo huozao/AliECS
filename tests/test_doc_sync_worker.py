@@ -787,5 +787,135 @@ class FeishuBitableErrorTests(WorkerImportTestCase):
         self.assertNotIn("tenant-token", error)
 
 
+class FeishuManualSyncTests(WorkerImportTestCase):
+    class _Store:
+        """sync_feishu_source 所需的最小 FakeStore。"""
+
+        def __init__(self, source: dict) -> None:
+            self.source = source
+            self.runs: list[dict] = []
+            self.finished: dict | None = None
+            self.sources: list[dict] = []
+
+        def get_source(self, source_id: int) -> dict | None:
+            return dict(self.source) if source_id == self.source["id"] else None
+
+        def start_run(self, provider: str, env_profile: str, mode: str) -> int:
+            self.runs.append({"provider": provider, "env_profile": env_profile, "mode": mode})
+            return 42
+
+        def finish_run(self, run_id: int, status: str, counts: dict, error_json: list) -> None:
+            self.finished = {"run_id": run_id, "status": status, "counts": dict(counts), "errors": list(error_json)}
+
+        def ensure_source(self, **kwargs: object) -> int:
+            self.sources.append(dict(kwargs))
+            return len(self.sources)
+
+        def disable_missing_sheets(self, provider: str, env_profile: str, external_doc_id: str, seen: list) -> int:
+            return 0
+
+        def replace_fields(self, source_id: int, fields: list) -> dict:
+            return {}
+
+        def upsert_record(self, source_id: int, snapshot: object) -> object:
+            from app.storage.postgres import UpsertDecision
+
+            return UpsertDecision(action="create", should_write=True)
+
+        def mark_source_synced(self, source_id: int) -> None:
+            return None
+
+    class _Client:
+        def list_tables(self, app_token: str) -> list[dict]:
+            return [{"table_id": "tbl_a", "name": "会话索引表"}, {"table_id": "tbl_b", "name": "使用说明"}]
+
+        def list_fields(self, app_token: str, table_id: str) -> list[dict]:
+            return []
+
+        def get_records(self, app_token: str, table_id: str, view_id: str = "") -> dict:
+            return {"records": [{"record_id": f"rec_{table_id}", "fields": {}}], "page_count": 1}
+
+    def _run(self, source: dict) -> tuple:
+        import unittest.mock as mock
+
+        from app.pipelines import sync_feishu_full as module
+
+        # credentials 只取 [0] 的 app_id/app_secret/api_base，用简单对象即可
+        class Cred:
+            app_id = "cli_x"
+            app_secret = "s"
+            api_base = "https://open.feishu.cn/open-apis"
+
+        store = self._Store(source)
+        with mock.patch.object(module, "credentials_for_profile", return_value=[Cred()]), mock.patch.object(
+            module, "FeishuBitableClient", return_value=self._Client()
+        ):
+            result = module.sync_feishu_source(store, source_id=source["id"], mode="manual")
+        return store, result
+
+    def test_doc_level_request_rescans_and_syncs_all_tables(self) -> None:
+        store, (status, run_id, detail) = self._run(
+            {
+                "id": 1619,
+                "provider": "feishu",
+                "env_profile": "COMPANY_A",
+                "source_name": "飞书 ChatGPT 会话管理台",
+                "source_type": "smartsheet_doc",
+                "external_doc_id": "bascn_console",
+                "external_sheet_id": "",
+                "source_url": "",
+                "status": "active",
+                "sheet_name": "",
+            }
+        )
+        self.assertEqual("success", status)
+        self.assertEqual(42, run_id)
+        self.assertEqual(2, len(store.sources))
+        self.assertEqual("manual", store.runs[0]["mode"])
+        self.assertEqual(2, store.finished["counts"]["sheet_count"])
+        self.assertEqual(2, store.finished["counts"]["record_count"])
+
+    def test_table_level_request_syncs_single_table(self) -> None:
+        store, (status, run_id, detail) = self._run(
+            {
+                "id": 1218,
+                "provider": "feishu",
+                "env_profile": "COMPANY_A",
+                "source_name": "飞书 ChatGPT 会话管理台 / 消息日志表",
+                "source_type": "bitable_table",
+                "external_doc_id": "bascn_console",
+                "external_sheet_id": "tbl_messages",
+                "source_url": "",
+                "status": "active",
+                "sheet_name": "消息日志表",
+            }
+        )
+        self.assertEqual("success", status)
+        self.assertEqual(0, len(store.sources))  # 单表请求不重扫
+        self.assertEqual(1, store.finished["counts"]["sheet_count"])
+
+    def test_non_feishu_source_fails_without_run(self) -> None:
+        from app.pipelines.sync_feishu_full import sync_feishu_source
+
+        store = self._Store(
+            {
+                "id": 9,
+                "provider": "wecom",
+                "env_profile": "COMPANY_A",
+                "source_name": "x",
+                "source_type": "smartsheet_doc",
+                "external_doc_id": "dc",
+                "external_sheet_id": "",
+                "source_url": "",
+                "status": "active",
+                "sheet_name": "",
+            }
+        )
+        status, run_id, detail = sync_feishu_source(store, source_id=9)
+        self.assertEqual("failed", status)
+        self.assertIsNone(run_id)
+        self.assertEqual([], store.runs)
+
+
 if __name__ == "__main__":
     unittest.main()
