@@ -2560,7 +2560,9 @@ def test_feishu_global_rule_policy_falls_back_to_env_without_table(monkeypatch):
     monkeypatch.setenv("OPENCLAW_BRIDGE_PROCESSING_CARD", "1")
     monkeypatch.setenv("OPENCLAW_BRIDGE_DEBUG_TRAILER", "0")
     policy = bridge.feishu_global_rule_policy()
-    assert policy == {"处理中卡片": True, "调试尾注": False}
+    assert policy["处理中卡片"] is True
+    assert policy["调试尾注"] is False
+    assert policy["处理中文案"]  # 文案键随 env/默认值一并给出
 
 
 def test_feishu_global_rule_policy_table_value_wins(monkeypatch):
@@ -2655,7 +2657,9 @@ def test_ensure_rule_record_creates_missing_columns_before_create(monkeypatch):
     monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields",
                         lambda t, names: ensured.append((t, list(names))))
     bridge.ensure_feishu_default_rule_record()
-    assert ensured == [("tbl_rule", ["处理中卡片", "调试尾注"])]
+    assert ensured == [
+        ("tbl_rule", ["处理中卡片", "调试尾注", "处理中文案", "追问文案", "空回复文案", "完成标记"])
+    ]
 
 
 def test_ensure_rule_record_backfills_missing_fields(monkeypatch):
@@ -2669,14 +2673,18 @@ def test_ensure_rule_record_backfills_missing_fields(monkeypatch):
                         lambda t, rid, fields: updated.update(rid=rid, fields=fields))
     bridge.ensure_feishu_default_rule_record()
     assert updated["rid"] == "r1"
-    assert updated["fields"] == {"处理中卡片": True, "调试尾注": True}
+    assert updated["fields"]["处理中卡片"] is True
+    assert updated["fields"]["调试尾注"] is True
+    assert updated["fields"]["处理中文案"] == bridge.DEFAULT_PROCESSING_ACK_TEXT
+    assert updated["fields"]["完成标记"] == bridge.DEFAULT_DONE_MARKER
 
 
 def test_ensure_rule_record_creates_missing_columns_before_backfill(monkeypatch):
     bridge = load_bridge()
     monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
     monkeypatch.setattr(bridge, "find_feishu_bitable_record",
-                        lambda t, f, e: {"record_id": "r1", "fields": {"处理中卡片": False}})
+                        lambda t, f, e: {"record_id": "r1", "fields": {
+                            "处理中卡片": False, "处理中文案": "x", "追问文案": "x", "空回复文案": "x", "完成标记": "x"}})
     monkeypatch.setattr(bridge, "update_feishu_bitable_record", lambda t, rid, fields: None)
     ensured = []
     monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields",
@@ -2689,7 +2697,9 @@ def test_ensure_rule_record_no_update_when_present(monkeypatch):
     bridge = load_bridge()
     monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
     monkeypatch.setattr(bridge, "find_feishu_bitable_record",
-                        lambda t, f, e: {"record_id": "r1", "fields": {"处理中卡片": False, "调试尾注": True}})
+                        lambda t, f, e: {"record_id": "r1", "fields": {
+                            "处理中卡片": False, "调试尾注": True,
+                            "处理中文案": "自定义A", "追问文案": "自定义B", "空回复文案": "自定义C", "完成标记": "自定义D"}})
     called = []
     monkeypatch.setattr(bridge, "update_feishu_bitable_record",
                         lambda t, rid, fields: called.append(1))
@@ -2697,7 +2707,7 @@ def test_ensure_rule_record_no_update_when_present(monkeypatch):
     monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields",
                         lambda t, names: ensure_called.append(1))
     bridge.ensure_feishu_default_rule_record()
-    assert called == []   # both fields already present -> no backfill (don't overwrite)
+    assert called == []   # all managed fields already present -> no backfill (don't overwrite)
     assert ensure_called == []   # nothing missing -> no need to touch table schema
 
 
@@ -2962,3 +2972,73 @@ def test_request_details_carries_chatgpt_mode(monkeypatch):
     }
     details = bridge.request_details(body)
     assert details["metadata"]["chatgpt_mode"] == "fast"
+
+def test_global_rule_policy_includes_text_defaults(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "")
+    monkeypatch.delenv("OPENCLAW_BRIDGE_PROCESSING_ACK_TEXT", raising=False)
+    monkeypatch.setenv("OPENCLAW_BRIDGE_DONE_MARKER", "✅ 完成了")
+    policy = bridge.feishu_global_rule_policy()
+    assert policy["处理中文案"] == bridge.DEFAULT_PROCESSING_ACK_TEXT
+    assert policy["追问文案"] == bridge.DEFAULT_PROCESSING_REMIND_TEXT
+    assert policy["空回复文案"] == bridge.DEFAULT_PROCESSING_EMPTY_TEXT
+    assert policy["完成标记"] == "✅ 完成了"  # env 覆盖默认
+
+
+def test_global_rule_policy_table_text_wins_and_empty_falls_back(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
+    monkeypatch.setattr(
+        bridge,
+        "find_feishu_bitable_record",
+        lambda t, f, e: {
+            "fields": {
+                "处理中文案": [{"text": "🍵 泡杯茶，答案马上来"}],
+                "完成标记": "",
+                "调试尾注": False,
+            }
+        },
+    )
+    policy = bridge.feishu_global_rule_policy()
+    assert policy["处理中文案"] == "🍵 泡杯茶，答案马上来"  # 富文本段落取拼接文本
+    assert policy["完成标记"] == bridge.DEFAULT_DONE_MARKER  # 表格空值不覆盖默认
+    assert bridge.processing_ack_text() == "🍵 泡杯茶，答案马上来"
+
+
+def test_text_getters_read_policy(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(
+        bridge,
+        "feishu_global_rule_policy",
+        lambda: {
+            "处理中文案": "A",
+            "追问文案": "B",
+            "空回复文案": "C",
+            "完成标记": "D",
+            "调试尾注": False,
+        },
+    )
+    assert bridge.processing_ack_text() == "A"
+    assert bridge.processing_remind_text() == "B"
+    assert bridge.processing_empty_fallback_text() == "C"
+    assert bridge.done_marker_text() == "D"
+    assert bridge.build_feishu_trailer({}) == "D"  # 尾注关→完成标记走表格值
+
+
+def test_ensure_rule_record_backfills_text_columns(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
+    monkeypatch.setattr(
+        bridge,
+        "find_feishu_bitable_record",
+        lambda t, f, e: {"record_id": "rec_g", "fields": {"处理中卡片": True, "调试尾注": True}},
+    )
+    ensured: list[list[str]] = []
+    updated: dict = {}
+    monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields", lambda t, names: ensured.append(list(names)))
+    monkeypatch.setattr(bridge, "update_feishu_bitable_record", lambda t, r, fields: updated.update(fields))
+    record_id = bridge.ensure_feishu_default_rule_record()
+    assert record_id == "rec_g"
+    assert ensured and set(ensured[0]) == {"处理中文案", "追问文案", "空回复文案", "完成标记"}
+    assert updated["处理中文案"] == bridge.DEFAULT_PROCESSING_ACK_TEXT
+    assert updated["完成标记"] == bridge.DEFAULT_DONE_MARKER

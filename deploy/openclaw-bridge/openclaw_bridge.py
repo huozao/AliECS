@@ -1343,10 +1343,15 @@ def ensure_feishu_default_rule_record() -> str:
     if not table_id:
         return ""
     existing = find_feishu_bitable_record(table_id, "规则编号", "global-default")
+    managed_defaults: dict[str, Any] = {
+        "处理中卡片": True,
+        "调试尾注": True,
+        **_rule_text_env_defaults(),
+    }
     if existing:
         record_id = str(existing.get("record_id") or "")
         current = existing.get("fields") or {}
-        missing = {k: True for k in ("处理中卡片", "调试尾注") if k not in current}
+        missing = {k: v for k, v in managed_defaults.items() if k not in current}
         if missing and record_id:
             try:
                 ensure_feishu_bitable_fields(table_id, list(missing))
@@ -1354,7 +1359,7 @@ def ensure_feishu_default_rule_record() -> str:
             except Exception as exc:
                 log_line(f"ensure_rule_record backfill failed: {exc}")
         return record_id
-    ensure_feishu_bitable_fields(table_id, ["处理中卡片", "调试尾注"])
+    ensure_feishu_bitable_fields(table_id, list(managed_defaults))
     fields = {
         "规则编号": "global-default",
         "规则名称": "默认飞书会话规则",
@@ -1367,9 +1372,8 @@ def ensure_feishu_default_rule_record() -> str:
         "是否需要审核": False,
         "每日最大请求数": 0,
         "敏感群标记": False,
-        "处理中卡片": True,
-        "调试尾注": True,
         "备注": "openclaw-bridge 自动维护",
+        **managed_defaults,
     }
     return bitable_created_record_id(create_feishu_bitable_record(table_id, fields))
 
@@ -2173,12 +2177,25 @@ def trace_chain_result(
 
 _inflight_counts: dict[str, int] = {}
 _inflight_lock = Lock()
-_feishu_global_rule_cache: dict[str, tuple[float, dict[str, bool]]] = {}
+_feishu_global_rule_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _feishu_global_rule_cache_lock = Lock()
 
 DEFAULT_PROCESSING_ACK_TEXT = "📨 已投递到 ChatGPT，正在生成（约 20–60 秒）。答案会直接更新到这张卡片，请勿重复提问 🙏"
 DEFAULT_PROCESSING_REMIND_TEXT = "⚠️ 上一条还在 ChatGPT 处理中，这条已排队。请等上面那张卡片出结果再问，连续提问会拖慢每一条。"
 DEFAULT_PROCESSING_EMPTY_TEXT = "本次没有生成内容，请稍后重试。"
+DEFAULT_DONE_MARKER = "🌿 回复完毕"
+
+# 规则表 global-default 行上的文案列：列名 → (env 覆盖变量, 代码默认)。表格非空值 > env > 默认。
+RULE_TEXT_FIELDS: dict[str, tuple[str, str]] = {
+    "处理中文案": ("OPENCLAW_BRIDGE_PROCESSING_ACK_TEXT", DEFAULT_PROCESSING_ACK_TEXT),
+    "追问文案": ("OPENCLAW_BRIDGE_PROCESSING_REMIND_TEXT", DEFAULT_PROCESSING_REMIND_TEXT),
+    "空回复文案": ("OPENCLAW_BRIDGE_PROCESSING_EMPTY_TEXT", DEFAULT_PROCESSING_EMPTY_TEXT),
+    "完成标记": ("OPENCLAW_BRIDGE_DONE_MARKER", DEFAULT_DONE_MARKER),
+}
+
+
+def _rule_text_env_defaults() -> dict[str, str]:
+    return {key: os.getenv(env_name, default) for key, (env_name, default) in RULE_TEXT_FIELDS.items()}
 
 
 def _enter_inflight(lane_key: str) -> bool:
@@ -2211,13 +2228,15 @@ def _env_flag(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def feishu_global_rule_policy() -> dict[str, bool]:
-    """Global feishu switches, sourced from the rule bitable's ``global-default`` row
-    with a short TTL cache. Any failure (no table / no creds / read error / missing
-    field) falls back to env so a broken or absent table never changes behavior."""
-    env_defaults = {
+def feishu_global_rule_policy() -> dict[str, Any]:
+    """Global feishu switches + reply texts, sourced from the rule bitable's
+    ``global-default`` row with a short TTL cache. Any failure (no table / no creds /
+    read error / missing field / empty text) falls back to env so a broken or absent
+    table never changes behavior."""
+    env_defaults: dict[str, Any] = {
         "处理中卡片": _env_flag("OPENCLAW_BRIDGE_PROCESSING_CARD", False),
         "调试尾注": _env_flag("OPENCLAW_BRIDGE_DEBUG_TRAILER", True),
+        **_rule_text_env_defaults(),
     }
     now = time.monotonic()
     with _feishu_global_rule_cache_lock:
@@ -2233,6 +2252,10 @@ def feishu_global_rule_policy() -> dict[str, bool]:
             for key in ("处理中卡片", "调试尾注"):
                 if key in fields:
                     result[key] = bitable_truthy(fields.get(key))
+            for key in RULE_TEXT_FIELDS:
+                text = bitable_field_text(fields.get(key)) if key in fields else ""
+                if text:
+                    result[key] = text
         except Exception as exc:
             log_line(
                 "feishu_global_rule_read_failed "
@@ -2256,16 +2279,26 @@ def debug_trailer_enabled() -> bool:
     return bool(feishu_global_rule_policy().get("调试尾注"))
 
 
+def _rule_text(key: str) -> str:
+    """文案取值：规则表非空值 >（policy 兜底已折入的）env > 代码默认。"""
+    env_name, default = RULE_TEXT_FIELDS[key]
+    try:
+        value = str(feishu_global_rule_policy().get(key) or "")
+    except Exception:  # noqa: BLE001 - 文案读取永不影响主流程
+        value = ""
+    return value or os.getenv(env_name, default)
+
+
 def processing_ack_text() -> str:
-    return os.getenv("OPENCLAW_BRIDGE_PROCESSING_ACK_TEXT", DEFAULT_PROCESSING_ACK_TEXT)
+    return _rule_text("处理中文案")
 
 
 def processing_remind_text() -> str:
-    return os.getenv("OPENCLAW_BRIDGE_PROCESSING_REMIND_TEXT", DEFAULT_PROCESSING_REMIND_TEXT)
+    return _rule_text("追问文案")
 
 
 def processing_empty_fallback_text() -> str:
-    return os.getenv("OPENCLAW_BRIDGE_PROCESSING_EMPTY_TEXT", DEFAULT_PROCESSING_EMPTY_TEXT)
+    return _rule_text("空回复文案")
 
 
 def send_processing_card(details: dict[str, Any], text: str) -> str | None:
@@ -2304,11 +2337,8 @@ def lane_batch_key(metadata: dict[str, Any]) -> str:
     )
 
 
-DEFAULT_DONE_MARKER = "🌿 回复完毕"
-
-
 def done_marker_text() -> str:
-    return os.getenv("OPENCLAW_BRIDGE_DONE_MARKER", DEFAULT_DONE_MARKER)
+    return _rule_text("完成标记")
 
 
 def build_feishu_trailer(details: dict[str, Any]) -> str:
