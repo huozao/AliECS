@@ -699,6 +699,57 @@ class FeishuBitableSyncTests(WorkerImportTestCase):
         self.assertEqual("user:ou_28d4", store.contacts[0]["peer_id"])
         self.assertEqual(1, counts["managed_contact_count"])
 
+    def test_rescan_app_tables_registers_new_tables_and_disables_missing(self) -> None:
+        from app.pipelines.sync_feishu_full import _rescan_app_tables
+
+        class FakeClient:
+            def list_tables(self, app_token: str) -> list[dict]:
+                return [
+                    {"table_id": "tbl_sessions", "name": "会话索引表"},
+                    {"table_id": "tbl_notes", "name": "使用说明"},
+                ]
+
+        class FakeStore:
+            def __init__(self) -> None:
+                self.sources: list[dict] = []
+                self.disabled_args: tuple | None = None
+
+            def ensure_source(self, **kwargs: object) -> int:
+                self.sources.append(dict(kwargs))
+                return len(self.sources)
+
+            def disable_missing_sheets(
+                self, provider: str, env_profile: str, external_doc_id: str, seen_sheet_ids: list[str]
+            ) -> int:
+                self.disabled_args = (provider, env_profile, external_doc_id, list(seen_sheet_ids))
+                return 1
+
+        store = FakeStore()
+        pairs, disabled = _rescan_app_tables(
+            store,
+            FakeClient(),  # type: ignore[arg-type]
+            "COMPANY_A",
+            "bascn_console",
+            "飞书 ChatGPT 会话管理台",
+            source_url="https://feishu.cn/base/bascn_console",
+            view_ids={"tbl_sessions": "view_1"},
+        )
+
+        self.assertEqual(2, len(pairs))
+        self.assertEqual(1, disabled)
+        source_id, source = pairs[1]
+        self.assertEqual(2, source_id)
+        self.assertEqual("tbl_notes", source.table_id)
+        self.assertEqual("使用说明", source.sheet_name)
+        self.assertEqual("view_1", pairs[0][1].view_id)
+        self.assertEqual("", pairs[1][1].view_id)
+        self.assertEqual("bitable_table", store.sources[0]["source_type"])
+        self.assertEqual("飞书 ChatGPT 会话管理台 / 使用说明", store.sources[1]["source_name"])
+        self.assertEqual(
+            ("feishu", "COMPANY_A", "bascn_console", ["tbl_sessions", "tbl_notes"]),
+            store.disabled_args,
+        )
+
 
 class FeishuBitableErrorTests(WorkerImportTestCase):
     def test_request_json_http_error_includes_status_without_secrets(self) -> None:

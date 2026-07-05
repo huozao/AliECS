@@ -272,6 +272,53 @@ def _resolve_app_token(client: FeishuBitableClient, source: FeishuBitableSource)
     raise RuntimeError(f"{source.source_name} 缺少 FEISHU_APP_TOKEN 或 FEISHU_WIKI_NODE_TOKEN。")
 
 
+def _rescan_app_tables(
+    store: Any,
+    client: FeishuBitableClient,
+    profile: str,
+    app_token: str,
+    document_name: str,
+    source_url: str = "",
+    view_ids: dict[str, str] | None = None,
+) -> tuple[list[tuple[int, FeishuBitableSource]], int]:
+    """整簿重扫：列出工作簿全部数据表并登记为同步源，返回 ([(source_id, source), ...], 停用数)。
+    新表自动收录；本轮没看到的表标记 disabled（list_tables 返回空时不剪，防误伤）。"""
+    doc_name = str(document_name or app_token)
+    views = view_ids or {}
+    pairs: list[tuple[int, FeishuBitableSource]] = []
+    seen_table_ids: list[str] = []
+    for item in client.list_tables(app_token):
+        table_id = _table_id(item)
+        if not table_id:
+            continue
+        sheet_name = _table_name(item) or table_id
+        seen_table_ids.append(table_id)
+        source = FeishuBitableSource(
+            env_profile=profile,
+            app_token=app_token,
+            table_id=table_id,
+            source_name=sheet_name,
+            view_id=views.get(table_id, ""),
+            source_url=source_url,
+            document_name=doc_name,
+            sheet_name=sheet_name,
+        )
+        source_id = store.ensure_source(
+            provider="feishu",
+            env_profile=profile,
+            source_name=compose_source_name(doc_name, sheet_name),
+            source_type="bitable_table",
+            external_doc_id=app_token,
+            external_sheet_id=table_id,
+            source_url=source_url,
+            document_name=doc_name,
+            sheet_name=sheet_name,
+        )
+        pairs.append((source_id, source))
+    disabled = store.disable_missing_sheets("feishu", profile, app_token, seen_table_ids)
+    return pairs, disabled
+
+
 def ensure_bitable_app_anchor(
     store: Any,
     profile: str,
