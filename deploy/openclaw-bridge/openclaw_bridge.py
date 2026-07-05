@@ -510,6 +510,9 @@ def request_details(body: dict[str, Any]) -> dict[str, Any]:
         user_text = _strip_feishu_sender_prefix(user_text, get_last_user_metadata(messages))
         user_text = strip_feishu_mention_helper_text(user_text)
         enrich_feishu_metadata_with_session_route(metadata, raw_metadata, user_text)
+        chat_mode = feishu_chat_mode({"metadata": metadata, "raw_metadata": raw_metadata})
+        if chat_mode:
+            metadata["chatgpt_mode"] = chat_mode
     if not metadata.get("peer_id"):
         inherited_metadata = get_recent_lane_metadata()
         if inherited_metadata:
@@ -1897,6 +1900,90 @@ def feishu_group_reply_policy(details: dict[str, Any]) -> tuple[bool, str]:
     return enabled, reply_mode
 
 
+CHATGPT_MODE_LABELS = {"极速": "fast", "均衡": "balanced", "高级": "advanced"}
+CHATGPT_MODE_NAMES = {value: key for key, value in CHATGPT_MODE_LABELS.items()}
+CHATGPT_MODE_FIELD = "对话模式"
+FEISHU_CHAT_MODE_CACHE_SECONDS = float(os.getenv("FEISHU_CHAT_MODE_CACHE_SECONDS", "30"))
+_feishu_chat_mode_cache: dict[str, tuple[float, str]] = {}
+_feishu_chat_mode_cache_lock = Lock()
+
+
+def parse_feishu_mode_command(text: str) -> tuple[bool, str]:
+    """(是否 /模式 命令, 规范模式值)。参数缺失/非法时规范值为 ""（回用法提示）。"""
+    stripped = (text or "").strip()
+    if not stripped.startswith("/模式"):
+        return False, ""
+    argument = stripped[len("/模式"):].strip()
+    return True, CHATGPT_MODE_LABELS.get(argument, "")
+
+
+def feishu_mode_peer(details: dict[str, Any]) -> tuple[str, str]:
+    """模式状态的归属：群聊挂群表(chat_id)，私聊挂用户表(open_id)。"""
+    if feishu_is_group_message(details):
+        return "group", feishu_chat_id(details)
+    return "user", feishu_open_id(details)
+
+
+def feishu_chat_mode(details: dict[str, Any]) -> str:
+    """当前会话的粘性模式（规范值），未设置返回 ""。
+
+    bitable 是事实源；读失败时保留内存里的旧值（退化为纯内存，符合
+    "bitable 不可用只降级不阻断"的约定）。"""
+    kind, key = feishu_mode_peer(details)
+    if not key:
+        return ""
+    cache_key = f"{kind}:{key}"
+    now = time.monotonic()
+    with _feishu_chat_mode_cache_lock:
+        cached = _feishu_chat_mode_cache.get(cache_key)
+        if cached and now - cached[0] < FEISHU_CHAT_MODE_CACHE_SECONDS:
+            return cached[1]
+    mode = cached[1] if cached else ""
+    table_id = feishu_session_console_table_id(kind)
+    if table_id:
+        try:
+            record = find_feishu_bitable_record(
+                table_id, "chat_id" if kind == "group" else "open_id", key
+            )
+            label = bitable_field_text(((record or {}).get("fields") or {}).get(CHATGPT_MODE_FIELD)).strip()
+            mode = CHATGPT_MODE_LABELS.get(label, "")
+        except Exception as exc:
+            log_line(
+                "feishu_chat_mode_read_failed "
+                + json.dumps({"peer": cache_key, "error": str(exc)}, ensure_ascii=False, sort_keys=True)
+            )
+    with _feishu_chat_mode_cache_lock:
+        _feishu_chat_mode_cache[cache_key] = (now, mode)
+    return mode
+
+
+def set_feishu_chat_mode(details: dict[str, Any], mode: str) -> bool:
+    """设置会话粘性模式。内存立即生效；bitable 持久化 best-effort。"""
+    kind, key = feishu_mode_peer(details)
+    if not key:
+        return False
+    with _feishu_chat_mode_cache_lock:
+        _feishu_chat_mode_cache[f"{kind}:{key}"] = (time.monotonic(), mode)
+    table_id = feishu_session_console_table_id(kind)
+    if not table_id:
+        return True
+    try:
+        ensure_feishu_bitable_fields(table_id, [CHATGPT_MODE_FIELD])
+        record_id = (
+            upsert_feishu_group_record(details) if kind == "group" else upsert_feishu_user_record(details)
+        )
+        if record_id:
+            update_feishu_bitable_record(table_id, record_id, {CHATGPT_MODE_FIELD: CHATGPT_MODE_NAMES[mode]})
+    except Exception as exc:
+        log_line(
+            "feishu_chat_mode_persist_failed "
+            + json.dumps(
+                {"peer": f"{kind}:{key}", "mode": mode, "error": str(exc)}, ensure_ascii=False, sort_keys=True
+            )
+        )
+    return True
+
+
 def feishu_mentions_text(raw_metadata: dict[str, Any]) -> str:
     mentions = raw_metadata.get("mentions")
     if mentions is None:
@@ -2690,6 +2777,22 @@ def unpack_webdock_result(result: Any) -> tuple[str, dict[str, Any]]:
     return str(result or ""), {}
 
 
+def maybe_feishu_mode_command_reply(details: dict[str, Any]) -> str | None:
+    """/模式 命令的短路回复；非飞书或非命令返回 None（走正常链路）。"""
+    if (details.get("metadata") or {}).get("channel") != "feishu":
+        return None
+    is_command, mode = parse_feishu_mode_command(str(details.get("user_text") or ""))
+    if not is_command:
+        return None
+    if not mode:
+        current = feishu_chat_mode(details)
+        current_name = CHATGPT_MODE_NAMES.get(current, "默认（高级）")
+        return f"当前对话模式：{current_name}\n用法：/模式 极速｜均衡｜高级"
+    if not set_feishu_chat_mode(details, mode):
+        return "无法识别当前会话，模式未修改。"
+    return f"已切换为{CHATGPT_MODE_NAMES[mode]}模式，本会话后续回复将使用该模式。"
+
+
 def build_reply(body: dict[str, Any]) -> str:
     user_text = get_last_user_message(body.get("messages"))
     if not webdock_configured():
@@ -2702,6 +2805,11 @@ def build_reply(body: dict[str, Any]) -> str:
             trace_chain_result(details, started, reply="")
             append_feishu_session_console_records_async(details, "", "仅记录")
             return NO_REPLY
+        mode_reply = maybe_feishu_mode_command_reply(details)
+        if mode_reply is not None:
+            trace_chain_result(details, started, reply=mode_reply)
+            append_feishu_session_console_records_async(details, mode_reply, "已回复")
+            return mode_reply
         batched_body = maybe_batch_request(body)
         if batched_body == NO_REPLY:
             return NO_REPLY  # merged into a batch leader; the leader emits chain_result
