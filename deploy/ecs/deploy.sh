@@ -226,13 +226,17 @@ if [[ -f "$CURRENT_ENV" ]]; then
   cp "$CURRENT_ENV" "$PREVIOUS_ENV"
 fi
 
+# 每服务镜像标签：优先用调用方传入的内容寻址标签（*_TAG，内容没变 = 标签不变 = 容器不重建），
+# 未提供时回落到发布号 IMAGE_TAG（手动 deploy.sh VYYYYMMDDNNN 的全量部署行为不变）。
+echo "[部署] 服务镜像标签：public-web=${PUBLIC_WEB_TAG:-$IMAGE_TAG} admin-ui=${ADMIN_UI_TAG:-$IMAGE_TAG} backend-api=${BACKEND_API_TAG:-$IMAGE_TAG} doc-sync-worker=${DOC_SYNC_WORKER_TAG:-$IMAGE_TAG} tplus-sync-worker=${TPLUS_SYNC_WORKER_TAG:-$IMAGE_TAG} mcp-coding-server=${MCP_CODING_SERVER_TAG:-$IMAGE_TAG}"
+
 cat > "$CURRENT_ENV" <<ENV
-PUBLIC_WEB_IMAGE=${GHCR_BASE}/public-web:${IMAGE_TAG}
-ADMIN_UI_IMAGE=${GHCR_BASE}/admin-ui:${IMAGE_TAG}
-BACKEND_API_IMAGE=${GHCR_BASE}/backend-api:${IMAGE_TAG}
-DOC_SYNC_WORKER_IMAGE=${GHCR_BASE}/doc-sync-worker:${IMAGE_TAG}
-TPLUS_SYNC_WORKER_IMAGE=${GHCR_BASE}/tplus-sync-worker:${IMAGE_TAG}
-MCP_CODING_SERVER_IMAGE=${GHCR_BASE}/mcp-coding-server:${IMAGE_TAG}
+PUBLIC_WEB_IMAGE=${GHCR_BASE}/public-web:${PUBLIC_WEB_TAG:-$IMAGE_TAG}
+ADMIN_UI_IMAGE=${GHCR_BASE}/admin-ui:${ADMIN_UI_TAG:-$IMAGE_TAG}
+BACKEND_API_IMAGE=${GHCR_BASE}/backend-api:${BACKEND_API_TAG:-$IMAGE_TAG}
+DOC_SYNC_WORKER_IMAGE=${GHCR_BASE}/doc-sync-worker:${DOC_SYNC_WORKER_TAG:-$IMAGE_TAG}
+TPLUS_SYNC_WORKER_IMAGE=${GHCR_BASE}/tplus-sync-worker:${TPLUS_SYNC_WORKER_TAG:-$IMAGE_TAG}
+MCP_CODING_SERVER_IMAGE=${GHCR_BASE}/mcp-coding-server:${MCP_CODING_SERVER_TAG:-$IMAGE_TAG}
 
 POSTGRES_USER=${POSTGRES_USER}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
@@ -375,13 +379,35 @@ if [[ "$pull_failed" -ne 0 ]]; then
   exit 1
 fi
 
-echo "[部署] 先执行迁移"
-"$ROOT_DIR/migrate.sh"
+# 迁移条件化：db/ 与 migrate.sh 自上次成功部署未变更时跳过（省 2G 小机上的数分钟）。
+# 判定不了就保守执行；FORCE_MIGRATIONS=1 强制执行。
+REPO_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
+LAST_SUCCESS_COMMIT_FILE="$METADATA_DIR/last-success-commit"
+RUN_MIGRATIONS="${FORCE_MIGRATIONS:-}"
+if [[ -z "$RUN_MIGRATIONS" ]]; then
+  RUN_MIGRATIONS=1
+  if [[ -f "$LAST_SUCCESS_COMMIT_FILE" ]] && git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    last_success="$(cat "$LAST_SUCCESS_COMMIT_FILE")"
+    if git -C "$REPO_ROOT" cat-file -e "${last_success}^{commit}" 2>/dev/null \
+      && git -C "$REPO_ROOT" diff --quiet "$last_success" HEAD -- db deploy/ecs/migrate.sh; then
+      RUN_MIGRATIONS=0
+    fi
+  fi
+fi
+if [[ "$RUN_MIGRATIONS" == "1" ]]; then
+  echo "[部署] 先执行迁移"
+  "$ROOT_DIR/migrate.sh"
+else
+  echo "[部署] db/ 与 migrate.sh 自上次成功部署（$(cat "$LAST_SUCCESS_COMMIT_FILE")）未变更，跳过迁移"
+fi
 
 echo "[部署] 再切换服务"
 docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" up -d
 
 if "$ROOT_DIR/healthcheck.sh"; then
+  if git -C "$REPO_ROOT" rev-parse HEAD >/dev/null 2>&1; then
+    git -C "$REPO_ROOT" rev-parse HEAD > "$LAST_SUCCESS_COMMIT_FILE"
+  fi
   echo "[部署] 成功"
   exit 0
 fi

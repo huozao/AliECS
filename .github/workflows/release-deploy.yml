@@ -123,14 +123,39 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # 内容寻址标签：镜像标签 = 构建上下文目录的 git tree hash。目录内容没变 → 标签已存在 →
+      # 跳过构建；ECS 侧 compose 看到同一标签不会重建容器，改 1 个服务不再全量重启 7 个。
+      - name: Compute content tag
+        id: tree
+        run: echo "tag=t-$(git rev-parse "HEAD:${{ matrix.context }}" | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
+      - name: Check if content image already exists
+        id: exists
+        run: |
+          if docker manifest inspect "ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.tree.outputs.tag }}" >/dev/null 2>&1; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+            echo "Content image already exists, skipping build: ${{ matrix.image }}:${{ steps.tree.outputs.tag }}"
+          else
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build and push ${{ matrix.image }}
+        if: ${{ steps.exists.outputs.hit != 'true' }}
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ needs.resolve-release.outputs.release_version }}
+          tags: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.tree.outputs.tag }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+      # 发布号 tag 始终作为内容 tag 的别名存在：rollback.sh / 手动 deploy.sh VYYYYMMDDNNN
+      # 的既有用法不受影响（秒级 manifest 复制，不重新构建）。
+      - name: Alias release tag to content tag
+        run: |
+          docker buildx imagetools create \
+            -t "ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ needs.resolve-release.outputs.release_version }}" \
+            "ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.tree.outputs.tag }}"
 
   deploy:
     needs:
@@ -219,6 +244,17 @@ jobs:
               echo "[deploy] Deploy script is missing or not executable: ${DEPLOY_SCRIPT}" >&2
               exit 1
             fi
+
+            # 按服务导出内容寻址标签（与 build-push 的算法一致：目录 tree hash 前 12 位）。
+            # 内容没变的服务标签不变 → compose 不重建对应容器。
+            echo "[deploy] Resolving per-service content tags"
+            content_tag() { echo "t-$(git rev-parse "HEAD:$1" | cut -c1-12)"; }
+            export PUBLIC_WEB_TAG="$(content_tag services/public-web)"
+            export ADMIN_UI_TAG="$(content_tag services/admin-ui)"
+            export BACKEND_API_TAG="$(content_tag services/backend-api)"
+            export DOC_SYNC_WORKER_TAG="$(content_tag services/doc-sync-worker)"
+            export TPLUS_SYNC_WORKER_TAG="$(content_tag services/tplus-sync-worker)"
+            export MCP_CODING_SERVER_TAG="$(content_tag services/mcp-coding-server)"
 
             echo "[deploy] Running latest deploy script: ${DEPLOY_SCRIPT}"
             "${DEPLOY_SCRIPT}" "${RELEASE_VERSION}"
