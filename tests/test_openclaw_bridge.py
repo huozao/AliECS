@@ -2883,3 +2883,82 @@ def test_feishu_chat_mode_keeps_memory_when_bitable_down(monkeypatch):
     assert bridge.set_feishu_chat_mode(details, "balanced") is True
     monkeypatch.setattr(bridge, "FEISHU_CHAT_MODE_CACHE_SECONDS", 0.0)
     assert bridge.feishu_chat_mode(details) == "balanced"
+
+
+def test_feishu_mode_command_switch_reply(monkeypatch):
+    bridge = load_bridge()
+    recorded = []
+    monkeypatch.setattr(bridge, "set_feishu_chat_mode", lambda details, mode: recorded.append(mode) or True)
+    details = _mode_details(key="ou_mode_cmd_1")
+    details["user_text"] = "/模式 极速"
+    reply = bridge.maybe_feishu_mode_command_reply(details)
+    assert recorded == ["fast"]
+    assert "极速" in reply
+
+
+def test_feishu_mode_command_usage_reply(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_chat_mode", lambda details: "advanced")
+    details = _mode_details(key="ou_mode_cmd_2")
+    details["user_text"] = "/模式"
+    reply = bridge.maybe_feishu_mode_command_reply(details)
+    assert "高级" in reply and "用法" in reply
+
+
+def test_feishu_mode_command_ignores_wechat():
+    bridge = load_bridge()
+    details = {
+        "user_text": "/模式 极速",
+        "metadata": {"channel": "wechat", "chat_type": "private", "peer_id": "user:wx_1"},
+        "raw_metadata": {},
+    }
+    assert bridge.maybe_feishu_mode_command_reply(details) is None
+
+
+def test_feishu_mode_command_normal_text_passthrough():
+    bridge = load_bridge()
+    details = _mode_details(key="ou_mode_cmd_3")
+    details["user_text"] = "今天天气如何"
+    assert bridge.maybe_feishu_mode_command_reply(details) is None
+
+
+def test_build_reply_mode_command_short_circuits(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://webdock.invalid/v1")
+    monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
+
+    def no_webdock(body):
+        raise AssertionError("mode command must not reach webdock")
+
+    monkeypatch.setattr(bridge, "call_webdock", no_webdock)
+    monkeypatch.setattr(bridge, "set_feishu_chat_mode", lambda details, mode: True)
+    monkeypatch.setattr(bridge, "append_feishu_session_console_records_async", lambda *a, **k: None)
+    monkeypatch.setattr(bridge, "trace_chain_result", lambda *a, **k: None)
+    body = {
+        "metadata": {
+            "channel": "feishu",
+            "chat_type": "private",
+            "peer_id": "user:ou_mode_sc_1",
+            "open_id": "ou_mode_sc_1",
+        },
+        "messages": [{"role": "user", "content": "/模式 均衡"}],
+    }
+    reply = bridge.build_reply(body)
+    assert "均衡" in reply
+
+
+def test_request_details_carries_chatgpt_mode(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_chat_mode", lambda details: "fast")
+    monkeypatch.setattr(bridge, "find_current_feishu_session_record", lambda session_key: None)
+    body = {
+        "metadata": {
+            "channel": "feishu",
+            "chat_type": "private",
+            "peer_id": "user:ou_mode_md_1",
+            "open_id": "ou_mode_md_1",
+        },
+        "messages": [{"role": "user", "content": "你好"}],
+    }
+    details = bridge.request_details(body)
+    assert details["metadata"]["chatgpt_mode"] == "fast"

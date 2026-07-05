@@ -510,6 +510,9 @@ def request_details(body: dict[str, Any]) -> dict[str, Any]:
         user_text = _strip_feishu_sender_prefix(user_text, get_last_user_metadata(messages))
         user_text = strip_feishu_mention_helper_text(user_text)
         enrich_feishu_metadata_with_session_route(metadata, raw_metadata, user_text)
+        chat_mode = feishu_chat_mode({"metadata": metadata, "raw_metadata": raw_metadata})
+        if chat_mode:
+            metadata["chatgpt_mode"] = chat_mode
     if not metadata.get("peer_id"):
         inherited_metadata = get_recent_lane_metadata()
         if inherited_metadata:
@@ -2774,6 +2777,22 @@ def unpack_webdock_result(result: Any) -> tuple[str, dict[str, Any]]:
     return str(result or ""), {}
 
 
+def maybe_feishu_mode_command_reply(details: dict[str, Any]) -> str | None:
+    """/模式 命令的短路回复；非飞书或非命令返回 None（走正常链路）。"""
+    if (details.get("metadata") or {}).get("channel") != "feishu":
+        return None
+    is_command, mode = parse_feishu_mode_command(str(details.get("user_text") or ""))
+    if not is_command:
+        return None
+    if not mode:
+        current = feishu_chat_mode(details)
+        current_name = CHATGPT_MODE_NAMES.get(current, "默认（高级）")
+        return f"当前对话模式：{current_name}\n用法：/模式 极速｜均衡｜高级"
+    if not set_feishu_chat_mode(details, mode):
+        return "无法识别当前会话，模式未修改。"
+    return f"已切换为{CHATGPT_MODE_NAMES[mode]}模式，本会话后续回复将使用该模式。"
+
+
 def build_reply(body: dict[str, Any]) -> str:
     user_text = get_last_user_message(body.get("messages"))
     if not webdock_configured():
@@ -2786,6 +2805,11 @@ def build_reply(body: dict[str, Any]) -> str:
             trace_chain_result(details, started, reply="")
             append_feishu_session_console_records_async(details, "", "仅记录")
             return NO_REPLY
+        mode_reply = maybe_feishu_mode_command_reply(details)
+        if mode_reply is not None:
+            trace_chain_result(details, started, reply=mode_reply)
+            append_feishu_session_console_records_async(details, mode_reply, "已回复")
+            return mode_reply
         batched_body = maybe_batch_request(body)
         if batched_body == NO_REPLY:
             return NO_REPLY  # merged into a batch leader; the leader emits chain_result
