@@ -1091,6 +1091,54 @@ class PostgresDocSyncStore:
             cur.execute("UPDATE external_sources SET last_sync_at = NOW(), updated_at = NOW() WHERE id = %s", (source_id,))
         self.conn.commit()
 
+    # --- 文档同步调度配置（integration_sync_config，与 backend 共用） ---
+    def get_sync_config(self, provider: str) -> dict[str, Any] | None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT enabled, interval_seconds, anchor_time, pull_paused, updated_at, updated_by "
+                "FROM integration_sync_config WHERE provider = %s",
+                (provider,),
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "enabled": bool(row[0]),
+            "interval_seconds": int(row[1]),
+            "anchor_time": str(row[2] or ""),
+            "pull_paused": bool(row[3]),
+            "updated_at": row[4],
+            "updated_by": str(row[5] or ""),
+        }
+
+    def upsert_sync_config(
+        self, provider: str, enabled: bool, interval_seconds: int, anchor_time: str, updated_by: str
+    ) -> None:
+        """写调度配置（不碰 pull_paused，那是管理页应急覆盖的专属开关）。"""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO integration_sync_config(provider, enabled, interval_seconds, anchor_time, updated_at, updated_by)
+                VALUES (%s, %s, %s, %s, NOW(), %s)
+                ON CONFLICT (provider) DO UPDATE
+                SET enabled = EXCLUDED.enabled,
+                    interval_seconds = EXCLUDED.interval_seconds,
+                    anchor_time = EXCLUDED.anchor_time,
+                    updated_at = NOW(),
+                    updated_by = EXCLUDED.updated_by
+                """,
+                (provider, enabled, interval_seconds, anchor_time, updated_by),
+            )
+        self.conn.commit()
+
+    def last_full_run_started_at(self) -> datetime | None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT MAX(started_at) FROM sync_runs WHERE mode = 'full' AND provider IN ('wecom', 'feishu')"
+            )
+            row = cur.fetchone()
+        return row[0] if row and row[0] else None
+
     # --- 群研发过程记录：群↔需求绑定 + 群消息入库 ---
     def upsert_group_binding(
         self,

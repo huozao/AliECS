@@ -262,6 +262,221 @@ class WorkerLoopTests(WorkerImportTestCase):
                     os.environ[key] = value
         self.assertEqual(0, code)
 
+    def test_loop_skips_full_sync_when_disabled_but_still_polls(self) -> None:
+        from app.pipelines.worker_loop import run_worker_loop
+
+        calls = {"full": 0, "pending": 0}
+        code = run_worker_loop(
+            full_sync=lambda: calls.__setitem__("full", calls["full"] + 1) or 0,
+            consume_requests=lambda: calls.__setitem__("pending", calls["pending"] + 1) or 0,
+            sleep=lambda s: None,
+            max_cycles=2,
+            schedule_reader=lambda: {"enabled": False, "interval_seconds": 90, "anchor_time": "", "pull_paused": False},
+        )
+        self.assertEqual(0, code)
+        self.assertEqual(0, calls["full"])
+        self.assertGreater(calls["pending"], 0)
+
+    def test_loop_restart_does_not_rerun_full_sync_within_interval(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        from app.pipelines.worker_loop import run_worker_loop
+
+        now = datetime(2026, 7, 6, 10, 0, tzinfo=timezone.utc)
+        calls = {"full": 0}
+        code = run_worker_loop(
+            full_sync=lambda: calls.__setitem__("full", calls["full"] + 1) or 0,
+            consume_requests=lambda: 0,
+            sleep=lambda s: None,
+            max_cycles=1,
+            schedule_reader=lambda: {"enabled": True, "interval_seconds": 86400, "anchor_time": "", "pull_paused": False},
+            now_fn=lambda: now,
+            last_full_reader=lambda: now - timedelta(hours=1),  # 1 小时前刚全量过
+        )
+        self.assertEqual(0, code)
+        self.assertEqual(0, calls["full"])
+
+    def test_loop_waits_until_anchor_due(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        from app.pipelines.worker_loop import run_worker_loop
+
+        # last=UTC 07-05 18:05（北京 02:05），锚 02:00+24h → due=07-06 18:00 UTC；now=10:00 → 需等 8h。
+        now = datetime(2026, 7, 6, 10, 0, tzinfo=timezone.utc)
+        slept: list[float] = []
+        calls = {"full": 0}
+        code = run_worker_loop(
+            full_sync=lambda: calls.__setitem__("full", calls["full"] + 1) or 0,
+            consume_requests=lambda: 0,
+            sleep=lambda s: slept.append(s),
+            max_cycles=1,
+            schedule_reader=lambda: {"enabled": True, "interval_seconds": 86400, "anchor_time": "02:00", "pull_paused": False},
+            now_fn=lambda: now,
+            last_full_reader=lambda: datetime(2026, 7, 5, 18, 5, tzinfo=timezone.utc),
+        )
+        self.assertEqual(0, code)
+        self.assertEqual(0, calls["full"])
+        self.assertEqual(8 * 3600, sum(slept))
+
+
+class SyncScheduleTests(WorkerImportTestCase):
+    def test_parse_config_rows_accepts_valid_keys_and_rejects_invalid_values(self) -> None:
+        from app.pipelines.sync_schedule import parse_config_rows
+
+        config, errors = parse_config_rows(
+            [
+                {"配置键": "文档同步开关", "配置值": "true", "状态": "启用"},
+                {"配置键": "文档同步周期小时", "配置值": "6", "状态": ""},
+                {"配置键": "文档同步起点时间", "配置值": "02:00", "状态": "启用"},
+                {"配置键": "未知配置", "配置值": "x", "状态": "启用"},
+                {"配置键": "文档同步周期小时", "配置值": "0.5", "状态": "启用"},
+            ]
+        )
+        self.assertEqual({"enabled": True, "interval_seconds": 21600, "anchor_time": "02:00"}, config)
+        self.assertEqual(1, len(errors))
+        self.assertIn("0.5", errors[0])
+
+    def test_parse_config_rows_skips_disabled_rows_and_bad_anchor(self) -> None:
+        from app.pipelines.sync_schedule import parse_config_rows
+
+        config, errors = parse_config_rows(
+            [
+                {"配置键": "文档同步开关", "配置值": "false", "状态": "停用"},
+                {"配置键": "文档同步起点时间", "配置值": "25:00", "状态": "启用"},
+            ]
+        )
+        self.assertEqual({}, config)
+        self.assertEqual(1, len(errors))
+
+    def test_next_full_sync_due_without_anchor_is_last_plus_interval(self) -> None:
+        from datetime import datetime, timezone
+
+        from app.pipelines.sync_schedule import next_full_sync_due
+
+        now = datetime(2026, 7, 6, 10, 0, tzinfo=timezone.utc)
+        self.assertEqual(now, next_full_sync_due(now, None, 86400, ""))
+        last = datetime(2026, 7, 6, 1, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            datetime(2026, 7, 7, 1, 0, tzinfo=timezone.utc),
+            next_full_sync_due(now, last, 86400, ""),
+        )
+
+    def test_next_full_sync_due_aligns_to_beijing_anchor(self) -> None:
+        from datetime import datetime, timezone
+
+        from app.pipelines.sync_schedule import next_full_sync_due
+
+        now = datetime(2026, 7, 6, 10, 0, tzinfo=timezone.utc)
+        # 北京 02:00 = UTC 18:00（前一日）；last=UTC 07-05 18:05（北京 02:05 刚跑过）→ 下次 07-06 18:00 UTC。
+        last = datetime(2026, 7, 5, 18, 5, tzinfo=timezone.utc)
+        self.assertEqual(
+            datetime(2026, 7, 6, 18, 0, tzinfo=timezone.utc),
+            next_full_sync_due(now, last, 86400, "02:00"),
+        )
+        # 6h 周期锚 02:00 → 北京 02/08/14/20 相位（UTC 18/00/06/12）；last=UTC 07-06 01:00 → 下次 06:00 UTC。
+        self.assertEqual(
+            datetime(2026, 7, 6, 6, 0, tzinfo=timezone.utc),
+            next_full_sync_due(now, datetime(2026, 7, 6, 1, 0, tzinfo=timezone.utc), 21600, "02:00"),
+        )
+
+    def test_pull_config_writes_db_when_changed_and_respects_pause(self) -> None:
+        import unittest.mock as mock
+
+        from app.pipelines import sync_schedule as module
+
+        class FakeClient:
+            def list_fields(self, app_token: str, table_id: str) -> list[dict]:
+                return [
+                    {"field_id": "f_key", "field_title": "配置键"},
+                    {"field_id": "f_val", "field_title": "配置值"},
+                    {"field_id": "f_status", "field_title": "状态"},
+                ]
+
+            def get_records(self, app_token: str, table_id: str, view_id: str = "") -> dict:
+                return {
+                    "records": [
+                        {"record_id": "r1", "fields": {"f_key": "文档同步周期小时", "f_val": "6", "f_status": "启用"}},
+                        {"record_id": "r2", "fields": {"f_key": "文档同步起点时间", "f_val": "02:00", "f_status": "启用"}},
+                    ],
+                    "page_count": 1,
+                }
+
+        class FakeStore:
+            def __init__(self, pull_paused: bool = False) -> None:
+                self.pull_paused = pull_paused
+                self.saved: dict | None = None
+
+            def list_bitable_sources(self, provider: str, env_profile: str) -> list[dict]:
+                return [
+                    {
+                        "external_doc_id": "bascn_console",
+                        "external_sheet_id": "tbl_cfg",
+                        "document_name": "飞书 ChatGPT 会话管理台",
+                        "sheet_name": "配置表",
+                        "source_url": "",
+                    },
+                    {
+                        "external_doc_id": "bascn_console",
+                        "external_sheet_id": "tbl_other",
+                        "document_name": "飞书 ChatGPT 会话管理台",
+                        "sheet_name": "会话索引表",
+                        "source_url": "",
+                    },
+                ]
+
+            def get_sync_config(self, provider: str) -> dict:
+                return {
+                    "enabled": True,
+                    "interval_seconds": 86400,
+                    "anchor_time": "",
+                    "pull_paused": self.pull_paused,
+                    "updated_at": None,
+                    "updated_by": "",
+                }
+
+            def upsert_sync_config(
+                self, provider: str, enabled: bool, interval_seconds: int, anchor_time: str, updated_by: str
+            ) -> None:
+                self.saved = {
+                    "provider": provider,
+                    "enabled": enabled,
+                    "interval_seconds": interval_seconds,
+                    "anchor_time": anchor_time,
+                    "updated_by": updated_by,
+                }
+
+            def close(self) -> None:
+                return None
+
+        class Cred:
+            app_id = "cli_x"
+            app_secret = "s"
+            api_base = "https://open.feishu.cn/open-apis"
+
+        store = FakeStore()
+        with mock.patch.object(module, "open_store", return_value=store), mock.patch.object(
+            module, "env_profiles", return_value=["COMPANY_A"]
+        ), mock.patch.object(module, "credentials_for_profile", return_value=[Cred()]), mock.patch.object(
+            module, "FeishuBitableClient", return_value=FakeClient()
+        ):
+            message = module.pull_config_from_bitable()
+        self.assertIsNotNone(store.saved)
+        self.assertEqual(21600, store.saved["interval_seconds"])
+        self.assertEqual("02:00", store.saved["anchor_time"])
+        self.assertEqual(True, store.saved["enabled"])  # 表格没给开关 → 保留 DB 现值
+        self.assertEqual("feishu-config-table", store.saved["updated_by"])
+        self.assertIn("applied", message)
+
+        paused = FakeStore(pull_paused=True)
+        with mock.patch.object(module, "open_store", return_value=paused), mock.patch.object(
+            module, "env_profiles", return_value=["COMPANY_A"]
+        ), mock.patch.object(module, "credentials_for_profile", return_value=[Cred()]), mock.patch.object(
+            module, "FeishuBitableClient", return_value=FakeClient()
+        ):
+            message = module.pull_config_from_bitable()
+        self.assertIsNone(paused.saved)
+        self.assertIn("paused", message)
+
 
 class SourceNameTests(WorkerImportTestCase):
     def test_compose_source_name_keeps_document_and_sheet_names_separate(self) -> None:
