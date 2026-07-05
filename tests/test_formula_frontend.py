@@ -190,20 +190,17 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertIn("state.view.arrow?(up?'↑':'↓'):''", self.html)
         self.assertIn("if('arrow' in saved&&!('delta' in saved))saved.delta=saved.arrow;", self.html)
 
-    def test_compare_excel_export_uses_scheme_b_layout(self) -> None:
-        # 方案B：状态分组排序、格内多行(mso-data-placement)、底色深浅、缺失「—」、差异统计
-        self.assertIn("br{mso-data-placement:same-cell;}", self.html)
+    def test_compare_excel_export_via_backend_xlsx(self) -> None:
+        # 对比表导出改为后端真 xlsx（伪xls在Excel/WPS只认内联、移动端连内联都丢，2026-07-05 拍板）
+        self.assertIn("/v1/recipes/compare/export", self.html)
+        self.assertIn("function buildComparePayload(", self.html)
         self.assertIn("const EXPORT_ST_ORDER={replace:0,add:1,del:2,change:3,same:4,history:5};", self.html)
-        self.assertIn("function exportHeat(", self.html)
-        self.assertIn("配方比例对比表", self.html)
-        self.assertIn("差异统计", self.html)
-        self.assertIn('<td style="background:#f2f0ec;color:#b8b2a8">—</td>', self.html)
-        # Excel/WPS 忽略 head CSS 类，视觉样式必须内联（2026-07-05 真机取证）
-        self.assertIn("const thStyle='background:#4a3c28;color:#ffffff;font-weight:bold';", self.html)
-        self.assertNotIn('class="miss"', self.html)
-        # 数量行不带单位（已有「单位」列）
-        self.assertNotIn("${formatQty(cell.qty)} ${escapeHtml(cell.unit)}", self.html)
-        self.assertIn("★ 基准", self.html)
+        self.assertIn("filter_label:", self.html)
+        self.assertIn("view:state.view,", self.html)
+        self.assertIn("code_warn:isSpecialItemCode(row.itemCode),", self.html)
+        self.assertNotIn("downloadHtmlAsXls", self.html)
+        self.assertNotIn("mso-data-placement", self.html)
+        self.assertNotIn("application/vnd.ms-excel", self.html)
         self.assertNotIn("barBg", self.html)
 
     def test_version_card_shows_parent_name_on_top_without_label(self) -> None:
@@ -255,12 +252,10 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertNotIn("请至少选择 2 个配方参与对比", self.html)
         self.assertNotIn("if(selected.length<2)", self.html)
 
-    def test_raw_download_still_uses_server_workbook_and_compare_download_is_client_table(self) -> None:
+    def test_raw_and_compare_downloads_both_use_server_workbooks(self) -> None:
         self.assertIn("function downloadRawResult()", self.html)
         self.assertIn("/v1/recipes/download/${state.fileId}", self.html)
-        self.assertIn("function downloadHtmlAsXls(", self.html)
-        self.assertIn("配方比例对比表_${filenamePart(queryInput.value.trim())}_${stampFile}.xls", self.html)
-        self.assertIn("application/vnd.ms-excel", self.html)
+        self.assertIn("配方比例对比表_${filenamePart(queryInput.value.trim())}.xlsx", self.html)
 
 
 if __name__ == "__main__":

@@ -906,102 +906,58 @@
       const blob=await response.blob();
       saveBlob(blob,downloadNameFromDisposition(response.headers.get('content-disposition'),`配方查询_人眼版_${state.fileId}.xlsx`));
     }
-    function excelCss(){
-      return `<style>
-        br{mso-data-placement:same-cell;}
-        body{font-family:"Microsoft YaHei",Arial,sans-serif;}
-        table{border-collapse:collapse;font-size:12px;}
-        td,th{border:.5pt solid #d8ccb8;padding:4px 8px;vertical-align:middle;text-align:center;}
-      </style>`;
-    }
-    // 对比表 Excel（方案B 紧凑式）：行按状态分组排序，每版本一列，格内比例/数量/±基准多行；
-    // 底色深浅=该配方内部占比（横条替代品）；跟随当前筛选与视图显示设置。
-    // ⚠️ 视觉样式必须全部内联写在元素上：Excel/WPS 的 HTML 导入会忽略 head 里的 CSS 类选择器，
-    // 只有 br{mso-data-placement} 等解析指令放 head（2026-07-05 真机取证结论，勿改回 class 方案）。
+    // 对比表 Excel：真 .xlsx 由后端渲染（/v1/recipes/compare/export）。HTML 伪 xls 在
+    // Excel/WPS 只认内联样式、移动端连内联背景都丢（2026-07-05 真机取证），已弃用。
+    // 前端把呈现态（版本列/行状态/每格 比例/数量/±基准）原样传后端，对比逻辑唯一事实源仍在前端。
     const EXPORT_ST_ORDER={replace:0,add:1,del:2,change:3,same:4,history:5};
-    const EXPORT_ST_COLOR={replace:['#dbeafe','#1d4ed8'],add:['#ede9fe','#6d28d9'],del:['#fee2e2','#b91c1c'],change:['#ffedd5','#c2410c'],same:['#f1f5f9','#64748b'],history:['#f5efe6','#7b6852']};
-    function exportHeat(value,max){
-      const p=max>0?Math.max(0,Math.min(1,value/max)):0;
-      const q=p>0?0.12+0.88*p:0; // 非零占比给 12% 可见下限，避免数据平淡时整表近白
-      const mix=(a,b)=>Math.round(a+(b-a)*q);
-      return `#${[mix(0xFF,0xE3),mix(0xFB,0xC9),mix(0xF3,0x9E)].map((part)=>part.toString(16).padStart(2,'0')).join('')}`;
-    }
-    function downloadHtmlAsXls(filename,tableHtml){
-      const blob=new Blob([`<html><head><meta charset="utf-8">${excelCss()}</head><body>${tableHtml}</body></html>`],{type:"application/vnd.ms-excel;charset=utf-8"});
-      saveBlob(blob,filename);
-    }
     function filenamePart(value){
       return String(value||'配方').replace(/[\\/:*?"<>|\r\n\t]+/g,'-').replace(/\s+/g,'').slice(0,36)||'配方';
     }
-    function downloadCompareResult(){
+    function buildComparePayload(){
       const selected=selectedVersions();
-      if(!selected.length){showError('请选择配方查看详情。');return;}
+      if(!selected.length)return null;
       const base=baseVersion(), targets=targetVersions();
-      if(!base||!targets.length){showError('没有可导出的对比数据。');return;}
+      if(!base||!targets.length)return null;
       const rowsAll=buildCompareMatrix();
       const rows=rowsAll.map((row)=>({...row,st:rowStatus(row,rowsAll)})).filter((row)=>passCompareFilter(row.st))
         .sort((a,b)=>((EXPORT_ST_ORDER[a.st]??9)-(EXPORT_ST_ORDER[b.st]??9))||a.itemCode.localeCompare(b.itemCode,'zh-CN'));
-      const stats={};
-      rows.forEach((row)=>{const label=statusText[row.st];stats[label]=(stats[label]||0)+1;});
       const filterLabels={all:'全部',diff:'仅差异',replace:'仅替换',adddel:'仅新增/删除',change:'仅比例变化',same:'仅一致'};
-      const showSpec=state.view.spec;
-      const cols=(showSpec?5:4)+selected.length;
-      const now=new Date(), pad=(n)=>String(n).padStart(2,'0');
-      const stampDate=`${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
-      const stampFile=`${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-      const versionHead=(version)=>{
-        const baseTag=version.key===base.key?'<br><span style="font-size:10px;color:#ffd98a">★ 基准</span>':'';
-        return `${escapeHtml(version.parentCode)}<br><span style="font-size:10px;font-weight:normal;color:#d8ccb8">${escapeHtml(version.version||'-')}</span>${baseTag}`;
+      return{
+        query:queryInput.value.trim(),
+        filter_label:filterLabels[state.activeFilter]||state.activeFilter,
+        view:state.view,
+        versions:selected.map((version)=>({label:targetLabel(version),code:version.parentCode,version:version.version||'',is_base:version.key===base.key,is_target:targets.some((target)=>target.key===version.key)})),
+        rows:rows.map((row)=>({
+          status:row.st,
+          item_code:row.itemCode,
+          item_name:row.itemName,
+          spec:row.spec||'',
+          unit:row.unit||'',
+          code_warn:isSpecialItemCode(row.itemCode),
+          cells:selected.map((version)=>{
+            const cell=row.cells[version.key];
+            if(!cell)return null;
+            const baseCell=row.cells[base.key];
+            const isBase=version.key===base.key;
+            const isTarget=targets.some((target)=>target.key===version.key);
+            return{
+              ratio:cell.ratio,
+              qty:cell.qty,
+              delta:(!isBase&&isTarget&&baseCell)?cell.ratio-baseCell.ratio:null,
+              is_new:Boolean(!isBase&&isTarget&&!baseCell)
+            };
+          })
+        }))
       };
-      const infoHeads=[['状态',52],['子件编码',76],['子件名称',150]].concat(showSpec?[['规格型号',90]]:[]).concat([['单位',40]]);
-      const bodyRows=rows.map((row)=>{
-        const [stBg,stFg]=EXPORT_ST_COLOR[row.st]||['#fff','#333'];
-        const warnStyle=isSpecialItemCode(row.itemCode)?';color:#a83d2f;font-weight:bold':'';
-        const cells=selected.map((version)=>{
-          const cell=row.cells[version.key];
-          if(!cell)return '<td style="background:#f2f0ec;color:#b8b2a8">—</td>';
-          const isBase=version.key===base.key;
-          const baseCell=row.cells[base.key];
-          const isTarget=targets.some((target)=>target.key===version.key);
-          const lines=[];
-          if(state.view.pct||!state.view.qty)lines.push(`<b>${ratio(cell.ratio)}</b>`);
-          if(state.view.qty)lines.push(`<span style="color:#777;font-size:10px">${formatQty(cell.qty)}</span>`);
-          if(!isBase&&isTarget){
-            if(!baseCell){
-              if(state.view.newTag)lines.push('<span style="color:#6d28d9;font-size:10px;font-weight:bold">新增</span>');
-            }else if(state.view.arrow||state.view.delta){
-              const delta=cell.ratio-baseCell.ratio;
-              if(Math.abs(delta)>0.000001){
-                const up=delta>0;
-                const glyph=state.view.arrow?(up?'↑':'↓'):'';
-                const num=state.view.delta?` ${fmtDelta(delta)}`:'';
-                lines.push(`<span style="color:${up?'#c0392b':'#1e8449'};font-size:10px;font-weight:bold">${glyph}${num}</span>`);
-              }
-            }
-          }
-          const bg=isBase?'#f6efe2':exportHeat(cell.ratio,versionMaxRatio(version.key));
-          return `<td style="background:${bg}">${lines.join('<br>')}</td>`;
-        }).join('');
-        return `<tr style="height:44px">
-          <td style="background:${stBg};color:${stFg};font-weight:bold">${statusText[row.st]}</td>
-          <td style="font-family:Consolas,monospace${warnStyle}">${escapeHtml(row.itemCode)}</td>
-          <td style="text-align:left">${escapeHtml(row.itemName)}</td>
-          ${showSpec?`<td style="text-align:left;color:#777">${escapeHtml(row.spec)}</td>`:''}
-          <td>${escapeHtml(row.unit)}</td>
-          ${cells}
-        </tr>`;
-      }).join('');
-      const metaStyle='background:#faf6ee;color:#6b6258;text-align:left;font-size:11px';
-      const thStyle='background:#4a3c28;color:#ffffff;font-weight:bold';
-      const html=`<table>
-        <tr><td style="font-size:20px;font-weight:bold;color:#2d2418;text-align:left;background:#ffffff;padding:10px 4px" colspan=${cols}>配方比例对比表</td></tr>
-        <tr><td style="${metaStyle}" colspan=${cols}>基准：${escapeHtml(targetLabel(base))}　|　目标：${escapeHtml(targets.map((target)=>targetLabel(target)).join('、'))}　|　导出：${stampDate}　|　筛选：${filterLabels[state.activeFilter]||state.activeFilter}</td></tr>
-        <tr><td style="${metaStyle};font-weight:bold;font-size:12px" colspan=${cols}>差异统计：　${escapeHtml(Object.entries(stats).map(([key,value])=>`${key} ${value}`).join(' · '))}　（行按状态分组排序）</td></tr>
-        <tr>${infoHeads.map(([label,width])=>`<th style="${thStyle};width:${width}px">${label}</th>`).join('')}${selected.map((version)=>`<th style="${thStyle};width:108px">${versionHead(version)}</th>`).join('')}</tr>
-        ${bodyRows}
-        <tr><td style="color:#8a8172;font-size:10px;text-align:left;background:#ffffff" colspan=${cols}>说明：每格=比例/数量/相对基准变化（数量单位见「单位」列）；红↑=比基准高、绿↓=低；「—」=该配方不含此物料；底色深浅=该配方内占比高低；★基准列米色底；红色编码=格式与多数物料不一致。</td></tr>
-      </table>`;
-      downloadHtmlAsXls(`配方比例对比表_${filenamePart(queryInput.value.trim())}_${stampFile}.xls`,html);
+    }
+    async function downloadCompareResult(){
+      const payload=buildComparePayload();
+      if(!payload){showError('请选择配方查看详情。');return;}
+      const headers={'Content-Type':'application/json'};syncAuth();if(state.token)headers.Authorization=`Bearer ${state.token}`;
+      const response=await fetch(`${API_BASE}/v1/recipes/compare/export`,{method:'POST',headers,body:JSON.stringify(payload)});
+      if(!response.ok){let message=`HTTP ${response.status}`;try{const data=await response.json();message=data.detail||message;}catch{}throw new Error(message);}
+      const blob=await response.blob();
+      saveBlob(blob,downloadNameFromDisposition(response.headers.get('content-disposition'),`配方比例对比表_${filenamePart(queryInput.value.trim())}.xlsx`));
     }
     async function downloadCostResult(){
       const query=queryInput.value.trim();
@@ -1046,7 +1002,7 @@
       compareFilters.querySelectorAll('.pill').forEach((pill)=>pill.onclick=()=>{compareFilters.querySelectorAll('.pill').forEach((item)=>item.classList.remove('active'));pill.classList.add('active');state.activeFilter=pill.dataset.filter;renderCompareTable();});
       downloadRawBtn.onclick=()=>downloadRawResult().catch((error)=>showError(error.message));
       downloadHumanBtn.onclick=()=>downloadHumanResult().catch((error)=>showError(error.message));
-      downloadCompareBtn.onclick=()=>downloadCompareResult();
+      downloadCompareBtn.onclick=()=>downloadCompareResult().catch((error)=>showError(error.message));
       exportCostBtn.onclick=()=>downloadCostResult().catch((error)=>showError(error.message));
       resetAllPricesBtn.onclick=()=>resetAllPrices().catch((error)=>showError(error.message));
       resetAllSimBtn.onclick=()=>resetAllSimulatedQuantities().catch((error)=>showError(error.message));

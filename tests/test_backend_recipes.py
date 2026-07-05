@@ -197,6 +197,82 @@ class BackendRecipeRouteTests(unittest.TestCase):
         )
         self.assertEqual(400, response.status_code)
 
+    def _compare_export_payload(self) -> dict:
+        return {
+            "query": "3027",
+            "filter_label": "全部",
+            "view": {"spec": True, "qty": True, "pct": True, "arrow": True, "delta": True, "newTag": True, "bar": True},
+            "versions": [
+                {"label": "A｜V1", "code": "A", "version": "V1", "is_base": True, "is_target": False},
+                {"label": "B｜V2", "code": "B", "version": "V2", "is_base": False, "is_target": True},
+            ],
+            "rows": [
+                {
+                    "status": "change",
+                    "item_code": "C001",
+                    "item_name": "树脂",
+                    "spec": "PP",
+                    "unit": "kg",
+                    "code_warn": False,
+                    "cells": [
+                        {"ratio": 0.994, "qty": 100, "delta": None, "is_new": False},
+                        {"ratio": 0.913, "qty": 91.5, "delta": -0.081, "is_new": False},
+                    ],
+                },
+                {
+                    "status": "add",
+                    "item_code": "C002",
+                    "item_name": "色粉",
+                    "spec": "",
+                    "unit": "kg",
+                    "code_warn": True,
+                    "cells": [None, {"ratio": 0.087, "qty": 8.5, "delta": None, "is_new": True}],
+                },
+            ],
+        }
+
+    def test_compare_export_returns_styled_real_xlsx(self) -> None:
+        token = self._token(permissions=["formula.read"])
+
+        response = self.client.post(
+            "/v1/recipes/compare/export",
+            headers={"Authorization": f"Bearer {token}"},
+            json=self._compare_export_payload(),
+        )
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn(
+            urllib.parse.quote("配方比例对比表"),
+            response.headers.get("content-disposition", ""),
+        )
+        workbook = load_workbook(BytesIO(response.content))
+        sheet = workbook["比例对比"]
+        self.assertEqual("配方比例对比表", sheet["A1"].value)
+        # 表头深棕填充（伪xls时代 head CSS 被 Excel 忽略的问题，真 xlsx 彻底解决）
+        self.assertEqual("FF4A3C28", sheet.cell(row=4, column=1).fill.start_color.rgb)
+        # 状态列彩色填充（第5行=change 橙）
+        self.assertEqual("FFFFEDD5", sheet.cell(row=5, column=1).fill.start_color.rgb)
+        # 缺失格「—」灰底；冻结窗格生效
+        self.assertEqual("—", sheet.cell(row=6, column=6).value)
+        self.assertEqual("F5", sheet.freeze_panes)
+
+    def test_compare_export_rejects_mismatched_cells(self) -> None:
+        token = self._token(permissions=["formula.read"])
+        payload = self._compare_export_payload()
+        payload["rows"][0]["cells"] = [None]
+
+        response = self.client.post(
+            "/v1/recipes/compare/export",
+            headers={"Authorization": f"Bearer {token}"},
+            json=payload,
+        )
+
+        self.assertEqual(400, response.status_code)
+
+    def test_compare_export_requires_login(self) -> None:
+        response = self.client.post("/v1/recipes/compare/export", json=self._compare_export_payload())
+        self.assertIn(response.status_code, {401, 403})
+
     def test_admin_user_can_query_recipe(self) -> None:
         token = self._token(roles=["admin"], permissions=["admin.access"])
 
