@@ -177,11 +177,18 @@ class FormulaFrontendTests(unittest.TestCase):
 
     def test_view_options_persist_with_qty_pct_guard(self) -> None:
         self.assertIn("const VIEW_KEY='formula_display_options';", self.html)
-        self.assertIn("const VIEW_DEFAULTS={spec:true,qty:true,pct:true,arrow:true,newTag:true,bar:true};", self.html)
+        self.assertIn("const VIEW_DEFAULTS={spec:true,qty:true,pct:true,arrow:true,delta:true,newTag:true,bar:true};", self.html)
         self.assertIn("if(!state.view.qty&&!state.view.pct){", self.html)
         self.assertIn("至少保留一项", self.html)
-        for key in ("spec", "qty", "pct", "arrow", "newTag", "bar"):
+        for key in ("spec", "qty", "pct", "arrow", "delta", "newTag", "bar"):
             self.assertIn(f'data-view="{key}"', self.html)
+
+    def test_arrow_and_delta_are_independent_toggles(self) -> None:
+        # 箭头(↑↓)与±基准数值拆成两个开关；旧 localStorage 的 arrow 值迁移到 delta
+        self.assertIn("显示↑↓箭头", self.html)
+        self.assertIn("显示±基准", self.html)
+        self.assertIn("state.view.arrow?(up?'↑':'↓'):''", self.html)
+        self.assertIn("if('arrow' in saved&&!('delta' in saved))saved.delta=saved.arrow;", self.html)
 
     def test_compare_excel_export_uses_scheme_b_layout(self) -> None:
         # 方案B：状态分组排序、格内多行(mso-data-placement)、底色深浅、缺失「—」、差异统计
@@ -190,7 +197,12 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertIn("function exportHeat(", self.html)
         self.assertIn("配方比例对比表", self.html)
         self.assertIn("差异统计", self.html)
-        self.assertIn('<td class="miss">—</td>', self.html)
+        self.assertIn('<td style="background:#f2f0ec;color:#b8b2a8">—</td>', self.html)
+        # Excel/WPS 忽略 head CSS 类，视觉样式必须内联（2026-07-05 真机取证）
+        self.assertIn("const thStyle='background:#4a3c28;color:#ffffff;font-weight:bold';", self.html)
+        self.assertNotIn('class="miss"', self.html)
+        # 数量行不带单位（已有「单位」列）
+        self.assertNotIn("${formatQty(cell.qty)} ${escapeHtml(cell.unit)}", self.html)
         self.assertIn("★ 基准", self.html)
         self.assertNotIn("barBg", self.html)
 
@@ -247,7 +259,7 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertIn("function downloadRawResult()", self.html)
         self.assertIn("/v1/recipes/download/${state.fileId}", self.html)
         self.assertIn("function downloadHtmlAsXls(", self.html)
-        self.assertIn("配方比例对比表_${filenamePart(queryInput.value.trim())}.xls", self.html)
+        self.assertIn("配方比例对比表_${filenamePart(queryInput.value.trim())}_${stampFile}.xls", self.html)
         self.assertIn("application/vnd.ms-excel", self.html)
 
 
