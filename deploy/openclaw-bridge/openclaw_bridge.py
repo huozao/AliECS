@@ -1208,6 +1208,7 @@ def list_feishu_bitable_records(table_id: str) -> list[dict[str, Any]]:
     return records
 
 
+FEISHU_BITABLE_FIELD_TYPE_TEXT = 1
 FEISHU_BITABLE_FIELD_TYPE_CHECKBOX = 7
 
 
@@ -1233,7 +1234,9 @@ def create_feishu_bitable_field(
     )
 
 
-def ensure_feishu_bitable_fields(table_id: str, field_names: list[str]) -> None:
+def ensure_feishu_bitable_fields(
+    table_id: str, field_names: list[str], field_type: int = FEISHU_BITABLE_FIELD_TYPE_CHECKBOX
+) -> None:
     """Best-effort: create any bitable columns that don't exist yet, so a later
     write to those field names doesn't fail with FieldNameNotFound (unlike
     WeCom smartsheets, Feishu Bitable requires a column to exist before a
@@ -1251,7 +1254,7 @@ def ensure_feishu_bitable_fields(table_id: str, field_names: list[str]) -> None:
         if name in existing:
             continue
         try:
-            create_feishu_bitable_field(table_id, name)
+            create_feishu_bitable_field(table_id, name, field_type)
         except Exception as exc:
             log_line(f"create_feishu_bitable_field({name}) failed: {exc}")
 
@@ -1972,7 +1975,9 @@ def set_feishu_chat_mode(details: dict[str, Any], mode: str) -> bool:
     if not table_id:
         return True
     try:
-        ensure_feishu_bitable_fields(table_id, [CHATGPT_MODE_FIELD])
+        ensure_feishu_bitable_fields(
+            table_id, [CHATGPT_MODE_FIELD], field_type=FEISHU_BITABLE_FIELD_TYPE_TEXT
+        )
         record_id = (
             upsert_feishu_group_record(details) if kind == "group" else upsert_feishu_user_record(details)
         )

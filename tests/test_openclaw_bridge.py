@@ -2855,7 +2855,11 @@ def test_feishu_chat_mode_persists_to_group_table(monkeypatch):
     monkeypatch.setenv("FEISHU_SESSION_CONSOLE_GROUP_TABLE_ID", "tbl_group")
     ensured, updated = [], []
     monkeypatch.setattr(
-        bridge, "ensure_feishu_bitable_fields", lambda table, names: ensured.append((table, tuple(names)))
+        bridge,
+        "ensure_feishu_bitable_fields",
+        lambda table, names, field_type=bridge.FEISHU_BITABLE_FIELD_TYPE_CHECKBOX: ensured.append(
+            (table, tuple(names), field_type)
+        ),
     )
     monkeypatch.setattr(bridge, "upsert_feishu_group_record", lambda details: "rec_1")
     monkeypatch.setattr(
@@ -2863,7 +2867,8 @@ def test_feishu_chat_mode_persists_to_group_table(monkeypatch):
     )
     details = _mode_details("group", "oc_mode_group_1")
     assert bridge.set_feishu_chat_mode(details, "advanced") is True
-    assert ensured == [("tbl_group", ("对话模式",))]
+    # 对话模式列必须建成文本列(类型1)；默认 Checkbox(7) 写文本会报 1254065
+    assert ensured == [("tbl_group", ("对话模式",), bridge.FEISHU_BITABLE_FIELD_TYPE_TEXT)]
     assert updated == [("tbl_group", "rec_1", {"对话模式": "高级"})]
 
 
