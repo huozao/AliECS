@@ -2636,7 +2636,7 @@ def test_ensure_rule_record_creates_with_new_fields(monkeypatch):
     bridge = load_bridge()
     monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
     monkeypatch.setattr(bridge, "find_feishu_bitable_record", lambda t, f, e: None)
-    monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields", lambda t, names: None)
+    monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields", lambda t, names, field_type=7: None)
     captured = {}
     monkeypatch.setattr(bridge, "create_feishu_bitable_record",
                         lambda t, fields: captured.update(fields=fields) or {"data": {"record": {"record_id": "r1"}}})
@@ -2655,10 +2655,12 @@ def test_ensure_rule_record_creates_missing_columns_before_create(monkeypatch):
     monkeypatch.setattr(bridge, "bitable_created_record_id", lambda r: "r1")
     ensured = []
     monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields",
-                        lambda t, names: ensured.append((t, list(names))))
+                        lambda t, names, field_type=7: ensured.append((t, list(names), field_type)))
     bridge.ensure_feishu_default_rule_record()
+    # 布尔开关列建 Checkbox(7)，四个文案列建文本(1)——文本文案不能写进 Checkbox 列（CheckboxFieldConvFail）。
     assert ensured == [
-        ("tbl_rule", ["处理中卡片", "调试尾注", "处理中文案", "追问文案", "空回复文案", "完成标记"])
+        ("tbl_rule", ["处理中卡片", "调试尾注"], bridge.FEISHU_BITABLE_FIELD_TYPE_CHECKBOX),
+        ("tbl_rule", ["处理中文案", "追问文案", "空回复文案", "完成标记"], bridge.FEISHU_BITABLE_FIELD_TYPE_TEXT),
     ]
 
 
@@ -2667,7 +2669,7 @@ def test_ensure_rule_record_backfills_missing_fields(monkeypatch):
     monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
     monkeypatch.setattr(bridge, "find_feishu_bitable_record",
                         lambda t, f, e: {"record_id": "r1", "fields": {"规则编号": "global-default"}})
-    monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields", lambda t, names: None)
+    monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields", lambda t, names, field_type=7: None)
     updated = {}
     monkeypatch.setattr(bridge, "update_feishu_bitable_record",
                         lambda t, rid, fields: updated.update(rid=rid, fields=fields))
@@ -2688,9 +2690,10 @@ def test_ensure_rule_record_creates_missing_columns_before_backfill(monkeypatch)
     monkeypatch.setattr(bridge, "update_feishu_bitable_record", lambda t, rid, fields: None)
     ensured = []
     monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields",
-                        lambda t, names: ensured.append((t, list(names))))
+                        lambda t, names, field_type=7: ensured.append((t, list(names), field_type)))
     bridge.ensure_feishu_default_rule_record()
-    assert ensured == [("tbl_rule", ["调试尾注"])]   # only the actually-missing key
+    # 仅缺 调试尾注（布尔）→ 只建一列 Checkbox；文案列都在（虽为占位值）不重建。
+    assert ensured == [("tbl_rule", ["调试尾注"], bridge.FEISHU_BITABLE_FIELD_TYPE_CHECKBOX)]
 
 
 def test_ensure_rule_record_no_update_when_present(monkeypatch):
@@ -2705,7 +2708,7 @@ def test_ensure_rule_record_no_update_when_present(monkeypatch):
                         lambda t, rid, fields: called.append(1))
     ensure_called = []
     monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields",
-                        lambda t, names: ensure_called.append(1))
+                        lambda t, names, field_type=7: ensure_called.append(1))
     bridge.ensure_feishu_default_rule_record()
     assert called == []   # all managed fields already present -> no backfill (don't overwrite)
     assert ensure_called == []   # nothing missing -> no need to touch table schema
@@ -3040,7 +3043,8 @@ def test_ensure_rule_record_backfills_text_columns(monkeypatch):
     )
     ensured: list[list[str]] = []
     updated: dict = {}
-    monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields", lambda t, names: ensured.append(list(names)))
+    monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields",
+                        lambda t, names, field_type=7: ensured.append(list(names)))
     monkeypatch.setattr(bridge, "update_feishu_bitable_record", lambda t, r, fields: updated.update(fields))
     record_id = bridge.ensure_feishu_default_rule_record()
     assert record_id == "rec_g"
