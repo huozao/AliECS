@@ -1357,12 +1357,12 @@ def ensure_feishu_default_rule_record() -> str:
         missing = {k: v for k, v in managed_defaults.items() if k not in current}
         if missing and record_id:
             try:
-                ensure_feishu_bitable_fields(table_id, list(missing))
+                _ensure_rule_columns(table_id, list(missing))
                 update_feishu_bitable_record(table_id, record_id, missing)
             except Exception as exc:
                 log_line(f"ensure_rule_record backfill failed: {exc}")
         return record_id
-    ensure_feishu_bitable_fields(table_id, list(managed_defaults))
+    _ensure_rule_columns(table_id, list(managed_defaults))
     fields = {
         "规则编号": "global-default",
         "规则名称": "默认飞书会话规则",
@@ -2201,6 +2201,17 @@ RULE_TEXT_FIELDS: dict[str, tuple[str, str]] = {
 
 def _rule_text_env_defaults() -> dict[str, str]:
     return {key: os.getenv(env_name, default) for key, (env_name, default) in RULE_TEXT_FIELDS.items()}
+
+
+def _ensure_rule_columns(table_id: str, names: list[str]) -> None:
+    """规则表建列：布尔开关列建 Checkbox(默认)，文案列建文本(type=1)。
+    文本文案若误建进 Checkbox 列，写入时会 CheckboxFieldConvFail 而静默丢失。"""
+    bool_names = [name for name in names if name not in RULE_TEXT_FIELDS]
+    text_names = [name for name in names if name in RULE_TEXT_FIELDS]
+    if bool_names:
+        ensure_feishu_bitable_fields(table_id, bool_names)
+    if text_names:
+        ensure_feishu_bitable_fields(table_id, text_names, field_type=FEISHU_BITABLE_FIELD_TYPE_TEXT)
 
 
 def _enter_inflight(lane_key: str) -> bool:
