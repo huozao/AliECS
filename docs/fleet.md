@@ -1,7 +1,7 @@
 # 设备清单（Fleet）
 
 > 单一事实源：设备 ↔ 职责 ↔ 仓库 ↔ 部署链路的权威映射。
-> 所有事实于 2026-07-02 经 SSH 实测核实。发现与本文不符时，以实测为准并更新本文。
+> 所有事实于 2026-07-04 经 SSH 实测核实。发现与本文不符时，以实测为准并更新本文。
 
 ## 命名规则
 
@@ -29,10 +29,10 @@ bridge/openclaw 容器
       └─ 备 127.0.0.1:11811 ← webdock1 反向隧道
 ```
 
-- **主备关系的唯一权威来源是 aliecs 上 `/etc/default/webdock-failover-proxy`**（当前 PRIMARY_PORT=11810 即 webdock2 为主，2026-07-02 切换）。⚠️ 代理脚本 `/opt/aliecs/webdock-failover-proxy.py` 的内置默认值与实际配置**正好相反**，勿以代码默认值判断主备。
+- **主备关系的唯一权威来源是 aliecs 上 `/etc/default/webdock-failover-proxy` 的 `WEBDOCK_FAILOVER_PRIMARY_NAME` / `WEBDOCK_FAILOVER_STANDBY_NAME`**（当前 primary=webdock2，standby=webdock1；2026-07-04 实测 `127.0.0.1:11800/healthz` 返回 `X-Webdock-Route: primary`、`X-Webdock-Device: webdock2`）。⚠️ 端口只是当前实现细节：当前 primary 端口为 11810、standby 端口为 11811，但切换时可能改端口或改名称绑定，勿只凭端口号或代码默认值判断主备。
 - 主上游失败自动切备（标记 60s），并给回复加"已自动切换备用服务器"前缀。
-- 代理在响应头标注实际来源：`X-Webdock-Device`（设备名，来自环境文件 `WEBDOCK_FAILOVER_PRIMARY_NAME`/`STANDBY_NAME`）和 `X-Webdock-Route`（primary/standby）；bridge 用它渲染飞书卡片灰色脚注（`设备: webdock1(主) | 项目: xx | 耗时: Ns`）。
-- 切换主备 = 改该环境文件后 `systemctl restart webdock-failover-proxy`，不改代码。
+- 代理在响应头标注实际来源：`X-Webdock-Device`（设备名，来自环境文件 `WEBDOCK_FAILOVER_PRIMARY_NAME`/`STANDBY_NAME`）和 `X-Webdock-Route`（primary/standby）；bridge 用它渲染飞书卡片灰色脚注（例如 `设备: webdock2(主) | 项目: xx | 耗时: Ns`，以实际响应头为准）。
+- 切换主备 = 改该环境文件里的 `PRIMARY_*` / `STANDBY_*`（尤其是 `*_NAME` 与对应 host/port 绑定）后 `systemctl restart webdock-failover-proxy`，不改代码。
 - 判定某条消息由哪台处理：查各机 `/var/log/webdock/archive/<UTC日期>.jsonl`（权威记录）。
 
 ## 设备档案
@@ -43,7 +43,7 @@ bridge/openclaw 容器
 - 入口：`ssh aliecs`（root@47.77.176.62）。ECS **不在 tailnet**。
 - 运行容器：backend-api / public-web / admin-ui / doc-sync-worker / tplus-sync-worker / mcp-coding-server（同一 V-tag，来自 AliECS release）、postgres:16、`openclaw-bridge`（独立 V-tag，手动 cutover）、openclaw 网关（上游官方镜像，配置在主机 `/root/.openclaw`，不进 git，restic 备份）、sing-box。
 - 主机层：nginx（配置入 infra 仓库；**MCP OAuth 的 `/.well-known/*` 路由是手工加的，重建会丢**）、三个隧道代理 systemd 服务（webdock-failover-proxy、webdock-tunnel-proxy、immich-tunnel-proxy，脚本在 `/opt/aliecs/`）。
-- 隧道端口（127.0.0.1）：11811←webdock1 主、11810←webdock2 备、12283←webdock1 Immich、18015/18016←webdock1 AdventureLog，另有 Gokapi/Authentik 隧道（端口见 webdock1 各 unit 的 env）。
+- 隧道端口（127.0.0.1）：11800 为 webdock failover 入口；当前 11810←webdock2 主、11811←webdock1 备（以 `/etc/default/webdock-failover-proxy` 的 NAME 绑定为准）；12283←webdock1 Immich、18015/18016←webdock1 AdventureLog，另有 Gokapi/Authentik 隧道（端口见 webdock1 各 unit 的 env）。
 - 远程控制台（2026-07-04，`https://hydwang.xyz/console/`）：nginx `/console/*` 七路 location（认证=Authelia `two_factor` + lldap `console_admins` 组，成对 deny 兜底；**VNC 层免密设计**，2FA 是唯一闸门）；本机组件 ttyd 7681（unit `ttyd-console`，⚠️ apt 自带 `ttyd.service` 抢端口须 disable）、webtop 3000 按需启停（`/opt/aliecs/aliecs-temp-desktop.sh`，2G 内存用完必须 stop）；ECS `authorized_keys` permitlisten 新增四条 160xx（16080/16081←webdock1、16090/16091←webdock2，与生产 118xx 隔离）。详见 infra `console/README.md`。
 - 部署：push AliECS main → release-deploy 自动构建部署业务镜像；bridge 镜像同流程构建但 **cutover 永远手动**（改 `/root/infra/server/.env` 的 `OPENCLAW_BRIDGE_TAG`，先 `docker rm -f openclaw-bridge` 再 compose up）。
 - 排障：`docker ps`、bridge 日志 `docker logs openclaw-bridge`、部署尖峰时 health 告警多为瞬时（2G 内存超卖）。
