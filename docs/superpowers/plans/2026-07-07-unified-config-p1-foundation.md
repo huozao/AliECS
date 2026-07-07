@@ -334,7 +334,7 @@ git commit -m "feat(bridge): 新增「系统配置」簿 app_token/table_id env 
 
 ## 部署（计划外，人工，落地时执行）
 
-0. **⚠️ 红线：这个「系统配置」簿永不登记为 doc-sync / export 数据源。** `/v1/exports/catalog` 不按 `source_type` 过滤，任何登记为源的飞书簿都会露在 hydwang.xyz/exports/。所有服务一律用下面 env 配的 `app_token/table_id` **直读**该簿。
+0. **双路径**：实时消费走下面 env 的 `app_token/table_id` **直读**；同时把该簿**登记为 doc-sync 数据源**，使其被 hydwang.xyz/exports/ 收录 = 第二备份源 + 观察窗口（刻意要的，只读镜像不参与实时生效）。
 1. 在飞书新建一个多维表格 App 作为「系统配置」簿，把 bridge 应用加为协作者。
 2. 记录其 `app_token` 与各域表 `table_id`，用 `sops set` 写入 `infra/secrets/server.enc.env`：`FEISHU_SYSTEM_CONFIG_APP_TOKEN`、`FEISHU_SYSTEM_CONFIG_<NAME>_TABLE_ID`。
 3. push 到 origin + 各设备 bare（见 [[multi-party-code-consistency]]），ECS `render.sh` 后 force-recreate bridge（env_file 只在创建时读）。
