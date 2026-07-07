@@ -47,7 +47,11 @@
 | T+导出说明 | backend | 表→DB→backend 热读 |
 | 库存仓库范围 | backend | 表→DB→backend 热读 |
 
-代价（实施要覆盖）：doc-sync 需把新簿登记为数据源；bridge 需新增指向新簿 app_token / table_id 的 env（并入 SOPS）。
+代价（实施要覆盖）：各服务（bridge / doc-sync / backend）新增指向新簿 `app_token / table_id` 的 env（并入 SOPS）。
+
+**⚠️ 关键隔离约束：配置簿永不登记为 doc-sync / export 数据源。**
+`/v1/exports/catalog`（exports.py:129）按工作簿聚合、只过滤 `status='active' AND external_doc_id<>''`，**不看 `source_type`**——任何被登记成 doc-sync 源的飞书簿都会出现在 hydwang.xyz/exports/「飞书」标签（含 sheet/行数/下载）。因此配置的读取**一律走 env 配好的 `app_token/table_id` 直读**（doc_sync 的配置拉取器改为直读，不再用 `list_bitable_sources` 扫源），使配置簿对 exports 从构造上不可见，而非在 catalog 加黑名单过滤。
+迁移时须**注销会话管理台里旧「配置表」的 source 登记**（它当前很可能已露在 exports/）。
 
 ### D2. 统一表形态 = 类型化列，不是键值行
 配置表**不再**用 `配置键 | 配置值(文本)` 的键值行模式——单一文本列没法对不同配置用不同字段类型。统一约定为：
