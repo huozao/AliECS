@@ -923,7 +923,11 @@ def feishu_request_json(
     method: str = "POST",
 ) -> dict[str, Any]:
     method = method.upper()
-    data = json.dumps(payload or {}, ensure_ascii=False).encode("utf-8") if method != "GET" else None
+    data = (
+        json.dumps(payload or {}, ensure_ascii=False).encode("utf-8")
+        if method not in ("GET", "DELETE")
+        else None
+    )
     headers = {"Content-Type": "application/json; charset=utf-8"}
     if auth_token is None:
         auth_token = feishu_tenant_access_token()
@@ -1234,25 +1238,55 @@ def create_feishu_bitable_field(
     )
 
 
+def delete_feishu_bitable_field(table_id: str, field_id: str) -> dict[str, Any]:
+    app_token = feishu_session_console_app_token()
+    if not app_token or not table_id or not field_id:
+        return {}
+    return feishu_request_json(
+        f"/bitable/v1/apps/{urllib.parse.quote(app_token)}/tables/{urllib.parse.quote(table_id)}/fields/{urllib.parse.quote(field_id)}",
+        method="DELETE",
+    )
+
+
 def ensure_feishu_bitable_fields(
-    table_id: str, field_names: list[str], field_type: int = FEISHU_BITABLE_FIELD_TYPE_CHECKBOX
+    table_id: str,
+    field_names: list[str],
+    field_type: int = FEISHU_BITABLE_FIELD_TYPE_CHECKBOX,
+    *,
+    reconcile_type: bool = False,
 ) -> None:
     """Best-effort: create any bitable columns that don't exist yet, so a later
     write to those field names doesn't fail with FieldNameNotFound (unlike
     WeCom smartsheets, Feishu Bitable requires a column to exist before a
     record write can set its value). Any failure (permission, API error, or
     being unable to list existing fields) is logged and skipped — never
-    raises, matching the best-effort contract of its callers."""
+    raises, matching the best-effort contract of its callers.
+
+    ``reconcile_type=True`` additionally repairs a column that already exists
+    but with the wrong type — a legacy Checkbox column where Text is now
+    required makes every record write fail with CheckboxFieldConvFail. Only
+    callers whose column values are bridge-managed/regenerable pass this, since
+    the repair deletes and recreates the column (dropping its cell values)."""
     if not table_id or not field_names:
         return
     try:
-        existing = {str(field.get("field_name") or "") for field in list_feishu_bitable_fields(table_id)}
+        existing = {
+            str(field.get("field_name") or ""): field
+            for field in list_feishu_bitable_fields(table_id)
+        }
     except Exception as exc:
         log_line(f"list_feishu_bitable_fields failed: {exc}")
         return
     for name in field_names:
-        if name in existing:
-            continue
+        field = existing.get(name)
+        if field is not None:
+            if not reconcile_type or int(field.get("type") or 0) == field_type:
+                continue
+            try:
+                delete_feishu_bitable_field(table_id, str(field.get("field_id") or ""))
+            except Exception as exc:
+                log_line(f"delete_feishu_bitable_field({name}) failed: {exc}")
+                continue
         try:
             create_feishu_bitable_field(table_id, name, field_type)
         except Exception as exc:
@@ -1976,7 +2010,10 @@ def set_feishu_chat_mode(details: dict[str, Any], mode: str) -> bool:
         return True
     try:
         ensure_feishu_bitable_fields(
-            table_id, [CHATGPT_MODE_FIELD], field_type=FEISHU_BITABLE_FIELD_TYPE_TEXT
+            table_id,
+            [CHATGPT_MODE_FIELD],
+            field_type=FEISHU_BITABLE_FIELD_TYPE_TEXT,
+            reconcile_type=True,
         )
         record_id = (
             upsert_feishu_group_record(details) if kind == "group" else upsert_feishu_user_record(details)
@@ -2211,7 +2248,9 @@ def _ensure_rule_columns(table_id: str, names: list[str]) -> None:
     if bool_names:
         ensure_feishu_bitable_fields(table_id, bool_names)
     if text_names:
-        ensure_feishu_bitable_fields(table_id, text_names, field_type=FEISHU_BITABLE_FIELD_TYPE_TEXT)
+        ensure_feishu_bitable_fields(
+            table_id, text_names, field_type=FEISHU_BITABLE_FIELD_TYPE_TEXT, reconcile_type=True
+        )
 
 
 def _enter_inflight(lane_key: str) -> bool:
