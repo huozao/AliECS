@@ -2717,10 +2717,10 @@ def test_ensure_rule_record_no_update_when_present(monkeypatch):
 def test_ensure_feishu_bitable_fields_creates_missing_only(monkeypatch):
     bridge = load_bridge()
     monkeypatch.setattr(bridge, "list_feishu_bitable_fields",
-                        lambda t: [{"field_name": "处理中卡片"}])
+                        lambda t, app_token=None: [{"field_name": "处理中卡片"}])
     created = []
     monkeypatch.setattr(bridge, "create_feishu_bitable_field",
-                        lambda t, name, field_type=7: created.append((t, name, field_type)))
+                        lambda t, name, field_type=7, app_token=None: created.append((t, name, field_type)))
     bridge.ensure_feishu_bitable_fields("tbl_rule", ["处理中卡片", "调试尾注"])
     assert created == [("tbl_rule", "调试尾注", 7)]   # existing field skipped, missing one created
 
@@ -3064,3 +3064,29 @@ def test_select_field_type_constants():
     bridge = load_bridge()
     assert bridge.FEISHU_BITABLE_FIELD_TYPE_SINGLE_SELECT == 3
     assert bridge.FEISHU_BITABLE_FIELD_TYPE_MULTI_SELECT == 4
+
+
+def test_create_field_routes_explicit_app_token(monkeypatch):
+    bridge = load_bridge()
+    seen = {}
+
+    def fake_post(path, body):
+        seen["path"] = path
+        seen["body"] = body
+        return {}
+
+    monkeypatch.setattr(bridge, "feishu_post_json", fake_post)
+    # 显式 app_token 不应回退到会话台 app_token
+    monkeypatch.setattr(bridge, "feishu_session_console_app_token", lambda: "SESSION_TOKEN")
+    bridge.create_feishu_bitable_field("tblX", "开关", app_token="SYSCFG_TOKEN")
+    assert "SYSCFG_TOKEN" in seen["path"]
+    assert "SESSION_TOKEN" not in seen["path"]
+
+
+def test_create_field_defaults_to_session_app_token(monkeypatch):
+    bridge = load_bridge()
+    seen = {}
+    monkeypatch.setattr(bridge, "feishu_post_json", lambda path, body: seen.setdefault("path", path) or {})
+    monkeypatch.setattr(bridge, "feishu_session_console_app_token", lambda: "SESSION_TOKEN")
+    bridge.create_feishu_bitable_field("tblX", "开关")
+    assert "SESSION_TOKEN" in seen["path"]

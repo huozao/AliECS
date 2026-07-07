@@ -1223,8 +1223,8 @@ def feishu_select_field_property(options: list[str]) -> dict[str, Any]:
     return {"options": [{"name": name, "color": index % 16} for index, name in enumerate(options)]}
 
 
-def list_feishu_bitable_fields(table_id: str) -> list[dict[str, Any]]:
-    app_token = feishu_session_console_app_token()
+def list_feishu_bitable_fields(table_id: str, app_token: str | None = None) -> list[dict[str, Any]]:
+    app_token = app_token or feishu_session_console_app_token()
     if not app_token or not table_id:
         return []
     data = feishu_get_json(
@@ -1234,9 +1234,12 @@ def list_feishu_bitable_fields(table_id: str) -> list[dict[str, Any]]:
 
 
 def create_feishu_bitable_field(
-    table_id: str, field_name: str, field_type: int = FEISHU_BITABLE_FIELD_TYPE_CHECKBOX
+    table_id: str,
+    field_name: str,
+    field_type: int = FEISHU_BITABLE_FIELD_TYPE_CHECKBOX,
+    app_token: str | None = None,
 ) -> dict[str, Any]:
-    app_token = feishu_session_console_app_token()
+    app_token = app_token or feishu_session_console_app_token()
     if not app_token or not table_id:
         return {}
     return feishu_post_json(
@@ -1245,8 +1248,8 @@ def create_feishu_bitable_field(
     )
 
 
-def delete_feishu_bitable_field(table_id: str, field_id: str) -> dict[str, Any]:
-    app_token = feishu_session_console_app_token()
+def delete_feishu_bitable_field(table_id: str, field_id: str, app_token: str | None = None) -> dict[str, Any]:
+    app_token = app_token or feishu_session_console_app_token()
     if not app_token or not table_id or not field_id:
         return {}
     return feishu_request_json(
@@ -1261,6 +1264,7 @@ def ensure_feishu_bitable_fields(
     field_type: int = FEISHU_BITABLE_FIELD_TYPE_CHECKBOX,
     *,
     reconcile_type: bool = False,
+    app_token: str | None = None,
 ) -> None:
     """Best-effort: create any bitable columns that don't exist yet, so a later
     write to those field names doesn't fail with FieldNameNotFound (unlike
@@ -1279,7 +1283,7 @@ def ensure_feishu_bitable_fields(
     try:
         existing = {
             str(field.get("field_name") or ""): field
-            for field in list_feishu_bitable_fields(table_id)
+            for field in list_feishu_bitable_fields(table_id, app_token=app_token)
         }
     except Exception as exc:
         log_line(f"list_feishu_bitable_fields failed: {exc}")
@@ -1290,12 +1294,12 @@ def ensure_feishu_bitable_fields(
             if not reconcile_type or int(field.get("type") or 0) == field_type:
                 continue
             try:
-                delete_feishu_bitable_field(table_id, str(field.get("field_id") or ""))
+                delete_feishu_bitable_field(table_id, str(field.get("field_id") or ""), app_token=app_token)
             except Exception as exc:
                 log_line(f"delete_feishu_bitable_field({name}) failed: {exc}")
                 continue
         try:
-            create_feishu_bitable_field(table_id, name, field_type)
+            create_feishu_bitable_field(table_id, name, field_type, app_token=app_token)
         except Exception as exc:
             log_line(f"create_feishu_bitable_field({name}) failed: {exc}")
 
