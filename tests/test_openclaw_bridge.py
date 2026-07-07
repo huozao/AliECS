@@ -3114,3 +3114,24 @@ def test_create_field_without_property_omits_property_key(monkeypatch):
     monkeypatch.setattr(bridge, "feishu_session_console_app_token", lambda: "T")
     bridge.create_feishu_bitable_field("tblX", "开关")
     assert "property" not in seen["body"]
+
+
+def test_system_config_app_token_reads_env(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SYSTEM_CONFIG_APP_TOKEN", "SYSCFG")
+    assert bridge.system_config_app_token() == "SYSCFG"
+
+
+def test_system_config_app_token_no_session_fallback(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.delenv("FEISHU_SYSTEM_CONFIG_APP_TOKEN", raising=False)
+    monkeypatch.setattr(bridge, "feishu_session_console_app_token", lambda: "SESSION")
+    assert bridge.system_config_app_token() == ""
+
+
+def test_system_config_table_id_reads_named_env(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SYSTEM_CONFIG_CHAT_MODE_TABLE_ID", "tblMode")
+    assert bridge.system_config_table_id("chat_mode") == "tblMode"
+    monkeypatch.delenv("FEISHU_SYSTEM_CONFIG_CHAT_MODE_TABLE_ID", raising=False)
+    assert bridge.system_config_table_id("chat_mode") == ""

@@ -815,6 +815,16 @@ def feishu_session_console_app_token() -> str:
     )
 
 
+def system_config_app_token() -> str:
+    """独立「系统配置」多维表格的 app_token；缺失返回空（不回退会话台）。"""
+    return os.getenv("FEISHU_SYSTEM_CONFIG_APP_TOKEN") or ""
+
+
+def system_config_table_id(name: str) -> str:
+    """按域名取「系统配置」簿的 table_id：FEISHU_SYSTEM_CONFIG_<NAME>_TABLE_ID。"""
+    return os.getenv(f"FEISHU_SYSTEM_CONFIG_{name.upper()}_TABLE_ID") or ""
+
+
 def feishu_session_console_table_id(kind: str) -> str:
     env_names = {
         "message": (
