@@ -2728,27 +2728,27 @@ def test_ensure_feishu_bitable_fields_creates_missing_only(monkeypatch):
 def test_ensure_feishu_bitable_fields_noop_when_table_id_empty(monkeypatch):
     bridge = load_bridge()
     called = []
-    monkeypatch.setattr(bridge, "list_feishu_bitable_fields", lambda t: called.append(1) or [])
+    monkeypatch.setattr(bridge, "list_feishu_bitable_fields", lambda t, app_token=None: called.append(1) or [])
     bridge.ensure_feishu_bitable_fields("", ["调试尾注"])
     assert called == []
 
 
 def test_ensure_feishu_bitable_fields_list_failure_is_best_effort(monkeypatch):
     bridge = load_bridge()
-    def boom(t):
+    def boom(t, app_token=None):
         raise RuntimeError("bitable down")
     monkeypatch.setattr(bridge, "list_feishu_bitable_fields", boom)
     created = []
     monkeypatch.setattr(bridge, "create_feishu_bitable_field",
-                        lambda t, name, field_type=7: created.append(name))
+                        lambda t, name, field_type=7, app_token=None: created.append(name))
     bridge.ensure_feishu_bitable_fields("tbl_rule", ["调试尾注"])   # must not raise
     assert created == []   # can't tell what's missing -> skip creating, don't guess
 
 
 def test_ensure_feishu_bitable_fields_create_failure_is_best_effort(monkeypatch):
     bridge = load_bridge()
-    monkeypatch.setattr(bridge, "list_feishu_bitable_fields", lambda t: [])
-    def boom(t, name, field_type=7):
+    monkeypatch.setattr(bridge, "list_feishu_bitable_fields", lambda t, app_token=None: [])
+    def boom(t, name, field_type=7, app_token=None):
         raise RuntimeError("permission denied")
     monkeypatch.setattr(bridge, "create_feishu_bitable_field", boom)
     bridge.ensure_feishu_bitable_fields("tbl_rule", ["处理中卡片", "调试尾注"])   # must not raise
