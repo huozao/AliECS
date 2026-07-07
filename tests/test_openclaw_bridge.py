@@ -2740,7 +2740,7 @@ def test_ensure_feishu_bitable_fields_list_failure_is_best_effort(monkeypatch):
     monkeypatch.setattr(bridge, "list_feishu_bitable_fields", boom)
     created = []
     monkeypatch.setattr(bridge, "create_feishu_bitable_field",
-                        lambda t, name, field_type=7, app_token=None: created.append(name))
+                        lambda t, name, field_type=7, app_token=None, field_property=None: created.append(name))
     bridge.ensure_feishu_bitable_fields("tbl_rule", ["调试尾注"])   # must not raise
     assert created == []   # can't tell what's missing -> skip creating, don't guess
 
@@ -2748,7 +2748,7 @@ def test_ensure_feishu_bitable_fields_list_failure_is_best_effort(monkeypatch):
 def test_ensure_feishu_bitable_fields_create_failure_is_best_effort(monkeypatch):
     bridge = load_bridge()
     monkeypatch.setattr(bridge, "list_feishu_bitable_fields", lambda t, app_token=None: [])
-    def boom(t, name, field_type=7, app_token=None):
+    def boom(t, name, field_type=7, app_token=None, field_property=None):
         raise RuntimeError("permission denied")
     monkeypatch.setattr(bridge, "create_feishu_bitable_field", boom)
     bridge.ensure_feishu_bitable_fields("tbl_rule", ["处理中卡片", "调试尾注"])   # must not raise
