@@ -2720,7 +2720,7 @@ def test_ensure_feishu_bitable_fields_creates_missing_only(monkeypatch):
                         lambda t, app_token=None: [{"field_name": "处理中卡片"}])
     created = []
     monkeypatch.setattr(bridge, "create_feishu_bitable_field",
-                        lambda t, name, field_type=7, app_token=None: created.append((t, name, field_type)))
+                        lambda t, name, field_type=7, app_token=None, field_property=None: created.append((t, name, field_type)))
     bridge.ensure_feishu_bitable_fields("tbl_rule", ["处理中卡片", "调试尾注"])
     assert created == [("tbl_rule", "调试尾注", 7)]   # existing field skipped, missing one created
 
@@ -3090,3 +3090,27 @@ def test_create_field_defaults_to_session_app_token(monkeypatch):
     monkeypatch.setattr(bridge, "feishu_session_console_app_token", lambda: "SESSION_TOKEN")
     bridge.create_feishu_bitable_field("tblX", "开关")
     assert "SESSION_TOKEN" in seen["path"]
+
+
+def test_create_single_select_field_posts_options(monkeypatch):
+    bridge = load_bridge()
+    seen = {}
+    monkeypatch.setattr(bridge, "feishu_post_json", lambda path, body: seen.setdefault("body", body) or {})
+    monkeypatch.setattr(bridge, "feishu_session_console_app_token", lambda: "T")
+    bridge.create_feishu_bitable_field(
+        "tblX",
+        "对话模式默认",
+        field_type=bridge.FEISHU_BITABLE_FIELD_TYPE_SINGLE_SELECT,
+        field_property=bridge.feishu_select_field_property(["极速", "均衡", "高级"]),
+    )
+    assert seen["body"]["type"] == 3
+    assert [o["name"] for o in seen["body"]["property"]["options"]] == ["极速", "均衡", "高级"]
+
+
+def test_create_field_without_property_omits_property_key(monkeypatch):
+    bridge = load_bridge()
+    seen = {}
+    monkeypatch.setattr(bridge, "feishu_post_json", lambda path, body: seen.setdefault("body", body) or {})
+    monkeypatch.setattr(bridge, "feishu_session_console_app_token", lambda: "T")
+    bridge.create_feishu_bitable_field("tblX", "开关")
+    assert "property" not in seen["body"]

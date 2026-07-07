@@ -1238,13 +1238,17 @@ def create_feishu_bitable_field(
     field_name: str,
     field_type: int = FEISHU_BITABLE_FIELD_TYPE_CHECKBOX,
     app_token: str | None = None,
+    field_property: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     app_token = app_token or feishu_session_console_app_token()
     if not app_token or not table_id:
         return {}
+    body: dict[str, Any] = {"field_name": field_name, "type": field_type}
+    if field_property:
+        body["property"] = field_property
     return feishu_post_json(
         f"/bitable/v1/apps/{urllib.parse.quote(app_token)}/tables/{urllib.parse.quote(table_id)}/fields",
-        {"field_name": field_name, "type": field_type},
+        body,
     )
 
 
@@ -1265,6 +1269,7 @@ def ensure_feishu_bitable_fields(
     *,
     reconcile_type: bool = False,
     app_token: str | None = None,
+    field_property: dict[str, Any] | None = None,
 ) -> None:
     """Best-effort: create any bitable columns that don't exist yet, so a later
     write to those field names doesn't fail with FieldNameNotFound (unlike
@@ -1299,7 +1304,7 @@ def ensure_feishu_bitable_fields(
                 log_line(f"delete_feishu_bitable_field({name}) failed: {exc}")
                 continue
         try:
-            create_feishu_bitable_field(table_id, name, field_type, app_token=app_token)
+            create_feishu_bitable_field(table_id, name, field_type, app_token=app_token, field_property=field_property)
         except Exception as exc:
             log_line(f"create_feishu_bitable_field({name}) failed: {exc}")
 
