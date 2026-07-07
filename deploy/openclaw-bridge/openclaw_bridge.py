@@ -1214,6 +1214,13 @@ def list_feishu_bitable_records(table_id: str) -> list[dict[str, Any]]:
 
 FEISHU_BITABLE_FIELD_TYPE_TEXT = 1
 FEISHU_BITABLE_FIELD_TYPE_CHECKBOX = 7
+FEISHU_BITABLE_FIELD_TYPE_SINGLE_SELECT = 3
+FEISHU_BITABLE_FIELD_TYPE_MULTI_SELECT = 4
+
+
+def feishu_select_field_property(options: list[str]) -> dict[str, Any]:
+    """单选/多选字段的 property：保序选项，color 轮转 0..15。"""
+    return {"options": [{"name": name, "color": index % 16} for index, name in enumerate(options)]}
 
 
 def list_feishu_bitable_fields(table_id: str) -> list[dict[str, Any]]:

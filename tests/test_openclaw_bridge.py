@@ -3051,3 +3051,16 @@ def test_ensure_rule_record_backfills_text_columns(monkeypatch):
     assert ensured and set(ensured[0]) == {"处理中文案", "追问文案", "空回复文案", "完成标记"}
     assert updated["处理中文案"] == bridge.DEFAULT_PROCESSING_ACK_TEXT
     assert updated["完成标记"] == bridge.DEFAULT_DONE_MARKER
+
+
+def test_select_field_property_keeps_order_and_colors():
+    bridge = load_bridge()
+    prop = bridge.feishu_select_field_property(["极速", "均衡", "高级"])
+    assert [o["name"] for o in prop["options"]] == ["极速", "均衡", "高级"]
+    assert [o["color"] for o in prop["options"]] == [0, 1, 2]
+
+
+def test_select_field_type_constants():
+    bridge = load_bridge()
+    assert bridge.FEISHU_BITABLE_FIELD_TYPE_SINGLE_SELECT == 3
+    assert bridge.FEISHU_BITABLE_FIELD_TYPE_MULTI_SELECT == 4
