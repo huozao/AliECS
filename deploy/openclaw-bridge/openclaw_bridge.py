@@ -1192,8 +1192,8 @@ def update_feishu_bitable_record(table_id: str, record_id: str, fields: dict[str
     )
 
 
-def list_feishu_bitable_records(table_id: str) -> list[dict[str, Any]]:
-    app_token = feishu_session_console_app_token()
+def list_feishu_bitable_records(table_id: str, app_token: str | None = None) -> list[dict[str, Any]]:
+    app_token = app_token or feishu_session_console_app_token()
     if not app_token or not table_id:
         return []
     records: list[dict[str, Any]] = []
@@ -1333,10 +1333,15 @@ def bitable_created_record_id(result: dict[str, Any]) -> str:
     return str(record.get("record_id") or data.get("record_id") or "")
 
 
-def find_feishu_bitable_record(table_id: str, field_name: str, expected: str) -> dict[str, Any] | None:
+def find_feishu_bitable_record(
+    table_id: str,
+    field_name: str,
+    expected: str,
+    app_token: str | None = None,
+) -> dict[str, Any] | None:
     if not table_id or not expected:
         return None
-    for record in list_feishu_bitable_records(table_id):
+    for record in list_feishu_bitable_records(table_id, app_token=app_token):
         fields = record.get("fields") or {}
         if isinstance(fields, dict) and bitable_field_text(fields.get(field_name)) == expected:
             return record
@@ -1970,6 +1975,10 @@ def feishu_group_reply_policy(details: dict[str, Any]) -> tuple[bool, str]:
 CHATGPT_MODE_LABELS = {"极速": "fast", "均衡": "balanced", "高级": "advanced"}
 CHATGPT_MODE_NAMES = {value: key for key, value in CHATGPT_MODE_LABELS.items()}
 CHATGPT_MODE_FIELD = "对话模式"
+CHATGPT_MODE_DEFAULT_FIELD = "对话模式默认"
+CHATGPT_MODE_DEFAULT_RECORD_ID_FIELD = "配置编号"
+CHATGPT_MODE_DEFAULT_RECORD_ID = "global-default"
+CHATGPT_MODE_DEFAULT_FALLBACK = "advanced"
 FEISHU_CHAT_MODE_CACHE_SECONDS = float(os.getenv("FEISHU_CHAT_MODE_CACHE_SECONDS", "30"))
 _feishu_chat_mode_cache: dict[str, tuple[float, str]] = {}
 _feishu_chat_mode_cache_lock = Lock()
@@ -1991,8 +2000,30 @@ def feishu_mode_peer(details: dict[str, Any]) -> tuple[str, str]:
     return "user", feishu_open_id(details)
 
 
+def feishu_chat_mode_default() -> str:
+    app_token = system_config_app_token()
+    table_id = system_config_table_id("chat_mode")
+    if not app_token or not table_id:
+        return CHATGPT_MODE_DEFAULT_FALLBACK
+    try:
+        record = find_feishu_bitable_record(
+            table_id,
+            CHATGPT_MODE_DEFAULT_RECORD_ID_FIELD,
+            CHATGPT_MODE_DEFAULT_RECORD_ID,
+            app_token=app_token,
+        )
+        label = bitable_field_text(((record or {}).get("fields") or {}).get(CHATGPT_MODE_DEFAULT_FIELD)).strip()
+        return CHATGPT_MODE_LABELS.get(label) or CHATGPT_MODE_DEFAULT_FALLBACK
+    except Exception as exc:
+        log_line(
+            "feishu_chat_mode_default_read_failed "
+            + json.dumps({"error": str(exc)}, ensure_ascii=False, sort_keys=True)
+        )
+        return CHATGPT_MODE_DEFAULT_FALLBACK
+
+
 def feishu_chat_mode(details: dict[str, Any]) -> str:
-    """当前会话的粘性模式（规范值），未设置返回 ""。
+    """当前会话模式（规范值）：粘性模式优先，未设置时回退系统默认。
 
     bitable 是事实源；读失败时保留内存里的旧值（退化为纯内存，符合
     "bitable 不可用只降级不阻断"的约定）。"""
@@ -2019,6 +2050,8 @@ def feishu_chat_mode(details: dict[str, Any]) -> str:
                 "feishu_chat_mode_read_failed "
                 + json.dumps({"peer": cache_key, "error": str(exc)}, ensure_ascii=False, sort_keys=True)
             )
+    if not mode:
+        mode = feishu_chat_mode_default()
     with _feishu_chat_mode_cache_lock:
         _feishu_chat_mode_cache[cache_key] = (now, mode)
     return mode
