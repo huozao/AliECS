@@ -2717,10 +2717,10 @@ def test_ensure_rule_record_no_update_when_present(monkeypatch):
 def test_ensure_feishu_bitable_fields_creates_missing_only(monkeypatch):
     bridge = load_bridge()
     monkeypatch.setattr(bridge, "list_feishu_bitable_fields",
-                        lambda t: [{"field_name": "处理中卡片"}])
+                        lambda t, app_token=None: [{"field_name": "处理中卡片"}])
     created = []
     monkeypatch.setattr(bridge, "create_feishu_bitable_field",
-                        lambda t, name, field_type=7: created.append((t, name, field_type)))
+                        lambda t, name, field_type=7, app_token=None, field_property=None: created.append((t, name, field_type)))
     bridge.ensure_feishu_bitable_fields("tbl_rule", ["处理中卡片", "调试尾注"])
     assert created == [("tbl_rule", "调试尾注", 7)]   # existing field skipped, missing one created
 
@@ -2728,27 +2728,27 @@ def test_ensure_feishu_bitable_fields_creates_missing_only(monkeypatch):
 def test_ensure_feishu_bitable_fields_noop_when_table_id_empty(monkeypatch):
     bridge = load_bridge()
     called = []
-    monkeypatch.setattr(bridge, "list_feishu_bitable_fields", lambda t: called.append(1) or [])
+    monkeypatch.setattr(bridge, "list_feishu_bitable_fields", lambda t, app_token=None: called.append(1) or [])
     bridge.ensure_feishu_bitable_fields("", ["调试尾注"])
     assert called == []
 
 
 def test_ensure_feishu_bitable_fields_list_failure_is_best_effort(monkeypatch):
     bridge = load_bridge()
-    def boom(t):
+    def boom(t, app_token=None):
         raise RuntimeError("bitable down")
     monkeypatch.setattr(bridge, "list_feishu_bitable_fields", boom)
     created = []
     monkeypatch.setattr(bridge, "create_feishu_bitable_field",
-                        lambda t, name, field_type=7: created.append(name))
+                        lambda t, name, field_type=7, app_token=None, field_property=None: created.append(name))
     bridge.ensure_feishu_bitable_fields("tbl_rule", ["调试尾注"])   # must not raise
     assert created == []   # can't tell what's missing -> skip creating, don't guess
 
 
 def test_ensure_feishu_bitable_fields_create_failure_is_best_effort(monkeypatch):
     bridge = load_bridge()
-    monkeypatch.setattr(bridge, "list_feishu_bitable_fields", lambda t: [])
-    def boom(t, name, field_type=7):
+    monkeypatch.setattr(bridge, "list_feishu_bitable_fields", lambda t, app_token=None: [])
+    def boom(t, name, field_type=7, app_token=None, field_property=None):
         raise RuntimeError("permission denied")
     monkeypatch.setattr(bridge, "create_feishu_bitable_field", boom)
     bridge.ensure_feishu_bitable_fields("tbl_rule", ["处理中卡片", "调试尾注"])   # must not raise
@@ -3051,3 +3051,87 @@ def test_ensure_rule_record_backfills_text_columns(monkeypatch):
     assert ensured and set(ensured[0]) == {"处理中文案", "追问文案", "空回复文案", "完成标记"}
     assert updated["处理中文案"] == bridge.DEFAULT_PROCESSING_ACK_TEXT
     assert updated["完成标记"] == bridge.DEFAULT_DONE_MARKER
+
+
+def test_select_field_property_keeps_order_and_colors():
+    bridge = load_bridge()
+    prop = bridge.feishu_select_field_property(["极速", "均衡", "高级"])
+    assert [o["name"] for o in prop["options"]] == ["极速", "均衡", "高级"]
+    assert [o["color"] for o in prop["options"]] == [0, 1, 2]
+
+
+def test_select_field_type_constants():
+    bridge = load_bridge()
+    assert bridge.FEISHU_BITABLE_FIELD_TYPE_SINGLE_SELECT == 3
+    assert bridge.FEISHU_BITABLE_FIELD_TYPE_MULTI_SELECT == 4
+
+
+def test_create_field_routes_explicit_app_token(monkeypatch):
+    bridge = load_bridge()
+    seen = {}
+
+    def fake_post(path, body):
+        seen["path"] = path
+        seen["body"] = body
+        return {}
+
+    monkeypatch.setattr(bridge, "feishu_post_json", fake_post)
+    # 显式 app_token 不应回退到会话台 app_token
+    monkeypatch.setattr(bridge, "feishu_session_console_app_token", lambda: "SESSION_TOKEN")
+    bridge.create_feishu_bitable_field("tblX", "开关", app_token="SYSCFG_TOKEN")
+    assert "SYSCFG_TOKEN" in seen["path"]
+    assert "SESSION_TOKEN" not in seen["path"]
+
+
+def test_create_field_defaults_to_session_app_token(monkeypatch):
+    bridge = load_bridge()
+    seen = {}
+    monkeypatch.setattr(bridge, "feishu_post_json", lambda path, body: seen.setdefault("path", path) or {})
+    monkeypatch.setattr(bridge, "feishu_session_console_app_token", lambda: "SESSION_TOKEN")
+    bridge.create_feishu_bitable_field("tblX", "开关")
+    assert "SESSION_TOKEN" in seen["path"]
+
+
+def test_create_single_select_field_posts_options(monkeypatch):
+    bridge = load_bridge()
+    seen = {}
+    monkeypatch.setattr(bridge, "feishu_post_json", lambda path, body: seen.setdefault("body", body) or {})
+    monkeypatch.setattr(bridge, "feishu_session_console_app_token", lambda: "T")
+    bridge.create_feishu_bitable_field(
+        "tblX",
+        "对话模式默认",
+        field_type=bridge.FEISHU_BITABLE_FIELD_TYPE_SINGLE_SELECT,
+        field_property=bridge.feishu_select_field_property(["极速", "均衡", "高级"]),
+    )
+    assert seen["body"]["type"] == 3
+    assert [o["name"] for o in seen["body"]["property"]["options"]] == ["极速", "均衡", "高级"]
+
+
+def test_create_field_without_property_omits_property_key(monkeypatch):
+    bridge = load_bridge()
+    seen = {}
+    monkeypatch.setattr(bridge, "feishu_post_json", lambda path, body: seen.setdefault("body", body) or {})
+    monkeypatch.setattr(bridge, "feishu_session_console_app_token", lambda: "T")
+    bridge.create_feishu_bitable_field("tblX", "开关")
+    assert "property" not in seen["body"]
+
+
+def test_system_config_app_token_reads_env(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SYSTEM_CONFIG_APP_TOKEN", "SYSCFG")
+    assert bridge.system_config_app_token() == "SYSCFG"
+
+
+def test_system_config_app_token_no_session_fallback(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.delenv("FEISHU_SYSTEM_CONFIG_APP_TOKEN", raising=False)
+    monkeypatch.setattr(bridge, "feishu_session_console_app_token", lambda: "SESSION")
+    assert bridge.system_config_app_token() == ""
+
+
+def test_system_config_table_id_reads_named_env(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SYSTEM_CONFIG_CHAT_MODE_TABLE_ID", "tblMode")
+    assert bridge.system_config_table_id("chat_mode") == "tblMode"
+    monkeypatch.delenv("FEISHU_SYSTEM_CONFIG_CHAT_MODE_TABLE_ID", raising=False)
+    assert bridge.system_config_table_id("chat_mode") == ""
