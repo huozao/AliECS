@@ -10,7 +10,11 @@ from app.storage.postgres import normalize_record, open_store
 
 
 BEIJING = timezone(timedelta(hours=8))
-CONFIG_TABLE_SHEET_NAME = "配置表"
+DOC_SYNC_CONFIG_TABLE_SHEET_NAME = "同步配置"
+LEGACY_CONFIG_TABLE_SHEET_NAME = "配置表"
+CONFIG_TABLE_SHEET_NAME = LEGACY_CONFIG_TABLE_SHEET_NAME
+DOC_SYNC_CONFIG_RECORD_ID_FIELD = "配置编号"
+DOC_SYNC_CONFIG_RECORD_ID = "global-default"
 CONFIG_PROVIDER = "doc_sync"
 _ANCHOR_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _TRUTHY = {"1", "true", "yes", "y", "on", "是", "开", "启用", "√", "✓", "checked"}
@@ -66,8 +70,32 @@ def _cell_text(value: Any) -> str:
     return str(value if value is not None else "")
 
 
+def _parse_typed_config_rows(rows: list[dict[str, Any]]) -> tuple[dict[str, Any], list[str]]:
+    config: dict[str, Any] = {}
+    errors: list[str] = []
+    target = None
+    for row in rows:
+        record_id = _cell_text(row.get(DOC_SYNC_CONFIG_RECORD_ID_FIELD)).strip()
+        if record_id == DOC_SYNC_CONFIG_RECORD_ID:
+            target = row
+            break
+    if target is None:
+        return config, errors
+    for column, (field, parser) in CONFIG_REGISTRY.items():
+        if column not in target:
+            continue
+        raw = _cell_text(target.get(column))
+        try:
+            config[field] = parser(raw)
+        except (ValueError, TypeError) as exc:
+            errors.append(f"{column}: {exc}")
+    return config, errors
+
+
 def parse_config_rows(rows: list[dict[str, Any]]) -> tuple[dict[str, Any], list[str]]:
-    """按注册表解析「配置表」行：状态列非空且≠启用的行跳过；未知键忽略；非法值进错误列表。"""
+    """解析 doc_sync 配置：优先支持「同步配置」typed 单例行，兼容旧「配置表」键值行。"""
+    if any(DOC_SYNC_CONFIG_RECORD_ID_FIELD in row for row in rows):
+        return _parse_typed_config_rows(rows)
     config: dict[str, Any] = {}
     errors: list[str] = []
     for row in rows:
@@ -152,8 +180,18 @@ def read_last_full_run() -> datetime | None:
         return None
 
 
+def _select_config_source(sources: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, str]:
+    typed = [row for row in sources if str(row.get("sheet_name") or "") == DOC_SYNC_CONFIG_TABLE_SHEET_NAME]
+    if typed:
+        return typed[0], "feishu-system-config-table"
+    legacy = [row for row in sources if str(row.get("sheet_name") or "") == LEGACY_CONFIG_TABLE_SHEET_NAME]
+    if legacy:
+        return legacy[0], "feishu-config-table"
+    return None, ""
+
+
 def pull_config_from_bitable() -> str:
-    """从飞书「配置表」单向拉取调度配置落 DB（表格=编辑面，DB=生效面）。
+    """从飞书「同步配置」/旧「配置表」单向拉取调度配置落 DB（表格=编辑面，DB=生效面）。
     返回状态字符串（记日志用），任何异常吞掉返回错误串。"""
     try:
         store = open_store()
@@ -166,12 +204,8 @@ def pull_config_from_bitable() -> str:
         if current.get("pull_paused"):
             return "paused: 管理页已暂停表格拉取"
         for profile in env_profiles(""):
-            sources = [
-                row
-                for row in store.list_bitable_sources("feishu", profile)
-                if str(row.get("sheet_name") or "") == CONFIG_TABLE_SHEET_NAME
-            ]
-            if not sources:
+            source, updated_by = _select_config_source(store.list_bitable_sources("feishu", profile))
+            if not source:
                 continue
             credentials = credentials_for_profile(profile)
             if not credentials:
@@ -182,7 +216,6 @@ def pull_config_from_bitable() -> str:
                 app_secret=credential.app_secret,
                 api_base=credential.api_base,
             )
-            source = sources[0]
             app_token = str(source.get("external_doc_id") or "")
             table_id = str(source.get("external_sheet_id") or "")
             fields = client.list_fields(app_token, table_id)
@@ -194,9 +227,9 @@ def pull_config_from_bitable() -> str:
             rows = [normalize_record(record, field_titles) for record in records if isinstance(record, dict)]
             config, errors = parse_config_rows(rows)
             for error in errors:
-                print(f"[配置表拉取] 非法值已跳过：{error}")
+                print(f"[同步配置拉取] 非法值已跳过：{error}")
             if not config:
-                return "noop: 配置表无可用配置项"
+                return "noop: 同步配置/配置表无可用配置项"
             merged = {
                 "enabled": config.get("enabled", current["enabled"]),
                 "interval_seconds": config.get("interval_seconds", current["interval_seconds"]),
@@ -210,10 +243,10 @@ def pull_config_from_bitable() -> str:
                 enabled=bool(merged["enabled"]),
                 interval_seconds=int(merged["interval_seconds"]),
                 anchor_time=str(merged["anchor_time"]),
-                updated_by="feishu-config-table",
+                updated_by=updated_by,
             )
             return f"applied: {merged}"
-        return "noop: 未找到「配置表」数据源"
+        return "noop: 未找到「同步配置」或「配置表」数据源"
     except Exception as exc:  # noqa: BLE001
         return f"error: {exc}"
     finally:
