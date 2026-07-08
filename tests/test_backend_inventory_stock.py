@@ -29,6 +29,17 @@ def _write_stock_excel(directory: Path) -> Path:
     return path
 
 
+def _write_warehouse_excel(directory: Path, codes: list[tuple[str, str]]) -> Path:
+    path = directory / "warehouse_20260610_120000.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["WarehouseCode", "WarehouseName"])
+    for code, name in codes:
+        ws.append([code, name])
+    wb.save(path)
+    return path
+
+
 class InventoryCurrentStockTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -115,6 +126,164 @@ class InventoryCurrentStockTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             self.main.inventory_current_stock(q="", warehouse="002", scope="raw", user=user)
         self.assertEqual(400, ctx.exception.status_code)
+
+    def test_inventory_scope_uses_system_config_mirror(self) -> None:
+        directory = Path(self._tmp.name)
+        path = directory / "current_stock_20260610_120000.xlsx"
+        wb = Workbook()
+        ws = wb.active
+        ws.append(
+            [
+                "WarehouseCode", "WarehouseName", "InventoryCode", "InventoryName",
+                "InventoryClassName", "Specification", "UnitName", "ExistingQuantity", "AvailableQuantity",
+            ]
+        )
+        ws.append(["001", "原材库", "A1", "ABS", "原材料", "", "kg", "10", "10"])
+        ws.append(["002", "成品库", "B1", "成品", "物料清单", "", "kg", "20", "20"])
+        ws.append(["007", "呆滞库", "C1", "呆滞", "物料清单", "", "kg", "5", "5"])
+        wb.save(path)
+        _write_warehouse_excel(directory, [("001", "原材库"), ("002", "成品库"), ("007", "呆滞库")])
+        old_record = self.main._system_config_record
+        self.main._system_config_record = lambda sheet: {
+            "库存原料仓库": ["002"],
+            "成品排除仓库": ["007"],
+        } if sheet == "库存仓库范围" else {}
+        try:
+            user = self._user(permissions=["inventory.raw.read", "inventory.finished.read"])
+            raw = self.main.inventory_current_stock(q="", warehouse="", scope="raw", user=user)
+            finished = self.main.inventory_current_stock(q="", warehouse="", scope="finished", user=user)
+        finally:
+            self.main._system_config_record = old_record
+        self.assertEqual({"002"}, {item["WarehouseCode"] for item in raw["items"]})
+        self.assertEqual({"001", "002"}, {item["WarehouseCode"] for item in finished["items"]})
+
+    def test_inventory_scope_falls_back_when_mirror_codes_are_invalid(self) -> None:
+        directory = Path(self._tmp.name)
+        path = directory / "current_stock_20260610_120000.xlsx"
+        wb = Workbook()
+        ws = wb.active
+        ws.append(
+            [
+                "WarehouseCode", "WarehouseName", "InventoryCode", "InventoryName",
+                "InventoryClassName", "Specification", "UnitName", "ExistingQuantity", "AvailableQuantity",
+            ]
+        )
+        ws.append(["001", "原材库", "A1", "ABS", "原材料", "", "kg", "10", "10"])
+        ws.append(["012", "L-代加工库", "A2", "代加工料", "代加工材料", "", "kg", "20", "20"])
+        ws.append(["002", "成品库", "B1", "成品", "物料清单", "", "kg", "30", "30"])
+        wb.save(path)
+        _write_warehouse_excel(directory, [("001", "原材库"), ("012", "L-代加工库"), ("002", "成品库")])
+        old_record = self.main._system_config_record
+        self.main._system_config_record = lambda sheet: {
+            "库存原料仓库": ["999"],
+            "成品排除仓库": ["998"],
+        } if sheet == "库存仓库范围" else {}
+        try:
+            user = self._user(permissions=["inventory.raw.read", "inventory.finished.read"])
+            raw = self.main.inventory_current_stock(q="", warehouse="", scope="raw", user=user)
+            finished = self.main.inventory_current_stock(q="", warehouse="", scope="finished", user=user)
+        finally:
+            self.main._system_config_record = old_record
+        self.assertEqual({"001", "012"}, {item["WarehouseCode"] for item in raw["items"]})
+        self.assertEqual({"002", "012"}, {item["WarehouseCode"] for item in finished["items"]})
+
+    def test_inventory_scope_falls_back_when_warehouse_archive_missing(self) -> None:
+        directory = Path(self._tmp.name)
+        path = directory / "current_stock_20260610_120000.xlsx"
+        wb = Workbook()
+        ws = wb.active
+        ws.append(
+            [
+                "WarehouseCode", "WarehouseName", "InventoryCode", "InventoryName",
+                "InventoryClassName", "Specification", "UnitName", "ExistingQuantity", "AvailableQuantity",
+            ]
+        )
+        ws.append(["001", "原材库", "A1", "ABS", "原材料", "", "kg", "10", "10"])
+        ws.append(["012", "L-代加工库", "A2", "代加工料", "代加工材料", "", "kg", "20", "20"])
+        ws.append(["002", "成品库", "B1", "成品", "物料清单", "", "kg", "30", "30"])
+        wb.save(path)
+        old_record = self.main._system_config_record
+        self.main._system_config_record = lambda sheet: {
+            "库存原料仓库": ["002"],
+            "成品排除仓库": ["012"],
+        } if sheet == "库存仓库范围" else {}
+        try:
+            user = self._user(permissions=["inventory.raw.read", "inventory.finished.read"])
+            raw = self.main.inventory_current_stock(q="", warehouse="", scope="raw", user=user)
+            finished = self.main.inventory_current_stock(q="", warehouse="", scope="finished", user=user)
+        finally:
+            self.main._system_config_record = old_record
+        self.assertEqual({"001", "012"}, {item["WarehouseCode"] for item in raw["items"]})
+        self.assertEqual({"002", "012"}, {item["WarehouseCode"] for item in finished["items"]})
+
+    def test_config_codes_reads_feishu_multi_select_dict_items(self) -> None:
+        self.assertEqual(["001", "012"], self.main._config_codes([{"text": "001"}, {"name": "012"}, {"text": "001"}]))
+        self.assertEqual(["001", "012"], self.main._config_codes("001，012"))
+
+    def test_inventory_scope_falls_back_when_warehouse_archive_unreadable(self) -> None:
+        directory = Path(self._tmp.name)
+        path = directory / "current_stock_20260610_120000.xlsx"
+        wb = Workbook()
+        ws = wb.active
+        ws.append(
+            [
+                "WarehouseCode", "WarehouseName", "InventoryCode", "InventoryName",
+                "InventoryClassName", "Specification", "UnitName", "ExistingQuantity", "AvailableQuantity",
+            ]
+        )
+        ws.append(["001", "原材库", "A1", "ABS", "原材料", "", "kg", "10", "10"])
+        ws.append(["012", "L-代加工库", "A2", "代加工料", "代加工材料", "", "kg", "20", "20"])
+        ws.append(["002", "成品库", "B1", "成品", "物料清单", "", "kg", "30", "30"])
+        wb.save(path)
+        (directory / "warehouse_20260610_120000.xlsx").write_bytes(b"not an xlsx")
+        old_record = self.main._system_config_record
+        self.main._system_config_record = lambda sheet: {
+            "库存原料仓库": ["002"],
+            "成品排除仓库": ["012"],
+        } if sheet == "库存仓库范围" else {}
+        try:
+            user = self._user(permissions=["inventory.raw.read", "inventory.finished.read"])
+            raw = self.main.inventory_current_stock(q="", warehouse="", scope="raw", user=user)
+            finished = self.main.inventory_current_stock(q="", warehouse="", scope="finished", user=user)
+        finally:
+            self.main._system_config_record = old_record
+        self.assertEqual({"001", "012"}, {item["WarehouseCode"] for item in raw["items"]})
+        self.assertEqual({"002", "012"}, {item["WarehouseCode"] for item in finished["items"]})
+
+    def test_inventory_scope_falls_back_when_warehouse_archive_has_no_code_column(self) -> None:
+        directory = Path(self._tmp.name)
+        path = directory / "current_stock_20260610_120000.xlsx"
+        wb = Workbook()
+        ws = wb.active
+        ws.append(
+            [
+                "WarehouseCode", "WarehouseName", "InventoryCode", "InventoryName",
+                "InventoryClassName", "Specification", "UnitName", "ExistingQuantity", "AvailableQuantity",
+            ]
+        )
+        ws.append(["001", "原材库", "A1", "ABS", "原材料", "", "kg", "10", "10"])
+        ws.append(["012", "L-代加工库", "A2", "代加工料", "代加工材料", "", "kg", "20", "20"])
+        ws.append(["002", "成品库", "B1", "成品", "物料清单", "", "kg", "30", "30"])
+        wb.save(path)
+        warehouse = directory / "warehouse_20260610_120000.xlsx"
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["Name"])
+        ws.append(["原材库"])
+        wb.save(warehouse)
+        old_record = self.main._system_config_record
+        self.main._system_config_record = lambda sheet: {
+            "库存原料仓库": ["002"],
+            "成品排除仓库": ["012"],
+        } if sheet == "库存仓库范围" else {}
+        try:
+            user = self._user(permissions=["inventory.raw.read", "inventory.finished.read"])
+            raw = self.main.inventory_current_stock(q="", warehouse="", scope="raw", user=user)
+            finished = self.main.inventory_current_stock(q="", warehouse="", scope="finished", user=user)
+        finally:
+            self.main._system_config_record = old_record
+        self.assertEqual({"001", "012"}, {item["WarehouseCode"] for item in raw["items"]})
+        self.assertEqual({"002", "012"}, {item["WarehouseCode"] for item in finished["items"]})
 
     def test_filters_by_warehouse_and_keyword(self) -> None:
         _write_stock_excel(Path(self._tmp.name))

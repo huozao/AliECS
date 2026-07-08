@@ -43,7 +43,93 @@ _TPLUS_EXPORT_DESCRIPTIONS = {
 }
 
 
+def _system_config_record(sheet_name: str) -> dict[str, Any]:
+    """Read one singleton row from the doc-sync mirror of Feishu「系统配置」.
+
+    This is intentionally best-effort: backend must keep serving with code
+    defaults when doc-sync, Postgres, or the mirror row is temporarily absent.
+    """
+    try:
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT er.raw_json, er.normalized_json, er.source_id
+                    FROM external_sources es
+                    JOIN external_records er ON er.source_id = es.id
+                    WHERE es.provider = 'feishu'
+                      AND es.document_name = '系统配置'
+                      AND es.sheet_name = %s
+                      AND es.status = 'active'
+                    ORDER BY er.id
+                    """,
+                    (sheet_name,),
+                )
+                rows = cur.fetchall()
+                source_ids = sorted({int(row[2]) for row in rows if len(row) >= 3 and row[2] is not None})
+                field_titles: dict[tuple[int, str], str] = {}
+                if source_ids:
+                    cur.execute(
+                        """
+                        SELECT source_id, external_field_id, field_title
+                        FROM external_fields
+                        WHERE source_id = ANY(%s)
+                        """,
+                        (source_ids,),
+                    )
+                    field_titles = {
+                        (int(source_id), str(field_id)): str(title or field_id)
+                        for source_id, field_id, title in cur.fetchall()
+                    }
+    except Exception:  # noqa: BLE001 - 配置镜像不可用时回退代码默认
+        return {}
+    for raw_json, normalized_json, source_id in rows:
+        source_id = int(source_id)
+        fields: dict[str, Any] = {}
+        if isinstance(normalized_json, dict):
+            fields.update(normalized_json)
+        raw = raw_json if isinstance(raw_json, dict) else {}
+        raw_fields = raw.get("fields") if isinstance(raw.get("fields"), dict) else raw
+        for key, value in raw_fields.items():
+            fields[field_titles.get((source_id, str(key)), str(key))] = value
+        if _config_text(fields.get("配置编号")) == "global-default":
+            return fields
+    return {}
+
+
+def _config_cell_text(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in ("text", "name", "value"):
+            if key in value:
+                return str(value.get(key) or "").strip()
+        return ""
+    return str(value or "").strip()
+
+
+def _config_text(value: Any) -> str:
+    if isinstance(value, list):
+        return "".join(_config_cell_text(item) for item in value).strip()
+    return _config_cell_text(value)
+
+
+def _config_codes(value: Any) -> list[str]:
+    values = (
+        value
+        if isinstance(value, list)
+        else str(value or "").replace("；", ";").replace("，", ";").replace(",", ";").split(";")
+    )
+    result: list[str] = []
+    for item in values:
+        code = _config_cell_text(item)
+        if code and code not in result:
+            result.append(code)
+    return result
+
+
 def _tplus_export_description(module: str) -> str:
+    configured = _config_text(_system_config_record("T+导出说明").get(module))
+    if configured:
+        return configured
     return _TPLUS_EXPORT_DESCRIPTIONS.get(module, "暂未配置说明；请按表头人工判断内容。")
 
 
@@ -201,6 +287,47 @@ _RAW_STOCK_WAREHOUSES = {"001", "012"}
 _FINISHED_EXCLUDED_WAREHOUSES = {"001"}
 
 
+def _latest_tplus_warehouse_codes() -> set[str]:
+    path = _latest_tplus_export_file("warehouse")
+    if path is None:
+        return set()
+    try:
+        import pandas as pd
+
+        df = pd.read_excel(path, dtype=str).fillna("")
+    except Exception:  # noqa: BLE001 - 仓库档案不可读时不阻断库存页
+        return set()
+    for column in ("WarehouseCode", "仓库编码", "Code"):
+        if column in df.columns:
+            return {str(code).strip() for code in df[column].tolist() if str(code).strip()}
+    return set()
+
+
+def _validated_config_codes(configured: list[str], defaults: set[str], valid_codes: set[str]) -> set[str]:
+    if not configured:
+        return set(defaults)
+    if not valid_codes:
+        return set(defaults)
+    selected = {code for code in configured if code in valid_codes}
+    return selected or set(defaults)
+
+
+def _inventory_scope_config() -> tuple[set[str], set[str]]:
+    record = _system_config_record("库存仓库范围")
+    valid_codes = _latest_tplus_warehouse_codes()
+    raw_warehouses = _validated_config_codes(
+        _config_codes(record.get("库存原料仓库")),
+        _RAW_STOCK_WAREHOUSES,
+        valid_codes,
+    )
+    finished_excluded = _validated_config_codes(
+        _config_codes(record.get("成品排除仓库")),
+        _FINISHED_EXCLUDED_WAREHOUSES,
+        valid_codes,
+    )
+    return raw_warehouses, finished_excluded
+
+
 @router.get("/v1/inventory/current-stock")
 def inventory_current_stock(
     q: str = Query(default=""),
@@ -229,11 +356,12 @@ def inventory_current_stock(
             df[column] = ""
     df = df[list(_STOCK_COLUMNS)].fillna("")
 
+    raw_warehouses, finished_excluded = _inventory_scope_config()
     codes = df["WarehouseCode"].str.strip()
     if scope == "raw":
-        df = df[codes.isin(_RAW_STOCK_WAREHOUSES)]
+        df = df[codes.isin(raw_warehouses)]
     else:
-        df = df[~codes.isin(_FINISHED_EXCLUDED_WAREHOUSES)]
+        df = df[~codes.isin(finished_excluded)]
 
     warehouses = (
         df[["WarehouseCode", "WarehouseName"]]

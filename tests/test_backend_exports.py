@@ -79,6 +79,67 @@ class BackendExportsTests(unittest.TestCase):
         self.assertIn("销售价格表", items["sales_price"]["description"])
         self.assertIn("暂未配置说明", items["unknown_module"]["description"])
 
+    def test_tplus_export_description_uses_system_config_mirror(self) -> None:
+        old_record = self.main._system_config_record
+        self.main._system_config_record = lambda sheet: {"bom": "配置里的 BOM 说明"} if sheet == "T+导出说明" else {}
+        try:
+            self.assertEqual("配置里的 BOM 说明", self.main._tplus_export_description("bom"))
+        finally:
+            self.main._system_config_record = old_record
+
+    def test_tplus_export_description_falls_back_when_mirror_empty(self) -> None:
+        old_record = self.main._system_config_record
+        self.main._system_config_record = lambda sheet: {}
+        try:
+            self.assertIn("BOM 父件和子件", self.main._tplus_export_description("bom"))
+            self.assertIn("暂未配置说明", self.main._tplus_export_description("unknown_module"))
+        finally:
+            self.main._system_config_record = old_record
+
+    def test_config_text_reads_feishu_rich_text_cell(self) -> None:
+        self.assertEqual("配置里的 BOM 说明", self.main._config_text([{"text": "配置里的 BOM 说明"}]))
+
+    def test_system_config_record_maps_raw_field_ids_to_titles(self) -> None:
+        class FakeCursor:
+            def __init__(self) -> None:
+                self.rows = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args) -> None:
+                return None
+
+            def execute(self, sql: str, params=None) -> None:
+                if "FROM external_sources es" in sql:
+                    self.rows = [
+                        (
+                            {"fields": {"fld_id": "global-default", "fld_bom": [{"text": "映射说明"}]}},
+                            {"配置编号": "global-default", "bom": "归一化说明"},
+                            101,
+                        )
+                    ]
+                else:
+                    self.rows = [(101, "fld_id", "配置编号"), (101, "fld_bom", "bom")]
+
+            def fetchall(self):
+                return self.rows
+
+        class FakeConn:
+            def cursor(self):
+                return FakeCursor()
+
+            def close(self) -> None:
+                return None
+
+        old_conn = self.main._conn
+        self.main._conn = lambda: FakeConn()
+        try:
+            record = self.main._system_config_record("T+导出说明")
+        finally:
+            self.main._conn = old_conn
+        self.assertEqual([{"text": "映射说明"}], record["bom"])
+
     def test_exports_catalog_includes_doc_rows_before_sheet_sync(self) -> None:
         executed_sql: list[str] = []
 
