@@ -370,7 +370,27 @@
         </section>
       </section>
 
-      <section class="card">
+      <section id="systemConfigPanel" class="card">
+        <h2>系统配置生效总览</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>域</th>
+                <th>配置项</th>
+                <th>生效值</th>
+                <th>来源</th>
+                <th>最后同步</th>
+                <th>编辑家</th>
+                <th>应急</th>
+              </tr>
+            </thead>
+            <tbody id="systemConfigBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="featuresPanel" class="card">
         <h2>功能入口管理</h2>
         <div class="grid two">
           <div>
@@ -467,6 +487,7 @@
       roles: [],
       permissions: [],
       features: [],
+      systemConfig: [],
       logs: [],
       auditLogs:{items:[],page:1,page_size:50,total:0}
     };
@@ -558,6 +579,25 @@
         .replaceAll("'", "&#039;");
     }
 
+    function safeHref(value) {
+      const raw = String(value || "").trim();
+      if (!raw) return "";
+      if (raw.startsWith("/") && !raw.startsWith("//")) return raw;
+      try {
+        const parsed = new URL(raw, location.origin);
+        if (parsed.protocol === "http:" || parsed.protocol === "https:") return raw;
+      } catch {
+        return "";
+      }
+      return "";
+    }
+
+    function renderSafeLink(url, label) {
+      const href = safeHref(url);
+      if (!href) return '<span class="muted">无效链接</span>';
+      return `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${escapeHtml(label || "打开")}</a>`;
+    }
+
     function renderAuth() {
       syncTokenState();
       const loggedIn = Boolean(state.token);
@@ -646,11 +686,52 @@
           <td>${escapeHtml(f.title)}</td>
           <td>${tag(f.status, f.status === "active" ? "ok" : "warn")}</td>
           <td>${f.required_permission ? tag(f.required_permission) : tag("公开", "ok")}</td>
-          <td>${f.url ? `<a href="${escapeHtml(f.url)}" target="_blank" rel="noreferrer">打开</a>` : '<span class="muted">无</span>'}</td>
+          <td>${f.url ? renderSafeLink(f.url, "打开") : '<span class="muted">无</span>'}</td>
           <td>${f.sort_order}</td>
           <td><button type="button" onclick="editFeature(${f.id})">编辑</button></td>
         </tr>
       `).join("");
+    }
+
+    function renderSystemConfigEmergency(group, rowIndex) {
+      if (rowIndex > 0) return "";
+      const emergency = group.emergency || {};
+      if (group.domain === "doc_sync" && emergency.pause_supported) {
+        const paused = Boolean(emergency.pull_paused);
+        const label = paused ? "恢复拉取" : "暂停拉取";
+        return `<button type="button" onclick="toggleDocSyncPullPaused(${!paused})">${label}</button>`;
+      }
+      return '<span class="muted">-</span>';
+    }
+
+    function renderSystemConfigEditor(editor) {
+      if (!editor) return '<span class="muted">未配置</span>';
+      if (editor.url) {
+        return renderSafeLink(editor.url, editor.label || "打开");
+      }
+      return `<span class="muted">${escapeHtml(editor.label || "未配置")}</span>`;
+    }
+
+    function renderSystemConfig() {
+      const rows = [];
+      (state.systemConfig || []).forEach((group) => {
+        const groupRows = group.rows && group.rows.length ? group.rows : [{ key: group.domain, label: "-", value: "-", source: group.source }];
+        groupRows.forEach((row, index) => {
+          const statusKind = group.status === "ok" ? "ok" : "warn";
+          rows.push(`
+            <tr>
+              <td>${index === 0 ? `${tag(group.title || group.domain, statusKind)}${group.note ? `<div class="muted small">${escapeHtml(group.note)}</div>` : ""}` : ""}</td>
+              <td>${escapeHtml(row.label || row.key || "")}</td>
+              <td>${escapeHtml(row.value || "")}</td>
+              <td>${tag(row.source || group.source || "-", row.source === "应急开关" ? "warn" : statusKind)}</td>
+              <td>${index === 0 ? escapeHtml(group.last_synced_at || "-") : ""}</td>
+              <td>${index === 0 ? renderSystemConfigEditor(group.editor) : ""}</td>
+              <td>${renderSystemConfigEmergency(group, index)}</td>
+            </tr>
+          `);
+        });
+      });
+      $("systemConfigBody").innerHTML = rows.join("") || '<tr><td colspan="7" class="muted">暂无系统配置数据。</td></tr>';
     }
 
     function renderLogs() {
@@ -681,6 +762,30 @@
       renderLogs();
     }
 
+    async function loadSystemConfig() {
+      try {
+        const systemConfigResp = await api("/v1/admin/system-config/effective");
+        state.systemConfig = systemConfigResp.items || [];
+      } catch (error) {
+        state.systemConfig = [{
+          domain: "system_config",
+          title: "系统配置",
+          status: "warn",
+          source: "读取失败",
+          editor: { label: "稍后重试", url: null },
+          last_synced_at: null,
+          rows: [{
+            key: "system_config.error",
+            label: "总览接口",
+            value: error instanceof Error ? error.message : "读取失败",
+            source: "读取失败"
+          }],
+          emergency: { pause_supported: false, override_supported: false }
+        }];
+      }
+      renderSystemConfig();
+    }
+
     async function loadAll() {
       clearMessage();
       state.me = await api("/v1/auth/me");
@@ -708,6 +813,7 @@
       renderRoles();
       renderPermissions();
       renderFeatures();
+      await loadSystemConfig();
       await loadAuditLogs(1);
     }
 
@@ -869,12 +975,35 @@
       await loadAll();
     }
 
+    async function toggleDocSyncPullPaused(paused) {
+      const group = (state.systemConfig || []).find((item) => item.domain === "doc_sync");
+      const emergency = group && group.emergency ? group.emergency : null;
+      if (!emergency || !emergency.pause_supported) {
+        showError("当前环境不支持文档同步应急暂停。");
+        return;
+      }
+
+      await api("/v1/ops/doc-sync/sync-config", {
+        method: "PUT",
+        body: JSON.stringify({
+          enabled: Boolean(emergency.enabled ?? true),
+          interval_hours: Number(emergency.interval_hours || 24),
+          anchor_time: String(emergency.anchor_time || ""),
+          pull_paused: Boolean(paused)
+        })
+      });
+
+      showSuccess(paused ? "已暂停文档同步表格拉取。" : "已恢复文档同步表格拉取。");
+      await loadAll();
+    }
+
     window.resetPassword = resetPassword;
     window.disableUser = disableUser;
     window.enableUser = enableUser;
     window.assignRoles = assignRoles;
     window.assignRolePermissions = assignRolePermissions;
     window.editFeature = editFeature;
+    window.toggleDocSyncPullPaused = toggleDocSyncPullPaused;
 
     document.addEventListener("DOMContentLoaded", async () => {
       $("loginBtn").addEventListener("click", ssoLogin);
