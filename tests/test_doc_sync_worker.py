@@ -943,6 +943,29 @@ class FeishuBitableSyncTests(WorkerImportTestCase):
         self.assertEqual(6, len(client.created_tables))
         self.assertEqual("会话索引表", client.created_tables[0]["name"])
         self.assertIn({"field_name": "session_key", "type": 1}, client.created_tables[0]["fields"])
+        table_fields = {table["name"]: table["fields"] for table in client.created_tables}
+        self.assertIn({"field_name": "默认新对话项目链接", "type": 15}, table_fields["群表"])
+        self.assertIn({"field_name": "默认新对话项目名称", "type": 1}, table_fields["群表"])
+        self.assertIn({"field_name": "最近名称解析时间", "type": 5}, table_fields["群表"])
+        self.assertIn({"field_name": "默认新对话项目链接", "type": 15}, table_fields["用户表"])
+        self.assertIn({"field_name": "默认新对话项目名称", "type": 1}, table_fields["用户表"])
+        self.assertIn({"field_name": "最近名称解析时间", "type": 5}, table_fields["用户表"])
+        self.assertIn(
+            {
+                "field_name": "对话模式默认",
+                "type": 3,
+                "property": {
+                    "options": [
+                        {"name": "极速", "color": 0},
+                        {"name": "均衡", "color": 1},
+                        {"name": "高级", "color": 2},
+                    ]
+                },
+            },
+            table_fields["规则配置表"],
+        )
+        self.assertIn({"field_name": "默认新对话项目链接", "type": 15}, table_fields["规则配置表"])
+        self.assertIn({"field_name": "默认新对话项目名称", "type": 1}, table_fields["规则配置表"])
         self.assertEqual("会话索引表", store.sources[0]["sheet_name"])
         self.assertEqual("bascn_console", sources[0].app_token)
 

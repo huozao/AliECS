@@ -16,13 +16,21 @@ from app.storage.postgres import build_record_snapshot, compose_source_name, ope
 
 FIELD_TEXT = 1
 FIELD_NUMBER = 2
+FIELD_SINGLE_SELECT = 3
 FIELD_DATETIME = 5
 FIELD_CHECKBOX = 7
 FIELD_URL = 15
 
 
-def _field(name: str, field_type: int = FIELD_TEXT) -> dict[str, Any]:
-    return {"field_name": name, "type": field_type}
+def _field(name: str, field_type: int = FIELD_TEXT, field_property: dict[str, Any] | None = None) -> dict[str, Any]:
+    field = {"field_name": name, "type": field_type}
+    if field_property:
+        field["property"] = field_property
+    return field
+
+
+def _select_options(options: list[str]) -> dict[str, Any]:
+    return {"options": [{"name": name, "color": index % 16} for index, name in enumerate(options)]}
 
 
 SESSION_CONSOLE_TABLE_SCHEMAS: list[dict[str, Any]] = [
@@ -120,6 +128,9 @@ SESSION_CONSOLE_TABLE_SCHEMAS: list[dict[str, Any]] = [
             _field("是否记录全量消息", FIELD_CHECKBOX),
             _field("回复模式"),
             _field("默认会话"),
+            _field("默认新对话项目链接", FIELD_URL),
+            _field("默认新对话项目名称"),
+            _field("最近名称解析时间", FIELD_DATETIME),
             _field("群负责人"),
             _field("风险级别"),
             _field("最近消息时间", FIELD_DATETIME),
@@ -139,6 +150,9 @@ SESSION_CONSOLE_TABLE_SCHEMAS: list[dict[str, Any]] = [
             _field("用户角色"),
             _field("所属部门"),
             _field("默认私聊会话"),
+            _field("默认新对话项目链接", FIELD_URL),
+            _field("默认新对话项目名称"),
+            _field("最近名称解析时间", FIELD_DATETIME),
             _field("每日额度", FIELD_NUMBER),
             _field("已用次数", FIELD_NUMBER),
             _field("最近互动时间", FIELD_DATETIME),
@@ -157,6 +171,9 @@ SESSION_CONSOLE_TABLE_SCHEMAS: list[dict[str, Any]] = [
             _field("是否启用", FIELD_CHECKBOX),
             _field("是否记录全量消息", FIELD_CHECKBOX),
             _field("回复模式"),
+            _field("对话模式默认", FIELD_SINGLE_SELECT, _select_options(["极速", "均衡", "高级"])),
+            _field("默认新对话项目链接", FIELD_URL),
+            _field("默认新对话项目名称"),
             _field("是否允许图片", FIELD_CHECKBOX),
             _field("是否允许文件", FIELD_CHECKBOX),
             _field("是否需要审核", FIELD_CHECKBOX),
