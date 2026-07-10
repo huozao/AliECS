@@ -18,7 +18,7 @@
   <div class="wrap">
     <header class="topbar">
       <div><h1 id="pageTitle">成品库存</h1><div id="metaLine" class="muted small">数据来自 T+ 现存量同步</div></div>
-      <nav class="row"><a class="btn" href="/">首页</a><button id="loginBtn" class="btn" type="button">登录</button><button id="logoutBtn" class="btn hidden" type="button">退出登录</button></nav>
+      <nav class="row"><a class="btn" href="/">首页</a><button id="loginBtn" class="btn" type="button">登录（SSO）</button><button id="logoutBtn" class="btn hidden" type="button">退出登录</button></nav>
     </header>
     <div id="msg" class="attention"></div>
     <section class="panel">
@@ -38,14 +38,6 @@
       </div>
     </section>
   </div>
-  <div id="authModal" class="modal">
-    <div class="modal-panel">
-      <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">登录</h3><button id="closeAuthBtn" class="btn" type="button">关闭</button></div>
-      <input id="usernameInput" autocomplete="username" placeholder="用户名" style="width:100%;margin-top:10px"/>
-      <input id="passwordInput" type="password" autocomplete="current-password" placeholder="密码" style="width:100%;margin-top:8px"/>
-      <div style="display:flex;justify-content:flex-end;margin-top:10px"><button id="submitLoginBtn" class="primary" type="button">提交</button></div>
-    </div>
-  </div>
   <script>
     // 本页与 finished-goods 共用同一套逻辑，仅 PAGE_TITLE/DEFAULT_WAREHOUSE 不同。
     const PAGE_TITLE='成品库存';
@@ -56,7 +48,6 @@
     const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
     const $=(id)=>document.getElementById(id);
     const token=()=>AUTH_KEYS.map((k)=>localStorage.getItem(k)||'').find(Boolean)||'';
-    const setAuthToken=(t)=>AUTH_KEYS.forEach((k)=>localStorage.setItem(k,t));
     const clearAuthToken=()=>AUTH_KEYS.forEach((k)=>localStorage.removeItem(k));
     const esc=(v)=>String(v??'').replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const qty=(v)=>Number(v||0).toLocaleString('zh-CN',{maximumFractionDigits:4});
@@ -96,21 +87,11 @@
       }catch(error){showError(error.message);}
       finally{$('searchBtn').disabled=false;}
     }
-    async function login(){
-      clearMessage();
-      const username=$('usernameInput').value.trim(),password=$('passwordInput').value;
-      if(!username||!password){showError('请输入用户名和密码。');return;}
-      const data=await api('/v1/auth/login',{method:'POST',body:JSON.stringify({username,password})});
-      setAuthToken(data.token);syncAuth();$('authModal').classList.remove('show');await search();
-    }
+    const ssoLogin=()=>{location.href=`${API_BASE}/v1/auth/oidc/login?rd=${encodeURIComponent(location.pathname+location.search)}`;};
     document.addEventListener('DOMContentLoaded',()=>{
       document.title=`AliECS · ${PAGE_TITLE}`;$('pageTitle').textContent=PAGE_TITLE;$('allOption').textContent=ALL_LABEL;
-      $('loginBtn').onclick=()=>$('authModal').classList.add('show');
+      $('loginBtn').onclick=ssoLogin;
       $('logoutBtn').onclick=()=>{clearAuthToken();syncAuth();$('stockBody').innerHTML='<tr><td colspan="8" class="muted">请登录后查询。</td></tr>';};
-      $('closeAuthBtn').onclick=()=>$('authModal').classList.remove('show');
-      $('submitLoginBtn').onclick=()=>login().catch((e)=>showError(e.message));
-      $('passwordInput').onkeydown=(e)=>{if(e.key==='Enter')login().catch((err)=>showError(err.message));};
-      $('authModal').onclick=(e)=>{if(e.target===$('authModal'))$('authModal').classList.remove('show');};
       $('searchBtn').onclick=()=>search();
       $('qInput').onkeydown=(e)=>{if(e.key==='Enter')search();};
       $('warehouseSelect').onchange=()=>{$('warehouseSelect').dataset.userTouched='1';search();};
