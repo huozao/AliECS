@@ -22,7 +22,6 @@ COMMON_FIELD_TITLES = (
     "企业配置",
     "状态",
     "文档定位ID",
-    "docid",
     "唯一键",
     "创建来源",
     "创建副本请求时间",
@@ -301,7 +300,8 @@ def build_document_snapshot(
         "唯一键": unique_key,
         "企业配置": env_profile,
         "智能表格名称": document_name,
-        "docid": docid if provider == "wecom" else "",
+        # ⚠️ 不要往 values 里写名为 "docid" 的键：企微服务端会把它误当本企业 docid 校验，
+        # 跨企业 docid/空值一律 301085 invalid docid（源 docid 由「文档定位ID」列承载）。
         "文档定位ID": docid,
         "来源链接": source_url,
         "来源类型": str(source.get("source_type") or ""),
