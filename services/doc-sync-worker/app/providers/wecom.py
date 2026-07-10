@@ -338,8 +338,11 @@ class WeComSmartsheetClient:
     def add_records(self, docid: str, sheet_id: str, records: list[dict[str, Any]]) -> dict[str, Any]:
         return self._post("/wedoc/smartsheet/add_records", {"docid": docid, "sheet_id": sheet_id, "records": records})
 
-    def add_sheet(self, docid: str, title: str) -> dict[str, Any]:
-        return self._post("/wedoc/smartsheet/add_sheet", {"docid": docid, "properties": {"title": title}})
+    def add_sheet(self, docid: str, title: str, index: int | None = None) -> dict[str, Any]:
+        properties: dict[str, Any] = {"title": title}
+        if index is not None:
+            properties["index"] = index
+        return self._post("/wedoc/smartsheet/add_sheet", {"docid": docid, "properties": properties})
 
     def add_fields(self, docid: str, sheet_id: str, fields: list[dict[str, Any]]) -> dict[str, Any]:
         return self._post("/wedoc/smartsheet/add_fields", {"docid": docid, "sheet_id": sheet_id, "fields": fields})
