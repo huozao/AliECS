@@ -23,9 +23,9 @@ from app.core import _audit, _conn, _encode_token, _token_ttl_seconds, _user_rol
 router = APIRouter()
 
 _STATE_TTL_SECONDS = 600
-# state -> (code_verifier, created_at)。进程内存态：现网单 uvicorn worker 成立；
+# state -> (code_verifier, created_at, return_to)。进程内存态：现网单 uvicorn worker 成立；
 # 若将来扩多 worker/多实例，必须改成 DB/共享存储，否则回调会随机 400。
-_pending_states: dict[str, tuple[str, float]] = {}
+_pending_states: dict[str, tuple[str, float, str]] = {}
 _discovery_cache: dict[str, dict[str, Any]] = {}
 
 
@@ -65,20 +65,27 @@ def _discovery() -> dict[str, Any]:
 
 
 def _prune_states(now: float) -> None:
-    expired = [key for key, (_, created) in _pending_states.items() if now - created > _STATE_TTL_SECONDS]
+    expired = [key for key, entry in _pending_states.items() if now - entry[1] > _STATE_TTL_SECONDS]
     for key in expired:
         _pending_states.pop(key, None)
 
 
+def _sanitize_return_to(rd: str) -> str:
+    """只接受本站相对路径（防开放跳转）；其余一律回首页。"""
+    if rd.startswith("/") and not rd.startswith("//") and "\\" not in rd:
+        return rd
+    return "/"
+
+
 @router.get("/v1/auth/oidc/login")
-def oidc_login() -> RedirectResponse:
+def oidc_login(rd: str = "") -> RedirectResponse:
     if not _oidc_enabled():
         raise HTTPException(status_code=404, detail="oidc disabled")
     now = time.time()
     _prune_states(now)
     state = secrets.token_urlsafe(32)
     verifier = secrets.token_urlsafe(48)
-    _pending_states[state] = (verifier, now)
+    _pending_states[state] = (verifier, now, _sanitize_return_to(rd))
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
     params = {
         "response_type": "code",
@@ -166,10 +173,16 @@ def oidc_callback(code: str = "", state: str = "") -> HTMLResponse:
 
     _audit(row[1], "auth.oidc.login")
     token_js = json.dumps(_encode_token(payload))
+    # rd 是用户可控输入且内联进 <script>，转义 <> 防 </script> 逃逸。
+    return_js = (
+        json.dumps(_sanitize_return_to(entry[2] if len(entry) > 2 else "/"))
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+    )
     html = (
         '<!doctype html><meta charset="utf-8"><title>登录成功</title>'
         "<script>var token=" + token_js + ";"
         '["aliecs_auth_token","portal_token","admin_token"].forEach(function(key){localStorage.setItem(key,token);});'
-        'location.replace("/");</script>登录成功，正在跳转……'
+        "location.replace(" + return_js + ");</script>登录成功，正在跳转……"
     )
     return HTMLResponse(html)

@@ -42,7 +42,7 @@
     const API_BASE=location.port==='8080'?'http://localhost:8000':'/api';
     const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
     const state={token:'',user:null,features:[],rbac:[]};
-    const ssoLogin=()=>{location.href=`${API_BASE}/v1/auth/oidc/login`;};
+    const ssoLogin=()=>{location.href=`${API_BASE}/v1/auth/oidc/login?rd=${encodeURIComponent(location.pathname+location.search)}`;};
     const getAuthToken=()=>AUTH_KEYS.map((key)=>localStorage.getItem(key)||'').find(Boolean)||'';
     const setAuthToken=(token)=>AUTH_KEYS.forEach((key)=>localStorage.setItem(key,token));
     const clearAuthToken=()=>AUTH_KEYS.forEach((key)=>localStorage.removeItem(key));

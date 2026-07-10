@@ -100,6 +100,21 @@ class OidcLoginTests(unittest.TestCase):
         self.assertIn("code_challenge_method=S256", location)
         self.assertIn("client_id=website", location)
         self.assertEqual(len(mod._pending_states), 1)
+        self.assertEqual(next(iter(mod._pending_states.values()))[2], "/")
+
+    def test_login_keeps_relative_rd_and_rejects_absolute(self):
+        mod = load_oidc()
+        with patch.dict(os.environ, OIDC_ENV, clear=False):
+            with patch.object(mod, "_http_get_json", return_value=DISCOVERY):
+                mod._pending_states.clear()
+                mod.oidc_login(rd="/formula/?a=1")
+                (entry,) = mod._pending_states.values()
+                self.assertEqual(entry[2], "/formula/?a=1")
+                for bad in ("https://evil.com/", "//evil.com", "/a\\b", "javascript:alert(1)"):
+                    mod._pending_states.clear()
+                    mod.oidc_login(rd=bad)
+                    (entry,) = mod._pending_states.values()
+                    self.assertEqual(entry[2], "/")
 
     def test_callback_rejects_unknown_state(self):
         mod = load_oidc()
@@ -112,7 +127,7 @@ class OidcLoginTests(unittest.TestCase):
         mod = load_oidc()
         cursor = FakeCursor([None, ALICE])  # sub 未命中 -> username 绑定 RETURNING 命中
         conn = FakeConn(cursor)
-        mod._pending_states["s1"] = ("verifier-1", time.time())
+        mod._pending_states["s1"] = ("verifier-1", time.time(), "/formula/")
         with patch.dict(os.environ, OIDC_ENV, clear=False):
             with patch.object(mod, "_http_get_json", side_effect=[DISCOVERY, USERINFO]):
                 with patch.object(mod, "_http_post_form", return_value={"access_token": "at-1"}) as post_form:
@@ -122,6 +137,7 @@ class OidcLoginTests(unittest.TestCase):
                                 response = mod.oidc_callback(code="code-1", state="s1")
         body = response.body.decode("utf-8")
         self.assertIn("aliecs_auth_token", body)
+        self.assertIn('location.replace("/formula/")', body)
         self.assertTrue(conn.committed)
         self.assertEqual(post_form.call_args.args[1]["code_verifier"], "verifier-1")
         bind_sql, bind_params = cursor.executed[1]
@@ -133,7 +149,7 @@ class OidcLoginTests(unittest.TestCase):
         mod = load_oidc()
         cursor = FakeCursor([None, None])
         conn = FakeConn(cursor)
-        mod._pending_states["s2"] = ("verifier-2", time.time())
+        mod._pending_states["s2"] = ("verifier-2", time.time(), "/")
         with patch.dict(os.environ, OIDC_ENV, clear=False):
             with patch.object(mod, "_http_get_json", side_effect=[DISCOVERY, USERINFO]):
                 with patch.object(mod, "_http_post_form", return_value={"access_token": "at-2"}):

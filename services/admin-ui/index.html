@@ -818,7 +818,7 @@
     }
 
     function ssoLogin() {
-      location.href = `${API_BASE}/v1/auth/oidc/login`;
+      location.href = `${API_BASE}/v1/auth/oidc/login?rd=${encodeURIComponent(location.pathname + location.search)}`;
     }
 
     function logout() {

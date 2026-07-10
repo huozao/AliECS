@@ -94,7 +94,7 @@
     async function fetchMe(){if(!token())return null;try{return await api('/v1/auth/me');}catch{return null;}}
     const isAdminUser=(me)=>!!me&&(((me.roles||[]).includes('admin'))||((me.permissions||[]).includes('admin.access')));
     function applyGate(me){const admin=isAdminUser(me);$('loginBtn').classList.toggle('hidden',admin);$('logoutBtn').classList.toggle('hidden',!token());$('adminContent').classList.toggle('hidden',!admin);$('gateHint').classList.toggle('hidden',admin);$('refreshBtn').classList.toggle('hidden',!admin);$('jsonHealthLink').classList.toggle('hidden',!admin);$('coupleEntryBtn').classList.toggle('hidden',!admin);$('addWechatBtn').classList.toggle('hidden',!admin);if(admin){refresh();}}
-    const ssoLogin=()=>{location.href=`${API_BASE}/v1/auth/oidc/login`;};
+    const ssoLogin=()=>{location.href=`${API_BASE}/v1/auth/oidc/login?rd=${encodeURIComponent(location.pathname+location.search)}`;};
     function renderSummary(data){
       const sys=data.system||{},db=data.database||{},t=data.tplus||{},r=data.reconciliation||{},hosts=data.hosts||[];
       summary.innerHTML=[
