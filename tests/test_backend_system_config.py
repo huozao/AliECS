@@ -42,8 +42,8 @@ class BackendSystemConfigTests(unittest.TestCase):
         result = effective_system_config(_={})
 
         domains = {item["domain"]: item for item in result["items"]}
+        self.assertEqual({"doc_sync", "tplus_export", "inventory_warehouse", "features"}, set(domains))
         self.assertIn("doc_sync", domains)
-        self.assertIn("chat_mode", domains)
         self.assertIn("tplus_export", domains)
         self.assertIn("inventory_warehouse", domains)
         self.assertIn("features", domains)
@@ -56,8 +56,6 @@ class BackendSystemConfigTests(unittest.TestCase):
         from app.routers import system_config
 
         def fake_record(sheet_name: str) -> dict[str, object]:
-            if sheet_name == "对话模式":
-                return {"配置编号": "global-default", "对话模式默认": "均衡"}
             if sheet_name == "T+导出说明":
                 return {"配置编号": "global-default", "bom": "BOM 自定义说明"}
             if sheet_name == "库存仓库范围":
@@ -73,11 +71,9 @@ class BackendSystemConfigTests(unittest.TestCase):
             result = system_config.effective_system_config(_={})
 
         domains = {item["domain"]: item for item in result["items"]}
-        self.assertEqual("系统配置镜像", domains["chat_mode"]["source"])
+        self.assertNotIn("chat_mode", domains)
         self.assertEqual("系统配置镜像", domains["tplus_export"]["source"])
         self.assertEqual("系统配置镜像", domains["inventory_warehouse"]["source"])
-        self.assertEqual("2026-07-08T10:00:00+00:00", domains["chat_mode"]["last_synced_at"])
-        self.assertTrue(any(row["value"] == "均衡" for row in domains["chat_mode"]["rows"]))
         self.assertTrue(domains["doc_sync"]["emergency"]["pause_supported"])
 
 

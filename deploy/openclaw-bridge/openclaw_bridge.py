@@ -605,7 +605,8 @@ def enrich_feishu_metadata_with_session_route(
     user_text: str,
 ) -> None:
     session_key = feishu_session_key_from_metadata(metadata, raw_metadata)
-    project_url = feishu_default_chatgpt_project_url()
+    details = {"metadata": metadata, "raw_metadata": raw_metadata, "user_text": user_text}
+    project_url, project_name = feishu_chatgpt_project_config(details)
     current_record: dict[str, Any] | None = None
     if session_key:
         try:
@@ -618,12 +619,16 @@ def enrich_feishu_metadata_with_session_route(
     fields = current_record.get("fields") if isinstance(current_record, dict) else {}
     if isinstance(fields, dict):
         project_url = (
-            bitable_field_text(fields.get("ChatGPT 项目首页链接"))
+            bitable_url_text(fields.get("ChatGPT 项目首页链接"))
             or project_home_from_conversation_url(bitable_field_text(fields.get("ChatGPT 对话链接")))
             or project_url
         )
+        project_name = bitable_field_text(fields.get("ChatGPT 项目名")) or project_name
     if project_url:
         metadata["chatgpt_project_url"] = project_url
+    current_project = str(metadata.get("chatgpt_project") or "").strip()
+    if project_name and current_project in {"", "Feishu"}:
+        metadata["chatgpt_project"] = project_name
 
     conversation_url = ""
     if isinstance(fields, dict):
@@ -889,6 +894,10 @@ def feishu_default_chatgpt_project_url() -> str:
 
 
 def feishu_default_chatgpt_project_name() -> str:
+    return feishu_env_chatgpt_project_name() or "飞书 AI 会话台"
+
+
+def feishu_env_chatgpt_project_name() -> str:
     for key in (
         "FEISHU_SESSION_CONSOLE_CHATGPT_PROJECT_NAME",
         "FEISHU_COMPANY_A_SESSION_CONSOLE_CHATGPT_PROJECT_NAME",
@@ -898,7 +907,7 @@ def feishu_default_chatgpt_project_name() -> str:
         value = os.getenv(key)
         if value and value.strip():
             return value.strip()
-    return "飞书 AI 会话台"
+    return ""
 
 
 def feishu_tenant_access_token() -> str:
@@ -1223,9 +1232,11 @@ def list_feishu_bitable_records(table_id: str, app_token: str | None = None) -> 
 
 
 FEISHU_BITABLE_FIELD_TYPE_TEXT = 1
+FEISHU_BITABLE_FIELD_TYPE_DATETIME = 5
 FEISHU_BITABLE_FIELD_TYPE_CHECKBOX = 7
 FEISHU_BITABLE_FIELD_TYPE_SINGLE_SELECT = 3
 FEISHU_BITABLE_FIELD_TYPE_MULTI_SELECT = 4
+FEISHU_BITABLE_FIELD_TYPE_URL = 15
 
 
 def feishu_select_field_property(options: list[str]) -> dict[str, Any]:
@@ -1323,6 +1334,17 @@ def bitable_url_value(url: str) -> dict[str, str]:
     return {"text": url, "link": url}
 
 
+def bitable_url_text(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in ("link", "url", "text"):
+            text = str(value.get(key) or "").strip()
+            if text:
+                return text
+    if isinstance(value, list) and value:
+        return bitable_url_text(value[0])
+    return bitable_field_text(value)
+
+
 def bitable_link_value(*record_ids: str) -> list[str]:
     return [record_id for record_id in record_ids if record_id]
 
@@ -1331,6 +1353,39 @@ def bitable_created_record_id(result: dict[str, Any]) -> str:
     data = result.get("data") or {}
     record = data.get("record") or {}
     return str(record.get("record_id") or data.get("record_id") or "")
+
+
+def _machine_like_feishu_name(value: str, peer_id: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return True
+    if peer_id and text == peer_id:
+        return True
+    return text.startswith(("oc_", "ou_", "on_", "group-", "user-"))
+
+
+def _merge_display_name(fields: dict[str, Any], field_name: str, candidate: str, peer_id: str) -> str:
+    current = bitable_field_text(fields.get(field_name)).strip()
+    if current and not _machine_like_feishu_name(current, peer_id):
+        return current
+    return str(candidate or current or peer_id)
+
+
+def _ensure_peer_config_columns(table_id: str) -> None:
+    try:
+        ensure_feishu_bitable_fields(table_id, [CHATGPT_PROJECT_URL_FIELD], field_type=FEISHU_BITABLE_FIELD_TYPE_URL)
+        ensure_feishu_bitable_fields(
+            table_id,
+            [CHATGPT_PROJECT_NAME_FIELD],
+            field_type=FEISHU_BITABLE_FIELD_TYPE_TEXT,
+        )
+        ensure_feishu_bitable_fields(
+            table_id,
+            [FEISHU_NAME_RESOLVED_AT_FIELD],
+            field_type=FEISHU_BITABLE_FIELD_TYPE_DATETIME,
+        )
+    except Exception as exc:
+        log_line(f"ensure_peer_config_columns failed: {exc}")
 
 
 def find_feishu_bitable_record(
@@ -1355,20 +1410,25 @@ def upsert_feishu_user_record(details: dict[str, Any]) -> str:
         return ""
     raw_metadata = details.get("raw_metadata") or {}
     now_ms = int(time.time() * 1000)
+    _ensure_peer_config_columns(table_id)
+    name = str(_first_metadata_value(raw_metadata, "name", "label", "sender_name") or open_id)
     fields = {
         "用户编号": f"user-{safe_bitable_id(open_id)}",
-        "飞书用户名": str(_first_metadata_value(raw_metadata, "name", "label", "sender_name") or open_id),
+        "飞书用户名": name,
         "open_id": open_id,
         "union_id": str(_first_metadata_value(raw_metadata, "union_id", "unionId") or ""),
         "user_id": str(_first_metadata_value(raw_metadata, "user_id", "userId") or ""),
         "用户状态": "启用",
         "用户角色": "普通用户",
         "最近互动时间": now_ms,
+        "最近名称解析时间": now_ms,
     }
     existing = find_feishu_bitable_record(table_id, "open_id", open_id)
     if existing:
         record_id = str(existing.get("record_id") or "")
         if record_id:
+            current = existing.get("fields") or {}
+            fields["飞书用户名"] = _merge_display_name(current, "飞书用户名", name, open_id)
             update_feishu_bitable_record(table_id, record_id, fields)
         return record_id
     return bitable_created_record_id(create_feishu_bitable_record(table_id, fields))
@@ -1381,11 +1441,14 @@ def upsert_feishu_group_record(details: dict[str, Any]) -> str:
         return ""
     raw_metadata = details.get("raw_metadata") or {}
     now_ms = int(time.time() * 1000)
+    _ensure_peer_config_columns(table_id)
+    name = str(_first_metadata_value(raw_metadata, "chat_name", "group_name", "room_name") or chat_id)
     fields: dict[str, Any] = {
         "群编号": f"group-{safe_bitable_id(chat_id)}",
-        "群名称": str(_first_metadata_value(raw_metadata, "chat_name", "group_name", "room_name") or chat_id),
+        "群名称": name,
         "chat_id": chat_id,
         "最近消息时间": now_ms,
+        "最近名称解析时间": now_ms,
     }
     if feishu_mentions_bot(details):
         fields["最近 @ 机器人时间"] = now_ms
@@ -1393,6 +1456,8 @@ def upsert_feishu_group_record(details: dict[str, Any]) -> str:
     if existing:
         record_id = str(existing.get("record_id") or "")
         if record_id:
+            current = existing.get("fields") or {}
+            fields["群名称"] = _merge_display_name(current, "群名称", name, chat_id)
             update_feishu_bitable_record(table_id, record_id, fields)
         return record_id
     fields.update(
@@ -1411,15 +1476,14 @@ def ensure_feishu_default_rule_record() -> str:
     if not table_id:
         return ""
     existing = find_feishu_bitable_record(table_id, "规则编号", "global-default")
-    managed_defaults: dict[str, Any] = {
-        "处理中卡片": True,
-        "调试尾注": True,
-        **_rule_text_env_defaults(),
-    }
+    managed_defaults = _rule_managed_defaults()
     if existing:
         record_id = str(existing.get("record_id") or "")
         current = existing.get("fields") or {}
         missing = {k: v for k, v in managed_defaults.items() if k not in current}
+        for key in (CHATGPT_MODE_DEFAULT_FIELD, CHATGPT_PROJECT_URL_FIELD, CHATGPT_PROJECT_NAME_FIELD):
+            if key in current and not bitable_url_text(current.get(key)).strip():
+                missing[key] = managed_defaults[key]
         if missing and record_id:
             try:
                 _ensure_rule_columns(table_id, list(missing))
@@ -1697,9 +1761,10 @@ def build_feishu_session_index_fields(
     metadata = details.get("metadata") or {}
     raw_metadata = details.get("raw_metadata") or {}
     conversation_url = str(_first_metadata_value(metadata, "chatgpt_conversation_url", "chatgpt_url") or "")
+    configured_project_url, configured_project_name = feishu_chatgpt_project_config(details)
     project_url = (
         str(_first_metadata_value(metadata, "chatgpt_project_url") or "")
-        or feishu_default_chatgpt_project_url()
+        or configured_project_url
         or project_home_from_conversation_url(conversation_url)
     )
     session_type = feishu_session_type(details)
@@ -1713,7 +1778,11 @@ def build_feishu_session_index_fields(
         "关联群": feishu_chat_id(details),
         "飞书用户名": str(_first_metadata_value(raw_metadata, "name", "label", "sender_name") or ""),
         "飞书群名": str(_first_metadata_value(raw_metadata, "chat_name", "group_name", "room_name") or ""),
-        "ChatGPT 项目名": str(_first_metadata_value(metadata, "chatgpt_project") or feishu_default_chatgpt_project_name()),
+        "ChatGPT 项目名": str(
+            _first_metadata_value(metadata, "chatgpt_project")
+            or configured_project_name
+            or feishu_default_chatgpt_project_name()
+        ),
         "ChatGPT 对话标题": name,
         "会话状态": "活跃",
         "是否当前会话": True,
@@ -1979,6 +2048,9 @@ CHATGPT_MODE_DEFAULT_FIELD = "对话模式默认"
 CHATGPT_MODE_DEFAULT_RECORD_ID_FIELD = "配置编号"
 CHATGPT_MODE_DEFAULT_RECORD_ID = "global-default"
 CHATGPT_MODE_DEFAULT_FALLBACK = "advanced"
+CHATGPT_PROJECT_URL_FIELD = "默认新对话项目链接"
+CHATGPT_PROJECT_NAME_FIELD = "默认新对话项目名称"
+FEISHU_NAME_RESOLVED_AT_FIELD = "最近名称解析时间"
 FEISHU_CHAT_MODE_CACHE_SECONDS = float(os.getenv("FEISHU_CHAT_MODE_CACHE_SECONDS", "30"))
 _feishu_chat_mode_cache: dict[str, tuple[float, str]] = {}
 _feishu_chat_mode_cache_lock = Lock()
@@ -2001,18 +2073,8 @@ def feishu_mode_peer(details: dict[str, Any]) -> tuple[str, str]:
 
 
 def feishu_chat_mode_default() -> str:
-    app_token = system_config_app_token()
-    table_id = system_config_table_id("chat_mode")
-    if not app_token or not table_id:
-        return CHATGPT_MODE_DEFAULT_FALLBACK
     try:
-        record = find_feishu_bitable_record(
-            table_id,
-            CHATGPT_MODE_DEFAULT_RECORD_ID_FIELD,
-            CHATGPT_MODE_DEFAULT_RECORD_ID,
-            app_token=app_token,
-        )
-        label = bitable_field_text(((record or {}).get("fields") or {}).get(CHATGPT_MODE_DEFAULT_FIELD)).strip()
+        label = str(feishu_global_rule_policy().get(CHATGPT_MODE_DEFAULT_FIELD) or "").strip()
         return CHATGPT_MODE_LABELS.get(label) or CHATGPT_MODE_DEFAULT_FALLBACK
     except Exception as exc:
         log_line(
@@ -2020,6 +2082,44 @@ def feishu_chat_mode_default() -> str:
             + json.dumps({"error": str(exc)}, ensure_ascii=False, sort_keys=True)
         )
         return CHATGPT_MODE_DEFAULT_FALLBACK
+
+
+def feishu_global_chatgpt_project_config() -> tuple[str, str]:
+    try:
+        policy = feishu_global_rule_policy()
+    except Exception:  # noqa: BLE001 - 全局项目配置不可读时仍回退 env
+        policy = {}
+    project_url = bitable_url_text(policy.get(CHATGPT_PROJECT_URL_FIELD)).strip()
+    project_name = bitable_field_text(policy.get(CHATGPT_PROJECT_NAME_FIELD)).strip()
+    return project_url or feishu_default_chatgpt_project_url(), project_name or feishu_env_chatgpt_project_name()
+
+
+def feishu_peer_chatgpt_project_config(details: dict[str, Any]) -> tuple[str, str]:
+    kind, key = feishu_mode_peer(details)
+    if not key:
+        return "", ""
+    table_id = feishu_session_console_table_id(kind)
+    if not table_id:
+        return "", ""
+    try:
+        record = find_feishu_bitable_record(table_id, "chat_id" if kind == "group" else "open_id", key)
+        fields = (record or {}).get("fields") or {}
+        return (
+            bitable_url_text(fields.get(CHATGPT_PROJECT_URL_FIELD)).strip(),
+            bitable_field_text(fields.get(CHATGPT_PROJECT_NAME_FIELD)).strip(),
+        )
+    except Exception as exc:
+        log_line(
+            "feishu_project_config_read_failed "
+            + json.dumps({"peer": f"{kind}:{key}", "error": str(exc)}, ensure_ascii=False, sort_keys=True)
+        )
+        return "", ""
+
+
+def feishu_chatgpt_project_config(details: dict[str, Any]) -> tuple[str, str]:
+    project_url, project_name = feishu_global_chatgpt_project_config()
+    peer_url, peer_name = feishu_peer_chatgpt_project_config(details)
+    return peer_url or project_url, peer_name or project_name
 
 
 def feishu_chat_mode(details: dict[str, Any]) -> str:
@@ -2299,16 +2399,47 @@ def _rule_text_env_defaults() -> dict[str, str]:
     return {key: os.getenv(env_name, default) for key, (env_name, default) in RULE_TEXT_FIELDS.items()}
 
 
+def _rule_managed_defaults() -> dict[str, Any]:
+    project_url = feishu_default_chatgpt_project_url()
+    return {
+        "处理中卡片": True,
+        "调试尾注": True,
+        **_rule_text_env_defaults(),
+        CHATGPT_MODE_DEFAULT_FIELD: CHATGPT_MODE_NAMES[CHATGPT_MODE_DEFAULT_FALLBACK],
+        CHATGPT_PROJECT_URL_FIELD: bitable_url_value(project_url) if project_url else "",
+        CHATGPT_PROJECT_NAME_FIELD: feishu_default_chatgpt_project_name(),
+    }
+
+
 def _ensure_rule_columns(table_id: str, names: list[str]) -> None:
     """规则表建列：布尔开关列建 Checkbox(默认)，文案列建文本(type=1)。
     文本文案若误建进 Checkbox 列，写入时会 CheckboxFieldConvFail 而静默丢失。"""
-    bool_names = [name for name in names if name not in RULE_TEXT_FIELDS]
-    text_names = [name for name in names if name in RULE_TEXT_FIELDS]
+    text_field_names = set(RULE_TEXT_FIELDS)
+    url_names = [name for name in names if name == CHATGPT_PROJECT_URL_FIELD]
+    mode_names = [name for name in names if name == CHATGPT_MODE_DEFAULT_FIELD]
+    text_names = [name for name in names if name in text_field_names]
+    project_name_names = [name for name in names if name == CHATGPT_PROJECT_NAME_FIELD]
+    special = text_field_names | {CHATGPT_PROJECT_URL_FIELD, CHATGPT_MODE_DEFAULT_FIELD, CHATGPT_PROJECT_NAME_FIELD}
+    bool_names = [name for name in names if name not in special]
     if bool_names:
         ensure_feishu_bitable_fields(table_id, bool_names)
     if text_names:
         ensure_feishu_bitable_fields(
             table_id, text_names, field_type=FEISHU_BITABLE_FIELD_TYPE_TEXT, reconcile_type=True
+        )
+    if project_name_names:
+        ensure_feishu_bitable_fields(
+            table_id, project_name_names, field_type=FEISHU_BITABLE_FIELD_TYPE_TEXT
+        )
+    if url_names:
+        ensure_feishu_bitable_fields(table_id, url_names, field_type=FEISHU_BITABLE_FIELD_TYPE_URL)
+    if mode_names:
+        ensure_feishu_bitable_fields(
+            table_id,
+            mode_names,
+            field_type=FEISHU_BITABLE_FIELD_TYPE_SINGLE_SELECT,
+            reconcile_type=True,
+            field_property=feishu_select_field_property(list(CHATGPT_MODE_LABELS)),
         )
 
 
@@ -2351,6 +2482,8 @@ def feishu_global_rule_policy() -> dict[str, Any]:
         "处理中卡片": _env_flag("OPENCLAW_BRIDGE_PROCESSING_CARD", False),
         "调试尾注": _env_flag("OPENCLAW_BRIDGE_DEBUG_TRAILER", True),
         **_rule_text_env_defaults(),
+        CHATGPT_MODE_DEFAULT_FIELD: CHATGPT_MODE_NAMES[CHATGPT_MODE_DEFAULT_FALLBACK],
+        CHATGPT_PROJECT_URL_FIELD: feishu_default_chatgpt_project_url(),
     }
     now = time.monotonic()
     with _feishu_global_rule_cache_lock:
@@ -2370,6 +2503,15 @@ def feishu_global_rule_policy() -> dict[str, Any]:
                 text = bitable_field_text(fields.get(key)) if key in fields else ""
                 if text:
                     result[key] = text
+            label = bitable_field_text(fields.get(CHATGPT_MODE_DEFAULT_FIELD)).strip()
+            if label:
+                result[CHATGPT_MODE_DEFAULT_FIELD] = label
+            project_url = bitable_url_text(fields.get(CHATGPT_PROJECT_URL_FIELD)).strip()
+            if project_url:
+                result[CHATGPT_PROJECT_URL_FIELD] = project_url
+            project_name = bitable_field_text(fields.get(CHATGPT_PROJECT_NAME_FIELD)).strip()
+            if project_name:
+                result[CHATGPT_PROJECT_NAME_FIELD] = project_name
         except Exception as exc:
             log_line(
                 "feishu_global_rule_read_failed "

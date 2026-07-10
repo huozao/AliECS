@@ -1348,6 +1348,100 @@ def test_bridge_new_feishu_conversation_uses_project_and_previous_url(monkeypatc
     assert "chatgpt_conversation_url" not in outbound["metadata"]
 
 
+def test_bridge_uses_group_project_override_when_no_current_session(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_GROUP_TABLE_ID", "tbl_group")
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_CHATGPT_PROJECT_URL", "https://chatgpt.com/g/g-p-env/project")
+    monkeypatch.setattr(bridge, "find_current_feishu_session_record", lambda session_key: None)
+
+    def fake_find(table, field, key, app_token=None):
+        assert (table, field, key) == ("tbl_group", "chat_id", "oc_project_group")
+        return {
+            "fields": {
+                "默认新对话项目链接": {"text": "项目A", "link": "https://chatgpt.com/g/g-p-group/project"},
+                "默认新对话项目名称": "群项目A",
+            }
+        }
+
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record", fake_find)
+
+    outbound = bridge.build_webdock_body(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Sender (untrusted metadata):\n```json\n"
+                        '{"chat_id":"oc_project_group","chat_type":"group","message_id":"om_group"}\n'
+                        "```\n\n/新对话"
+                    ),
+                }
+            ],
+            "metadata": {"channel": "feishu"},
+        }
+    )
+
+    assert outbound["metadata"]["chatgpt_project_url"] == "https://chatgpt.com/g/g-p-group/project"
+    assert outbound["metadata"]["chatgpt_project"] == "群项目A"
+
+
+def test_bridge_uses_user_project_override_for_private_chat(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_USER_TABLE_ID", "tbl_user")
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_CHATGPT_PROJECT_URL", "https://chatgpt.com/g/g-p-env/project")
+    monkeypatch.setattr(bridge, "find_current_feishu_session_record", lambda session_key: None)
+
+    def fake_find(table, field, key, app_token=None):
+        assert (table, field, key) == ("tbl_user", "open_id", "ou_project_user")
+        return {"fields": {"默认新对话项目链接": "https://chatgpt.com/g/g-p-user/project"}}
+
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record", fake_find)
+
+    outbound = bridge.build_webdock_body(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Sender (untrusted metadata):\n```json\n"
+                        '{"open_id":"ou_project_user","chat_type":"private","message_id":"om_private"}\n'
+                        "```\n\n/新对话"
+                    ),
+                }
+            ],
+            "metadata": {"channel": "feishu"},
+        }
+    )
+
+    assert outbound["metadata"]["chatgpt_project_url"] == "https://chatgpt.com/g/g-p-user/project"
+
+
+def test_bridge_uses_env_project_name_when_explicitly_configured(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_CHATGPT_PROJECT_URL", "https://chatgpt.com/g/g-p-env/project")
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_CHATGPT_PROJECT_NAME", "显式默认项目")
+    monkeypatch.setattr(bridge, "find_current_feishu_session_record", lambda session_key: None)
+
+    outbound = bridge.build_webdock_body(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Sender (untrusted metadata):\n```json\n"
+                        '{"open_id":"ou_env_project","chat_type":"private","message_id":"om_env"}\n'
+                        "```\n\n/新对话"
+                    ),
+                }
+            ],
+            "metadata": {"channel": "feishu"},
+        }
+    )
+
+    assert outbound["metadata"]["chatgpt_project_url"] == "https://chatgpt.com/g/g-p-env/project"
+    assert outbound["metadata"]["chatgpt_project"] == "显式默认项目"
+
+
 def test_feishu_session_index_archives_old_current_and_creates_new_version(monkeypatch):
     bridge = load_bridge()
     calls: list[tuple[str, str, dict]] = []
@@ -2637,7 +2731,7 @@ def test_ensure_rule_record_creates_with_new_fields(monkeypatch):
     bridge = load_bridge()
     monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
     monkeypatch.setattr(bridge, "find_feishu_bitable_record", lambda t, f, e: None)
-    monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields", lambda t, names, field_type=7: None)
+    monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields", lambda t, names, field_type=7, **kwargs: None)
     captured = {}
     monkeypatch.setattr(bridge, "create_feishu_bitable_record",
                         lambda t, fields: captured.update(fields=fields) or {"data": {"record": {"record_id": "r1"}}})
@@ -2656,13 +2750,24 @@ def test_ensure_rule_record_creates_missing_columns_before_create(monkeypatch):
     monkeypatch.setattr(bridge, "bitable_created_record_id", lambda r: "r1")
     ensured = []
     monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields",
-                        lambda t, names, field_type=7: ensured.append((t, list(names), field_type)))
+                        lambda t, names, field_type=7, **kwargs: ensured.append((t, list(names), field_type, kwargs)))
     bridge.ensure_feishu_default_rule_record()
     # 布尔开关列建 Checkbox(7)，四个文案列建文本(1)——文本文案不能写进 Checkbox 列（CheckboxFieldConvFail）。
-    assert ensured == [
-        ("tbl_rule", ["处理中卡片", "调试尾注"], bridge.FEISHU_BITABLE_FIELD_TYPE_CHECKBOX),
-        ("tbl_rule", ["处理中文案", "追问文案", "空回复文案", "完成标记"], bridge.FEISHU_BITABLE_FIELD_TYPE_TEXT),
-    ]
+    assert ensured[0] == ("tbl_rule", ["处理中卡片", "调试尾注"], bridge.FEISHU_BITABLE_FIELD_TYPE_CHECKBOX, {})
+    assert ensured[1] == (
+        "tbl_rule",
+        ["处理中文案", "追问文案", "空回复文案", "完成标记"],
+        bridge.FEISHU_BITABLE_FIELD_TYPE_TEXT,
+        {"reconcile_type": True},
+    )
+    assert ensured[2] == ("tbl_rule", ["默认新对话项目名称"], bridge.FEISHU_BITABLE_FIELD_TYPE_TEXT, {})
+    assert ensured[3] == ("tbl_rule", ["默认新对话项目链接"], bridge.FEISHU_BITABLE_FIELD_TYPE_URL, {})
+    assert ensured[4] == (
+        "tbl_rule",
+        ["对话模式默认"],
+        bridge.FEISHU_BITABLE_FIELD_TYPE_SINGLE_SELECT,
+        {"reconcile_type": True, "field_property": bridge.feishu_select_field_property(["极速", "均衡", "高级"])},
+    )
 
 
 def test_ensure_rule_record_backfills_missing_fields(monkeypatch):
@@ -2670,7 +2775,7 @@ def test_ensure_rule_record_backfills_missing_fields(monkeypatch):
     monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
     monkeypatch.setattr(bridge, "find_feishu_bitable_record",
                         lambda t, f, e: {"record_id": "r1", "fields": {"规则编号": "global-default"}})
-    monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields", lambda t, names, field_type=7: None)
+    monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields", lambda t, names, field_type=7, **kwargs: None)
     updated = {}
     monkeypatch.setattr(bridge, "update_feishu_bitable_record",
                         lambda t, rid, fields: updated.update(rid=rid, fields=fields))
@@ -2687,11 +2792,13 @@ def test_ensure_rule_record_creates_missing_columns_before_backfill(monkeypatch)
     monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
     monkeypatch.setattr(bridge, "find_feishu_bitable_record",
                         lambda t, f, e: {"record_id": "r1", "fields": {
-                            "处理中卡片": False, "处理中文案": "x", "追问文案": "x", "空回复文案": "x", "完成标记": "x"}})
+                            "处理中卡片": False, "处理中文案": "x", "追问文案": "x", "空回复文案": "x", "完成标记": "x",
+                            "对话模式默认": "高级", "默认新对话项目链接": "https://chatgpt.com/g/g-p-x/project",
+                            "默认新对话项目名称": "x"}})
     monkeypatch.setattr(bridge, "update_feishu_bitable_record", lambda t, rid, fields: None)
     ensured = []
     monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields",
-                        lambda t, names, field_type=7: ensured.append((t, list(names), field_type)))
+                        lambda t, names, field_type=7, **kwargs: ensured.append((t, list(names), field_type)))
     bridge.ensure_feishu_default_rule_record()
     # 仅缺 调试尾注（布尔）→ 只建一列 Checkbox；文案列都在（虽为占位值）不重建。
     assert ensured == [("tbl_rule", ["调试尾注"], bridge.FEISHU_BITABLE_FIELD_TYPE_CHECKBOX)]
@@ -2703,13 +2810,15 @@ def test_ensure_rule_record_no_update_when_present(monkeypatch):
     monkeypatch.setattr(bridge, "find_feishu_bitable_record",
                         lambda t, f, e: {"record_id": "r1", "fields": {
                             "处理中卡片": False, "调试尾注": True,
-                            "处理中文案": "自定义A", "追问文案": "自定义B", "空回复文案": "自定义C", "完成标记": "自定义D"}})
+                            "处理中文案": "自定义A", "追问文案": "自定义B", "空回复文案": "自定义C", "完成标记": "自定义D",
+                            "对话模式默认": "高级", "默认新对话项目链接": "https://chatgpt.com/g/g-p-x/project",
+                            "默认新对话项目名称": "自定义项目"}})
     called = []
     monkeypatch.setattr(bridge, "update_feishu_bitable_record",
                         lambda t, rid, fields: called.append(1))
     ensure_called = []
     monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields",
-                        lambda t, names, field_type=7: ensure_called.append(1))
+                        lambda t, names, field_type=7, **kwargs: ensure_called.append(1))
     bridge.ensure_feishu_default_rule_record()
     assert called == []   # all managed fields already present -> no backfill (don't overwrite)
     assert ensure_called == []   # nothing missing -> no need to touch table schema
@@ -2861,7 +2970,7 @@ def test_feishu_chat_mode_persists_to_group_table(monkeypatch):
     monkeypatch.setattr(
         bridge,
         "ensure_feishu_bitable_fields",
-        lambda table, names, field_type=bridge.FEISHU_BITABLE_FIELD_TYPE_CHECKBOX: ensured.append(
+        lambda table, names, field_type=bridge.FEISHU_BITABLE_FIELD_TYPE_CHECKBOX, **kwargs: ensured.append(
             (table, tuple(names), field_type)
         ),
     )
@@ -2890,8 +2999,7 @@ def test_feishu_chat_mode_reads_user_table(monkeypatch):
 
 def test_feishu_chat_mode_default_reads_system_config(monkeypatch):
     bridge = load_bridge()
-    monkeypatch.setenv("FEISHU_SYSTEM_CONFIG_APP_TOKEN", "sysApp")
-    monkeypatch.setenv("FEISHU_SYSTEM_CONFIG_CHAT_MODE_TABLE_ID", "tblMode")
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_RULE_TABLE_ID", "tbl_rule")
     monkeypatch.delenv("FEISHU_SESSION_CONSOLE_USER_TABLE_ID", raising=False)
     monkeypatch.setattr(
         bridge,
@@ -2906,8 +3014,7 @@ def test_feishu_chat_mode_default_reads_system_config(monkeypatch):
 
 def test_feishu_chat_mode_default_falls_back_to_advanced(monkeypatch):
     bridge = load_bridge()
-    monkeypatch.setenv("FEISHU_SYSTEM_CONFIG_APP_TOKEN", "sysApp")
-    monkeypatch.setenv("FEISHU_SYSTEM_CONFIG_CHAT_MODE_TABLE_ID", "tblMode")
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_RULE_TABLE_ID", "tbl_rule")
     monkeypatch.delenv("FEISHU_SESSION_CONSOLE_USER_TABLE_ID", raising=False)
     monkeypatch.setattr(
         bridge,
@@ -2923,8 +3030,7 @@ def test_feishu_chat_mode_default_falls_back_to_advanced(monkeypatch):
 def test_feishu_chat_mode_sticky_overrides_system_default(monkeypatch):
     bridge = load_bridge()
     monkeypatch.setenv("FEISHU_SESSION_CONSOLE_USER_TABLE_ID", "tbl_user")
-    monkeypatch.setenv("FEISHU_SYSTEM_CONFIG_APP_TOKEN", "sysApp")
-    monkeypatch.setenv("FEISHU_SYSTEM_CONFIG_CHAT_MODE_TABLE_ID", "tblMode")
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_RULE_TABLE_ID", "tbl_rule")
 
     def fake_find(table, field, key, app_token=None):
         if table == "tbl_user":
@@ -2934,6 +3040,87 @@ def test_feishu_chat_mode_sticky_overrides_system_default(monkeypatch):
     monkeypatch.setattr(bridge, "find_feishu_bitable_record", fake_find)
 
     assert bridge.feishu_chat_mode(_mode_details(key="ou_mode_default_3")) == "fast"
+
+
+def test_feishu_default_rule_backfills_chatgpt_defaults(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_CHATGPT_PROJECT_URL", "https://chatgpt.com/g/g-p-env/project")
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_CHATGPT_PROJECT_NAME", "默认项目")
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_RULE_TABLE_ID", "tbl_rule")
+    ensured, updated = [], []
+    monkeypatch.setattr(
+        bridge,
+        "find_feishu_bitable_record",
+        lambda table, field, key, app_token=None: {
+            "record_id": "rec_rule",
+            "fields": {"规则编号": "global-default"},
+        },
+    )
+    monkeypatch.setattr(
+        bridge,
+        "ensure_feishu_bitable_fields",
+        lambda table, names, field_type=bridge.FEISHU_BITABLE_FIELD_TYPE_CHECKBOX, reconcile_type=False, app_token=None, field_property=None: ensured.append(
+            (table, tuple(names), field_type, field_property)
+        ),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "update_feishu_bitable_record",
+        lambda table, record_id, fields: updated.append((table, record_id, fields)),
+    )
+
+    assert bridge.ensure_feishu_default_rule_record() == "rec_rule"
+
+    assert ("tbl_rule", ("对话模式默认",), bridge.FEISHU_BITABLE_FIELD_TYPE_SINGLE_SELECT, bridge.feishu_select_field_property(["极速", "均衡", "高级"])) in ensured
+    assert updated == [
+        (
+            "tbl_rule",
+            "rec_rule",
+            {
+                "处理中卡片": True,
+                "调试尾注": True,
+                "处理中文案": bridge.DEFAULT_PROCESSING_ACK_TEXT,
+                "追问文案": bridge.DEFAULT_PROCESSING_REMIND_TEXT,
+                "空回复文案": bridge.DEFAULT_PROCESSING_EMPTY_TEXT,
+                "完成标记": bridge.DEFAULT_DONE_MARKER,
+                "对话模式默认": "高级",
+                "默认新对话项目链接": {"text": "https://chatgpt.com/g/g-p-env/project", "link": "https://chatgpt.com/g/g-p-env/project"},
+                "默认新对话项目名称": "默认项目",
+            },
+        )
+    ]
+
+
+def test_feishu_group_name_manual_edit_is_preserved(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_GROUP_TABLE_ID", "tbl_group")
+    updated = []
+    monkeypatch.setattr(
+        bridge,
+        "find_feishu_bitable_record",
+        lambda table, field, key, app_token=None: {
+            "record_id": "rec_group",
+            "fields": {"chat_id": key, "群名称": "销售群"},
+        },
+    )
+    monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields", lambda *a, **k: None)
+    monkeypatch.setattr(
+        bridge,
+        "update_feishu_bitable_record",
+        lambda table, record_id, fields: updated.append(fields),
+    )
+
+    record_id = bridge.upsert_feishu_group_record(
+        {
+            "metadata": {"channel": "feishu", "chat_type": "group", "peer_id": "group:oc_manual_group"},
+            "raw_metadata": {"chat_id": "oc_manual_group", "chat_name": "oc_manual_group"},
+        }
+    )
+
+    assert record_id == "rec_group"
+    assert updated
+    assert updated[0]["群名称"] == "销售群"
+    assert "最近名称解析时间" in updated[0]
 
 
 def test_feishu_chat_mode_keeps_memory_when_bitable_down(monkeypatch):
@@ -3093,7 +3280,7 @@ def test_ensure_rule_record_backfills_text_columns(monkeypatch):
     ensured: list[list[str]] = []
     updated: dict = {}
     monkeypatch.setattr(bridge, "ensure_feishu_bitable_fields",
-                        lambda t, names, field_type=7: ensured.append(list(names)))
+                        lambda t, names, field_type=7, **kwargs: ensured.append(list(names)))
     monkeypatch.setattr(bridge, "update_feishu_bitable_record", lambda t, r, fields: updated.update(fields))
     record_id = bridge.ensure_feishu_default_rule_record()
     assert record_id == "rec_g"

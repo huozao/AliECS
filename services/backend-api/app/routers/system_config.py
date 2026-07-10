@@ -139,23 +139,6 @@ def _doc_sync_domain() -> dict[str, Any]:
     )
 
 
-def _chat_mode_domain() -> dict[str, Any]:
-    record = exports._system_config_record("对话模式")
-    value = exports._config_text(record.get("对话模式默认")) if record else ""
-    source = "系统配置镜像" if value else "默认/回退"
-    return _domain(
-        "chat_mode",
-        "对话模式",
-        "飞书系统配置 / 对话模式",
-        _feishu_table_url("FEISHU_SYSTEM_CONFIG_CHAT_MODE_TABLE_ID"),
-        source,
-        [_row("chat_mode.default", "默认对话模式", value or "高级", source)],
-        last_synced_at=_latest_system_config_sync_at("对话模式"),
-        status="ok" if value else "warn",
-        note="bridge 实时直读飞书；此处展示 doc-sync 观察镜像，可能按同步周期滞后。",
-    )
-
-
 def _tplus_export_domain() -> dict[str, Any]:
     record = exports._system_config_record("T+导出说明")
     configured = [key for key, value in record.items() if key != "配置编号" and exports._config_text(value)]
@@ -225,7 +208,6 @@ def effective_system_config(_: dict[str, Any] = Depends(require_admin)) -> dict[
     return {
         "items": [
             _doc_sync_domain(),
-            _chat_mode_domain(),
             _tplus_export_domain(),
             _inventory_domain(),
             _features_domain(),
