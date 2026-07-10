@@ -199,7 +199,7 @@ def ensure_backup_workbook(
             existing = refreshed
 
     result_sheets = {title: existing[title] for title in BACKUP_SHEET_TITLES}
-    for index, title in enumerate(BACKUP_SHEET_TITLES, start=1):
+    for title in BACKUP_SHEET_TITLES:
         sheet_id = result_sheets[title]
         target_titles = backup_field_titles(title, max_sheets=max_sheets)
         current_titles = [
@@ -208,15 +208,14 @@ def ensure_backup_workbook(
         ]
         if title in created_titles:
             _initialize_sheet_fields(client, docid, sheet_id, target_titles)
-        elif current_titles != target_titles:
-            result_sheets[title] = rebuild_sheet_with_order(
-                client,
-                docid=docid,
-                sheet_id=sheet_id,
-                sheet_title=title,
-                target_titles=target_titles,
-                index=index,
-            )
+        else:
+            # 既有工作表只补缺失列，不强制列序、不删多余列（如历史遗留的 docid 列）：
+            # 企微 provider 没有删表/改表名能力，rebuild_sheet_with_order 在生产不可行，
+            # 触发即在 add_sheet 后中途崩溃并把备份 job 卡死在 running。
+            missing = [name for name in target_titles if name not in current_titles]
+            field_defs = [{"field_title": name, "field_type": "FIELD_TYPE_TEXT"} for name in missing]
+            for start in range(0, len(field_defs), FIELD_BATCH_SIZE):
+                client.add_fields(docid, sheet_id, field_defs[start : start + FIELD_BATCH_SIZE])
 
     if created:
         for sheet_id in initial_sheet_ids:
