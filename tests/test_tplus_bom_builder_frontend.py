@@ -19,9 +19,12 @@ class TPlusBomBuilderFrontendTests(unittest.TestCase):
         self.assertIn("/v1/tplus/bom-submissions/", self.html)
         self.assertIn("confirmed:true", self.html)
 
-    def test_page_does_not_offer_new_parent_creation(self):
-        self.assertIn("仅支持选择 T+ 中已经存在的父件和子件", self.html)
-        self.assertNotIn("创建新父件", self.html)
+    def test_page_supports_material_scope_quantity_and_custom_inventory(self):
+        self.assertIn('value="material" selected>原材料库', self.html)
+        self.assertIn("添加子件", self.html)
+        self.assertIn("需用数量", self.html)
+        self.assertIn("新增自定义存货", self.html)
+        self.assertIn("inventory_class_code", self.html)
 
     def test_migration_adds_permission_feature_and_audit_tables(self):
         self.assertIn("tplus.bom.write", self.migration)
