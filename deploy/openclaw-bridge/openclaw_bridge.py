@@ -606,7 +606,7 @@ def enrich_feishu_metadata_with_session_route(
 ) -> None:
     session_key = feishu_session_key_from_metadata(metadata, raw_metadata)
     details = {"metadata": metadata, "raw_metadata": raw_metadata, "user_text": user_text}
-    project_url, project_name = feishu_chatgpt_project_config(details)
+    is_new_conversation = feishu_command_type(user_text) == "/新对话"
     current_record: dict[str, Any] | None = None
     if session_key:
         try:
@@ -617,13 +617,26 @@ def enrich_feishu_metadata_with_session_route(
                 + json.dumps({"session_key": session_key, "error": str(exc)}, ensure_ascii=False, sort_keys=True)
             )
     fields = current_record.get("fields") if isinstance(current_record, dict) else {}
+    session_url = session_name = ""
     if isinstance(fields, dict):
-        project_url = (
-            bitable_url_text(fields.get("ChatGPT 项目首页链接"))
-            or project_home_from_conversation_url(bitable_field_text(fields.get("ChatGPT 对话链接")))
-            or project_url
+        session_url = bitable_url_text(fields.get("ChatGPT 项目首页链接")) or project_home_from_conversation_url(
+            bitable_field_text(fields.get("ChatGPT 对话链接"))
         )
-        project_name = bitable_field_text(fields.get("ChatGPT 项目名")) or project_name
+        session_name = bitable_field_text(fields.get("ChatGPT 项目名"))
+    peer_url, peer_name = feishu_peer_chatgpt_project_config(details)
+    global_url, global_name = feishu_global_chatgpt_project_config()
+    # 继续旧对话时留在原会话的项目里（会话记录 > 群/用户配置 > 全局规则 > env）；
+    # /新对话 时群/用户配置优先（群/用户配置 > 会话记录 > 全局规则 > env），
+    # 否则旧会话记录会把「默认新对话项目链接」永远压住，改配置无法生效。
+    if is_new_conversation:
+        candidates = [(peer_url, peer_name), (session_url, session_name), (global_url, global_name)]
+    else:
+        candidates = [(session_url, session_name), (peer_url, peer_name), (global_url, global_name)]
+    project_url, project_name = next(
+        ((url, name) for url, name in candidates if url), ("", "")
+    )
+    if not project_name:
+        project_name = next((name for _, name in candidates if name), "")
     if project_url:
         metadata["chatgpt_project_url"] = project_url
     current_project = str(metadata.get("chatgpt_project") or "").strip()
@@ -2817,8 +2830,8 @@ PROJECT_SLUG_RE = re.compile(r"/g/g-p-[0-9a-f]+-([^/?#]+)")
 
 def format_card_footer(details: dict[str, Any]) -> str:
     """Developer footer for the Feishu card, in the OpenClaw gray-tail style:
-    ``设备: webdock1(主) | 项目: lark-hao | 耗时: 129s``. Parts whose info is
-    missing are dropped; returns "" when nothing is known."""
+    ``设备: webdock1(主) | 项目: lark-hao | 模式: 极速 | 耗时: 129s``. Parts whose
+    info is missing are dropped; returns "" when nothing is known."""
     info = details.get("webdock_footer") or {}
     parts: list[str] = []
     device = str(info.get("device") or "").strip()
@@ -2831,6 +2844,10 @@ def format_card_footer(details: dict[str, Any]) -> str:
     slug = PROJECT_SLUG_RE.search(url)
     if slug:
         parts.append(f"项目: {slug.group(1)}")
+    mode_value = str(metadata.get("chatgpt_mode") or "").strip()
+    mode_name = CHATGPT_MODE_NAMES.get(mode_value, "")
+    if mode_name:
+        parts.append(f"模式: {mode_name}")
     elapsed = info.get("elapsed_seconds")
     if isinstance(elapsed, (int, float)) and elapsed > 0:
         parts.append(f"耗时: {int(elapsed)}s")
