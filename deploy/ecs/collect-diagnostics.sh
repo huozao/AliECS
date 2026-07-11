@@ -114,6 +114,7 @@ section "recent backend logs"
 
 section "recent doc-sync logs"
 "${compose[@]}" logs --tail=120 doc-sync-worker 2>&1 | redact || echo "[diagnostics] doc-sync logs unavailable"
+"${compose[@]}" logs --tail=120 tplus-write-worker 2>&1 | redact || echo "[diagnostics] tplus-write logs unavailable"
 
 section "recent postgres logs"
 "${compose[@]}" logs --tail=80 postgres 2>&1 | redact || echo "[diagnostics] postgres logs unavailable"
