@@ -49,6 +49,28 @@ class TPlusBomWriteDomainTests(unittest.TestCase):
         self.assertTrue(any("需用数量" in error for error in errors))
         self.assertTrue(any("不超过 1" in error for error in errors))
 
+    def test_builds_custom_material_create_payload(self):
+        item = {
+            "source": "custom", "code": "RM-NEW", "name": "新原料", "specification": "25kg",
+            "inventory_class_code": "01", "inventory_class_name": "原材料",
+            "unit_code": "1", "unit_name": "kg",
+        }
+        payload = main.build_inventory_create_payload(item, kind="material")
+        dto = payload["dto"]
+        self.assertEqual("RM-NEW", dto["Code"])
+        self.assertEqual({"Code": "01", "Name": "原材料"}, dto["InventoryClass"])
+        self.assertTrue(dto["IsPurchase"])
+        self.assertTrue(dto["IsMaterial"])
+        self.assertFalse(dto["IsMadeSelf"])
+        self.assertEqual({"Code": "01"}, dto["BaseVoucherState"])
+
+    def test_custom_inventory_requires_class_and_unit_codes(self):
+        parent, children, options = self._draft()
+        children[0].update({"source": "custom", "unit_code": "", "inventory_class_code": ""})
+        errors = main.validate_bom_draft(parent, children, options)
+        self.assertTrue(any("计量单位编码" in error for error in errors))
+        self.assertTrue(any("存货分类编码" in error for error in errors))
+
 
 if __name__ == "__main__":
     unittest.main()

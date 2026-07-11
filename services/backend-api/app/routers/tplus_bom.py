@@ -5,18 +5,20 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import urllib.error
+import urllib.request
 
 from contextlib import closing
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 
 from app.core import _audit, _conn, require_login, require_permission
-from app.routers.exports import _latest_tplus_export_file
-from app.tplus_bom import build_bom_create_payload, validate_bom_draft
+from app.routers.exports import _inventory_scope_config, _latest_tplus_export_file
+from app.tplus_bom import build_bom_create_payload, build_custom_inventory_requests, validate_bom_draft
 
 
 router = APIRouter(prefix="/v1/tplus", tags=["tplus-bom"])
@@ -27,6 +29,10 @@ class BomParent(BaseModel):
     name: str = Field(default="", max_length=200)
     specification: str = Field(default="", max_length=200)
     unit_name: str = Field(min_length=1, max_length=40)
+    unit_code: str = Field(default="", max_length=40)
+    source: Literal["tplus", "custom"] = "tplus"
+    inventory_class_code: str = Field(default="", max_length=100)
+    inventory_class_name: str = Field(default="", max_length=200)
 
 
 class BomChild(BomParent):
@@ -97,10 +103,86 @@ def _inventory_column(df, *names: str) -> str:
     return ""
 
 
+def _chanjet_open_token() -> str:
+    token_file = os.getenv("CHANJET_OPEN_TOKEN_FILE", "").strip()
+    if token_file:
+        try:
+            token = open(token_file, "r", encoding="utf-8").read().strip()
+            if token:
+                return token
+        except OSError:
+            pass
+    return os.getenv("CHANJET_OPEN_TOKEN", "").strip()
+
+
+def _chanjet_read_post(endpoint: str, payload: dict[str, Any]) -> Any:
+    app_key = os.getenv("CHANJET_APP_KEY", "").strip()
+    app_secret = os.getenv("CHANJET_APP_SECRET", "").strip()
+    open_token = _chanjet_open_token()
+    if not app_key or not app_secret or not open_token:
+        raise HTTPException(status_code=503, detail="T+ 查询凭据未配置")
+    base_url = os.getenv("CHANJET_BASE_URL", "https://openapi.chanjet.com").rstrip("/")
+    request = urllib.request.Request(
+        f"{base_url}/{endpoint.lstrip('/')}",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "appKey": app_key,
+            "appSecret": app_secret,
+            "openToken": open_token,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail=f"T+ 分类查询失败：{type(exc).__name__}") from exc
+
+
+@router.get("/inventory-create-options")
+def tplus_inventory_create_options(user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
+    _require_bom_write(user)
+    path = _latest_tplus_export_file("inventory")
+    if path is None:
+        raise HTTPException(status_code=404, detail="存货档案尚未同步")
+    import pandas as pd
+
+    df = pd.read_excel(path, dtype=str).fillna("")
+    unit_code_col = _inventory_column(df, "BaseUnitCode", "Unit.Code", "UnitCode", "计量单位编码")
+    unit_name_col = _inventory_column(df, "BaseUnitName", "Unit.Name", "UnitName", "计量单位", "单位")
+    if not unit_code_col or not unit_name_col:
+        raise HTTPException(status_code=409, detail="存货档案缺少计量单位字段")
+    units = sorted(
+        {
+            (str(row[unit_code_col]).strip(), str(row[unit_name_col]).strip())
+            for _, row in df.iterrows()
+            if str(row[unit_code_col]).strip() and str(row[unit_name_col]).strip()
+        }
+    )
+    class_response = _chanjet_read_post(
+        "/tplus/api/v2/inventoryClass/Query",
+        {"param": {"SelectFields": "Code,Name,IsEndNode"}},
+    )
+    class_rows = class_response if isinstance(class_response, list) else []
+    classes = [
+        {"code": str(row.get("Code") or row.get("code") or "").strip(), "name": str(row.get("Name") or row.get("name") or "").strip()}
+        for row in class_rows
+        if isinstance(row, dict) and bool(row.get("IsEndNode", row.get("isendnode", True)))
+    ]
+    classes = [item for item in classes if item["code"] and item["name"]]
+    return {
+        "classes": classes,
+        "units": [{"code": code, "name": name} for code, name in units],
+        "source_file": path.name,
+    }
+
+
 @router.get("/inventories")
 def tplus_inventory_choices(
     q: str = Query(default="", max_length=100),
     limit: int = Query(default=50, ge=1, le=200),
+    scope: Literal["all", "material"] = Query(default="all"),
     user: dict[str, Any] = Depends(require_login),
 ) -> dict[str, Any]:
     _require_bom_write(user)
@@ -113,7 +195,10 @@ def tplus_inventory_choices(
     df = pd.read_excel(path, dtype=str).fillna("")
     code_col = _inventory_column(df, "Code", "InventoryCode", "存货编码")
     name_col = _inventory_column(df, "Name", "InventoryName", "存货名称")
-    unit_col = _inventory_column(df, "Unit.Name", "UnitName", "计量单位", "单位")
+    unit_col = _inventory_column(df, "BaseUnitName", "Unit.Name", "UnitName", "计量单位", "单位")
+    unit_code_col = _inventory_column(df, "BaseUnitCode", "Unit.Code", "UnitCode", "计量单位编码")
+    class_code_col = _inventory_column(df, "InventoryClass.Code", "InventoryClassCode", "存货分类编码")
+    class_name_col = _inventory_column(df, "InventoryClass.Name", "InventoryClassName", "存货分类")
     spec_col = _inventory_column(df, "Specification", "规格型号")
     disabled_col = _inventory_column(df, "Disabled", "停用")
     if not code_col or not name_col or not unit_col:
@@ -121,6 +206,27 @@ def tplus_inventory_choices(
     if disabled_col:
         disabled = df[disabled_col].astype(str).str.strip().str.lower()
         df = df[~disabled.isin({"1", "true", "yes", "是"})]
+    stock_by_code: dict[str, dict[str, Any]] = {}
+    if scope == "material":
+        stock_path = _latest_tplus_export_file("current_stock")
+        if stock_path is None:
+            raise HTTPException(status_code=404, detail="原材料库存尚未同步")
+        stock = pd.read_excel(stock_path, dtype=str).fillna("")
+        required = {"InventoryCode", "WarehouseCode"}
+        if not required.issubset(set(stock.columns)):
+            raise HTTPException(status_code=409, detail="原材料库存缺少存货或仓库字段")
+        raw_warehouses, _ = _inventory_scope_config()
+        stock = stock[stock["WarehouseCode"].astype(str).str.strip().isin(raw_warehouses)]
+        for _, item in stock.iterrows():
+            code = str(item.get("InventoryCode") or "").strip()
+            if not code:
+                continue
+            current = stock_by_code.setdefault(code, {"existing_quantity": 0.0, "available_quantity": 0.0})
+            existing_qty = pd.to_numeric(item.get("ExistingQuantity"), errors="coerce")
+            available_qty = pd.to_numeric(item.get("AvailableQuantity"), errors="coerce")
+            current["existing_quantity"] += 0.0 if pd.isna(existing_qty) else float(existing_qty)
+            current["available_quantity"] += 0.0 if pd.isna(available_qty) else float(available_qty)
+        df = df[df[code_col].astype(str).str.strip().isin(stock_by_code)]
     keyword = q.strip().lower()
     if keyword:
         mask = df[code_col].str.lower().str.contains(keyword, regex=False) | df[name_col].str.lower().str.contains(keyword, regex=False)
@@ -134,6 +240,11 @@ def tplus_inventory_choices(
             "name": str(row[name_col]).strip(),
             "specification": str(row[spec_col]).strip() if spec_col else "",
             "unit_name": str(row[unit_col]).strip(),
+            "unit_code": str(row[unit_code_col]).strip() if unit_code_col else "",
+            "inventory_class_code": str(row[class_code_col]).strip() if class_code_col else "",
+            "inventory_class_name": str(row[class_name_col]).strip() if class_name_col else "",
+            "source": "tplus",
+            **stock_by_code.get(str(row[code_col]).strip(), {}),
         }
         for _, row in df.iterrows()
         if str(row[code_col]).strip() and str(row[unit_col]).strip()
@@ -221,6 +332,10 @@ def submit_bom_draft(
     with closing(_conn()) as conn:
         row = _load_owned_draft(conn, draft_id, actor, is_admin)
         payload = build_bom_create_payload(row[2], row[3], row[4])
+        request_envelope = {
+            "bom": payload,
+            "custom_inventories": build_custom_inventory_requests(row[2], row[3]),
+        }
         stable_key = (idempotency_key or f"bom-draft-{draft_id}").strip()
         if len(stable_key) > 200:
             raise HTTPException(status_code=400, detail="Idempotency-Key 过长")
@@ -233,7 +348,7 @@ def submit_bom_draft(
             cur.execute(
                 """INSERT INTO tplus_bom_submissions(draft_id, idempotency_key, requested_by, request_json)
                    VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING RETURNING id""",
-                (draft_id, digest, actor, Jsonb(payload)),
+                (draft_id, digest, actor, Jsonb(request_envelope)),
             )
             inserted = cur.fetchone()
             if not inserted:

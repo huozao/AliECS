@@ -70,6 +70,57 @@ class BomWriteWorkerTests(unittest.TestCase):
         self.assertEqual(1, len(client.calls))
         self.assertIn("已存在", finish.call_args.kwargs["error"]["message"])
 
+    @patch.object(bom_write_worker, "add_event")
+    @patch.object(bom_write_worker, "finish_submission")
+    def test_custom_inventory_is_created_and_verified_before_bom(self, finish, _event):
+        submission = self._submission()
+        submission["request_json"] = {
+            "bom": submission["request_json"],
+            "custom_inventories": [{
+                "kind": "material", "code": "RM-NEW",
+                "payload": {"dto": {"Code": "RM-NEW", "Name": "新原料"}},
+            }],
+        }
+        client = FakeClient([
+            [],
+            [],
+            {"result": 55},
+            [{"ID": 55, "Code": "RM-NEW", "Name": "新原料"}],
+            {"result": 123},
+            [{"ID": 123, "Code": "FG-001", "Version": "V1"}],
+        ])
+        status = bom_write_worker.process_submission(submission, client=client)
+        self.assertEqual("success", status)
+        self.assertEqual(
+            [
+                bom_write_worker.BOM_QUERY_ENDPOINT,
+                bom_write_worker.INVENTORY_QUERY_ENDPOINT,
+                bom_write_worker.INVENTORY_CREATE_ENDPOINT,
+                bom_write_worker.INVENTORY_QUERY_ENDPOINT,
+                bom_write_worker.BOM_CREATE_ENDPOINT,
+                bom_write_worker.BOM_QUERY_ENDPOINT,
+            ],
+            [call[0] for call in client.calls],
+        )
+        self.assertEqual("success", finish.call_args.kwargs["status"])
+
+    @patch.object(bom_write_worker, "add_event")
+    @patch.object(bom_write_worker, "finish_submission")
+    def test_custom_inventory_code_conflict_stops_before_create(self, finish, _event):
+        submission = self._submission()
+        submission["request_json"] = {
+            "bom": submission["request_json"],
+            "custom_inventories": [{
+                "kind": "material", "code": "RM-NEW",
+                "payload": {"dto": {"Code": "RM-NEW", "Name": "新原料"}},
+            }],
+        }
+        client = FakeClient([[], [{"Code": "RM-NEW", "Name": "已有别名"}]])
+        status = bom_write_worker.process_submission(submission, client=client)
+        self.assertEqual("failed", status)
+        self.assertEqual(2, len(client.calls))
+        self.assertIn("名称为", finish.call_args.kwargs["error"]["message"])
+
     def test_disabled_worker_never_claims(self):
         with patch.dict(os.environ, {"TPLUS_BOM_WRITE_ENABLED": "false"}, clear=False):
             claimed = []
