@@ -1151,9 +1151,12 @@ def feishu_send_interactive_message(details: dict[str, Any], message_id: str, ca
     return str((resp.get("data") or {}).get("message_id") or "")
 
 
-def feishu_patch_card(message_id: str, card: dict[str, Any], auth_token: str) -> None:
+def feishu_patch_card(message_id: str, card: dict[str, Any], auth_token: str, *, _from_rotation: bool = False) -> None:
     """Update an already-sent interactive card in place (the placeholder becomes the
-    final answer). Requires the card to have been sent with config.update_multi=true."""
+    final answer). Requires the card to have been sent with config.update_multi=true.
+    非轮播调用先掐掉该消息上的占位轮播，保证终局内容不被轮播覆盖。"""
+    if not _from_rotation:
+        stop_placeholder_rotation(message_id)
     feishu_post_json(
         f"/im/v1/messages/{urllib.parse.quote(message_id)}",
         {"content": json.dumps(card, ensure_ascii=False)},
@@ -2398,6 +2401,11 @@ DEFAULT_PROCESSING_ACK_TEXT = "📨 已投递到 ChatGPT，正在生成（约 20
 DEFAULT_PROCESSING_REMIND_TEXT = "⚠️ 上一条还在 ChatGPT 处理中，这条已排队。请等上面那张卡片出结果再问，连续提问会拖慢每一条。"
 DEFAULT_PROCESSING_EMPTY_TEXT = "本次没有生成内容，请稍后重试。"
 DEFAULT_DONE_MARKER = "🌿 回复完毕"
+# 占位卡轮播提示：一行一条，与基础占位文案轮换显示。
+DEFAULT_PLACEHOLDER_TIPS = (
+    "💡 提示：/新对话 开启新会话，/模式 极速｜均衡｜高级 切换速度\n"
+    "⏳ 长回复生成中，请勿重复提问，答案会更新到这张卡片"
+)
 
 # 规则表 global-default 行上的文案列：列名 → (env 覆盖变量, 代码默认)。表格非空值 > env > 默认。
 RULE_TEXT_FIELDS: dict[str, tuple[str, str]] = {
@@ -2405,6 +2413,7 @@ RULE_TEXT_FIELDS: dict[str, tuple[str, str]] = {
     "追问文案": ("OPENCLAW_BRIDGE_PROCESSING_REMIND_TEXT", DEFAULT_PROCESSING_REMIND_TEXT),
     "空回复文案": ("OPENCLAW_BRIDGE_PROCESSING_EMPTY_TEXT", DEFAULT_PROCESSING_EMPTY_TEXT),
     "完成标记": ("OPENCLAW_BRIDGE_DONE_MARKER", DEFAULT_DONE_MARKER),
+    "轮播提示文案": ("OPENCLAW_BRIDGE_PLACEHOLDER_TIPS", DEFAULT_PLACEHOLDER_TIPS),
 }
 
 
@@ -2417,6 +2426,7 @@ def _rule_managed_defaults() -> dict[str, Any]:
     return {
         "处理中卡片": True,
         "调试尾注": True,
+        "占位轮播": True,
         **_rule_text_env_defaults(),
         CHATGPT_MODE_DEFAULT_FIELD: CHATGPT_MODE_NAMES[CHATGPT_MODE_DEFAULT_FALLBACK],
         CHATGPT_PROJECT_URL_FIELD: bitable_url_value(project_url) if project_url else "",
@@ -2494,6 +2504,7 @@ def feishu_global_rule_policy() -> dict[str, Any]:
     env_defaults: dict[str, Any] = {
         "处理中卡片": _env_flag("OPENCLAW_BRIDGE_PROCESSING_CARD", False),
         "调试尾注": _env_flag("OPENCLAW_BRIDGE_DEBUG_TRAILER", True),
+        "占位轮播": _env_flag("OPENCLAW_BRIDGE_PLACEHOLDER_ROTATE", True),
         **_rule_text_env_defaults(),
         CHATGPT_MODE_DEFAULT_FIELD: CHATGPT_MODE_NAMES[CHATGPT_MODE_DEFAULT_FALLBACK],
         CHATGPT_PROJECT_URL_FIELD: feishu_default_chatgpt_project_url(),
@@ -2509,7 +2520,7 @@ def feishu_global_rule_policy() -> dict[str, Any]:
         try:
             record = find_feishu_bitable_record(table_id, "规则编号", "global-default")
             fields = (record or {}).get("fields") or {}
-            for key in ("处理中卡片", "调试尾注"):
+            for key in ("处理中卡片", "调试尾注", "占位轮播"):
                 if key in fields:
                     result[key] = bitable_truthy(fields.get(key))
             for key in RULE_TEXT_FIELDS:
@@ -2589,6 +2600,92 @@ def send_processing_card(details: dict[str, Any], text: str) -> str | None:
     except Exception as exc:
         log_line(f"processing card send failed: {exc}")
         return None
+
+
+class _PlaceholderRotation:
+    """占位卡轮播状态：lock 串行化轮播 patch 与终局 patch，cancelled 置位后轮播立即停。"""
+
+    def __init__(self) -> None:
+        self.lock = Lock()
+        self.cancelled = False
+
+
+_placeholder_rotations: dict[str, _PlaceholderRotation] = {}
+_placeholder_rotations_lock = Lock()
+
+PLACEHOLDER_ROTATE_MAX_SECONDS = 1800.0  # 安全上限：终局 patch 丢失时轮播也不会永转
+
+
+def placeholder_rotation_enabled() -> bool:
+    return bool(feishu_global_rule_policy().get("占位轮播"))
+
+
+def placeholder_rotate_seconds() -> float:
+    try:
+        return max(3.0, float(os.getenv("OPENCLAW_BRIDGE_PLACEHOLDER_ROTATE_SECONDS", "8")))
+    except ValueError:
+        return 8.0
+
+
+def placeholder_rotation_tips() -> list[str]:
+    """轮播提示列表：规则表「轮播提示文案」一行一条（>env>默认），空行忽略。"""
+    return [line.strip() for line in _rule_text("轮播提示文案").splitlines() if line.strip()]
+
+
+def stop_placeholder_rotation(message_id: str) -> None:
+    with _placeholder_rotations_lock:
+        entry = _placeholder_rotations.pop(str(message_id), None)
+    if entry:
+        # 拿到 lock 才返回：此刻在途的轮播 patch 已落地，之后的终局 patch 必然后到、必然赢。
+        with entry.lock:
+            entry.cancelled = True
+
+
+def start_placeholder_rotation(message_id: str, base_text: str) -> None:
+    """占位卡轮播：每隔 N 秒就地 patch 占位卡，轮换 基础文案+提示文案 并附等待秒数。
+    best-effort：任何失败只影响轮播本身，终局答案由 feishu_patch_card 的掐停逻辑兜底。"""
+    tips = placeholder_rotation_tips()
+    if not tips or not placeholder_rotation_enabled():
+        return
+    entry = _PlaceholderRotation()
+    with _placeholder_rotations_lock:
+        _placeholder_rotations[str(message_id)] = entry
+    Thread(
+        target=_placeholder_rotation_loop,
+        args=(str(message_id), base_text, entry),
+        daemon=True,
+        name=f"placeholder-rotation-{str(message_id)[-8:]}",
+    ).start()
+
+
+def _placeholder_rotation_loop(message_id: str, base_text: str, entry: _PlaceholderRotation) -> None:
+    texts = [base_text] + placeholder_rotation_tips()
+    interval = placeholder_rotate_seconds()
+    started = time.monotonic()
+    index = 0
+    failures = 0
+    try:
+        while time.monotonic() - started < PLACEHOLDER_ROTATE_MAX_SECONDS:
+            time.sleep(interval)
+            index += 1
+            with entry.lock:
+                if entry.cancelled:
+                    return
+                elapsed = int(time.monotonic() - started)
+                text = f"{texts[index % len(texts)]}\n\n⏳ 已等待 {elapsed}s"
+                try:
+                    auth_token = feishu_tenant_access_token()
+                    card = build_feishu_card([("text", text)], footer="")
+                    feishu_patch_card(message_id, card, auth_token, _from_rotation=True)
+                    failures = 0
+                except Exception as exc:  # noqa: BLE001 - 轮播失败绝不影响主链路
+                    failures += 1
+                    log_line(f"placeholder rotation patch failed: {exc}")
+                    if failures >= 3:
+                        return
+    finally:
+        with _placeholder_rotations_lock:
+            _placeholder_rotations.pop(message_id, None)
 
 
 def lane_batch_key(metadata: dict[str, Any]) -> str:
@@ -3127,6 +3224,7 @@ def build_reply(body: dict[str, Any]) -> str:
                 placeholder_id = send_processing_card(write_details, text)
                 if placeholder_id:
                     write_details["feishu_placeholder_msg_id"] = placeholder_id
+                    start_placeholder_rotation(placeholder_id, text)
             result = call_webdock(batched_body)
             reply, response_metadata = unpack_webdock_result(result)
             write_details["webdock_footer"] = dict(getattr(result, "footer", None) or {})
