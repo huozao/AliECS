@@ -1,3 +1,165 @@
+# BOM Builder 行内录入重构 Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** 把 `/bom-builder/` 从「统一搜索+点添加」改为「子件常驻搜索行逐行录入」，父件默认新建态，草稿自动保存，登录修为 SSO。
+
+**Architecture:** 单文件静态页重写（`services/public-web/bom-builder/index.html`，repo 惯例：单 HTML 全内联）。后端接口零改动，沿用 `/v1/tplus/inventories`、`/v1/tplus/inventory-create-options`、bom-drafts 草稿/校验/提交/轮询链路。页面结构测试用 pytest 静态断言（CI 可跑），交互用本地 mock server 手动冒烟 + 上线后真机闭环。
+
+**Tech Stack:** 原生 HTML/CSS/JS（无框架，与 public-web 其他页一致）、pytest（静态断言）、python http.server（本地 mock 冒烟）。
+
+**Spec:** `docs/superpowers/specs/2026-07-11-bom-builder-inline-entry-design.md`
+
+## Global Constraints
+
+- 后端任何文件不改；只改 `services/public-web/bom-builder/index.html`，只新增 `tests/test_bom_builder_page.py`。
+- 手机优先：数量输入必须 `inputmode="decimal"`；点击区≥40px；吸底提交条留 `env(safe-area-inset-bottom)`。
+- 登录只走 SSO：`/v1/auth/oidc/login?rd=<当前路径>`；禁止出现 `/v1/auth/login` 调用与密码输入框。
+- 默认值按**名称匹配**：父件类别「物料清单」、原料类别「原材料」、单位「kg」；名称匹配不到回退现有编码（父件类 `06`、原料类 `01`、单位 `1`）；两者都不在选项里则不预选。
+- 合计**不同单位不相加**，按 unit_name 分组显示。
+- 草稿 payload 契约（后端 pydantic，勿改字段名）：
+  - parent: `{code*, name, specification, unit_name*, unit_code, inventory_class_code, inventory_class_name}`
+  - children[]: parent 字段 + `{required_quantity*, warehouse_code, child_bom_version}`
+  - options: `{version*, produce_quantity, yield_rate, is_default_bom, warehouse_code, routing_code, manufacture_plant_code}`
+- 提交幂等键沿用 `Idempotency-Key: bom-builder-<draftId>`。
+- localStorage 键：草稿 `bom_builder_draft_v2`；token 读写沿用 `aliecs_auth_token`/`portal_token`/`admin_token` 三键。
+- worktree：`scratchpad\bom-inline`，分支 `feat/bom-builder-inline-entry`（已存在，spec 已提交）。
+
+---
+
+### Task 1: 生产数据核实（默认类别/单位名）
+
+**Files:** 无代码改动；结论记入 Task 3 常量与本文件执行记录。
+
+**Interfaces:**
+- Produces: 三个常量的最终取值 —— `DEFAULT_PARENT_CLASS_NAME`（预期「物料清单」）、`DEFAULT_MATERIAL_CLASS_NAME`（预期「原材料」）、`DEFAULT_UNIT_NAME`（预期「kg」），以及是否保留回退编码 `06`/`01`/`1`。
+
+- [ ] **Step 1: 查存货档案中类别与单位的真实名称**
+
+```bash
+ssh aliecs 'ls -t /srv/aliecs/data/tplus-exports/ | head -20'
+# 找到最新 inventory*.xlsx 与 bom*.xlsx（实际目录以 backend env TPLUS_EXPORT_DIR 为准，
+# 可先: ssh aliecs "docker exec aliecs-backend-api-1 env | grep -i tplus"）
+ssh aliecs 'docker exec aliecs-backend-api-1 python - <<PY
+import glob, pandas as pd
+inv = sorted(glob.glob("/app/data/tplus-exports/*inventory*.xlsx"))[-1]
+df = pd.read_excel(inv, dtype=str).fillna("")
+cls = [c for c in df.columns if "Class" in c or "分类" in c]
+unit = [c for c in df.columns if "Unit" in c or "单位" in c]
+print("class cols:", cls); print("unit cols:", unit)
+print(df[cls[1] if len(cls)>1 else cls[0]].value_counts().head(10))
+print(df[unit[1] if len(unit)>1 else unit[0]].value_counts().head(10))
+PY'
+```
+
+Expected: 类别分布里能看到「物料清单」「原材料」（或它们的真实叫法），单位分布里能看到「kg」（或「千克」等真实叫法）。
+
+- [ ] **Step 2: 查现有 BOM 父件实际用的类别/单位**
+
+```bash
+ssh aliecs 'docker exec aliecs-backend-api-1 python - <<PY
+import glob, pandas as pd
+bom = sorted(glob.glob("/app/data/tplus-exports/*bom*.xlsx"))[-1]
+df = pd.read_excel(bom, dtype=str).fillna("")
+print(df.columns.tolist()[:30])
+# 找父件编码列后与存货档案 join 看类别/单位分布（列名以实际为准）
+PY'
+```
+
+Expected: 现有 BOM 父件的类别集中在某一类（预期=物料清单），单位集中在 kg。
+
+- [ ] **Step 3: 固化结论**
+
+把 Step1/2 得到的**真实名称字符串**替换进 Task 3 代码顶部三个 `DEFAULT_*_NAME` 常量（若与预期一致则不用改）。若某名称在数据里不存在，保留名称匹配逻辑（匹配不到自动回退编码），并在 PR 描述里注明。
+
+---
+
+### Task 2: 失败的页面结构测试
+
+**Files:**
+- Test: `tests/test_bom_builder_page.py`（新建）
+
+**Interfaces:**
+- Produces: 对最终页面的结构断言；Task 3 的完成判定 = 本测试全绿。
+
+- [ ] **Step 1: 写测试**
+
+```python
+"""bom-builder 页面结构断言：行内录入重构后的关键锚点与禁止项。"""
+from __future__ import annotations
+
+from pathlib import Path
+
+PAGE = Path(__file__).resolve().parents[1] / "services" / "public-web" / "bom-builder" / "index.html"
+
+
+def read_page() -> str:
+    return PAGE.read_text(encoding="utf-8")
+
+
+def test_login_is_sso_only():
+    html = read_page()
+    assert "oidc/login?rd=" in html
+    assert "/v1/auth/login" not in html
+    assert "passwordInput" not in html
+    assert "authModal" not in html
+
+
+def test_unified_search_section_removed():
+    html = read_page()
+    assert 'id="searchScope"' not in html
+    assert 'id="searchBtn"' not in html
+
+
+def test_inline_adder_anchors_present():
+    html = read_page()
+    for anchor in ("adderInput", "adderResults", "childList", "totalsLine", "submitBtn"):
+        assert f'id="{anchor}"' in html, anchor
+
+
+def test_parent_card_new_mode_anchors_present():
+    html = read_page()
+    for anchor in (
+        "parentCode", "parentName", "parentClassSelect", "parentUnitSelect",
+        "parentModeBtn", "parentSearchInput", "parentResults",
+    ):
+        assert f'id="{anchor}"' in html, anchor
+
+
+def test_mobile_and_autosave_essentials():
+    html = read_page()
+    assert 'inputmode="decimal"' in html
+    assert "bom_builder_draft_v2" in html
+    assert "物料清单" in html
+    assert "Idempotency-Key" in html
+```
+
+- [ ] **Step 2: 跑测试确认失败**
+
+Run: `python -m pytest tests/test_bom_builder_page.py -q`
+Expected: FAIL（现页面含 authModal/searchBtn，缺 adderInput 等锚点）。
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add tests/test_bom_builder_page.py
+git commit -m "test(bom-builder): 行内录入重构页面结构断言（先红）"
+```
+
+---
+
+### Task 3: 重写 bom-builder 页面
+
+**Files:**
+- Modify: `services/public-web/bom-builder/index.html`（整文件替换）
+
+**Interfaces:**
+- Consumes: Task 1 的三个 `DEFAULT_*_NAME` 常量取值；后端契约见 Global Constraints。
+- Produces: 最终页面；Task 4/5 直接使用。
+
+- [ ] **Step 1: 用下面完整内容替换 index.html**
+
+```html
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -132,8 +294,7 @@
 
     // ---------- 选项（类别/单位）：名称匹配预选，匹配不到回退编码 ----------
     function pickOption(select,preferName,fallbackCode){const byName=[...select.options].find((o)=>o.dataset.name===preferName);if(byName){select.value=byName.value;return}if([...select.options].some((o)=>o.value===fallbackCode))select.value=fallbackCode;}
-    async function ensureOptions(){if(state.options)return state.options;const data=await api('/v1/tplus/inventory-create-options');state.options=data;
-      for(const select of [$('parentClassSelect'),$('customClassSelect')])select.innerHTML=(data.classes||[]).map((x)=>`<option value="${esc(x.code)}" data-name="${esc(x.name)}">${esc(x.code)} · ${esc(x.name)}</option>`).join('');
+    async function ensureOptions(){if(state.options)return state.options;const data=await api('/v1/tplus/inventory-create-options');state.options=data;for(const select of [$('parentClassSelect'),$('customClassSelect')])select.innerHTML=(data.classes||[]).map((x)=>`<option value="${esc(x.code)}" data-name="${esc(x.name)}">${esc(x.code)} · ${esc(x.name)}</option>`).join('');
       for(const select of [$('parentUnitSelect'),$('customUnitSelect')])select.innerHTML=(data.units||[]).map((x)=>`<option value="${esc(x.code)}" data-name="${esc(x.name)}">${esc(x.name)}</option>`).join('');
       pickOption($('parentClassSelect'),DEFAULT_PARENT_CLASS_NAME,FALLBACK_PARENT_CLASS_CODE);
       pickOption($('customClassSelect'),DEFAULT_MATERIAL_CLASS_NAME,FALLBACK_MATERIAL_CLASS_CODE);
@@ -204,7 +365,7 @@
     // ---------- 自动保存 ----------
     function snapshot(){return{parentMode:state.parentMode,parentPicked:state.parentPicked,children:state.children,draftId:state.draftId,form:{parentCode:$('parentCode').value,parentName:$('parentName').value,parentClass:$('parentClassSelect').value,parentUnit:$('parentUnitSelect').value,parentSpec:$('parentSpec').value,version:$('versionInput').value,produceQty:$('produceQtyInput').value,yieldRate:$('yieldRateInput').value,warehouse:$('warehouseInput').value,routing:$('routingInput').value,plant:$('plantInput').value,defaultBom:$('defaultBomInput').checked}};}
     function payload(){const form=snapshot().form;return{parent:parentItem(),children:state.children.map((c)=>({...c,required_quantity:String(c.required_quantity)})),options:{version:form.version.trim(),produce_quantity:form.produceQty,yield_rate:form.yieldRate,is_default_bom:form.defaultBom,warehouse_code:form.warehouse.trim(),routing_code:form.routing.trim(),manufacture_plant_code:form.plant.trim()}};}
-    const serverSave=debounce(async()=>{if(!token())return;try{const body=JSON.stringify(payload());const data=state.draftId?await api(`/v1/tplus/bom-drafts/${state.draftId}`,{method:'PATCH',body}):await api('/v1/tplus/bom-drafts',{method:'POST',body});state.draftId=data.id;localStorage.setItem(LS_KEY,JSON.stringify(snapshot()));$('saveHint').textContent=`草稿 #${state.draftId} 已自动保存`;}catch{$('saveHint').textContent='服务端草稿保存失败（本地已暂存）';}},2000);
+    const serverSave=debounce(async()=>{if(!token())return;try{const body=JSON.stringify(payload());const data=state.draftId?await api(`/v1/tplus/bom-drafts/${state.draftId}`,{method:'PATCH',body}):await api('/v1/tplus/bom-drafts',{method:'POST',body});state.draftId=data.id;localStorage.setItem(LS_KEY,JSON.stringify(snapshot()));$('saveHint').textContent=`草稿 #${state.draftId} 已自动保存`;}catch{ $('saveHint').textContent='服务端草稿保存失败（本地已暂存）';}},2000);
     function markDirty(){localStorage.setItem(LS_KEY,JSON.stringify(snapshot()));$('saveHint').textContent=token()?'保存中…':'未登录：仅本地暂存';if(token())serverSave();}
     function restore(){const raw=localStorage.getItem(LS_KEY);if(!raw)return;let saved;try{saved=JSON.parse(raw)}catch{return}
       const hasContent=(saved.children&&saved.children.length)||(saved.form&&(saved.form.parentCode||saved.form.parentName));
@@ -213,7 +374,7 @@
       state.children=saved.children||[];state.draftId=saved.draftId||null;state.parentPicked=saved.parentPicked||null;
       const form=saved.form||{};$('parentCode').value=form.parentCode||'';$('parentName').value=form.parentName||'';$('parentSpec').value=form.parentSpec||'';$('versionInput').value=form.version||'V1';$('produceQtyInput').value=form.produceQty||'1';$('yieldRateInput').value=form.yieldRate||'1';$('warehouseInput').value=form.warehouse||'';$('routingInput').value=form.routing||'';$('plantInput').value=form.plant||'';$('defaultBomInput').checked=!!form.defaultBom;
       if(form.parentClass)state.pendingParentClass=form.parentClass;if(form.parentUnit)state.pendingParentUnit=form.parentUnit;
-      setParentMode(saved.parentMode==='pick'&&state.parentPicked?'pick':'new');}
+      setParentMode(saved.parentMode==='pick'&&state.parentPicked?'pick':'new');renderChildren();}
 
     // ---------- 校验并写入 ----------
     function localCheck(){const p=parentItem();
@@ -268,3 +429,162 @@
   </script>
 </body>
 </html>
+```
+
+- [ ] **Step 2: 跑结构测试**
+
+Run: `python -m pytest tests/test_bom_builder_page.py -q`
+Expected: 5 passed。
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add services/public-web/bom-builder/index.html
+git commit -m "feat(bom-builder): 行内录入重构（常驻搜索行+父件新建态+自动保存+SSO 登录）"
+```
+
+---
+
+### Task 4: 本地 mock 冒烟
+
+**Files:**
+- Create（仅 scratchpad，不入库）: `<scratchpad>/bom-mock/serve.py`
+
+**Interfaces:**
+- Consumes: Task 3 页面（`localhost:8080` 时 API_BASE 指向 `localhost:8000`）。
+
+- [ ] **Step 1: 写 mock 服务**
+
+```python
+"""bom-builder 本地冒烟：8080 托管静态页，8000 提供假 API。"""
+import json, re, threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from functools import partial
+from http.server import SimpleHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
+
+ITEMS = [
+    {"code": "0101", "name": "白砂糖", "specification": "25kg/袋", "unit_name": "kg", "unit_code": "1",
+     "inventory_class_code": "01", "inventory_class_name": "原材料", "source": "tplus", "available_quantity": 1200.0},
+    {"code": "0102", "name": "面粉", "specification": "高筋", "unit_name": "kg", "unit_code": "1",
+     "inventory_class_code": "01", "inventory_class_name": "原材料", "source": "tplus", "available_quantity": 800.0},
+    {"code": "0103", "name": "鸡蛋", "specification": "", "unit_name": "个", "unit_code": "2",
+     "inventory_class_code": "01", "inventory_class_name": "原材料", "source": "tplus", "available_quantity": 3000.0},
+]
+STATE = {"draft": 0, "polls": 0}
+
+class Api(BaseHTTPRequestHandler):
+    def _send(self, obj, code=200):
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "*")
+        self.send_header("Access-Control-Allow-Methods", "*")
+        self.end_headers()
+        self.wfile.write(body)
+    def do_OPTIONS(self):
+        self._send({})
+    def do_GET(self):
+        url = urlparse(self.path)
+        if url.path == "/v1/auth/me":
+            return self._send({"username": "dev", "roles": ["admin"], "permissions": ["admin.access"]})
+        if url.path == "/v1/tplus/inventories":
+            q = (parse_qs(url.query).get("q", [""])[0]).lower()
+            hits = [i for i in ITEMS if q in i["code"].lower() or q in i["name"].lower()]
+            return self._send({"items": hits, "total": len(hits), "source_file": "mock.xlsx"})
+        if url.path == "/v1/tplus/inventory-create-options":
+            return self._send({"classes": [{"code": "01", "name": "原材料"}, {"code": "06", "name": "物料清单"}],
+                               "units": [{"code": "1", "name": "kg"}, {"code": "2", "name": "个"}]})
+        if re.fullmatch(r"/v1/tplus/bom-submissions/9", url.path):
+            STATE["polls"] += 1
+            status = "processing" if STATE["polls"] < 3 else "success"
+            return self._send({"id": 9, "status": status, "result_bom_id": "T999" if status == "success" else "",
+                               "attempts": 1, "error": {}})
+        self._send({"detail": "not found"}, 404)
+    def do_POST(self):
+        url = urlparse(self.path)
+        if url.path == "/v1/tplus/bom-drafts":
+            STATE["draft"] += 1
+            return self._send({"id": STATE["draft"]}, 201)
+        if re.fullmatch(r"/v1/tplus/bom-drafts/\d+/validate", url.path):
+            return self._send({"valid": True, "errors": []})
+        if re.fullmatch(r"/v1/tplus/bom-drafts/\d+/submit", url.path):
+            STATE["polls"] = 0
+            return self._send({"id": 9}, 202)
+        self._send({"detail": "not found"}, 404)
+    def do_PATCH(self):
+        if re.fullmatch(r"/v1/tplus/bom-drafts/\d+", urlparse(self.path).path):
+            return self._send({"id": STATE["draft"] or 1})
+        self._send({"detail": "not found"}, 404)
+
+def main():
+    static = partial(SimpleHTTPRequestHandler, directory=r"<worktree>/services/public-web")
+    threading.Thread(target=HTTPServer(("127.0.0.1", 8080), static).serve_forever, daemon=True).start()
+    print("static :8080  api :8000  →  http://localhost:8080/bom-builder/")
+    HTTPServer(("127.0.0.1", 8000), Api).serve_forever()
+
+if __name__ == "__main__":
+    main()
+```
+
+（`<worktree>` 替换为实际 worktree 绝对路径。）
+
+- [ ] **Step 2: 跑冒烟清单（浏览器手动，含手机宽度模拟）**
+
+Run: `python <scratchpad>/bom-mock/serve.py`，浏览器开 `http://localhost:8080/bom-builder/`，先在 devtools 执行 `localStorage.setItem('aliecs_auth_token','dev')` 后刷新。逐项验证：
+
+1. 父件卡默认新建态；类别预选「物料清单」、单位预选「kg」。
+2. 子件搜索行输「糖」→ 250ms 内出下拉 → 点「白砂糖」→ 行落成已选、焦点在数量框、下拉关闭、搜索框清空。
+3. 连续加「面粉」「鸡蛋」；数量填 12.5 / 30 / 3 → 吸底条显示 `3 项 · 合计 42.5 kg ＋ 3 个`。
+4. 再搜「白砂糖」点选 → 不重复添加，原行闪烁并聚焦数量。
+5. 搜「黄油」（无结果）→ 点「＋ 新建“黄油”」→ 弹窗名称预填、类别预选原材料、单位 kg → 加入后带「新建 T+」标签。
+6. 改任意内容 → 吸底条 2 秒内出现「草稿 #N 已自动保存」。
+7. 刷新页面 → 提示恢复 → 内容完整（含数量、父件表单）。
+8. 「改为选用 T+ 已有存货」→ 搜索选中 → 展示已选卡；撤销回新建态。
+9. 点「校验并写入 T+」→ confirm 文案含父件与子件数 → 确认后状态走 等待/写入中→成功，出现「再录一个配方」。
+10. 手机宽度（375px）模拟：无横向滚动、吸底条不遮内容、数量键盘为数字。
+
+Expected: 全部通过；发现问题当场修复。
+
+- [ ] **Step 3: 修补后重跑结构测试并提交（若有修补）**
+
+```bash
+python -m pytest tests/test_bom_builder_page.py -q
+git add services/public-web/bom-builder/index.html
+git commit -m "fix(bom-builder): 冒烟修补"
+```
+
+---
+
+### Task 5: 全量测试、PR 与上线验证
+
+**Files:** 无新改动。
+
+- [ ] **Step 1: 全量 pytest**
+
+Run: `python -m pytest tests -q`
+Expected: 全绿（基线 557+5 passed, 2 skipped）。
+
+- [ ] **Step 2: push + PR**
+
+```bash
+git push -u origin feat/bom-builder-inline-entry
+gh pr create --title "feat(bom-builder): 行内录入重构（常驻搜索行+父件新建态+自动保存+SSO）" --body "见 docs/superpowers/specs/2026-07-11-bom-builder-inline-entry-design.md；后端零改动；含 Task1 默认值核实结论。"
+```
+
+Expected: CI（validate/migration-dry-run）全绿。
+
+- [ ] **Step 3: 合并部署后真机验证（用户参与）**
+
+1. 手机开 `/bom-builder/`，登录（SSO）→ 回跳本页。
+2. 新建父件（默认类别/单位正确）→ 常驻行连加 3 个原料（含一次新建自定义）→ 合计正确 → 提交 → 轮询到 success → T+ 中确认 BOM 存在。
+3. 录一半杀进程重进 → 恢复提示且内容完整。
+
+---
+
+## Self-Review 记录
+
+- Spec 覆盖：三块结构(T3)、父件新建态+名称匹配预选(T1/T3)、常驻搜索行全部行为(T3)、按单位分组合计(T3 renderTotals)、自动保存两层+恢复(T3)、SSO(T3)、错误处理(attachSearch 行内报错/401 清 token)、非目标未越界（后端零改动）。
+- 占位符：无 TBD/TODO；mock `<worktree>` 为执行时替换的路径参数，Step 内已注明。
+- 类型/命名一致性：`parentItem()/addChild()/markDirty()/ensureOptions()` 各任务引用一致；payload 字段与后端 pydantic 逐一核对过。

@@ -20,10 +20,11 @@ class TPlusBomBuilderFrontendTests(unittest.TestCase):
         self.assertIn("confirmed:true", self.html)
 
     def test_page_supports_material_scope_quantity_and_custom_inventory(self):
-        self.assertIn('value="material" selected>原材料库', self.html)
-        self.assertIn("添加子件", self.html)
+        # 行内录入重构后：子件常驻搜索行固定走原材料库 scope，新建存货走搜索兜底弹窗。
+        self.assertIn("'material'", self.html)
+        self.assertIn("搜原料", self.html)
         self.assertIn("需用数量", self.html)
-        self.assertIn("新增自定义存货", self.html)
+        self.assertIn("新增原料存货", self.html)
         self.assertIn("inventory_class_code", self.html)
 
     def test_migration_adds_permission_feature_and_audit_tables(self):
