@@ -62,6 +62,7 @@ services:
       CHANJET_OPEN_TOKEN_FILE: /app/tplus-sync-requests/chanjet_open_token.txt
       CHANJET_EVENT_SPOOL_DIR: ${CHANJET_EVENT_SPOOL_DIR:-/tmp/aliecs-integration-events/chanjet}
       CHANJET_AUTO_EXCHANGE_OAUTH_CODE: ${CHANJET_AUTO_EXCHANGE_OAUTH_CODE:-false}
+      TPLUS_BOM_WRITE_ENABLED: ${TPLUS_BOM_WRITE_ENABLED:-false}
       RECIPE_BOM_INPUT_DIR: ${RECIPE_BOM_INPUT_DIR:-/app/tplus-output/excel}
       RECIPE_BOM_INPUT_GLOB: ${RECIPE_BOM_INPUT_GLOB:-*物料清单合并*.xlsx;*bom*.xlsx;*物料清单*.xlsx}
       RECIPE_ACTIVE_BOM_DIR: ${RECIPE_ACTIVE_BOM_DIR:-/app/recipe-active-bom}
@@ -189,6 +190,29 @@ services:
       - tplus_sync_data:/app/data
       - tplus_sync_output:/app/output
       - tplus_sync_requests:/app/sync-requests
+
+  tplus-write-worker:
+    image: ${TPLUS_SYNC_WORKER_IMAGE}
+    restart: always
+    command: ["python", "-m", "tplus_datahub.jobs.bom_write_worker"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      CHANJET_BASE_URL: ${CHANJET_BASE_URL:-https://openapi.chanjet.com}
+      CHANJET_APP_KEY: ${CHANJET_APP_KEY:-}
+      CHANJET_APP_SECRET: ${CHANJET_APP_SECRET:-}
+      CHANJET_OPEN_TOKEN: ${CHANJET_OPEN_TOKEN:-}
+      CHANJET_OPEN_TOKEN_FILE: /app/sync-requests/chanjet_open_token.txt
+      REQUEST_TIMEOUT_CONNECT: ${REQUEST_TIMEOUT_CONNECT:-5}
+      REQUEST_TIMEOUT_READ: ${REQUEST_TIMEOUT_READ:-30}
+      OUTPUT_DIR: /app/output
+      TPLUS_BOM_WRITE_ENABLED: ${TPLUS_BOM_WRITE_ENABLED:-false}
+      TPLUS_BOM_WRITE_POLL_SECONDS: ${TPLUS_BOM_WRITE_POLL_SECONDS:-5}
+    volumes:
+      - tplus_sync_output:/app/output
+      - tplus_sync_requests:/app/sync-requests:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   mcp-coding-server:
     image: ${MCP_CODING_SERVER_IMAGE}

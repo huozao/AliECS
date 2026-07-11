@@ -68,6 +68,7 @@ require_service "backend-api"
 require_service "postgres"
 require_service "doc-sync-worker"
 require_service "tplus-sync-worker"
+require_service "tplus-write-worker"
 
 echo "[post-deploy] Checking container status"
 "${compose[@]}" ps
@@ -83,6 +84,11 @@ check_table "external_fields"
 check_table "external_records"
 check_table "sync_runs"
 check_table "sync_requests"
+
+echo "[post-deploy] Checking T+ BOM write database tables"
+check_table "tplus_bom_drafts"
+check_table "tplus_bom_submissions"
+check_table "tplus_bom_submission_events"
 
 source_count="$(count_table external_sources)"
 run_count="$(count_table sync_runs)"

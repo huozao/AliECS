@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+import os
+import unittest
+from unittest.mock import patch
+
+from tplus_datahub.jobs import bom_write_worker
+
+
+class FakeClient:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def post(self, endpoint, payload):
+        self.calls.append((endpoint, payload))
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+class BomWriteWorkerTests(unittest.TestCase):
+    def _submission(self):
+        return {
+            "id": 7,
+            "request_json": {
+                "dto": {
+                    "Inventory": {"Code": "FG-001"},
+                    "Version": "V1",
+                    "Unit": {"Name": "个"},
+                    "ProduceQuantity": "1",
+                    "YieldRate": "1",
+                    "BOMChildDTOs": [],
+                }
+            },
+        }
+
+    @patch.object(bom_write_worker, "add_event")
+    @patch.object(bom_write_worker, "finish_submission")
+    def test_create_then_query_verifies_exact_bom(self, finish, _event):
+        client = FakeClient([
+            [],
+            {"result": 123},
+            [{"ID": 123, "Code": "FG-001", "Version": "V1"}],
+        ])
+        status = bom_write_worker.process_submission(self._submission(), client=client)
+        self.assertEqual("success", status)
+        self.assertEqual(bom_write_worker.BOM_QUERY_ENDPOINT, client.calls[0][0])
+        self.assertEqual(bom_write_worker.BOM_CREATE_ENDPOINT, client.calls[1][0])
+        self.assertEqual(bom_write_worker.BOM_QUERY_ENDPOINT, client.calls[2][0])
+        self.assertEqual("success", finish.call_args.kwargs["status"])
+        self.assertEqual("123", finish.call_args.kwargs["result_bom_id"])
+
+    @patch.object(bom_write_worker, "add_event")
+    @patch.object(bom_write_worker, "finish_submission")
+    def test_timeout_becomes_needs_review_without_retry(self, finish, _event):
+        client = FakeClient([[], TimeoutError("timeout")])
+        status = bom_write_worker.process_submission(self._submission(), client=client)
+        self.assertEqual("needs_review", status)
+        self.assertEqual(2, len(client.calls))
+        self.assertEqual("needs_review", finish.call_args.kwargs["status"])
+
+    @patch.object(bom_write_worker, "add_event")
+    @patch.object(bom_write_worker, "finish_submission")
+    def test_existing_parent_version_is_rejected_before_create(self, finish, _event):
+        client = FakeClient([[{"ID": 88, "Code": "FG-001", "Version": "V1"}]])
+        status = bom_write_worker.process_submission(self._submission(), client=client)
+        self.assertEqual("failed", status)
+        self.assertEqual(1, len(client.calls))
+        self.assertIn("已存在", finish.call_args.kwargs["error"]["message"])
+
+    def test_disabled_worker_never_claims(self):
+        with patch.dict(os.environ, {"TPLUS_BOM_WRITE_ENABLED": "false"}, clear=False):
+            claimed = []
+            result = bom_write_worker.run_forever(claim=lambda: claimed.append(True), sleep=lambda _: None, max_polls=1)
+        self.assertEqual(0, result)
+        self.assertEqual([], claimed)
+
+
+if __name__ == "__main__":
+    unittest.main()

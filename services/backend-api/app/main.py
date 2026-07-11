@@ -18,6 +18,7 @@ from app.routers.exports import router as exports_router
 from app.routers.ops import router as ops_router
 from app.routers.recipes import router as recipes_router
 from app.routers.system_config import router as system_config_router
+from app.routers.tplus_bom import router as tplus_bom_router
 from app.routers.webhooks import router as webhooks_router
 
 
@@ -27,6 +28,7 @@ app.include_router(ops_router)
 app.include_router(auth_admin_router)
 app.include_router(auth_oidc_router)
 app.include_router(recipes_router)
+app.include_router(tplus_bom_router)
 app.include_router(exports_router)
 app.include_router(couple_router)
 app.include_router(system_config_router)
