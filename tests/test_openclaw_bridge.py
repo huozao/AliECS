@@ -1348,6 +1348,68 @@ def test_bridge_new_feishu_conversation_uses_project_and_previous_url(monkeypatc
     assert "chatgpt_conversation_url" not in outbound["metadata"]
 
 
+def _session_record_with_project(session_key):
+    return {
+        "record_id": "rec_current",
+        "fields": {
+            "session_key": session_key,
+            "ChatGPT 项目首页链接": "https://chatgpt.com/g/g-p-old/project",
+            "ChatGPT 项目名": "旧项目",
+            "ChatGPT 对话链接": "https://chatgpt.com/g/g-p-old/c/conv-old",
+            "会话状态": "活跃",
+            "是否当前会话": True,
+        },
+    }
+
+
+def _group_body(text):
+    return {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Sender (untrusted metadata):\n```json\n"
+                    '{"chat_id":"oc_project_group","chat_type":"group","message_id":"om_group"}\n'
+                    "```\n\n" + text
+                ),
+            }
+        ],
+        "metadata": {"channel": "feishu"},
+    }
+
+
+def test_bridge_new_conversation_prefers_group_project_over_current_session(monkeypatch):
+    """/新对话 时群配置须压过旧会话记录的项目，否则改「默认新对话项目链接」永远不生效。"""
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_GROUP_TABLE_ID", "tbl_group")
+    monkeypatch.setattr(bridge, "find_current_feishu_session_record", _session_record_with_project)
+
+    def fake_find(table, field, key, app_token=None):
+        return {"fields": {"默认新对话项目链接": "https://chatgpt.com/g/g-p-new/project"}}
+
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record", fake_find)
+
+    outbound = bridge.build_webdock_body(_group_body("/新对话 重新开始"))
+    assert outbound["metadata"]["chatgpt_project_url"] == "https://chatgpt.com/g/g-p-new/project"
+    assert outbound["metadata"]["previous_chatgpt_conversation_url"] == "https://chatgpt.com/g/g-p-old/c/conv-old"
+
+
+def test_bridge_continuing_conversation_keeps_session_project_over_group_config(monkeypatch):
+    """继续旧对话时仍留在原会话的项目里，群配置只影响新对话。"""
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_GROUP_TABLE_ID", "tbl_group")
+    monkeypatch.setattr(bridge, "find_current_feishu_session_record", _session_record_with_project)
+
+    def fake_find(table, field, key, app_token=None):
+        return {"fields": {"默认新对话项目链接": "https://chatgpt.com/g/g-p-new/project"}}
+
+    monkeypatch.setattr(bridge, "find_feishu_bitable_record", fake_find)
+
+    outbound = bridge.build_webdock_body(_group_body("继续聊"))
+    assert outbound["metadata"]["chatgpt_project_url"] == "https://chatgpt.com/g/g-p-old/project"
+    assert outbound["metadata"]["chatgpt_conversation_url"] == "https://chatgpt.com/g/g-p-old/c/conv-old"
+
+
 def test_bridge_uses_group_project_override_when_no_current_session(monkeypatch):
     bridge = load_bridge()
     monkeypatch.setenv("FEISHU_SESSION_CONSOLE_GROUP_TABLE_ID", "tbl_group")
@@ -2380,6 +2442,21 @@ def test_format_card_footer_full_info():
         },
     }
     assert bridge.format_card_footer(details) == "设备: webdock1(主) | 项目: lark-hao | 耗时: 129s"
+
+
+def test_format_card_footer_includes_chat_mode():
+    bridge = load_bridge()
+    details = {
+        "webdock_footer": {"device": "webdock2", "route": "primary", "elapsed_seconds": 47},
+        "metadata": {
+            "chatgpt_project_url": "https://chatgpt.com/g/g-p-6a2ffe0bac248191988612d9081dd6b1-lark-hao/project",
+            "chatgpt_mode": "fast",
+        },
+    }
+    assert bridge.format_card_footer(details) == "设备: webdock2(主) | 项目: lark-hao | 模式: 极速 | 耗时: 47s"
+    # 未知/缺失模式值不显示模式段
+    details["metadata"]["chatgpt_mode"] = "bogus"
+    assert "模式" not in bridge.format_card_footer(details)
 
 
 def test_format_card_footer_standby_route():
