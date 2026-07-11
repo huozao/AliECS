@@ -2472,6 +2472,63 @@ def test_format_card_footer_missing_info_degrades():
     assert bridge.format_card_footer({}) == ""
 
 
+# --- 占位卡轮播 -------------------------------------------------------------
+
+
+def _start_rotation_with_recorder(bridge, monkeypatch, message_id="om_rotate"):
+    """启动一个快速轮播并记录所有 patch 调用；返回记录列表。"""
+    calls = []
+
+    def fake_post(path, payload, auth_token=None, method="POST", **kwargs):
+        calls.append((path, method, payload))
+        return {}
+
+    monkeypatch.setattr(bridge, "feishu_post_json", fake_post)
+    monkeypatch.setattr(bridge, "feishu_tenant_access_token", lambda: "token")
+    monkeypatch.setattr(bridge, "placeholder_rotate_seconds", lambda: 0.05)
+    bridge.start_placeholder_rotation(message_id, "基础占位文案")
+    return calls
+
+
+def test_placeholder_rotation_patches_periodically(monkeypatch):
+    bridge = load_bridge()
+    calls = _start_rotation_with_recorder(bridge, monkeypatch)
+    time.sleep(0.4)
+    bridge.stop_placeholder_rotation("om_rotate")
+    assert len(calls) >= 2
+    path, method, payload = calls[0]
+    assert method == "PATCH" and "om_rotate" in path
+    assert "已等待" in payload["content"]
+
+
+def test_final_patch_cancels_rotation(monkeypatch):
+    """非轮播的终局 patch 必须掐掉轮播，之后不再有轮播更新。"""
+    bridge = load_bridge()
+    calls = _start_rotation_with_recorder(bridge, monkeypatch)
+    time.sleep(0.15)
+    card = bridge.build_feishu_card([("text", "最终答案")], footer="")
+    bridge.feishu_patch_card("om_rotate", card, "token")
+    assert "om_rotate" not in bridge._placeholder_rotations
+    settled = len(calls)
+    time.sleep(0.25)
+    assert len(calls) == settled  # 终局之后零轮播 patch
+
+
+def test_placeholder_rotation_disabled_by_switch(monkeypatch):
+    monkeypatch.setenv("OPENCLAW_BRIDGE_PLACEHOLDER_ROTATE", "false")
+    bridge = load_bridge()
+    calls = _start_rotation_with_recorder(bridge, monkeypatch)
+    time.sleep(0.15)
+    assert calls == []
+    assert "om_rotate" not in bridge._placeholder_rotations
+
+
+def test_placeholder_rotation_tips_from_env_multiline(monkeypatch):
+    monkeypatch.setenv("OPENCLAW_BRIDGE_PLACEHOLDER_TIPS", "提示一\n\n提示二  \n")
+    bridge = load_bridge()
+    assert bridge.placeholder_rotation_tips() == ["提示一", "提示二"]
+
+
 # --- 飞书"处理中"单卡片方案 -----------------------------------------------
 
 
@@ -2830,10 +2887,10 @@ def test_ensure_rule_record_creates_missing_columns_before_create(monkeypatch):
                         lambda t, names, field_type=7, **kwargs: ensured.append((t, list(names), field_type, kwargs)))
     bridge.ensure_feishu_default_rule_record()
     # 布尔开关列建 Checkbox(7)，四个文案列建文本(1)——文本文案不能写进 Checkbox 列（CheckboxFieldConvFail）。
-    assert ensured[0] == ("tbl_rule", ["处理中卡片", "调试尾注"], bridge.FEISHU_BITABLE_FIELD_TYPE_CHECKBOX, {})
+    assert ensured[0] == ("tbl_rule", ["处理中卡片", "调试尾注", "占位轮播"], bridge.FEISHU_BITABLE_FIELD_TYPE_CHECKBOX, {})
     assert ensured[1] == (
         "tbl_rule",
-        ["处理中文案", "追问文案", "空回复文案", "完成标记"],
+        ["处理中文案", "追问文案", "空回复文案", "完成标记", "轮播提示文案"],
         bridge.FEISHU_BITABLE_FIELD_TYPE_TEXT,
         {"reconcile_type": True},
     )
@@ -2869,7 +2926,8 @@ def test_ensure_rule_record_creates_missing_columns_before_backfill(monkeypatch)
     monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
     monkeypatch.setattr(bridge, "find_feishu_bitable_record",
                         lambda t, f, e: {"record_id": "r1", "fields": {
-                            "处理中卡片": False, "处理中文案": "x", "追问文案": "x", "空回复文案": "x", "完成标记": "x",
+                            "处理中卡片": False, "占位轮播": True,
+                            "处理中文案": "x", "追问文案": "x", "空回复文案": "x", "完成标记": "x", "轮播提示文案": "x",
                             "对话模式默认": "高级", "默认新对话项目链接": "https://chatgpt.com/g/g-p-x/project",
                             "默认新对话项目名称": "x"}})
     monkeypatch.setattr(bridge, "update_feishu_bitable_record", lambda t, rid, fields: None)
@@ -2886,8 +2944,9 @@ def test_ensure_rule_record_no_update_when_present(monkeypatch):
     monkeypatch.setattr(bridge, "feishu_session_console_table_id", lambda kind: "tbl_rule")
     monkeypatch.setattr(bridge, "find_feishu_bitable_record",
                         lambda t, f, e: {"record_id": "r1", "fields": {
-                            "处理中卡片": False, "调试尾注": True,
+                            "处理中卡片": False, "调试尾注": True, "占位轮播": False,
                             "处理中文案": "自定义A", "追问文案": "自定义B", "空回复文案": "自定义C", "完成标记": "自定义D",
+                            "轮播提示文案": "自定义E",
                             "对话模式默认": "高级", "默认新对话项目链接": "https://chatgpt.com/g/g-p-x/project",
                             "默认新对话项目名称": "自定义项目"}})
     called = []
@@ -3156,10 +3215,12 @@ def test_feishu_default_rule_backfills_chatgpt_defaults(monkeypatch):
             {
                 "处理中卡片": True,
                 "调试尾注": True,
+                "占位轮播": True,
                 "处理中文案": bridge.DEFAULT_PROCESSING_ACK_TEXT,
                 "追问文案": bridge.DEFAULT_PROCESSING_REMIND_TEXT,
                 "空回复文案": bridge.DEFAULT_PROCESSING_EMPTY_TEXT,
                 "完成标记": bridge.DEFAULT_DONE_MARKER,
+                "轮播提示文案": bridge.DEFAULT_PLACEHOLDER_TIPS,
                 "对话模式默认": "高级",
                 "默认新对话项目链接": {"text": "https://chatgpt.com/g/g-p-env/project", "link": "https://chatgpt.com/g/g-p-env/project"},
                 "默认新对话项目名称": "默认项目",
@@ -3361,9 +3422,11 @@ def test_ensure_rule_record_backfills_text_columns(monkeypatch):
     monkeypatch.setattr(bridge, "update_feishu_bitable_record", lambda t, r, fields: updated.update(fields))
     record_id = bridge.ensure_feishu_default_rule_record()
     assert record_id == "rec_g"
-    assert ensured and set(ensured[0]) == {"处理中文案", "追问文案", "空回复文案", "完成标记"}
+    assert ensured and ensured[0] == ["占位轮播"]
+    assert set(ensured[1]) == {"处理中文案", "追问文案", "空回复文案", "完成标记", "轮播提示文案"}
     assert updated["处理中文案"] == bridge.DEFAULT_PROCESSING_ACK_TEXT
     assert updated["完成标记"] == bridge.DEFAULT_DONE_MARKER
+    assert updated["轮播提示文案"] == bridge.DEFAULT_PLACEHOLDER_TIPS
 
 
 def test_select_field_property_keeps_order_and_colors():
