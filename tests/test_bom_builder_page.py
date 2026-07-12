@@ -45,3 +45,13 @@ def test_mobile_and_autosave_essentials():
     assert "bom_builder_draft_v2" in html
     assert "物料清单" in html
     assert "Idempotency-Key" in html
+
+
+def test_children_render_as_table_without_more_section():
+    html = read_page()
+    assert 'id="childTableWrap"' in html
+    for header in ("编码", "名称", "规格型号", "单位", "数量", "可用"):
+        assert f"<th>{header}</th>" in html or f'<th class="num">{header}</th>' in html, header
+    # 「更多（预出仓库/子BOM版本）」已删：生产数据 2032/2034 子件两字段皆空，留空由 T+ 解析
+    assert "更多（预出仓库" not in html
+    assert "预出仓库编码" not in html.split("<script>")[1]

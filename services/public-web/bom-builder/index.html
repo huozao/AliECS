@@ -25,13 +25,16 @@
     .msg{display:none;border-left:4px solid var(--danger);padding:10px 12px;background:#fff;border-radius:8px;margin-bottom:12px;white-space:pre-wrap}
     .msg.good{border-color:var(--good)}.msg.warn{border-color:var(--warn)}
     details.adv{margin-top:8px}details.adv summary{cursor:pointer;color:var(--muted);font-size:13px;padding:4px 0}
-    .child-row{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:8px;background:#fbfcfa}
-    .child-row.flash{animation:flash 1.2s}
-    @keyframes flash{0%,60%{background:#fff3d6}100%{background:#fbfcfa}}
-    .child-top{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
-    .child-name{flex:1;min-width:0;overflow-wrap:anywhere}
-    .qty-line{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
-    .qty-line input.qty{width:130px}
+    .table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;margin-bottom:8px}
+    table{width:100%;border-collapse:collapse;background:#fff}
+    th,td{padding:8px 9px;border-bottom:1px solid var(--line);text-align:left;font-size:13px;white-space:nowrap;vertical-align:middle}
+    th{background:#eef2ed;position:sticky;top:0}
+    tbody tr:last-child td{border-bottom:0}
+    td.name-cell{white-space:normal;min-width:130px;overflow-wrap:anywhere}
+    td.num{text-align:right}
+    td input.qty{width:88px;padding:8px 9px}
+    tr.flash{animation:flash 1.2s}
+    @keyframes flash{0%,60%{background:#fff3d6}100%{background:transparent}}
     .tag{display:inline-block;padding:3px 8px;border-radius:999px;background:#e8ece7;font-size:12px}
     .tag.custom{background:#fff0d5;color:#795515}
     .adder{position:relative;margin-top:4px}
@@ -88,7 +91,12 @@
 
     <section class="panel">
       <h2>子件（原料 + 需用数量）</h2>
-      <div id="childList"></div>
+      <div class="table-wrap hidden" id="childTableWrap">
+        <table>
+          <thead><tr><th>编码</th><th>名称</th><th>规格型号</th><th>单位</th><th>数量</th><th class="num">可用</th><th></th></tr></thead>
+          <tbody id="childList"></tbody>
+        </table>
+      </div>
       <div class="adder"><input id="adderInput" placeholder="搜原料：编码 / 名称 / 规格" autocomplete="off"/><div id="adderResults" class="dropdown hidden"></div></div>
     </section>
 
@@ -176,7 +184,8 @@
       markDirty();renderChildren();
       const row=$('childList').lastElementChild;row.scrollIntoView({block:'center'});row.querySelector('input.qty').focus();}
     function renderChildren(){
-      $('childList').innerHTML=state.children.map((c,i)=>`<div class="child-row"><div class="child-top"><div class="child-name">${c.source==='custom'?'<span class="tag custom">新建 T+</span> ':''}<b>${esc(c.name)}</b><div class="muted small">${esc(c.code)}${c.specification?` · ${esc(c.specification)}`:''}${c.available_quantity===undefined?'':` · 可用 ${fmtQty(c.available_quantity)}`}</div></div><button class="danger" data-remove="${i}" type="button">删除</button></div><div class="qty-line"><label style="font-size:14px;color:var(--text)">需用数量</label><input class="qty" data-child="${i}" data-field="required_quantity" type="number" inputmode="decimal" min="0.000001" step="any" value="${esc(c.required_quantity)}" enterkeyhint="next"/><span class="muted small">${esc(c.unit_name)}</span></div><details class="adv"><summary>更多（预出仓库 / 子 BOM 版本）</summary><div class="qty-line"><input data-child="${i}" data-field="warehouse_code" placeholder="预出仓库编码" value="${esc(c.warehouse_code)}" style="width:150px"/><input data-child="${i}" data-field="child_bom_version" placeholder="子 BOM 版本" value="${esc(c.child_bom_version)}" style="width:130px"/></div></details></div>`).join('');
+      $('childTableWrap').classList.toggle('hidden',!state.children.length);
+      $('childList').innerHTML=state.children.map((c,i)=>`<tr><td class="small">${esc(c.code)}</td><td class="name-cell">${c.source==='custom'?'<span class="tag custom">新建 T+</span> ':''}<b>${esc(c.name)}</b></td><td class="small muted">${esc(c.specification||'')}</td><td>${esc(c.unit_name)}</td><td><input class="qty" aria-label="需用数量" data-child="${i}" data-field="required_quantity" type="number" inputmode="decimal" min="0.000001" step="any" value="${esc(c.required_quantity)}" enterkeyhint="next"/></td><td class="num">${c.available_quantity===undefined?'-':fmtQty(c.available_quantity)}</td><td><button class="danger" data-remove="${i}" type="button">删除</button></td></tr>`).join('');
       $('childList').querySelectorAll('[data-field]').forEach((el)=>el.oninput=()=>{state.children[Number(el.dataset.child)][el.dataset.field]=el.value;markDirty();renderTotals();});
       $('childList').querySelectorAll('[data-remove]').forEach((el)=>el.onclick=()=>{state.children.splice(Number(el.dataset.remove),1);markDirty();renderChildren();});
       $('childList').querySelectorAll('input.qty').forEach((el)=>el.onkeydown=(e)=>{if(e.key==='Enter'){e.preventDefault();$('adderInput').focus();}});
