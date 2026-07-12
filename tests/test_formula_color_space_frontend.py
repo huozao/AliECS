@@ -45,6 +45,9 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
         self.assertNotIn("a* 投影轴", self.html)
         self.assertNotIn("b* 投影轴", self.html)
         self.assertIn("GROUND_Y=-50*SCALE", self.html)
+        self.assertIn("major=value!==0&&Math.abs(value)%50===0", self.html)
+        self.assertIn("half=major ? .72 : .38", self.html)
+        self.assertIn("两个正交方向组成十字刻度", self.html)
 
     def test_l_axis_marks_five_key_lightness_values(self) -> None:
         self.assertIn("[0,25,50,75,100]", self.html)
@@ -63,6 +66,18 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
         self.assertIn('id="resetCamera"', self.html)
         self.assertIn('id="topCamera"', self.html)
 
+    def test_reference_opacity_can_reach_100_percent(self) -> None:
+        self.assertIn('id="referenceOpacity" type="range" min="10" max="100"', self.html)
+        self.assertIn("Math.min(1,state.referenceOpacity+.1)", self.html)
+
+    def test_product_colors_can_be_hidden_independently(self) -> None:
+        self.assertIn('id="toggleProducts"', self.html)
+        self.assertIn("showProducts:true", self.html)
+        self.assertIn("pointMesh.visible=showProducts", self.html)
+        self.assertIn("trajectoryGroup.visible=showProducts", self.html)
+        self.assertIn("if(!state.showProducts)return null", self.html)
+        self.assertIn("state.showProducts=!state.showProducts", self.html)
+
     def test_reference_voxels_show_hover_and_pinned_lab_readout(self) -> None:
         self.assertIn('id="referenceLabReadout"', self.html)
         self.assertIn("function referenceHitAt", self.html)
@@ -70,6 +85,7 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
         self.assertIn("mesh.userData={samples,space}", self.html)
         self.assertIn("state.referencePinned=referenceHitAt(event)", self.html)
         self.assertIn("a* ${round(sample.lab[1],1)}", self.html)
+        self.assertIn("sample.space==='p3'?'P3':'sRGB'", self.html)
 
     def test_reference_gamut_supports_l_horizontal_slice(self) -> None:
         self.assertIn('id="toggleLSlice"', self.html)
