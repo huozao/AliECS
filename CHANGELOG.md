@@ -1,5 +1,12 @@
 # 版本记录
 
+## v2.1.13：formula 只读 API token 通道（小程序云函数代理）
+
+- `services/backend-api/app/routers/recipes.py` 新增 `formula_login_or_token` 依赖：请求头 `X-API-Key` 与 env `FORMULA_API_TOKEN` 匹配即放行 5 条只读 formula 路由（query/cost/cost-export/compare-export/download），合成只读权限用户；不匹配回落现有 Bearer 登录鉴权；env 缺失=通道关闭。写路由（sync-bom）及其他域不挂载。
+- 供微信小程序云函数 formula-proxy 使用（小程序无 ICP 备案不能直连，云函数出网转发）；token 由 SOPS 管理。
+- 新增 `tests/test_backend_formula_token.py` 6 用例：匹配放行只读×5路由 / 错 token 401 / env 缺失关闭 / 写路由不放行 / 错 key 回落 Bearer。
+- 顺带修复 `app/recipes/compare_export.py` 潜在 bug：`rows` 为空时 legend 行与冻结窗格目标行重合，`ws.freeze_panes` 赋值 `Cell` 对象落入合并区变 `MergedCell` 导致 500；改赋坐标字符串规避（该场景此前无测试覆盖，由本任务新增用例首次触发）。
+
 ## v2.1.12：openclaw-bridge 群策略缓存可推送失效 + bitable 写记录异步化
 
 - 新增 `POST /admin/invalidate-feishu-group-policy` 端点（`X-Admin-Secret` 鉴权，未配 secret 时端点关闭）：bitable 群配置（「回复模式」/「是否启用机器人」）修改后由 bitable 自动化触发，按 `chat_id` 立即清缓存，无需等 TTL；空 `chat_id` 清整表（运维兜底）。

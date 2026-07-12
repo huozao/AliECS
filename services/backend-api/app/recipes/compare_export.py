@@ -208,7 +208,10 @@ def save_compare_workbook(output_path: Path, payload: dict) -> None:
         height=24,
     )
 
-    ws.freeze_panes = ws.cell(row=header_row + 1, column=n_info + 1)
+    # 用坐标字符串而非 Cell 对象：当 rows 为空时 legend_row 与 header_row+1 重合，
+    # 该单元格会落在 merged_row() 合并区内变成 MergedCell，Cell 对象赋值会在
+    # freeze_panes setter 里因 isinstance 判断落空而崩溃；坐标字符串不受此影响。
+    ws.freeze_panes = f"{get_column_letter(n_info + 1)}{header_row + 1}"
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)
