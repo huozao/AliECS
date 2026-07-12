@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>AliECS · 配方色彩空间</title>
+  <style>
+    :root{--bg:#f3efe8;--panel:#fffdf9;--text:#28231d;--muted:#746b60;--line:#ded5c8;--primary:#6d563a;--accent:#b86f42;--good:#3d7a54;--warn:#b45309;--shadow:0 16px 38px rgba(54,43,28,.12)}
+    *{box-sizing:border-box}html,body{height:100%}body{margin:0;background:radial-gradient(circle at 12% 0,rgba(192,153,101,.18),transparent 31%),var(--bg);color:var(--text);font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+    button,input,select{font:inherit}.page{min-height:100%;display:flex;flex-direction:column}.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:15px 20px;background:rgba(255,253,249,.94);border-bottom:1px solid var(--line);backdrop-filter:blur(12px)}h1{font-size:24px;margin:0}.subtitle{color:var(--muted);margin-top:3px}.actions{display:flex;gap:8px;flex-wrap:wrap}.btn,button{border:1px solid var(--line);border-radius:10px;padding:8px 12px;background:#fff;color:var(--text);font-weight:750;cursor:pointer;text-decoration:none}.btn.primary,button.primary{background:var(--primary);border-color:var(--primary);color:#fff}button.active{background:#e9dccb;border-color:#b99b76;color:#4d3923}.mock-badge{display:inline-flex;margin-left:8px;padding:3px 8px;border-radius:999px;background:#fff1d9;color:#9a5a08;font-size:12px;vertical-align:3px}
+    .toolbar{display:grid;grid-template-columns:minmax(180px,1.25fr) repeat(3,minmax(120px,.8fr)) auto;gap:8px;padding:9px 12px;background:rgba(255,253,249,.86);border-bottom:1px solid var(--line)}.field label{display:block;color:var(--muted);font-size:11px;margin-bottom:2px}.field input,.field select{width:100%;height:34px;border:1px solid var(--line);border-radius:8px;padding:0 9px;background:#fff;color:var(--text)}.mode-row{display:flex;align-items:flex-end;gap:5px;flex-wrap:wrap}.mode-row button{padding:6px 9px}
+    .workspace{flex:1;min-height:680px;display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:12px;padding:12px}.stage-card,.detail-card{background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);overflow:hidden}.stage-card{position:relative;min-height:680px}.stage{position:absolute;inset:0}.stage canvas{display:block;width:100%;height:100%}.stage-overlay{position:absolute;left:14px;right:14px;top:14px;display:grid;gap:7px;pointer-events:none}.metric-row{display:flex;gap:5px;flex-wrap:nowrap}.metric{display:flex;align-items:baseline;gap:3px;white-space:nowrap;background:rgba(255,253,249,.91);border:1px solid rgba(222,213,200,.9);border-radius:8px;padding:5px 7px;font-size:11px;box-shadow:0 6px 16px rgba(45,34,22,.08)}.metric b{font-size:15px}.lab-readout{background:rgba(35,31,27,.78);color:#fff;border-radius:9px;padding:6px 9px;width:max-content;min-width:176px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.view-settings{position:absolute;left:14px;bottom:14px;max-width:calc(100% - 28px);padding:8px 10px;background:rgba(255,253,249,.94);border:1px solid rgba(222,213,200,.9);border-radius:11px;box-shadow:0 6px 16px rgba(45,34,22,.08)}.view-settings summary{cursor:pointer;font-weight:750;user-select:none}.view-settings[open] summary{margin-bottom:8px}.view-settings-body{display:grid;gap:8px}.stage-actions{display:flex;gap:6px;flex-wrap:wrap}.stage-actions button{padding:6px 9px;background:rgba(255,253,249,.92)}.reference-controls{display:flex;align-items:flex-end;gap:7px;flex-wrap:wrap}.reference-controls label{display:grid;gap:3px;color:var(--muted);font-size:11px}.reference-controls select{height:32px;min-width:118px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--text);padding:0 8px}.reference-controls input{width:110px}.slice-switch{display:flex!important;align-items:center;gap:6px;height:32px}.slice-switch input{width:16px;height:16px;margin:0;accent-color:var(--primary)}.device-gamut{align-self:center;color:var(--muted);font-size:11px}.tooltip{position:absolute;display:none;pointer-events:none;background:rgba(32,28,24,.94);color:#fff;border-radius:9px;padding:7px 9px;font-size:12px;box-shadow:0 8px 18px rgba(0,0,0,.25)}
+    .detail-card{padding:16px;overflow:auto}.detail-card h2{margin:0 0 5px;font-size:20px}.detail-empty{color:var(--muted);padding:36px 6px;text-align:center}.swatch{height:94px;border-radius:13px;border:1px solid rgba(0,0,0,.12);margin:12px 0;position:relative;overflow:hidden}.swatch span{position:absolute;right:8px;bottom:7px;padding:3px 7px;border-radius:7px;background:rgba(255,255,255,.82);font:12px ui-monospace,monospace;color:#222}.info{display:grid;gap:7px;padding:12px 0;border-top:1px solid var(--line)}.info-row{display:grid;grid-template-columns:92px minmax(0,1fr) 24px;gap:8px;align-items:start}.info dt{color:var(--muted)}.info dd{margin:0;font-weight:720;word-break:break-word}.field-toggle{display:grid;place-items:center;width:24px;height:24px;cursor:pointer}.field-toggle input{width:16px;height:16px;margin:0;accent-color:var(--primary)}.triplet{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.warning{display:none;padding:9px 10px;border-radius:9px;background:#fff3e5;color:#9a4e05;margin:9px 0}.detail-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+    .coverage{margin-top:14px;padding:12px;border:1px solid var(--line);border-radius:11px;background:#fbf7f0}.coverage h3{margin:0 0 5px}.coverage p{margin:0;color:var(--muted);font-size:12px}.nearest{margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}.nearest h3{margin:0 0 8px}.nearest-inputs{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.nearest-inputs input{width:100%;height:36px;border:1px solid var(--line);border-radius:8px;padding:0 8px}.nearest>button{width:100%;margin-top:8px}.nearest-results{display:grid;gap:7px;margin-top:10px}.neighbor{display:grid;grid-template-columns:25px 1fr auto;align-items:center;gap:7px;width:100%;text-align:left;padding:8px;border:1px solid var(--line);border-radius:9px;background:#fff;font-weight:650}.neighbor:hover{border-color:#b99b76;background:#fffaf2}.neighbor-rank{display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:#eee4d7;color:#5f4932;font-size:12px}.neighbor small{display:block;color:var(--muted);font-weight:500}.neighbor-de{font-family:ui-monospace,monospace;color:#8d4e2c}.legend{display:flex;gap:12px;flex-wrap:wrap;padding:10px 18px;color:var(--muted);background:rgba(255,253,249,.8);border-top:1px solid var(--line)}.legend span{display:flex;align-items:center;gap:5px}.dot{width:10px;height:10px;border-radius:50%;background:#8b6b47}.dot.reference{width:8px;height:8px;background:linear-gradient(135deg,#e85d5d,#e9ce69,#66a9df);opacity:.55}.dot.target{border-radius:2px;transform:rotate(45deg);background:#fff;border:2px solid #222}.dot.hollow{background:#fff;border:2px solid #8b6b47}.diamond{width:9px;height:9px;background:#fff;transform:rotate(45deg);border:2px solid #5f6670}
+    @media(max-width:1000px){.toolbar{grid-template-columns:repeat(4,minmax(0,1fr))}.mode-row{grid-column:1/-1}.workspace{grid-template-columns:1fr}.stage-card{min-height:560px}.detail-card{max-height:none}}@media(max-width:620px){.topbar{align-items:flex-start;flex-direction:column}.toolbar{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 7px;padding:8px}.mode-row{grid-column:1/-1}.workspace{padding:8px}.stage-card{min-height:600px}.detail-actions{grid-template-columns:1fr}.stage-overlay{left:8px;right:8px;top:8px}.metric-row{gap:3px}.metric{flex:1;justify-content:center;padding:4px 3px;font-size:10px}.metric b{font-size:14px}.view-settings{right:8px;left:8px;bottom:8px}.reference-controls label{flex:1;min-width:115px}.reference-controls select{width:100%;min-width:0}.reference-controls input{width:100%}.reference-controls .slice-switch input{width:16px;flex:0 0 16px}}
+  </style>
+  <script type="importmap">
+    {"imports":{"three":"https://unpkg.com/three@0.180.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.180.0/examples/jsm/"}}
+  </script>
+</head>
+<body>
+<div class="page">
+  <header class="topbar">
+    <div><h1>配方色彩空间 <span class="mock-badge">模拟数据原型</span></h1><div class="subtitle">以实测 CIELAB 为主空间，探索配方、树脂与添加比例的颜色关系</div></div>
+    <div class="actions"><a class="btn" href="/">返回主页</a><a class="btn primary" href="/formula/">系统配方</a></div>
+  </header>
+  <section class="toolbar">
+    <div class="field"><label for="formulaSearch">配方搜索</label><input id="formulaSearch" placeholder="输入编码或名称"/></div>
+    <div class="field"><label for="resinFilter">树脂</label><select id="resinFilter"><option value="">全部树脂</option></select></div>
+    <div class="field"><label for="dosageFilter">最大添加比例</label><select id="dosageFilter"><option value="1">≤ 1.00%</option><option value="0.75">≤ 0.75%</option><option value="0.5">≤ 0.50%</option><option value="0.25">≤ 0.25%</option></select></div>
+    <div class="field"><label for="conditionFilter">测量条件</label><select id="conditionFilter"><option value="D65-10-SCI">D65 · 10° · SCI · d/8</option></select></div>
+    <div class="mode-row" aria-label="展示模式"><button class="active" data-mode="absolute">绝对 Lab</button><button data-mode="relative">相对空白</button><button data-mode="trajectory">比例轨迹</button></div>
+  </section>
+  <main class="workspace">
+    <section class="stage-card">
+      <div id="stage" class="stage" aria-label="三维 CIELAB 色彩空间"></div>
+      <div class="stage-overlay"><div class="metric-row"><div class="metric"><b id="visibleCount">0</b><span>现有产品点</span></div><div class="metric"><b id="formulaCount">0</b><span>配方版本</span></div><div class="metric"><b id="resinCount">0</b><span>树脂</span></div><div class="metric"><b id="coverageCount">0</b><span>覆盖色区</span></div></div><div id="referenceLabReadout" class="lab-readout">指向参考色域查看 Lab</div></div>
+      <details id="viewSettings" class="view-settings" open>
+        <summary>视图设置</summary>
+        <div class="view-settings-body">
+          <div class="stage-actions"><button id="toggleReference" class="active">隐藏参考色域</button><button id="resetCamera">复位</button><button id="topCamera">俯视</button></div>
+          <div class="reference-controls" aria-label="参考色域显示设置">
+            <label>参考色域<select id="referenceMode"><option value="overlay">sRGB + Display-P3</option><option value="srgb">仅 sRGB</option><option value="p3">仅 Display-P3</option><option value="difference">P3 − sRGB 差集</option></select></label>
+            <label>显示方式<select id="referenceStyle"><option value="surface">方块外壳</option><option value="solid">方块实体</option><option value="wireframe">线框方块</option></select></label>
+            <label>透明度 <span id="referenceOpacityValue">32%</span><input id="referenceOpacity" type="range" min="10" max="70" value="32"/></label>
+            <label class="slice-switch"><input id="toggleLSlice" type="checkbox"/>L* 水平切面</label>
+            <label>切面 L* <span id="sliceLValue">50</span><input id="sliceL" type="range" min="0" max="100" step="1" value="50" disabled/></label>
+            <span id="deviceGamut" class="device-gamut"></span>
+          </div>
+        </div>
+      </details>
+      <div id="tooltip" class="tooltip"></div>
+    </section>
+    <aside class="detail-card">
+      <h2>颜色详情</h2><div class="subtitle">点击三维颜色点查看关联信息</div>
+      <div id="detailEmpty" class="detail-empty">当前未选择颜色。<br/>可旋转、缩放场景并点击任意点。</div>
+      <div id="detailContent" hidden>
+        <div id="swatch" class="swatch"><span id="hexValue"></span></div>
+        <div id="gamutWarning" class="warning">该颜色超出 sRGB 色域，色块仅为映射后的屏幕近似色。</div>
+        <dl class="info">
+          <div class="info-row"><dt>配方</dt><dd id="detailFormula"></dd><label class="field-toggle"><input type="checkbox" data-label-field="formula" checked aria-label="在三维视图显示配方"/></label></div>
+          <div class="info-row"><dt>版本</dt><dd id="detailVersion"></dd><label class="field-toggle"><input type="checkbox" data-label-field="version" aria-label="在三维视图显示版本"/></label></div>
+          <div class="info-row"><dt>树脂</dt><dd id="detailResin"></dd><label class="field-toggle"><input type="checkbox" data-label-field="resin" checked aria-label="在三维视图显示树脂"/></label></div>
+          <div class="info-row"><dt>添加比例</dt><dd id="detailDosage"></dd><label class="field-toggle"><input type="checkbox" data-label-field="dosage" checked aria-label="在三维视图显示添加比例"/></label></div>
+          <div class="info-row"><dt>实测 Lab</dt><dd id="detailLab" class="triplet"></dd><label class="field-toggle"><input type="checkbox" data-label-field="lab" aria-label="在三维视图显示实测 Lab"/></label></div>
+          <div class="info-row"><dt>树脂空白</dt><dd id="detailBaseline" class="triplet"></dd><label class="field-toggle"><input type="checkbox" data-label-field="baseline" aria-label="在三维视图显示树脂空白"/></label></div>
+          <div class="info-row"><dt>ΔLab</dt><dd id="detailDelta" class="triplet"></dd><label class="field-toggle"><input type="checkbox" data-label-field="delta" aria-label="在三维视图显示 ΔLab"/></label></div>
+          <div class="info-row"><dt>ΔE76 / ΔE00</dt><dd id="detailDe" class="triplet"></dd><label class="field-toggle"><input type="checkbox" data-label-field="de" aria-label="在三维视图显示色差"/></label></div>
+          <div class="info-row"><dt>测量条件</dt><dd id="detailCondition"></dd><label class="field-toggle"><input type="checkbox" data-label-field="condition" aria-label="在三维视图显示测量条件"/></label></div>
+          <div class="info-row"><dt>测量日期</dt><dd id="detailDate"></dd><label class="field-toggle"><input type="checkbox" data-label-field="date" aria-label="在三维视图显示测量日期"/></label></div>
+          <div class="info-row"><dt>数据来源</dt><dd>模拟数据（待替换为企微智能表格）</dd><label class="field-toggle"><input type="checkbox" data-label-field="source" aria-label="在三维视图显示数据来源"/></label></div>
+        </dl>
+        <div class="detail-actions"><a id="formulaLink" class="btn primary" href="/formula/">查看完整配方</a><button id="focusTrajectory">只看此配方</button></div>
+      </div>
+      <section class="coverage"><h3>现有产品覆盖</h3><p id="coverageSummary">正在计算当前筛选范围…</p></section>
+      <section class="nearest"><h3>目标 Lab 定位与近邻产品</h3><div class="nearest-inputs"><input id="targetL" type="number" step="0.1" placeholder="L*" aria-label="目标 L*"/><input id="targetA" type="number" step="0.1" placeholder="a*" aria-label="目标 a*"/><input id="targetB" type="number" step="0.1" placeholder="b*" aria-label="目标 b*"/></div><button id="findNearest">在三维空间定位并查找附近产品</button><div id="nearestResults" class="nearest-results"></div></section>
+    </aside>
+  </main>
+  <footer class="legend"><span><i class="dot reference"></i><span id="referenceLegend">sRGB + Display-P3 方块外壳</span></span><span><i class="dot"></i>现有产品</span><span><i class="diamond"></i>树脂空白</span><span><i class="dot target"></i>目标颜色</span><span><i class="dot hollow"></i>预测点（后续）</span><span>近邻按 ΔE00 排序</span></footer>
+</div>
+<script type="module">
+  import * as THREE from 'three';
+  import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+  import {MOCK_RECIPE_COLORS} from './mock-data.js';
+
+  const state={mode:'absolute',selected:null,hoveredId:null,points:[],query:'',resin:'',maxDosage:1,target:null,neighbors:[],showReference:true,referenceMode:'overlay',referenceStyle:'surface',referenceOpacity:.32,sliceEnabled:false,sliceL:50,referencePinned:null,labelFields:new Set(['formula','resin','dosage'])};
+  const SCALE=.23;
+  const $=(id)=>document.getElementById(id);
+  const round=(value,digits=2)=>Number(value).toFixed(digits);
+  const labText=(lab)=>lab.map((value)=>round(value)).join(', ');
+
+  function deltaE76(a,b){return Math.hypot(a[0]-b[0],a[1]-b[1],a[2]-b[2]);}
+  function deltaE00(lab1,lab2){
+    const [L1,a1,b1]=lab1,[L2,a2,b2]=lab2,rad=Math.PI/180,deg=180/Math.PI;
+    const C1=Math.hypot(a1,b1),C2=Math.hypot(a2,b2),Cbar=(C1+C2)/2;
+    const G=.5*(1-Math.sqrt(Math.pow(Cbar,7)/(Math.pow(Cbar,7)+Math.pow(25,7))));
+    const ap1=(1+G)*a1,ap2=(1+G)*a2,cp1=Math.hypot(ap1,b1),cp2=Math.hypot(ap2,b2);
+    const hp=(x,y)=>{if(!x&&!y)return 0;const h=Math.atan2(y,x)*deg;return h<0?h+360:h;};
+    const hp1=hp(ap1,b1),hp2=hp(ap2,b2),dL=L2-L1,dC=cp2-cp1;
+    let dh=hp2-hp1;if(cp1*cp2===0)dh=0;else if(dh>180)dh-=360;else if(dh<-180)dh+=360;
+    const dH=2*Math.sqrt(cp1*cp2)*Math.sin(dh*rad/2),Lbar=(L1+L2)/2,Cpbar=(cp1+cp2)/2;
+    let hpbar;if(cp1*cp2===0)hpbar=hp1+hp2;else if(Math.abs(hp1-hp2)<=180)hpbar=(hp1+hp2)/2;else hpbar=(hp1+hp2+360)/2%360;
+    const T=1-.17*Math.cos((hpbar-30)*rad)+.24*Math.cos(2*hpbar*rad)+.32*Math.cos((3*hpbar+6)*rad)-.2*Math.cos((4*hpbar-63)*rad);
+    const dTheta=30*Math.exp(-Math.pow((hpbar-275)/25,2)),Rc=2*Math.sqrt(Math.pow(Cpbar,7)/(Math.pow(Cpbar,7)+Math.pow(25,7)));
+    const Sl=1+.015*Math.pow(Lbar-50,2)/Math.sqrt(20+Math.pow(Lbar-50,2)),Sc=1+.045*Cpbar,Sh=1+.015*Cpbar*T,Rt=-Math.sin(2*dTheta*rad)*Rc;
+    return Math.sqrt(Math.pow(dL/Sl,2)+Math.pow(dC/Sc,2)+Math.pow(dH/Sh,2)+Rt*(dC/Sc)*(dH/Sh));
+  }
+
+  function labToSrgb(lab){
+    const [L,a,b]=lab,fy=(L+16)/116,fx=fy+a/500,fz=fy-b/200,eps=216/24389,kappa=24389/27;
+    const finv=(t)=>Math.pow(t,3)>eps?Math.pow(t,3):(116*t-16)/kappa;
+    const X=95.047*finv(fx)/100,Y=100*finv(fy)/100,Z=108.883*finv(fz)/100;
+    const linear=[3.2404542*X-1.5371385*Y-.4985314*Z,-.969266*X+1.8760108*Y+.041556*Z,.0556434*X-.2040259*Y+1.0572252*Z];
+    const outOfGamut=linear.some((value)=>value<0||value>1);
+    const gamma=(value)=>value<=.0031308?12.92*value:1.055*Math.pow(value,1/2.4)-.055;
+    const rgb=linear.map((value)=>Math.round(Math.min(1,Math.max(0,gamma(value)))*255));
+    const hex='#'+rgb.map((value)=>value.toString(16).padStart(2,'0')).join('').toUpperCase();
+    return{rgb,hex,outOfGamut};
+  }
+
+  function srgbToLab(rgb){
+    const linear=rgb.map((value)=>value<=.04045?value/12.92:Math.pow((value+.055)/1.055,2.4));
+    const [r,g,b]=linear,X=(.4124564*r+.3575761*g+.1804375*b)/.95047,Y=.2126729*r+.7151522*g+.072175*b,Z=(.0193339*r+.119192*g+.9503041*b)/1.08883;
+    const f=(value)=>value>216/24389?Math.cbrt(value):(24389/27*value+16)/116;
+    const fx=f(X),fy=f(Y),fz=f(Z);return[116*fy-16,500*(fx-fy),200*(fy-fz)];
+  }
+
+  function displayP3ToLab(rgb){
+    const linear=rgb.map((value)=>value<=.04045?value/12.92:Math.pow((value+.055)/1.055,2.4));
+    const [r,g,b]=linear,X=(.48657095*r+.26566769*g+.19821729*b)/.95047,Y=.22897456*r+.69173852*g+.07928691*b,Z=(0*r+.04511338*g+1.04394437*b)/1.08883;
+    const f=(value)=>value>216/24389?Math.cbrt(value):(24389/27*value+16)/116;
+    const fx=f(X),fy=f(Y),fz=f(Z);return[116*fy-16,500*(fx-fy),200*(fy-fz)];
+  }
+
+  const enriched=MOCK_RECIPE_COLORS.measurements.map((item)=>{
+    const delta=item.sample_lab.map((value,index)=>value-item.baseline_lab[index]);
+    return{...item,delta_lab:delta,delta_e76:deltaE76(item.sample_lab,item.baseline_lab),delta_e00:deltaE00(item.sample_lab,item.baseline_lab),display:labToSrgb(item.sample_lab)};
+  });
+
+  const scene=new THREE.Scene();scene.background=new THREE.Color(0xf8f5ef);
+  const camera=new THREE.PerspectiveCamera(48,1,.1,500);camera.position.set(32,25,38);
+  const renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=THREE.SRGBColorSpace;$('stage').appendChild(renderer.domElement);
+  const controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;controls.target.set(0,2,0);controls.minDistance=8;controls.maxDistance=100;
+  scene.add(new THREE.HemisphereLight(0xffffff,0x8c765e,1.35));const keyLight=new THREE.DirectionalLight(0xffffff,1.1);keyLight.position.set(20,30,18);scene.add(keyLight);
+  const GROUND_Y=-50*SCALE,grid=new THREE.GridHelper(60,30,0x9b8a76,0xd9d1c7);grid.position.y=GROUND_Y;scene.add(grid);
+  function addAxisSegment(start,end,color,radius=.065){
+    const direction=end.clone().sub(start),mesh=new THREE.Mesh(new THREE.CylinderGeometry(radius,radius,direction.length(),6),new THREE.MeshBasicMaterial({color,depthTest:false}));mesh.position.copy(start).add(end).multiplyScalar(.5);mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),direction.clone().normalize());mesh.renderOrder=9;scene.add(mesh);return mesh;
+  }
+  function addGradientAxis(start,end,startColor,endColor,radius=.065){
+    const steps=32,from=new THREE.Color(startColor),to=new THREE.Color(endColor);for(let index=0;index<steps;index++){const t1=index/steps,t2=(index+1)/steps,p1=start.clone().lerp(end,t1),p2=start.clone().lerp(end,t2);addAxisSegment(p1,p2,from.clone().lerp(to,(t1+t2)/2),radius);}
+  }
+  // 官方 CIELAB 方向：+a* 红、−a* 绿、+b* 黄、−b* 蓝；主 a*b* 平面与 L* 轴在 L*=50 相交。
+  addGradientAxis(new THREE.Vector3(-128*SCALE,0,0),new THREE.Vector3(0,0,0),0x24a148,0xf2eee8);addGradientAxis(new THREE.Vector3(0,0,0),new THREE.Vector3(127*SCALE,0,0),0xf2eee8,0xe22f2f);
+  addGradientAxis(new THREE.Vector3(0,0,128*SCALE),new THREE.Vector3(0,0,0),0x2468d8,0xf2eee8);addGradientAxis(new THREE.Vector3(0,0,0),new THREE.Vector3(0,0,-127*SCALE),0xf2eee8,0xf2c230);
+  addGradientAxis(new THREE.Vector3(0,-50*SCALE,0),new THREE.Vector3(0,50*SCALE,0),0x171717,0xffffff);
+  // 将 a*b* 轴投影到 L*=0 网格面，方便从地面刻度直接估算任意点的坐标。
+  addGradientAxis(new THREE.Vector3(-128*SCALE,GROUND_Y+.08,0),new THREE.Vector3(0,GROUND_Y+.08,0),0x24a148,0x756e66,.05);addGradientAxis(new THREE.Vector3(0,GROUND_Y+.08,0),new THREE.Vector3(127*SCALE,GROUND_Y+.08,0),0x756e66,0xe22f2f,.05);
+  addGradientAxis(new THREE.Vector3(0,GROUND_Y+.08,128*SCALE),new THREE.Vector3(0,GROUND_Y+.08,0),0x2468d8,0x756e66,.05);addGradientAxis(new THREE.Vector3(0,GROUND_Y+.08,0),new THREE.Vector3(0,GROUND_Y+.08,-127*SCALE),0x756e66,0xf2c230,.05);
+  function makeTextSprite(text,color='#302a24',background='rgba(255,253,249,.86)'){
+    const canvas=document.createElement('canvas');canvas.width=192;canvas.height=72;const context=canvas.getContext('2d');context.fillStyle=background;context.fillRect(0,0,192,72);context.font='600 29px system-ui, sans-serif';context.textAlign='center';context.textBaseline='middle';context.fillStyle=color;context.fillText(text,96,36);const texture=new THREE.CanvasTexture(canvas);texture.colorSpace=THREE.SRGBColorSpace;const sprite=new THREE.Sprite(new THREE.SpriteMaterial({map:texture,transparent:true,depthTest:false}));sprite.scale.set(3.5,1.3,1);sprite.renderOrder=10;return sprite;
+  }
+  function addAxisLabel(text,position,color){const label=makeTextSprite(text,color);label.position.copy(position);label.scale.set(4.6,1.7,1);scene.add(label);}
+  addAxisLabel('−a* 绿',new THREE.Vector3(-30,0,0),'#16843a');addAxisLabel('+a* 红',new THREE.Vector3(30,0,0),'#c92525');addAxisLabel('−b* 蓝',new THREE.Vector3(0,0,30),'#1f5fc4');addAxisLabel('+b* 黄',new THREE.Vector3(0,0,-30),'#9d7900');
+  const gridLabelGroup=new THREE.Group();scene.add(gridLabelGroup);for(const value of [-100,-75,-50,-25,0,25,50,75,100]){const x=value*SCALE,z=-value*SCALE;addAxisSegment(new THREE.Vector3(x,GROUND_Y+.09,-.55),new THREE.Vector3(x,GROUND_Y+.09,.55),0x5b534b,.035);const aLabel=makeTextSprite(`${value}`,value>0?'#b52b2b':value<0?'#198442':'#4f473e');aLabel.position.set(x,GROUND_Y+.35,1.45);aLabel.scale.set(3.1,1.12,1);gridLabelGroup.add(aLabel);addAxisSegment(new THREE.Vector3(-.55,GROUND_Y+.09,z),new THREE.Vector3(.55,GROUND_Y+.09,z),0x5b534b,.035);if(value!==0){const bLabel=makeTextSprite(`${value}`,value>0?'#9d7900':'#245fbd');bLabel.position.set(1.45,GROUND_Y+.35,z);bLabel.scale.set(3.1,1.12,1);gridLabelGroup.add(bLabel);}}
+  for(const lightness of [0,25,50,75,100]){const y=(lightness-50)*SCALE;addAxisSegment(new THREE.Vector3(-.55,y,0),new THREE.Vector3(.55,y,0),0x514a43,.04);const lLabel=makeTextSprite(`L* ${lightness}`,lightness===0?'#171717':'#5a5148');lLabel.position.set(1.8,y,0);lLabel.scale.set(4,1.45,1);gridLabelGroup.add(lLabel);}
+  const labBounds=new THREE.Box3(new THREE.Vector3(-128*SCALE,-50*SCALE,-128*SCALE),new THREE.Vector3(127*SCALE,50*SCALE,127*SCALE));const boundsHelper=new THREE.Box3Helper(labBounds,0xc9bba9);scene.add(boundsHelper);
+  const GAMUT_STEPS=20,referenceGroup=new THREE.Group();scene.add(referenceGroup);let referenceMeshes=[];
+  function makeGamutSamples(space,style,differenceOnly=false){
+    const samples=[],convert=space==='srgb'?srgbToLab:displayP3ToLab;
+    for(let ri=0;ri<=GAMUT_STEPS;ri++)for(let gi=0;gi<=GAMUT_STEPS;gi++)for(let bi=0;bi<=GAMUT_STEPS;bi++){
+      const boundary=ri===0||ri===GAMUT_STEPS||gi===0||gi===GAMUT_STEPS||bi===0||bi===GAMUT_STEPS,rgb=[ri/GAMUT_STEPS,gi/GAMUT_STEPS,bi/GAMUT_STEPS],lab=convert(rgb);if(state.sliceEnabled){if(Math.abs(lab[0]-state.sliceL)>2.5)continue;}else if(style!=='solid'&&!boundary)continue;if(differenceOnly&&!labToSrgb(lab).outOfGamut)continue;samples.push({lab,hex:labToSrgb(lab).hex});
+    }return samples;
+  }
+  function clearReferenceMeshes(){for(const mesh of referenceMeshes){referenceGroup.remove(mesh);mesh.geometry.dispose();mesh.material.dispose();}referenceMeshes=[];}
+  function addGamutMesh(space,opacity,differenceOnly=false){
+    const samples=makeGamutSamples(space,state.referenceStyle,differenceOnly),geometry=new THREE.BoxGeometry(.44,state.sliceEnabled?.16:.44,.44),material=new THREE.MeshBasicMaterial({vertexColors:true,transparent:true,opacity,depthWrite:true,wireframe:state.referenceStyle==='wireframe'&&!state.sliceEnabled}),mesh=new THREE.InstancedMesh(geometry,material,samples.length),localMatrix=new THREE.Matrix4(),localColor=new THREE.Color(),instanceColors=new Float32Array(samples.length*3);
+    material.onBeforeCompile=(shader)=>{shader.vertexShader=shader.vertexShader.replace('#include <color_pars_vertex>','#include <color_pars_vertex>\nattribute vec3 instanceColor;');shader.vertexShader=shader.vertexShader.replace('#include <color_vertex>','#include <color_vertex>\nvColor.xyz = instanceColor.xyz;');};
+    samples.forEach(({lab,hex},index)=>{localMatrix.makeTranslation(lab[1]*SCALE,(state.sliceEnabled?state.sliceL-50:lab[0]-50)*SCALE,-lab[2]*SCALE);mesh.setMatrixAt(index,localMatrix);localColor.set(hex).toArray(instanceColors,index*3);});geometry.setAttribute('instanceColor',new THREE.InstancedBufferAttribute(instanceColors,3));mesh.instanceMatrix.needsUpdate=true;mesh.renderOrder=space==='p3'?0:1;mesh.userData={samples,space};referenceGroup.add(mesh);referenceMeshes.push(mesh);
+  }
+  function rebuildReferenceGamut(){
+    clearReferenceMeshes();if(state.referenceMode==='overlay')addGamutMesh('p3',state.referenceOpacity,true);else if(state.referenceMode==='p3')addGamutMesh('p3',state.referenceOpacity);else if(state.referenceMode==='difference')addGamutMesh('p3',state.referenceOpacity,true);if(state.referenceMode==='overlay'||state.referenceMode==='srgb')addGamutMesh('srgb',state.referenceMode==='overlay'?Math.min(.5,state.referenceOpacity+.1):state.referenceOpacity);
+  }
+  // 颜色点使用不受灯光影响的材质；否则场景明暗会改变 Lab→sRGB 的预览结果。
+  const pointGeometry=new THREE.SphereGeometry(.62,18,12),pointMaterial=new THREE.MeshBasicMaterial({vertexColors:true});
+  pointMaterial.onBeforeCompile=(shader)=>{
+    shader.vertexShader=shader.vertexShader.replace('#include <color_pars_vertex>','#include <color_pars_vertex>\nattribute vec3 instanceColor;');
+    shader.vertexShader=shader.vertexShader.replace('#include <color_vertex>','#include <color_vertex>\nvColor.xyz = instanceColor.xyz;');
+  };
+  const pointMesh=new THREE.InstancedMesh(pointGeometry,pointMaterial,enriched.length);pointMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);scene.add(pointMesh);
+  // 命中层比可见球体更大但不参与绘制，改善移动端点按与桌面鼠标选择。
+  const hitGeometry=new THREE.SphereGeometry(1.28,10,8),hitMaterial=new THREE.MeshBasicMaterial({transparent:true,opacity:0,depthWrite:false,colorWrite:false});
+  const hitMesh=new THREE.InstancedMesh(hitGeometry,hitMaterial,enriched.length);hitMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);scene.add(hitMesh);
+  const baselineGeometry=new THREE.OctahedronGeometry(.72),baselineMaterial=new THREE.MeshStandardMaterial({color:0xffffff,roughness:.5});
+  const baselineMesh=new THREE.InstancedMesh(baselineGeometry,baselineMaterial,MOCK_RECIPE_COLORS.resins.length);scene.add(baselineMesh);
+  const trajectoryGroup=new THREE.Group();scene.add(trajectoryGroup);const neighborLineGroup=new THREE.Group();scene.add(neighborLineGroup);const matrix=new THREE.Matrix4(),color=new THREE.Color();
+  const targetMarker=new THREE.Mesh(new THREE.OctahedronGeometry(1.05),new THREE.MeshBasicMaterial({color:0xffffff}));targetMarker.visible=false;scene.add(targetMarker);const targetHalo=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.OctahedronGeometry(1.38)),new THREE.LineBasicMaterial({color:0x222222}));targetHalo.visible=false;scene.add(targetHalo);
+  const selectedLabelCanvas=document.createElement('canvas'),selectedLabelTexture=new THREE.CanvasTexture(selectedLabelCanvas),selectedLabel=new THREE.Sprite(new THREE.SpriteMaterial({map:selectedLabelTexture,transparent:true,depthTest:false}));selectedLabelTexture.colorSpace=THREE.SRGBColorSpace;selectedLabel.visible=false;selectedLabel.renderOrder=20;scene.add(selectedLabel);
+
+  function positionFor(item){const source=state.mode==='relative'?item.delta_lab:item.sample_lab;return new THREE.Vector3(source[1]*SCALE,(source[0]-(state.mode==='relative'?0:50))*SCALE,-source[2]*SCALE);}
+  function labelValue(item,field){
+    const values={formula:`${item.parent_code}｜${item.parent_name}`,version:item.formula_version,resin:`${item.resin_name}｜${item.resin_batch}`,dosage:`${item.dosage.toFixed(2)} ${item.dosage_unit}`,lab:labText(item.sample_lab),baseline:labText(item.baseline_lab),delta:labText(item.delta_lab),de:`${round(item.delta_e76)} / ${round(item.delta_e00)}`,condition:item.condition_name,date:item.measured_at,source:'模拟数据'};return values[field]||'';
+  }
+  function positionSelectedLabel(){const visible=Boolean(state.selected)&&state.points.some((item)=>item.id===state.selected.id)&&state.labelFields.size>0;selectedLabel.visible=visible;if(visible)selectedLabel.position.copy(positionFor(state.selected)).add(new THREE.Vector3(1.2,1.8,0));}
+  function updateSelectedLabel(){
+    if(!state.selected||!state.labelFields.size){selectedLabel.visible=false;return;}const values=[...state.labelFields].map((field)=>labelValue(state.selected,field)).filter(Boolean),context=selectedLabelCanvas.getContext('2d'),maxWidth=470,lines=[];let line='';selectedLabelCanvas.width=512;context.font='600 24px system-ui, sans-serif';for(const value of values){const candidate=line?`${line} · ${value}`:value;if(line&&context.measureText(candidate).width>maxWidth){lines.push(line);line=value;}else line=candidate;}if(line)lines.push(line);selectedLabelCanvas.height=Math.max(62,28+lines.length*34);context.fillStyle='rgba(32,28,24,.9)';context.fillRect(0,0,selectedLabelCanvas.width,selectedLabelCanvas.height);context.font='600 24px system-ui, sans-serif';context.fillStyle='#fff';context.textAlign='center';context.textBaseline='middle';lines.forEach((text,index)=>context.fillText(text,256,18+17+index*34,maxWidth));selectedLabelTexture.needsUpdate=true;selectedLabel.scale.set(8,8*selectedLabelCanvas.height/512,1);positionSelectedLabel();
+  }
+  function filteredPoints(){const query=state.query.toLowerCase();return enriched.filter((item)=>(!query||`${item.parent_code} ${item.parent_name}`.toLowerCase().includes(query))&&(!state.resin||item.resin_code===state.resin)&&item.dosage<=state.maxDosage);}
+  function clearTrajectories(){while(trajectoryGroup.children.length){const child=trajectoryGroup.children.pop();child.geometry.dispose();child.material.dispose();}}
+  function clearNeighborLines(){while(neighborLineGroup.children.length){const child=neighborLineGroup.children.pop();child.geometry.dispose();child.material.dispose();}}
+  function rebuildTrajectories(){
+    clearTrajectories();if(state.mode!=='trajectory')return;
+    const groups=new Map;for(const item of state.points){const key=`${item.formula_key}|${item.resin_code}`;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(item);}
+    for(const items of groups.values()){
+      items.sort((a,b)=>a.dosage-b.dosage);if(items.length<2)continue;
+      const geometry=new THREE.BufferGeometry().setFromPoints(items.map(positionFor)),material=new THREE.LineBasicMaterial({color:items[items.length-1].display.hex,transparent:true,opacity:.72});trajectoryGroup.add(new THREE.Line(geometry,material));
+    }
+  }
+  function rebuildBaselines(){
+    const resins=MOCK_RECIPE_COLORS.resins.filter((resin)=>!state.resin||resin.code===state.resin);baselineMesh.count=state.mode==='relative'?0:resins.length;
+    resins.forEach((resin,index)=>{const pos=new THREE.Vector3(resin.baseline[1]*SCALE,(resin.baseline[0]-50)*SCALE,-resin.baseline[2]*SCALE);matrix.makeTranslation(pos.x,pos.y,pos.z);baselineMesh.setMatrixAt(index,matrix);});baselineMesh.instanceMatrix.needsUpdate=true;
+  }
+  function renderTarget(){
+    clearNeighborLines();const visible=Boolean(state.target)&&state.mode!=='relative';targetMarker.visible=visible;targetHalo.visible=visible;if(!visible)return;
+    const targetItem={sample_lab:state.target},pos=positionFor(targetItem),display=labToSrgb(state.target);targetMarker.position.copy(pos);targetHalo.position.copy(pos);targetMarker.material.color.set(display.hex);
+    for(const neighbor of state.neighbors){const geometry=new THREE.BufferGeometry().setFromPoints([pos,positionFor(neighbor)]),material=new THREE.LineBasicMaterial({color:0x5d5144,transparent:true,opacity:.34});neighborLineGroup.add(new THREE.Line(geometry,material));}
+  }
+  function updateCoverage(){
+    const labs=state.points.map((item)=>item.sample_lab);if(!labs.length){$('coverageCount').textContent='0';$('coverageSummary').textContent='当前筛选范围没有产品颜色。';return;}
+    const voxels=new Set(labs.map(([L,a,b])=>`${Math.floor(L/10)}|${Math.floor((a+128)/12)}|${Math.floor((b+128)/12)}`));$('coverageCount').textContent=voxels.size;
+    const range=(index)=>[Math.min(...labs.map((lab)=>lab[index])),Math.max(...labs.map((lab)=>lab[index]))].map((value)=>round(value,1));$('coverageSummary').textContent=`按 10×12×12 Lab 网格计 ${voxels.size} 个已占区域；L* ${range(0).join('～')}，a* ${range(1).join('～')}，b* ${range(2).join('～')}。`;
+  }
+  function renderScene(){
+    state.points=filteredPoints();pointMesh.count=state.points.length;const instanceColors=new Float32Array(enriched.length*3);
+    state.points.forEach((item,index)=>{const pos=positionFor(item),selected=state.selected&&state.selected.id===item.id,hovered=state.hoveredId===item.id,size=selected?1.5:hovered?1.28:1;matrix.compose(pos,new THREE.Quaternion(),new THREE.Vector3(size,size,size));pointMesh.setMatrixAt(index,matrix);matrix.makeTranslation(pos.x,pos.y,pos.z);hitMesh.setMatrixAt(index,matrix);color.set(item.display.hex).toArray(instanceColors,index*3);});
+    pointMesh.count=state.points.length;hitMesh.count=state.points.length;pointGeometry.setAttribute('instanceColor',new THREE.InstancedBufferAttribute(instanceColors,3));pointMesh.instanceMatrix.needsUpdate=true;hitMesh.instanceMatrix.needsUpdate=true;rebuildBaselines();rebuildTrajectories();const showReference=state.showReference&&state.mode!=='relative';referenceGroup.visible=showReference;boundsHelper.visible=showReference;$('toggleReference').disabled=state.mode==='relative';$('toggleReference').textContent=state.showReference?'隐藏参考色域':'显示参考色域';$('toggleReference').classList.toggle('active',showReference);renderTarget();positionSelectedLabel();updateCoverage();
+    $('visibleCount').textContent=state.points.length;$('formulaCount').textContent=new Set(state.points.map((item)=>item.formula_key)).size;$('resinCount').textContent=new Set(state.points.map((item)=>item.resin_code)).size;updateReferenceReadout();
+  }
+
+  function selectPoint(item){
+    state.selected=item;$('detailEmpty').hidden=true;$('detailContent').hidden=false;
+    $('swatch').style.background=item.display.hex;$('hexValue').textContent=item.display.hex;$('gamutWarning').style.display=item.display.outOfGamut?'block':'none';
+    $('detailFormula').textContent=`${item.parent_code}｜${item.parent_name}`;$('detailVersion').textContent=item.formula_version;$('detailResin').textContent=`${item.resin_name}｜${item.resin_batch}`;$('detailDosage').textContent=`${item.dosage.toFixed(2)} ${item.dosage_unit}`;
+    $('detailLab').textContent=labText(item.sample_lab);$('detailBaseline').textContent=labText(item.baseline_lab);$('detailDelta').textContent=labText(item.delta_lab);$('detailDe').textContent=`${round(item.delta_e76)} / ${round(item.delta_e00)}`;$('detailCondition').textContent=item.condition_name;$('detailDate').textContent=item.measured_at;
+    $('formulaLink').href=`/formula/?q=${encodeURIComponent(item.parent_code)}&version=${encodeURIComponent(item.formula_version)}`;updateSelectedLabel();renderScene();
+  }
+  function locateTarget(target){
+    const candidates=filteredPoints();state.target=target;if(!candidates.length){state.neighbors=[];$('nearestResults').innerHTML='<div class="detail-empty">当前筛选范围没有可比较的产品。</div>';renderScene();return;}state.neighbors=[...candidates].sort((a,b)=>deltaE00(target,a.sample_lab)-deltaE00(target,b.sample_lab)).slice(0,5);selectPoint(state.neighbors[0]);
+    $('nearestResults').innerHTML=state.neighbors.map((item,index)=>`<button class="neighbor" type="button" data-neighbor-id="${item.id}"><span class="neighbor-rank">${index+1}</span><span>${item.parent_code} · ${item.parent_name}<small>${item.resin_name} · ${item.dosage.toFixed(2)}% · ${labText(item.sample_lab)}</small></span><span class="neighbor-de">ΔE00 ${round(deltaE00(target,item.sample_lab))}</span></button>`).join('');
+    $('nearestResults').querySelectorAll('[data-neighbor-id]').forEach((button)=>button.onclick=()=>selectPoint(state.neighbors.find((item)=>item.id===Number(button.dataset.neighborId))));renderScene();
+  }
+
+  const raycaster=new THREE.Raycaster(),pointer=new THREE.Vector2();
+  function setRayFromEvent(event){const rect=renderer.domElement.getBoundingClientRect();pointer.x=(event.clientX-rect.left)/rect.width*2-1;pointer.y=-(event.clientY-rect.top)/rect.height*2+1;raycaster.setFromCamera(pointer,camera);return rect;}
+  function hitAt(event,screenRadius=32){
+    const rect=setRayFromEvent(event),hit=raycaster.intersectObject(hitMesh)[0];if(hit&&hit.instanceId<state.points.length)return state.points[hit.instanceId];
+    let nearest=null,best=screenRadius;for(const item of state.points){const projected=positionFor(item).clone().project(camera),screenX=rect.left+(projected.x+1)*rect.width/2,screenY=rect.top+(1-projected.y)*rect.height/2,distance=Math.hypot(event.clientX-screenX,event.clientY-screenY);if(distance<best){best=distance;nearest=item;}}return nearest;
+  }
+  function referenceHitAt(event){if(!state.showReference||state.mode==='relative'||!referenceGroup.visible)return null;setRayFromEvent(event);const hit=raycaster.intersectObjects(referenceMeshes,false)[0];if(!hit||hit.instanceId===undefined)return null;const mesh=hit.object,sample=mesh.userData.samples?.[hit.instanceId];return sample?{lab:sample.lab,space:mesh.userData.space}:null;}
+  function updateReferenceReadout(sample=state.referencePinned){const readout=$('referenceLabReadout');if(!state.showReference||state.mode==='relative'){readout.textContent='参考色域已隐藏';return;}if(sample){readout.textContent=`L* ${round(sample.lab[0],1)}　a* ${round(sample.lab[1],1)}　b* ${round(sample.lab[2],1)}`;return;}readout.textContent=state.sliceEnabled?`L* ${state.sliceL} 水平切面`:'指向参考色域查看 Lab';}
+  renderer.domElement.addEventListener('click',(event)=>{const item=hitAt(event,44);if(item){selectPoint(item);return;}state.referencePinned=referenceHitAt(event);updateReferenceReadout();});
+  renderer.domElement.addEventListener('pointermove',(event)=>{const item=hitAt(event,30),tip=$('tooltip'),rect=$('stage').getBoundingClientRect(),nextId=item?item.id:null;if(state.hoveredId!==nextId){state.hoveredId=nextId;renderScene();}if(item){renderer.domElement.style.cursor='pointer';tip.style.display='block';tip.style.left=`${event.clientX-rect.left+12}px`;tip.style.top=`${event.clientY-rect.top+12}px`;tip.textContent=`${item.parent_code} · ${item.resin_name} · ${item.dosage}%`;updateReferenceReadout();return;}const reference=referenceHitAt(event);renderer.domElement.style.cursor=reference?'crosshair':'grab';tip.style.display='none';updateReferenceReadout(reference||state.referencePinned);});
+  renderer.domElement.addEventListener('pointerleave',()=>{if(state.hoveredId!==null){state.hoveredId=null;renderScene();}$('tooltip').style.display='none';renderer.domElement.style.cursor='grab';updateReferenceReadout();});
+
+  function resize(){const rect=$('stage').getBoundingClientRect();camera.aspect=rect.width/rect.height;camera.updateProjectionMatrix();renderer.setSize(rect.width,rect.height,false);}new ResizeObserver(resize).observe($('stage'));
+  function animate(){requestAnimationFrame(animate);controls.update();renderer.render(scene,camera);}animate();
+  function resetCamera(){camera.up.set(0,1,0);camera.position.set(32,25,38);controls.target.set(0,2,0);controls.update();}$('toggleReference').onclick=()=>{state.showReference=!state.showReference;renderScene();};$('resetCamera').onclick=resetCamera;$('topCamera').onclick=()=>{camera.up.set(0,0,-1);camera.position.set(0,55,0);controls.target.set(0,0,0);controls.update();};
+  const referenceLabels={overlay:'sRGB + Display-P3',srgb:'sRGB',p3:'Display-P3',difference:'P3 − sRGB 差集'},styleLabels={surface:'方块外壳',solid:'方块实体',wireframe:'线框方块'};
+  function updateReference(){state.referencePinned=null;rebuildReferenceGamut();$('referenceLegend').textContent=state.sliceEnabled?`${referenceLabels[state.referenceMode]} · L*=${state.sliceL} 切面`:`${referenceLabels[state.referenceMode]} ${styleLabels[state.referenceStyle]}`;renderScene();}
+  $('referenceMode').onchange=(event)=>{state.referenceMode=event.target.value;updateReference();};$('referenceStyle').onchange=(event)=>{state.referenceStyle=event.target.value;updateReference();};$('referenceOpacity').oninput=(event)=>{state.referenceOpacity=Number(event.target.value)/100;$('referenceOpacityValue').textContent=`${event.target.value}%`;updateReference();};
+  $('toggleLSlice').onchange=(event)=>{state.sliceEnabled=event.target.checked;$('sliceL').disabled=!state.sliceEnabled;updateReference();};$('sliceL').oninput=(event)=>{state.sliceL=Number(event.target.value);$('sliceLValue').textContent=event.target.value;updateReference();};
+  $('deviceGamut').textContent=matchMedia('(color-gamut: rec2020)').matches?'设备报告：Rec.2020':matchMedia('(color-gamut: p3)').matches?'设备报告：Display-P3':'设备报告：sRGB';
+
+  for(const resin of MOCK_RECIPE_COLORS.resins)$('resinFilter').insertAdjacentHTML('beforeend',`<option value="${resin.code}">${resin.name}</option>`);
+  const filtersChanged=()=>state.target?locateTarget(state.target):renderScene();
+  $('formulaSearch').oninput=(event)=>{state.query=event.target.value.trim();filtersChanged();};$('resinFilter').onchange=(event)=>{state.resin=event.target.value;filtersChanged();};$('dosageFilter').onchange=(event)=>{state.maxDosage=Number(event.target.value);filtersChanged();};
+  document.querySelectorAll('[data-mode]').forEach((button)=>button.onclick=()=>{document.querySelectorAll('[data-mode]').forEach((item)=>item.classList.remove('active'));button.classList.add('active');state.mode=button.dataset.mode;renderScene();resetCamera();});
+  $('focusTrajectory').onclick=()=>{if(!state.selected)return;$('formulaSearch').value=state.selected.parent_code;state.query=state.selected.parent_code;document.querySelector('[data-mode="trajectory"]').click();};
+  $('findNearest').onclick=()=>{const raw=[$('targetL').value,$('targetA').value,$('targetB').value];if(raw.some((value)=>value.trim()===''))return;const target=raw.map(Number);if(target.some((value)=>!Number.isFinite(value)))return;if(state.mode==='relative')document.querySelector('[data-mode="absolute"]').click();locateTarget(target);};
+  document.querySelectorAll('[data-label-field]').forEach((checkbox)=>checkbox.onchange=()=>{if(checkbox.checked)state.labelFields.add(checkbox.dataset.labelField);else state.labelFields.delete(checkbox.dataset.labelField);updateSelectedLabel();});
+  const params=new URLSearchParams(location.search),formulaKey=params.get('formula_key');if(formulaKey){state.query=formulaKey.split('::')[0];$('formulaSearch').value=state.query;}
+  rebuildReferenceGamut();renderScene();resetCamera();
+</script>
+</body>
+</html>

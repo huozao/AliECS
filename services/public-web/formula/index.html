@@ -956,6 +956,8 @@
     const ssoLogin=()=>{location.href=`${API_BASE}/v1/auth/oidc/login?rd=${encodeURIComponent(location.pathname+location.search)}`;};
     document.addEventListener('DOMContentLoaded',()=>{
       state.manualPrices=loadManualPrices();state.priceTimes=loadPriceTimes();state.simulatedQuantities=loadSimulatedQuantities();state.view=loadViewOptions();syncAuth();
+      const linkParams=new URLSearchParams(location.search),linkedQuery=linkParams.get('q');
+      if(linkedQuery)queryInput.value=linkedQuery;
       queryForm.onsubmit=(event)=>queryFormula(event).catch((error)=>showError(error.message));
       syncBtn.onclick=()=>syncBom().catch((error)=>showError(error.message));
       renderCompareBtn.onclick=()=>renderAllCompare();
