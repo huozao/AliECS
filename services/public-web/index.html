@@ -5,51 +5,94 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>AliECS · 首页</title>
   <style>
-    :root{--bg:#f7f5f0;--card:#fffdf8;--text:#25211b;--muted:#766f63;--line:#e7dfd0;--primary:#6f5e46;--shadow:0 12px 30px rgba(69,56,38,.08)}
-    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top left,rgba(180,157,118,.18),transparent 35%),var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui}.wrap{max-width:1120px;margin:0 auto;padding:20px 18px 56px}.topbar{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;background:rgba(255,253,248,.92);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:20px;padding:18px 20px;margin-bottom:16px}h1{margin:0;font-size:34px}.subtitle{margin:8px 0 0;color:var(--muted)}.top-actions{display:flex;gap:8px;flex-wrap:nowrap;justify-content:flex-end;white-space:nowrap;overflow:auto;max-width:64%}.btn,button{border:0;border-radius:999px;padding:9px 13px;background:#e8dfcf;color:var(--text);cursor:pointer;font-weight:650;text-decoration:none}.btn.primary{background:var(--primary);color:#fff}.btn.subtle{background:#efe8dc;color:#6e6355}button:disabled,.btn:disabled{opacity:.6;cursor:progress}.card{background:rgba(255,253,248,.92);border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:var(--shadow);margin-bottom:16px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.feature-card{min-height:190px;display:flex;flex-direction:column;justify-content:space-between}.hidden{display:none!important}.small{font-size:12px}.muted{color:var(--muted)}.error,.success{border-radius:14px;padding:12px 14px;margin-bottom:14px}.error{display:none;background:#f5d7d3;color:#a6423a}.success{display:none;background:#dfeee3;color:#3f7a4c}.modal{position:fixed;inset:0;background:rgba(30,22,12,.28);display:none;align-items:center;justify-content:center;padding:16px}.modal.show{display:flex}.panel{width:min(440px,100%);background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px}.panel input{width:100%;border:1px solid var(--line);border-radius:12px;padding:11px 12px;margin-bottom:10px}@media (max-width:900px){.grid{grid-template-columns:1fr}.topbar{flex-wrap:wrap}.top-actions{max-width:100%}}
+    :root{--bg:#f7f5f0;--card:#fffdf8;--text:#25211b;--muted:#8a8172;--line:#e7dfd0;--primary:#6f5e46;--shadow:0 10px 26px rgba(69,56,38,.07)}
+    *{box-sizing:border-box}
+    body{margin:0;background:radial-gradient(circle at top left,rgba(180,157,118,.16),transparent 38%),var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui,"PingFang SC","Microsoft YaHei",sans-serif}
+    .wrap{max-width:1120px;margin:0 auto;padding:16px 16px 48px}
+    /* 顶栏 */
+    .topbar{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:6px 4px 14px}
+    h1{margin:0;font-size:26px;letter-spacing:.01em}
+    .top-actions{display:flex;gap:8px;align-items:center;flex:0 0 auto}
+    .btn,button{border:0;border-radius:999px;padding:9px 15px;background:#e8dfcf;color:var(--text);cursor:pointer;font-weight:650;font-size:14px;text-decoration:none;white-space:nowrap}
+    .btn.primary{background:var(--primary);color:#fff}
+    .btn.subtle{background:#efe8dc;color:#6e6355}
+    button:disabled,.btn:disabled{opacity:.6;cursor:progress}
+    /* ⋯ 菜单 */
+    .menu{position:relative}
+    .menu-toggle{padding:9px 13px;line-height:1}
+    .menu-list{position:absolute;right:0;top:calc(100% + 6px);background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:6px;min-width:150px;z-index:20}
+    .menu-list a,.menu-list button{display:block;width:100%;text-align:left;background:transparent;border-radius:10px;padding:10px 12px;font-weight:600}
+    .menu-list a:hover,.menu-list button:hover{background:#f3ede2}
+    /* 提示条 */
+    .error,.success{border-radius:12px;padding:11px 14px;margin:0 0 12px;font-size:14px}
+    .error{display:none;background:#f5d7d3;color:#a6423a}
+    .success{display:none;background:#dfeee3;color:#3f7a4c}
+    /* 分组 + 紧凑列表 */
+    .group{margin-bottom:22px}
+    .group h2{font-size:14px;color:var(--muted);font-weight:700;letter-spacing:.03em;margin:0 0 10px;padding-left:2px}
+    .rows{display:grid;grid-template-columns:1fr;gap:8px}
+    @media(min-width:640px){.rows{grid-template-columns:repeat(auto-fill,minmax(258px,1fr))}}
+    .row{display:flex;align-items:center;gap:12px;min-height:54px;padding:10px 14px;background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);text-decoration:none;color:var(--text);cursor:pointer;transition:transform .06s ease}
+    .row:active{transform:scale(.99)}
+    .row .emoji{font-size:21px;line-height:1;flex:0 0 auto}
+    .row .body{flex:1 1 auto;min-width:0}
+    .row .name{font-weight:650;font-size:15px}
+    .row .desc{font-size:12px;color:var(--muted);margin-top:3px;line-height:1.35}
+    .row .arrow{color:var(--muted);flex:0 0 auto;font-size:16px}
+    .row.locked{opacity:.5;cursor:default}
+    .row.locked:active{transform:none}
+    .hidden{display:none!important}
+    .muted{color:var(--muted)}
   </style>
 </head>
 <body>
   <div class="wrap">
     <header class="topbar">
-      <div>
-        <h1>首页</h1>
-        <p class="subtitle">配方、库存、系统状态与权限功能的统一导航页。</p>
-      </div>
+      <h1>首页</h1>
       <nav class="top-actions">
-        <a class="btn primary" href="/">首页</a>
-        <a class="btn" href="/health/">API Health</a>
-        <a id="adminLink" class="btn" href="/admin/">Admin UI</a>
-        <button id="refreshBtn" class="btn subtle" type="button">刷新数据</button>
         <button id="topLoginBtn" class="btn primary" type="button">登录（SSO）</button>
-        <button id="topLogoutBtn" class="btn hidden" type="button">退出登录</button>
+        <button id="topLogoutBtn" class="btn subtle hidden" type="button">退出登录</button>
+        <div class="menu">
+          <button id="menuToggle" class="btn subtle menu-toggle" type="button" aria-label="更多">⋯</button>
+          <div id="menuList" class="menu-list hidden">
+            <button id="refreshBtn" type="button">刷新数据</button>
+            <a href="/health/">API Health</a>
+            <a id="adminLink" href="/admin/">Admin UI</a>
+          </div>
+        </div>
       </nav>
     </header>
     <div id="errorBox" class="error"></div>
     <div id="successBox" class="success"></div>
-    <section id="features" class="card">
-      <h2>主要功能</h2>
-      <p class="muted">首页展示全部功能。第一行固定为原材料库存、成品库存、系统配方。</p>
-      <div id="featuresGrid" class="grid"></div>
-    </section>
-    <section id="toolsSection" class="card hidden">
-      <h2>工具 / 计算器</h2>
-      <p class="muted">独立的实验与计算工具，区别于上方的业务查询与录入功能。</p>
-      <div id="toolsGrid" class="grid"></div>
-    </section>
+    <main id="groupsRoot"></main>
   </div>
   <script>
     const API_BASE=location.port==='8080'?'http://localhost:8000':'/api';
     const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
-    const state={token:'',user:null,features:[],rbac:[]};
-    const ssoLogin=()=>{location.href=`${API_BASE}/v1/auth/oidc/login?rd=${encodeURIComponent(location.pathname+location.search)}`;};
-    const getAuthToken=()=>AUTH_KEYS.map((key)=>localStorage.getItem(key)||'').find(Boolean)||'';
-    const setAuthToken=(token)=>AUTH_KEYS.forEach((key)=>localStorage.setItem(key,token));
-    const clearAuthToken=()=>AUTH_KEYS.forEach((key)=>localStorage.removeItem(key));
+    const state={token:'',user:null,features:[]};
+
+    // —— 展示配置（前端映射，不依赖后端字段）——
+    const CATEGORY_ORDER=['业务查询','业务录入','质检','工具','个人','系统'];
+    const CATEGORY_EMOJI={'业务查询':'🔍','业务录入':'✍️','质检':'🔬','工具':'🛠️','个人':'👤','系统':'⚙️'};
+    const FEATURE_EMOJI={
+      raw_inventory:'🧱',finished_inventory:'📦',formula_query:'🧪',formula_color_space:'🎨',
+      tplus_bom_builder:'➕',new_model_form:'🆕',schedule_form:'📅',pending_return_alert:'🔔',
+      naming_form:'🏷️',qc_form:'🔬',density_calculator:'⚖️',midea_requirement:'📋',
+      personal_section:'👤',admin_ui:'⚙️',ash_calculator:'🔢',ai_file_transfer:'📁'
+    };
+    // 仅这些功能的说明确实补充了标题之外的信息，才显示小灰字
+    const DESC_WHITELIST=new Set(['formula_query','formula_color_space','ash_calculator','ai_file_transfer']);
+
+    const ssoLogin=()=>{location.href=`${API_BASE}/v1/auth/oidc/login`;};
+    const getAuthToken=()=>AUTH_KEYS.map((k)=>localStorage.getItem(k)||'').find(Boolean)||'';
+    const setAuthToken=(t)=>AUTH_KEYS.forEach((k)=>localStorage.setItem(k,t));
+    const clearAuthToken=()=>AUTH_KEYS.forEach((k)=>localStorage.removeItem(k));
     const syncTokenState=()=>{state.token=getAuthToken();};
-    function showError(message){errorBox.textContent=message;errorBox.style.display='block';successBox.style.display='none'}
-    function showSuccess(message){successBox.textContent=message;successBox.style.display='block';errorBox.style.display='none'}
-    function clearMessage(){errorBox.style.display='none';successBox.style.display='none'}
+    const isInternal=(u)=>typeof u==='string'&&u.startsWith('/');
+    function showError(m){errorBox.textContent=m;errorBox.style.display='block';successBox.style.display='none';}
+    function showSuccess(m){successBox.textContent=m;successBox.style.display='block';errorBox.style.display='none';}
+    function clearMessage(){errorBox.style.display='none';successBox.style.display='none';}
+
     async function api(path,opt={}){
       const headers=Object.assign({'Content-Type':'application/json'},opt.headers||{});
       syncTokenState();
@@ -64,30 +107,54 @@
       }
       return data;
     }
+
     function renderAuth(){
       const logged=Boolean(state.token&&state.user&&state.user.username!=='guest');
       topLoginBtn.classList.toggle('hidden',logged);
       topLogoutBtn.classList.toggle('hidden',!logged);
-      topLogoutBtn.textContent=logged?`退出登录（${state.user.username}）`:'退出登录';
+      topLogoutBtn.textContent=logged?`退出（${state.user.username}）`:'退出登录';
     }
-    function isInternal(url){return typeof url==='string'&&url.startsWith('/');}
-    function renderFeatureAction(feature){
-      if(!feature.url||feature.status!=='active')return '<span class="btn subtle">暂不可用</span>';
-      if(isInternal(feature.url))return `<button class="btn primary" type="button" onclick="location.assign('${feature.url}')">打开入口</button>`;
-      if(!feature.allowed)return `<button class="btn" type="button" onclick="showError('未登录或无权限，请点右上角「登录（SSO）」')">打开入口</button>`;
-      return `<a class="btn primary" href="${feature.url}" target="_blank" rel="noreferrer">打开入口</a>`;
+
+    // open-internal | open-external | locked-login | locked-reserved
+    function featureState(f){
+      if(f.status==='active'&&f.url){
+        if(isInternal(f.url))return 'open-internal';
+        return f.allowed?'open-external':'locked-login';
+      }
+      return 'locked-reserved';
     }
-    function featureCard(feature){
-      return `<article class="feature-card card"><div><h3>${feature.title}</h3><p>${feature.description||'暂无说明'}</p><div class="small muted">分类：${feature.category||'未分类'}<br/>权限：${feature.required_permission||'公开'}</div></div><div style="margin-top:14px;">${renderFeatureAction(feature)}</div></article>`;
+    function rowHtml(f){
+      const emoji=FEATURE_EMOJI[f.code]||CATEGORY_EMOJI[f.category]||'•';
+      const desc=(DESC_WHITELIST.has(f.code)&&f.description)?`<div class="desc">${f.description}</div>`:'';
+      const body=`<span class="emoji">${emoji}</span><div class="body"><div class="name">${f.title}</div>${desc}</div>`;
+      switch(featureState(f)){
+        case 'open-internal':
+          return `<a class="row" href="${f.url}">${body}<span class="arrow">›</span></a>`;
+        case 'open-external':
+          return `<a class="row" href="${f.url}" target="_blank" rel="noreferrer">${body}<span class="arrow">↗</span></a>`;
+        case 'locked-login':
+          return `<div class="row locked" onclick="showError('未登录或无权限，请点右上角「登录（SSO）」')">${body}<span class="arrow">🔒</span></div>`;
+        default:
+          return `<div class="row locked" onclick="showError('该功能暂未开放')">${body}<span class="arrow">🔒</span></div>`;
+      }
     }
+
     function renderFeatures(){
-      const items=state.features||[];
-      const tools=items.filter((feature)=>feature.category==='工具');
-      const rest=items.filter((feature)=>feature.category!=='工具');
-      featuresGrid.innerHTML=rest.length?rest.map(featureCard).join(''):'<div class="muted">当前没有功能配置。</div>';
-      if(tools.length){toolsGrid.innerHTML=tools.map(featureCard).join('');toolsSection.classList.remove('hidden');}
-      else{toolsSection.classList.add('hidden');}
+      const items=(state.features||[]).slice();
+      if(!items.length){groupsRoot.innerHTML='<div class="muted">当前没有功能配置。</div>';return;}
+      const groups={};
+      items.forEach((f)=>{const c=f.category||'其他';(groups[c]||(groups[c]=[])).push(f);});
+      const known=CATEGORY_ORDER.filter((c)=>groups[c]);
+      const extra=Object.keys(groups).filter((c)=>!CATEGORY_ORDER.includes(c));
+      const ordered=[...known,...extra];
+      groupsRoot.innerHTML=ordered.map((cat)=>{
+        const rows=groups[cat]
+          .sort((a,b)=>(a.sort_order||0)-(b.sort_order||0))
+          .map(rowHtml).join('');
+        return `<section class="group"><h2>${cat}</h2><div class="rows">${rows}</div></section>`;
+      }).join('');
     }
+
     async function loadFeatures(){
       clearMessage();
       const data=await api('/v1/features?include_all=true');
@@ -97,13 +164,16 @@
       renderAuth();
       renderFeatures();
     }
-    function logout(){clearAuthToken();syncTokenState();state.user=null;showSuccess('已退出登录。');loadFeatures().catch((error)=>showError(error.message));}
+    function logout(){clearAuthToken();syncTokenState();state.user=null;showSuccess('已退出登录。');loadFeatures().catch((e)=>showError(e.message));}
+
     document.addEventListener('DOMContentLoaded',()=>{
       syncTokenState();
-      refreshBtn.onclick=()=>loadFeatures().catch((error)=>showError(error.message));
+      refreshBtn.onclick=()=>{menuList.classList.add('hidden');loadFeatures().catch((e)=>showError(e.message));};
       topLoginBtn.onclick=ssoLogin;
       topLogoutBtn.onclick=logout;
-      loadFeatures().catch((error)=>showError(`加载功能入口失败：${error.message}`));
+      menuToggle.onclick=(e)=>{e.stopPropagation();menuList.classList.toggle('hidden');};
+      document.addEventListener('click',(e)=>{if(!e.target.closest('.menu'))menuList.classList.add('hidden');});
+      loadFeatures().catch((e)=>showError(`加载功能入口失败：${e.message}`));
     });
   </script>
 </body>
