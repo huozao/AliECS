@@ -184,6 +184,7 @@ def tplus_inventory_choices(
     q: str = Query(default="", max_length=100),
     limit: int = Query(default=50, ge=1, le=200),
     scope: Literal["all", "material"] = Query(default="all"),
+    include_disabled: bool = Query(default=False),
     user: dict[str, Any] = Depends(require_login),
 ) -> dict[str, Any]:
     _require_bom_write(user)
@@ -204,7 +205,7 @@ def tplus_inventory_choices(
     disabled_col = _inventory_column(df, "Disabled", "停用")
     if not code_col or not name_col or not unit_col:
         raise HTTPException(status_code=409, detail="存货档案缺少编码、名称或计量单位字段")
-    if disabled_col:
+    if disabled_col and include_disabled is not True:
         disabled = df[disabled_col].astype(str).str.strip().str.lower()
         df = df[~disabled.isin({"1", "true", "yes", "是"})]
     stock_by_code: dict[str, dict[str, Any]] = {}

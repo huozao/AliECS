@@ -18,6 +18,7 @@ def _write_inventory(directory: Path) -> None:
     ws.append(["Code", "Name", "Specification", "BaseUnitCode", "BaseUnitName", "Disabled"])
     ws.append(["515", "测试原料515", "25kg", "1", "kg", "False"])
     ws.append(["FG-1", "测试成品", "", "2", "个", "False"])
+    ws.append(["06000088", "停用旧父件", "", "1", "kg", "True"])
     wb.save(directory / "inventory_20260711_010830.xlsx")
 
 
@@ -80,6 +81,16 @@ class TPlusBomPickerTests(unittest.TestCase):
         self.assertEqual(["515"], [item["code"] for item in result["items"]])
         self.assertEqual(10.0, result["items"][0]["available_quantity"])
         self.assertEqual(13.0, result["items"][0]["existing_quantity"])
+
+    def test_disabled_rows_hidden_by_default(self):
+        result = self.main.tplus_inventory_choices(q="06000088", limit=20, scope="all", user=self._user())
+        self.assertEqual(0, result["total"])
+
+    def test_include_disabled_reveals_disabled_rows(self):
+        result = self.main.tplus_inventory_choices(
+            q="06000088", limit=20, scope="all", include_disabled=True, user=self._user()
+        )
+        self.assertEqual(["06000088"], [item["code"] for item in result["items"]])
 
     def test_create_options_use_tplus_classes_and_synced_units(self):
         old_post = self.main._chanjet_read_post
