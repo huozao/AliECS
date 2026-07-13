@@ -87,6 +87,14 @@ def test_code_suggestion_and_duplicate_check_wiring():
     assert "dupState" in html
 
 
+def test_desktop_two_column_layout_and_inventory_events():
+    html = read_page()
+    assert 'class="layout"' in html
+    assert "min-width:901px" in html
+    assert "inventory_created" in html
+    assert "已在 T+ 创建存货" in html
+
+
 def test_custom_material_attribute_defaults_purchase_and_material_only():
     html = read_page()
     custom_box = html.split('id="customAttrBox"')[1].split("</div></div>")[0]

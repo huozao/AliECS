@@ -53,6 +53,7 @@
     .modal.show{display:flex}
     .modal-panel{width:min(560px,100%);max-height:92vh;overflow:auto;background:#fff;border-radius:16px;padding:16px;border:1px solid var(--line)}
     .hint{padding:10px;border-radius:10px;background:#f2f6f1;color:var(--muted);font-size:13px;margin-bottom:10px}
+    @media(min-width:901px){.wrap{max-width:1100px}.layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;align-items:start}.layout>.panel{margin-bottom:0}}
     @media(max-width:420px){.grid{grid-template-columns:1fr}.field.wide{grid-column:auto}}
   </style>
 </head>
@@ -64,6 +65,7 @@
     </header>
     <div id="msg" class="msg"></div>
 
+    <div class="layout">
     <section class="panel" id="parentPanel">
       <div class="row" style="justify-content:space-between"><h2 style="margin:0">父件</h2><button id="parentModeBtn" class="linklike" type="button">改为选用 T+ 已有存货</button></div>
       <div id="parentNewBox">
@@ -122,6 +124,7 @@
       </div>
       <div class="adder"><input id="adderInput" placeholder="搜原料：编码 / 名称 / 规格" autocomplete="off"/><div id="adderResults" class="dropdown hidden"></div></div>
     </section>
+    </div>
 
     <div id="submissionBox" class="panel hidden"></div>
   </main>
@@ -319,7 +322,8 @@
     async function pollSubmission(){if(!state.submissionId)return;const data=await api(`/v1/tplus/bom-submissions/${state.submissionId}`);
       const terminal=['success','failed','needs_review'].includes(data.status);
       const labels={pending:'等待处理',processing:'正在写入 T+',success:'创建并验证成功',failed:'创建失败',needs_review:'需要人工复核'};
-      $('submissionBox').innerHTML=`<span class="status">${esc(labels[data.status]||data.status)}</span> <b>提交 #${data.id}</b><div class="muted small" style="margin-top:7px">T+ BOM ID：${esc(data.result_bom_id||'-')} · 尝试次数：${esc(data.attempts)}</div>${data.error&&data.error.message?`<div style="color:var(--danger);margin-top:7px">${esc(data.error.message)}</div>`:''}${data.status==='success'?'<div style="margin-top:10px"><button id="againBtn" class="btn" type="button">再录一个配方</button></div>':''}`;
+      const invLines=(data.events||[]).filter((ev)=>['inventory_created','inventory_reused'].includes(ev.type)).map((ev)=>`<div class="small" style="margin-top:5px;color:var(--good)">${ev.type==='inventory_created'?'已在 T+ 创建存货':'复用 T+ 已有存货'} ${esc((ev.detail||{}).code||'')} ${esc((ev.detail||{}).name||'')}</div>`).join('');
+      $('submissionBox').innerHTML=`<span class="status">${esc(labels[data.status]||data.status)}</span> <b>提交 #${data.id}</b><div class="muted small" style="margin-top:7px">T+ BOM ID：${esc(data.result_bom_id||'-')} · 尝试次数：${esc(data.attempts)}</div>${invLines}${data.error&&data.error.message?`<div style="color:var(--danger);margin-top:7px;white-space:pre-wrap">${esc(data.error.message)}</div>`:''}${data.status==='success'?'<div style="margin-top:10px"><button id="againBtn" class="btn" type="button">再录一个配方</button></div>':''}`;
       const again=$('againBtn');if(again)again.onclick=()=>{localStorage.removeItem(LS_KEY);location.reload();};
       if(!terminal)setTimeout(()=>pollSubmission().catch((e)=>message(e.message)),2000);
       else if(data.status==='success'){localStorage.removeItem(LS_KEY);message('T+ BOM 创建成功，并已完成写后查询验证。','good');}
