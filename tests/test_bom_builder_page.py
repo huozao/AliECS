@@ -77,6 +77,16 @@ def test_parent_attribute_defaults_five_checked_phantom_off():
     assert 'data-attr="is_phantom" checked' not in parent_box
 
 
+def test_code_suggestion_and_duplicate_check_wiring():
+    html = read_page()
+    assert "/v1/tplus/inventory-code-suggestion" in html
+    assert "include_disabled=true" in html
+    assert 'id="parentCodeHint"' in html and 'id="parentCodeWarn"' in html
+    assert 'id="customCodeHint"' in html and 'id="customCodeWarn"' in html
+    assert "编码已存在" in html
+    assert "dupState" in html
+
+
 def test_custom_material_attribute_defaults_purchase_and_material_only():
     html = read_page()
     custom_box = html.split('id="customAttrBox"')[1].split("</div></div>")[0]

@@ -211,6 +211,30 @@
       input.addEventListener('input',run);
       input.addEventListener('focus',()=>{if(input.value.trim())run();});}
 
+    // ---------- 建议编码与查重（辅助功能：接口失败不阻塞录入） ----------
+    const dupState={parentCode:false,customCode:false};
+    async function refreshCodeSuggestion(selectEl,hintEl,inputEl){
+      hintEl.textContent='';
+      const cls=selectEl.value;if(!cls||!token())return;
+      try{const data=await api(`/v1/tplus/inventory-code-suggestion?class_code=${encodeURIComponent(cls)}`);
+        if(selectEl.value!==cls)return;
+        hintEl.innerHTML=`建议编码：<button type="button" class="linklike" data-suggest>${esc(data.suggested)}</button>（点击填入，避免与已有编码重复）`;
+        hintEl.querySelector('[data-suggest]').onclick=()=>{inputEl.value=data.suggested;inputEl.dispatchEvent(new Event('input',{bubbles:true}));};}
+      catch(e){hintEl.textContent=`建议编码不可用：${e.message}`;}}
+    async function checkCodeDuplicate(inputEl,warnEl){
+      const key=inputEl.id,code=inputEl.value.trim();
+      warnEl.textContent='';dupState[key]=false;
+      if(!code||!token())return;
+      try{const data=await api(`/v1/tplus/inventories?q=${encodeURIComponent(code)}&limit=50&scope=all&include_disabled=true`);
+        if(inputEl.value.trim()!==code)return;
+        const hit=(data.items||[]).find((x)=>x.code===code);
+        if(hit){dupState[key]=true;warnEl.textContent=`编码已存在：${hit.name}（请修改流水号）`;}}
+      catch{warnEl.textContent='查重暂不可用（提交时以 T+ 校验为准）';}}
+    function wireCodeChecks(inputEl,warnEl){
+      const run=debounce(()=>checkCodeDuplicate(inputEl,warnEl),400);
+      inputEl.addEventListener('input',run);
+      inputEl.addEventListener('blur',()=>checkCodeDuplicate(inputEl,warnEl));}
+
     // ---------- 子件 ----------
     function findChild(code){return state.children.findIndex((c)=>c.code===code);}
     function addChild(item){
@@ -242,12 +266,15 @@
       pickOption($('customClassSelect'),DEFAULT_MATERIAL_CLASS_NAME,FALLBACK_MATERIAL_CLASS_CODE);
       pickOption($('customUnitSelect'),DEFAULT_UNIT_NAME,FALLBACK_UNIT_CODE);
       $('customAttrBox').querySelectorAll('[data-attr]').forEach((el)=>{el.checked=['is_purchase','is_material'].includes(el.dataset.attr)});
+      $('customCodeWarn').textContent='';dupState.customCode=false;
+      refreshCodeSuggestion($('customClassSelect'),$('customCodeHint'),$('customCode'));
       $('customModal').classList.add('show');$('customCode').focus();}
     function addCustom(){
       const classOption=$('customClassSelect').selectedOptions[0],unitOption=$('customUnitSelect').selectedOptions[0];
       const item={source:'custom',code:$('customCode').value.trim(),name:$('customName').value.trim(),specification:$('customSpec').value.trim(),inventory_class_code:classOption?.value||'',inventory_class_name:classOption?.dataset.name||'',unit_code:unitOption?.value||'',unit_name:unitOption?.dataset.name||'',...attrValues($('customAttrBox'))};
       for(const [key,label] of [['code','存货编码'],['name','存货名称'],['inventory_class_code','存货分类'],['unit_code','计量单位']]){if(!item[key]){message(`新增原料的${label}不能为空。`);return}}
       if(!Object.values(attrValues($('customAttrBox'))).some(Boolean)){message('新增原料至少勾选一项存货属性。');return}
+      if(dupState.customCode){message('新增原料编码已存在，请修改流水号或点击建议编码。');return}
       $('customModal').classList.remove('show');$('adderInput').value='';addChild(item);}
 
     // ---------- 自动保存 ----------
@@ -268,7 +295,7 @@
     // ---------- 校验并写入 ----------
     function localCheck(){const p=parentItem();
       if(!p||!p.code)throw new Error('请填写父件编码。');
-      if(state.parentMode==='new'){if(!p.name)throw new Error('请填写父件名称。');if(!p.inventory_class_code)throw new Error('请选择父件所属类别。');if(!p.unit_code)throw new Error('请选择父件单位。');if(!Object.values(attrValues($('parentAttrBox'))).some(Boolean))throw new Error('父件至少勾选一项存货属性。');}
+      if(state.parentMode==='new'){if(!p.name)throw new Error('请填写父件名称。');if(!p.inventory_class_code)throw new Error('请选择父件所属类别。');if(!p.unit_code)throw new Error('请选择父件单位。');if(!Object.values(attrValues($('parentAttrBox'))).some(Boolean))throw new Error('父件至少勾选一项存货属性。');if(dupState.parentCode)throw new Error('父件编码已存在，请修改流水号或点击建议编码。');}
       if(!$('versionInput').value.trim())throw new Error('请填写版本号。');
       if(!state.children.length)throw new Error('请至少添加一个子件。');
       const bad=state.children.find((c)=>{const qty=Number(c.required_quantity);return !Number.isFinite(qty)||qty<=0});
@@ -313,7 +340,11 @@
       $('submitBtn').onclick=submit;
       document.querySelectorAll('#parentCode,#parentName,#parentSpec,#versionInput,#produceQtyInput,#yieldRateInput,#warehouseInput,#routingInput,#plantInput,#defaultBomInput,#parentClassSelect,#parentUnitSelect').forEach((el)=>{el.addEventListener('input',markDirty);el.addEventListener('change',markDirty);});
       $('parentAttrBox').querySelectorAll('[data-attr]').forEach((el)=>el.addEventListener('change',markDirty));
-      if(token())ensureOptions().then(()=>{if(state.pendingParentClass)$('parentClassSelect').value=state.pendingParentClass;if(state.pendingParentUnit)$('parentUnitSelect').value=state.pendingParentUnit;}).catch((e)=>message(`读取 T+ 分类/单位失败：${e.message}（父件类别与单位暂不可选，可稍后刷新重试）`,'warn'));
+      wireCodeChecks($('parentCode'),$('parentCodeWarn'));
+      wireCodeChecks($('customCode'),$('customCodeWarn'));
+      $('parentClassSelect').addEventListener('change',()=>refreshCodeSuggestion($('parentClassSelect'),$('parentCodeHint'),$('parentCode')));
+      $('customClassSelect').addEventListener('change',()=>refreshCodeSuggestion($('customClassSelect'),$('customCodeHint'),$('customCode')));
+      if(token())ensureOptions().then(()=>{if(state.pendingParentClass)$('parentClassSelect').value=state.pendingParentClass;if(state.pendingParentUnit)$('parentUnitSelect').value=state.pendingParentUnit;refreshCodeSuggestion($('parentClassSelect'),$('parentCodeHint'),$('parentCode'));}).catch((e)=>message(`读取 T+ 分类/单位失败：${e.message}（父件类别与单位暂不可选，可稍后刷新重试）`,'warn'));
       else message('请先点右上角「登录（SSO）」再开始录入。','warn');
     });
   </script>

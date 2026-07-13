@@ -28,6 +28,7 @@ class TPlusBomBuilderFrontendTests(unittest.TestCase):
         self.assertIn("inventory_class_code", self.html)
         self.assertIn("is_made_request", self.html)
         self.assertIn("attrValues", self.html)
+        self.assertIn("inventory-code-suggestion", self.html)
 
     def test_migration_adds_permission_feature_and_audit_tables(self):
         self.assertIn("tplus.bom.write", self.migration)
