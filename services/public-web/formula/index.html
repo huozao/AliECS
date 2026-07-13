@@ -206,6 +206,7 @@
       </div>
     </section>
   </div>
+  <script src="compare-core.js"></script>
   <script>
     const API_BASE=location.port==='8080'?'http://localhost:8000':'/api';
     const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
@@ -213,8 +214,8 @@
     const PRICE_TIME_KEY='formula_manual_price_times';
     const SIM_QTY_KEY='formula_simulated_quantities';
     const VIEW_KEY='formula_display_options';
-    const VIEW_DEFAULTS={spec:true,qty:true,pct:true,arrow:true,delta:true,newTag:true,bar:true};
-    const state={token:'',fileId:'',cost:null,selectedKey:'',manualPrices:{},priceTimes:{},simulatedQuantities:{},focusCode:'',focusSimCode:'',queryRows:[],versions:[],selectedKeys:new Set(),baseKey:'',targetKeys:new Set(),activeFilter:'all',view:{...VIEW_DEFAULTS},majorityParentCode:'',majorityItemLen:0,majorityItemPrefix:''};
+    const VIEW_DEFAULTS=CompareCore.VIEW_DEFAULTS;
+    const state={token:'',fileId:'',cost:null,selectedKey:'',manualPrices:{},priceTimes:{},simulatedQuantities:{},focusCode:'',focusSimCode:'',queryRows:[],versions:[],selectedKeys:new Set(),baseKey:'',targetKeys:new Set(),activeFilter:'all',view:{...VIEW_DEFAULTS},majority:{parentCode:'',itemLen:0,itemPrefix:''}};
     const loadViewOptions=()=>{try{const saved=JSON.parse(localStorage.getItem(VIEW_KEY)||'{}');if('arrow' in saved&&!('delta' in saved))saved.delta=saved.arrow;return{...VIEW_DEFAULTS,...saved}}catch{return {...VIEW_DEFAULTS}}};
     const saveViewOptions=()=>localStorage.setItem(VIEW_KEY,JSON.stringify(state.view));
     const getAuthToken=()=>AUTH_KEYS.map((key)=>localStorage.getItem(key)||'').find(Boolean)||'';
@@ -243,27 +244,17 @@
       }
       return data;
     }
+    const {ratio,fmtDelta,formatQty,shortVersion,rowKey,rowDisabled,numberFromCell,detailToCompareRow,statusText,statusClass,EXPORT_ST_ORDER,targetLabel}=CompareCore;
+    const sel=()=>({versions:state.versions,selectedKeys:state.selectedKeys,baseKey:state.baseKey,targetKeys:state.targetKeys});
     const money=(value)=>Number(value||0).toLocaleString('zh-CN',{minimumFractionDigits:3,maximumFractionDigits:3});
     const qty=(value)=>Number(value||0).toLocaleString('zh-CN',{maximumFractionDigits:6});
     const inputValue=(value)=>Number(value||0).toLocaleString('en-US',{useGrouping:false,maximumFractionDigits:6});
-    const ratio=(value)=>Number.isFinite(Number(value))?`${(Number(value)*100).toFixed(3)}%`:'';
     const DASH='—';
     const moneyD=(value)=>Math.abs(Number(value||0))<0.0005?DASH:money(value);
     const qtyD=(value)=>Math.abs(Number(value||0))<0.0000005?DASH:qty(value);
     const ratioD=(value)=>(!Number.isFinite(Number(value))||Math.abs(Number(value))<0.000005)?DASH:ratio(value);
     const barPct=(value,max)=>{const n=Number(value),m=Number(max);return m>0&&Number.isFinite(n)&&n>0?Math.max(0,Math.min(100,n/m*100)):0;};
     const escapeHtml=(value)=>String(value??'').replace(/[&<>"']/g,(m)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-    const fmtDelta=(value)=>`${value>0?'+':''}${(Number(value)*100).toFixed(3)}%`;
-    const shortVersion=(value)=>{const text=String(value||'');return text.length>18?text.replace('2026-','26-'):text;};
-    const rowKey=(row)=>`${row.parentCode}|||${row.version}`;
-    const mode=(items)=>{
-      const counts=new Map();
-      items.filter((item)=>item!==''&&item!=null).forEach((item)=>counts.set(String(item),(counts.get(String(item))||0)+1));
-      return [...counts.entries()].sort((a,b)=>b[1]-a[1])[0]?.[0]||'';
-    };
-    const itemPrefix=(code)=>String(code||'').slice(0,3);
-    const NON_DISABLED_VALUES=new Set(['','0','否','False','false']);
-    const rowDisabled=(row)=>!NON_DISABLED_VALUES.has(String((row&&('停用' in row?row['停用']:row.disabled))||'').trim());
     function currentScope(){
       const value=defaultBom.value;
       if(value==='disabled')return{bom:'all',disabled:'only'};
@@ -275,32 +266,6 @@
       if(scope.disabled==='only')return (rows||[]).filter(rowDisabled);
       if(scope.disabled==='exclude')return (rows||[]).filter((row)=>!rowDisabled(row));
       return rows||[];
-    }
-    function numberFromCell(value){
-      const text=String(value??'').trim();
-      if(!text)return 0;
-      const numeric=Number(text.replace('%',''));
-      if(!Number.isFinite(numeric))return 0;
-      return text.includes('%')?numeric/100:numeric;
-    }
-    function detailToCompareRow(row){
-      return{
-        parentCode:String(row['父件编码']||''),
-        parentName:String(row['父件名称']||''),
-        version:String(row['版本号_子件']||''),
-        itemCode:String(row['子件编码']||''),
-        itemName:String(row['子件名称']||''),
-        spec:String(row['规格型号_子件']||''),
-        unit:String(row['计量单位_子件']||''),
-        qty:numberFromCell(row['需用数量']),
-        ratio:numberFromCell(row['比例']),
-        defaultBOM:String(row['默认BOM']||''),
-        disabled:String(row['停用']||'')
-      };
-    }
-    function formatQty(value){
-      if(!Number.isFinite(Number(value)))return '—';
-      return Number(value).toLocaleString('zh-CN',{maximumFractionDigits:6});
     }
     function renderRawDetails(rows){
       rawDetails.classList.toggle('hidden',!rows.length);
@@ -318,80 +283,22 @@
         <td>${escapeHtml(row.disabled)}</td>
       </tr>`).join('');
     }
-    function refreshMajorityPatterns(){
-      state.majorityParentCode=mode(state.queryRows.map((row)=>row.parentCode));
-      state.majorityItemLen=Number(mode(state.queryRows.map((row)=>String(row.itemCode).length)))||0;
-      state.majorityItemPrefix=mode(state.queryRows.map((row)=>itemPrefix(row.itemCode)));
-    }
-    function isSpecialParentCode(code){
-      return Boolean(state.majorityParentCode&&String(code)!==String(state.majorityParentCode));
-    }
-    function isSpecialItemCode(code){
-      const text=String(code||'');
-      return Boolean((state.majorityItemLen&&text.length!==state.majorityItemLen)||(state.majorityItemPrefix&&itemPrefix(text)!==state.majorityItemPrefix));
-    }
-    function codeTip(code){
-      const text=String(code||'');
-      const reasons=[];
-      if(state.majorityItemLen&&text.length!==state.majorityItemLen)reasons.push(`长度${text.length}位，多数为${state.majorityItemLen}位`);
-      if(state.majorityItemPrefix&&itemPrefix(text)!==state.majorityItemPrefix)reasons.push(`前缀${itemPrefix(text)}，多数前缀${state.majorityItemPrefix}`);
-      return reasons.join('；');
-    }
+    const isSpecialParentCode=(code)=>CompareCore.isSpecialParentCode(code,state.majority);
+    const isSpecialItemCode=(code)=>CompareCore.isSpecialItemCode(code,state.majority);
+    const codeTip=(code)=>CompareCore.codeTip(code,state.majority);
     function buildVersionsFromRows(rows){
       state.queryRows=rows;
-      refreshMajorityPatterns();
-      const map=new Map();
-      rows.forEach((row)=>{
-        const key=rowKey(row);
-        if(!map.has(key))map.set(key,{key,parentCode:row.parentCode,parentName:row.parentName,version:row.version,defaultBOM:'',disabled:'1',rows:[],maxRatio:0});
-        const version=map.get(key);
-        version.rows.push(row);
-        version.maxRatio=Math.max(version.maxRatio,row.ratio||0);
-        if(String(row.defaultBOM)==='1')version.defaultBOM='1';
-        if(!rowDisabled(row))version.disabled='0';
-      });
-      state.versions=[...map.values()];
-      state.selectedKeys=new Set(state.versions.map((version)=>version.key));
-      const defaultVersion=state.versions.find((version)=>version.defaultBOM==='1')||state.versions[0]||null;
-      const enabledVersion=state.versions.find((version)=>!rowDisabled(version))||state.versions[state.versions.length-1]||defaultVersion;
-      state.baseKey=defaultVersion?defaultVersion.key:'';
-      const targetCandidates=state.versions.filter((version)=>version.key!==state.baseKey);
-      state.targetKeys=new Set((targetCandidates.length?targetCandidates:[enabledVersion||defaultVersion]).filter(Boolean).map((version)=>version.key));
+      state.majority=CompareCore.majorityPatterns(rows);
+      const built=CompareCore.buildVersions(rows);
+      state.versions=built.versions;state.selectedKeys=built.selectedKeys;state.baseKey=built.baseKey;state.targetKeys=built.targetKeys;
       versionGrid.classList.toggle('hidden',!state.versions.length);
     }
-    function selectedVersions(){
-      return state.versions.filter((version)=>state.selectedKeys.has(version.key));
-    }
-    function baseVersion(){
-      return state.versions.find((version)=>version.key===state.baseKey)||selectedVersions()[0]||state.versions[0]||null;
-    }
-    function normalizeTargets(){
-      const selected=selectedVersions(), selectedKeys=new Set(selected.map((version)=>version.key)), base=baseVersion();
-      state.targetKeys=new Set([...state.targetKeys].filter((key)=>selectedKeys.has(key)));
-      if(base&&selected.length>1)state.targetKeys.delete(base.key);
-      if(!state.targetKeys.size){
-        const fallback=selected.filter((version)=>!base||version.key!==base.key);
-        state.targetKeys=new Set((fallback.length?fallback:selected).map((version)=>version.key));
-      }
-    }
-    function targetVersions(){
-      const selected=selectedVersions();
-      if(!selected.length)return [];
-      const base=baseVersion();
-      const explicit=selected.filter((version)=>state.targetKeys.has(version.key));
-      if(explicit.length)return explicit;
-      const fallback=selected.filter((version)=>!base||version.key!==base.key);
-      return fallback.length?fallback:(base?[base]:selected);
-    }
-    function targetVersion(){
-      return targetVersions()[0]||state.versions[0]||null;
-    }
-    function isTargetVersion(version){
-      return targetVersions().some((target)=>target.key===version.key);
-    }
-    function targetLabel(version){
-      return `${version.parentCode}｜${version.version||'-'}`;
-    }
+    function selectedVersions(){return CompareCore.selectedVersions(sel());}
+    function baseVersion(){return CompareCore.baseVersion(sel());}
+    function normalizeTargets(){const s=sel();CompareCore.normalizeTargets(s);state.targetKeys=s.targetKeys;}
+    function targetVersions(){return CompareCore.targetVersions(sel());}
+    function targetVersion(){return targetVersions()[0]||state.versions[0]||null;}
+    function isTargetVersion(version){return CompareCore.isTargetVersion(sel(),version);}
     function renderVersionCards(){
       normalizeTargets();
       versionGrid.innerHTML=state.versions.map((version)=>{
@@ -458,58 +365,10 @@
         });
       });
     }
-    function itemFamily(row){
-      const text=(row.itemName||row.spec||row.itemCode).replace(/[0-9A-Za-z\-_\s（）()]/g,'');
-      return `${row.unit}::${text.slice(0,3)||row.itemCode.slice(0,3)}`;
-    }
-    function buildCompareMatrix(){
-      const map=new Map();
-      state.queryRows.forEach((row)=>{
-        const key=rowKey(row);
-        if(!state.selectedKeys.has(key))return;
-        if(!map.has(row.itemCode))map.set(row.itemCode,{itemCode:row.itemCode,itemName:row.itemName,spec:row.spec,unit:row.unit,family:itemFamily(row),cells:{}});
-        map.get(row.itemCode).cells[key]=row;
-      });
-      return [...map.values()].sort((a,b)=>a.itemCode.localeCompare(b.itemCode,'zh-CN'));
-    }
-    function categoryHasReplacement(row,rows,target){
-      const base=baseVersion();
-      if(!base||!target)return false;
-      const peers=rows.filter((item)=>item.family===row.family);
-      if(peers.length<2)return false;
-      const baseCodes=peers.filter((item)=>item.cells[base.key]).map((item)=>item.itemCode).sort().join(',');
-      const targetCodes=peers.filter((item)=>item.cells[target.key]).map((item)=>item.itemCode).sort().join(',');
-      return Boolean(baseCodes&&targetCodes&&baseCodes!==targetCodes);
-    }
-    function rowStatusForTarget(row,rows,target){
-      const base=baseVersion();
-      const baseCell=base?row.cells[base.key]:null;
-      const targetCell=target?row.cells[target.key]:null;
-      if(categoryHasReplacement(row,rows,target)&&(!baseCell||!targetCell))return 'replace';
-      if(!baseCell&&targetCell)return 'add';
-      if(baseCell&&!targetCell)return 'del';
-      if(baseCell&&targetCell&&Math.abs(targetCell.ratio-baseCell.ratio)>0.000001)return 'change';
-      const values=[baseCell?.ratio,targetCell?.ratio].filter(Number.isFinite);
-      const unique=[...new Set(values.map((value)=>value.toFixed(6)))];
-      if(values.length&&unique.length===1)return 'same';
-      if(!baseCell&&!targetCell)return 'history';
-      return 'same';
-    }
-    function rowStatus(row,rows){
-      const targets=targetVersions();
-      if(!targets.length)return rowStatusForTarget(row,rows,baseVersion());
-      const statuses=targets.map((target)=>rowStatusForTarget(row,rows,target));
-      const priority=['replace','add','del','change','same','history'];
-      return priority.find((status)=>statuses.includes(status))||'same';
-    }
-    const statusText={change:'变更',replace:'替换',add:'新增',del:'删除',same:'一致',history:'历史'};
-    const statusClass={change:'st-change',replace:'st-replace',add:'st-add',del:'st-del',same:'st-same',history:'st-history'};
-    function passCompareFilter(status){
-      return state.activeFilter==='all'||(state.activeFilter==='diff'&&status!=='same')||(state.activeFilter==='replace'&&status==='replace')||(state.activeFilter==='adddel'&&(status==='add'||status==='del'))||(state.activeFilter==='change'&&status==='change')||(state.activeFilter==='same'&&status==='same');
-    }
-    function versionMaxRatio(key){
-      return state.versions.find((version)=>version.key===key)?.maxRatio||1;
-    }
+    function buildCompareMatrix(){return CompareCore.buildCompareMatrix(state.queryRows,sel());}
+    function rowStatus(row,rows){return CompareCore.rowStatus(row,rows,sel());}
+    function passCompareFilter(status){return CompareCore.passCompareFilter(status,state.activeFilter);}
+    function versionMaxRatio(key){return CompareCore.versionMaxRatio(sel(),key);}
     function renderCompareCell(row,version){
       const cell=row.cells[version.key], base=baseVersion(), baseCell=base?row.cells[base.key]:null, isTarget=isTargetVersion(version);
       if(!cell)return '<td class="version-col"></td>';
@@ -608,17 +467,9 @@
       }).join('');
     }
     function applyQuickSelect(mode){
-      const all=state.versions.map((version)=>version.key);
-      if(mode==='all')state.selectedKeys=new Set(all);
-      else if(mode==='none')state.selectedKeys=new Set();
-      else if(mode==='invert')state.selectedKeys=new Set(all.filter((key)=>!state.selectedKeys.has(key)));
-      else if(mode==='default')state.selectedKeys=new Set(state.versions.filter((version)=>version.defaultBOM==='1').map((version)=>version.key));
-      else if(mode==='activeDefault')state.selectedKeys=new Set(state.versions.filter((version)=>!rowDisabled(version)||version.defaultBOM==='1').map((version)=>version.key));
-      if(!state.selectedKeys.has(state.baseKey)){
-        const first=state.versions.find((version)=>state.selectedKeys.has(version.key));
-        state.baseKey=first?first.key:'';
-      }
-      normalizeTargets();
+      const s=sel();
+      CompareCore.applyQuickSelect(s,mode);
+      state.selectedKeys=s.selectedKeys;state.baseKey=s.baseKey;state.targetKeys=s.targetKeys;
       renderAllCompare();
     }
     function renderAllCompare(){
@@ -894,46 +745,11 @@
     // 对比表 Excel：真 .xlsx 由后端渲染（/v1/recipes/compare/export）。HTML 伪 xls 在
     // Excel/WPS 只认内联样式、移动端连内联背景都丢（2026-07-05 真机取证），已弃用。
     // 前端把呈现态（版本列/行状态/每格 比例/数量/±基准）原样传后端，对比逻辑唯一事实源仍在前端。
-    const EXPORT_ST_ORDER={replace:0,add:1,del:2,change:3,same:4,history:5};
     function filenamePart(value){
       return String(value||'配方').replace(/[\\/:*?"<>|\r\n\t]+/g,'-').replace(/\s+/g,'').slice(0,36)||'配方';
     }
     function buildComparePayload(){
-      const selected=selectedVersions();
-      if(!selected.length)return null;
-      const base=baseVersion(), targets=targetVersions();
-      if(!base||!targets.length)return null;
-      const rowsAll=buildCompareMatrix();
-      const rows=rowsAll.map((row)=>({...row,st:rowStatus(row,rowsAll)})).filter((row)=>passCompareFilter(row.st))
-        .sort((a,b)=>((EXPORT_ST_ORDER[a.st]??9)-(EXPORT_ST_ORDER[b.st]??9))||a.itemCode.localeCompare(b.itemCode,'zh-CN'));
-      const filterLabels={all:'全部',diff:'仅差异',replace:'仅替换',adddel:'仅新增/删除',change:'仅比例变化',same:'仅一致'};
-      return{
-        query:queryInput.value.trim(),
-        filter_label:filterLabels[state.activeFilter]||state.activeFilter,
-        view:state.view,
-        versions:selected.map((version)=>({label:targetLabel(version),code:version.parentCode,version:version.version||'',is_base:version.key===base.key,is_target:targets.some((target)=>target.key===version.key)})),
-        rows:rows.map((row)=>({
-          status:row.st,
-          item_code:row.itemCode,
-          item_name:row.itemName,
-          spec:row.spec||'',
-          unit:row.unit||'',
-          code_warn:isSpecialItemCode(row.itemCode),
-          cells:selected.map((version)=>{
-            const cell=row.cells[version.key];
-            if(!cell)return null;
-            const baseCell=row.cells[base.key];
-            const isBase=version.key===base.key;
-            const isTarget=targets.some((target)=>target.key===version.key);
-            return{
-              ratio:cell.ratio,
-              qty:cell.qty,
-              delta:(!isBase&&isTarget&&baseCell)?cell.ratio-baseCell.ratio:null,
-              is_new:Boolean(!isBase&&isTarget&&!baseCell)
-            };
-          })
-        }))
-      };
+      return CompareCore.buildComparePayload({query:queryInput.value.trim(),activeFilter:state.activeFilter,view:state.view,queryRows:state.queryRows,sel:sel(),majority:state.majority});
     }
     async function downloadCompareResult(){
       const payload=buildComparePayload();
