@@ -5,50 +5,121 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>AliECS · API Health</title>
   <style>
-    :root{--bg:#f7f5f0;--panel:#fffdf8;--text:#25211b;--muted:#766f63;--line:#e7dfd0;--good:#3f7a4c;--warn:#a46b1f;--bad:#a6423a;--primary:#6f5e46;--shadow:0 12px 30px rgba(69,56,38,.08)}
-    *{box-sizing:border-box}.hidden{display:none!important}body{margin:0;background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui}.wrap{max-width:1180px;margin:0 auto;padding:20px 18px 56px}.topbar{display:flex;justify-content:space-between;gap:14px;align-items:center;background:rgba(255,253,248,.94);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px;padding:16px 18px;margin-bottom:16px}h1{margin:0;font-size:30px}.subtitle{margin:6px 0 0;color:var(--muted)}.actions{display:flex;gap:8px;flex-wrap:wrap}.btn,button{border:0;border-radius:999px;padding:9px 13px;background:#e8dfcf;color:var(--text);font-weight:650;text-decoration:none;cursor:pointer}.btn.primary{background:var(--primary);color:#fff}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.band,.panel{background:rgba(255,253,248,.94);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:16px;padding:16px;margin-bottom:14px}.clickable{cursor:pointer}.metric{font-size:30px;font-weight:800;margin-top:8px}.muted{color:var(--muted)}.chip{display:inline-flex;align-items:center;border-radius:999px;padding:5px 9px;font-size:12px;font-weight:750}.ok{background:#dfeee3;color:var(--good)}.degraded,.warning{background:#f4ead8;color:var(--warn)}.critical,.failed{background:#f5d7d3;color:var(--bad)}table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}th,td{border-bottom:1px solid var(--line);padding:9px 10px;text-align:left;font-size:13px;vertical-align:top}th{background:#f2eadc}.list{display:grid;gap:8px}.attention{border-left:4px solid var(--warn);padding:8px 10px;background:#fff;border-radius:8px}.attention.critical{border-left-color:var(--bad)}.modal{position:fixed;inset:0;background:rgba(30,22,12,.28);display:none;align-items:center;justify-content:center;padding:16px}.modal.show{display:flex}.modal-panel{width:min(860px,100%);max-height:88vh;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px}pre{white-space:pre-wrap;word-break:break-word;background:#f7f5f0;border:1px solid var(--line);border-radius:12px;padding:12px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}textarea{width:100%;min-height:76px;border:1px solid var(--line);border-radius:12px;padding:10px 12px;font:inherit}.card-link{display:block;text-decoration:none;color:inherit;transition:box-shadow .15s}.card-link:hover{box-shadow:0 4px 16px rgba(69,56,38,.13)}.card-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}@media (max-width:900px){.grid{grid-template-columns:1fr}.card-grid{grid-template-columns:1fr}.topbar{align-items:flex-start;flex-direction:column}}
+    :root{--bg:#f7f5f0;--panel:#fffdf8;--text:#25211b;--muted:#8a8172;--line:#e7dfd0;--good:#3f7a4c;--warn:#a46b1f;--bad:#a6423a;--primary:#6f5e46;--shadow:0 10px 26px rgba(69,56,38,.07)}
+    *{box-sizing:border-box}
+    .hidden{display:none!important}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui,"PingFang SC","Microsoft YaHei",sans-serif}
+    .wrap{max-width:1180px;margin:0 auto;padding:16px 16px 48px}
+    /* 顶栏 */
+    .topbar{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:6px 4px 12px}
+    h1{margin:0;font-size:24px}
+    .actions{display:flex;gap:8px;align-items:center;flex:0 0 auto}
+    .btn,button{border:0;border-radius:999px;padding:9px 14px;background:#e8dfcf;color:var(--text);font-weight:650;font-size:14px;text-decoration:none;cursor:pointer;white-space:nowrap}
+    .btn.primary{background:var(--primary);color:#fff}
+    button:disabled,.btn:disabled{opacity:.6;cursor:progress}
+    .menu{position:relative}
+    .menu-toggle{padding:9px 13px;line-height:1}
+    .menu-list{position:absolute;right:0;top:calc(100% + 6px);background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:6px;min-width:158px;z-index:20}
+    .menu-list a,.menu-list button{display:block;width:100%;text-align:left;background:transparent;border-radius:10px;padding:10px 12px;font-weight:600}
+    .menu-list a:hover,.menu-list button:hover{background:#f3ede2}
+    /* 总状态条 */
+    .statusbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:13px 16px;margin-bottom:14px;font-weight:650}
+    .statusbar .dot{width:11px;height:11px;border-radius:50%;background:var(--good);display:inline-block;margin-right:7px;vertical-align:middle}
+    .statusbar .dot.warn{background:var(--warn)}.statusbar .dot.bad{background:var(--bad)}
+    .statusbar .seg{color:var(--muted);font-weight:600;font-size:14px}
+    .statusbar .seg b{color:var(--text);font-weight:750}
+    /* 区块 */
+    .band{background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:16px;padding:16px;margin-bottom:14px}
+    .band h2{margin:0 0 12px;font-size:16px}
+    .band h3{margin:16px 0 8px;font-size:13px;color:var(--muted);font-weight:700;letter-spacing:.02em}
+    .muted{color:var(--muted)}
+    /* 指标小格 */
+    .metrics{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+    @media(min-width:720px){.metrics{grid-template-columns:repeat(3,1fr)}}
+    .metric{background:#fff;border:1px solid var(--line);border-radius:13px;padding:12px 13px}
+    .metric.clickable{cursor:pointer}
+    .metric .label{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px}
+    .metric .value{font-size:24px;font-weight:800;margin-top:4px;line-height:1.1}
+    .metric .value.sm{font-size:15px;font-weight:700}
+    .metric .sub{font-size:12px;color:var(--muted);margin-top:3px}
+    .chip{display:inline-flex;align-items:center;border-radius:999px;padding:3px 8px;font-size:11px;font-weight:750}
+    .ok{background:#dfeee3;color:var(--good)}.degraded,.warning{background:#f4ead8;color:var(--warn)}.critical,.failed{background:#f5d7d3;color:var(--bad)}
+    /* 关注项 */
+    .list{display:grid;gap:8px}
+    .attention{border-left:4px solid var(--warn);padding:9px 11px;background:#fff;border-radius:9px;font-size:13px}
+    .attention.critical{border-left-color:var(--bad)}
+    /* 主机卡片行 */
+    .hostrows{display:grid;grid-template-columns:1fr;gap:8px}
+    @media(min-width:720px){.hostrows{grid-template-columns:repeat(2,1fr)}}
+    .hostrow{display:flex;align-items:center;gap:11px;background:#fff;border:1px solid var(--line);border-radius:13px;padding:11px 13px;cursor:pointer;min-height:54px}
+    .hostrow .hdot{width:9px;height:9px;border-radius:50%;background:var(--good);flex:0 0 auto}
+    .hostrow .hdot.bad{background:var(--bad)}
+    .hostrow .hbody{flex:1 1 auto;min-width:0}
+    .hostrow .hname{font-weight:700;font-size:14px}
+    .hostrow .hmeta{font-size:12px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .hostrow .arrow{color:var(--muted);flex:0 0 auto}
+    /* 链接卡 + 按钮 */
+    .linkgrid{display:grid;grid-template-columns:1fr;gap:10px}
+    @media(min-width:720px){.linkgrid{grid-template-columns:repeat(2,1fr)}}
+    .card-link{display:block;text-decoration:none;color:inherit;background:#fff;border:1px solid var(--line);border-radius:13px;padding:14px;transition:box-shadow .15s}
+    .card-link:hover{box-shadow:0 4px 16px rgba(69,56,38,.13)}
+    .card-link h3{margin:0 0 5px;font-size:15px}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    /* 弹层 */
+    .modal{position:fixed;inset:0;background:rgba(30,22,12,.28);display:none;align-items:center;justify-content:center;padding:16px;z-index:40}
+    .modal.show{display:flex}
+    .modal-panel{width:min(860px,100%);max-height:88vh;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px}
+    pre{white-space:pre-wrap;word-break:break-word;background:#f7f5f0;border:1px solid var(--line);border-radius:12px;padding:12px;font-size:12px}
   </style>
 </head>
 <body>
   <div class="wrap">
     <header class="topbar">
-      <div><h1>API Health</h1><p class="subtitle">服务器、同步任务与需要人工关注的状态。</p></div>
-      <nav class="actions"><a class="btn" href="/">首页</a><a id="jsonHealthLink" class="btn hidden" href="/api/healthz" target="_blank">JSON Health</a><button id="coupleEntryBtn" class="btn hidden" type="button" title="Couple">💗</button><button id="addWechatBtn" class="btn hidden" type="button">添加新微信</button><button id="loginBtn" class="btn" type="button">登录（SSO）</button><button id="logoutBtn" class="btn hidden" type="button">退出登录</button><button id="refreshBtn" class="btn primary hidden" type="button">刷新</button></nav>
+      <h1>API Health</h1>
+      <nav class="actions">
+        <button id="refreshBtn" class="btn primary hidden" type="button">刷新</button>
+        <button id="loginBtn" class="btn" type="button">登录（SSO）</button>
+        <button id="logoutBtn" class="btn hidden" type="button">退出</button>
+        <div class="menu">
+          <button id="menuToggle" class="btn menu-toggle" type="button" aria-label="更多">⋯</button>
+          <div id="menuList" class="menu-list hidden">
+            <a href="/">返回首页</a>
+            <a id="jsonHealthLink" class="hidden" href="/api/healthz" target="_blank">JSON Health</a>
+            <button id="addWechatBtn" class="hidden" type="button">添加新微信</button>
+            <button id="coupleEntryBtn" class="hidden" type="button">💗 Couple 入口</button>
+          </div>
+        </div>
+      </nav>
     </header>
     <div id="msg" class="attention" style="display:none;margin-bottom:14px"></div>
     <div id="gateHint" class="band">此页面仅管理员可见。请点右上角「登录（SSO）」。</div>
     <div id="adminContent" class="hidden">
-      <!-- 区1 设备与服务状态 -->
+      <div id="statusBar" class="statusbar"></div>
       <section class="band">
         <h2>设备与服务状态</h2>
-        <div id="summary" class="grid"></div>
-        <h3>需要关注</h3>
+        <h3 style="margin-top:0">需要关注</h3>
         <div id="attention" class="list muted">加载中...</div>
-        <h3 style="margin-top:14px">外部主机</h3>
+        <h3>关键指标</h3>
+        <div id="summary" class="metrics"></div>
+        <h3>外部主机</h3>
         <div id="hosts"></div>
       </section>
-      <!-- 区2 畅捷通同步 -->
       <section class="band">
-        <h2>畅捷通同步</h2>
-        <div class="card-grid">
-          <a class="card-link panel" href="/tplus-sync/">
-            <h3 style="margin:0 0 6px">T+ 同步时间线</h3>
-            <p class="muted" style="margin:0">查看每次同步的统一时间线、变化明细与产出 Excel。</p>
+        <h2>同步与工具</h2>
+        <div class="linkgrid">
+          <a class="card-link" href="/tplus-sync/">
+            <h3>T+ 同步时间线</h3>
+            <p class="muted" style="margin:0">每次同步的统一时间线、变化明细与产出 Excel。</p>
           </a>
-          <a class="card-link panel" href="/exports/">
-            <h3 style="margin:0 0 6px">数据导出</h3>
+          <a class="card-link" href="/exports/">
+            <h3>数据导出</h3>
             <p class="muted" style="margin:0">管理导出目录，同步文档，下载数据文件。</p>
           </a>
         </div>
-      </section>
-      <!-- 区3 渠道与其他 -->
-      <section class="band">
-        <h2>渠道与其他</h2>
-        <div class="row" style="gap:12px;margin-bottom:10px">
+        <div class="row" style="gap:10px;margin-top:12px">
           <button id="addWechatPanelBtn" class="btn primary" type="button">添加新微信</button>
           <a class="btn" href="/couple/" title="Couple">💗 Couple 入口</a>
         </div>
-        <p class="muted" style="margin:0">企微 / 飞书等渠道功能后续在此扩展</p>
       </section>
     </div>
   </div>
@@ -94,16 +165,31 @@
     async function fetchMe(){if(!token())return null;try{return await api('/v1/auth/me');}catch{return null;}}
     const isAdminUser=(me)=>!!me&&(((me.roles||[]).includes('admin'))||((me.permissions||[]).includes('admin.access')));
     function applyGate(me){const admin=isAdminUser(me);$('loginBtn').classList.toggle('hidden',admin);$('logoutBtn').classList.toggle('hidden',!token());$('adminContent').classList.toggle('hidden',!admin);$('gateHint').classList.toggle('hidden',admin);$('refreshBtn').classList.toggle('hidden',!admin);$('jsonHealthLink').classList.toggle('hidden',!admin);$('coupleEntryBtn').classList.toggle('hidden',!admin);$('addWechatBtn').classList.toggle('hidden',!admin);if(admin){refresh();}}
-    const ssoLogin=()=>{location.href=`${API_BASE}/v1/auth/oidc/login?rd=${encodeURIComponent(location.pathname+location.search)}`;};
+    const ssoLogin=()=>{location.href=`${API_BASE}/v1/auth/oidc/login`;};
+
+    function renderStatusBar(data){
+      const t=data.tplus||{},r=data.reconciliation||{},hosts=data.hosts||[];
+      const overall=(data.status||'unknown').toLowerCase();
+      const dotClass=overall==='ok'?'':(overall==='critical'||overall==='failed'?'bad':'warn');
+      const hostsOk=hosts.filter((h)=>h.ok).length;
+      const hostBad=hosts.length-hostsOk;
+      $('statusBar').innerHTML=[
+        `<span><span class="dot ${dotClass}"></span>整体 ${data.status||'unknown'}</span>`,
+        `<span class="seg">主机 <b>${hostsOk}/${hosts.length}</b></span>`,
+        `<span class="seg">待处理 <b>${t.pending_requests||0}</b></span>`,
+        `<span class="seg">失败 <b>${t.failed_requests||0}</b></span>`,
+        `<span class="seg">差异待审 <b>${r.needs_review||0}</b></span>`
+      ].join('')+(hostBad?`<span class="chip failed">主机异常 ${hostBad}</span>`:'');
+    }
     function renderSummary(data){
       const sys=data.system||{},db=data.database||{},t=data.tplus||{},r=data.reconciliation||{},hosts=data.hosts||[];
       summary.innerHTML=[
-        `<article class="panel"><div>整体状态 ${chip(data.status)}</div><div class="metric">${data.status||'unknown'}</div><div class="muted">${data.service||''}</div></article>`,
-        `<article class="panel"><div>数据库 ${chip(db.ok?'ok':'critical')}</div><div class="metric">${db.ok?'OK':'异常'}</div><div class="muted">${db.message||''}</div></article>`,
-        `<article class="panel"><div>待处理队列</div><div class="metric">${t.pending_requests||0}</div><div class="muted">失败 ${t.failed_requests||0}，差异待审 ${r.needs_review||0}</div></article>`,
-        `<article class="panel"><div>磁盘</div><div class="metric">${sys.disk_percent||0}%</div><div class="muted">内存 ${sys.memory_percent||0}%</div></article>`,
-        `<article class="panel"><div>最近 T+ 成功</div><div class="metric" style="font-size:18px">${fmtTime(t.last_success_at)}</div><div class="muted">${t.last_run?`${t.last_run.module}/${t.last_run.mode}/${t.last_run.status}`:'暂无 run'}</div></article>`,
-        `<article class="panel clickable" onclick="scrollToHosts()"><div>外部主机</div><div class="metric">${hosts.filter((item)=>item.ok).length}/${hosts.length}</div><div class="muted">点击查看详情，可手动刷新</div></article>`
+        `<article class="metric"><div class="label">整体状态 ${chip(data.status)}</div><div class="value">${data.status||'unknown'}</div><div class="sub">${data.service||''}</div></article>`,
+        `<article class="metric"><div class="label">数据库 ${chip(db.ok?'ok':'critical')}</div><div class="value">${db.ok?'OK':'异常'}</div><div class="sub">${db.message||''}</div></article>`,
+        `<article class="metric"><div class="label">待处理队列</div><div class="value">${t.pending_requests||0}</div><div class="sub">失败 ${t.failed_requests||0}，差异待审 ${r.needs_review||0}</div></article>`,
+        `<article class="metric"><div class="label">磁盘</div><div class="value">${sys.disk_percent||0}%</div><div class="sub">内存 ${sys.memory_percent||0}%</div></article>`,
+        `<article class="metric"><div class="label">最近 T+ 成功</div><div class="value sm">${fmtTime(t.last_success_at)}</div><div class="sub">${t.last_run?`${t.last_run.module}/${t.last_run.mode}/${t.last_run.status}`:'暂无 run'}</div></article>`,
+        `<article class="metric clickable" onclick="scrollToHosts()"><div class="label">外部主机</div><div class="value">${hosts.filter((item)=>item.ok).length}/${hosts.length}</div><div class="sub">点击查看详情</div></article>`
       ].join('');
     }
     function renderAttention(items){
@@ -111,8 +197,11 @@
       attention.innerHTML=items.map((item)=>`<div class="attention ${item.level||'warning'}"><strong>${item.code}</strong><br/><span>${item.message||''}</span></div>`).join('');
     }
     function renderHosts(items){
-      const rows=(items||[]).map((item)=>`<tr><td>${item.name}</td><td>${chip(item.ok?'ok':'failed')}</td><td>${item.status_code||''}</td><td>${item.latency_ms||''}</td><td>${item.description||item.message||item.url||''}</td><td><button class="btn primary" type="button" onclick="openHost('${encodeURIComponent(item.name)}')">查看/刷新</button></td></tr>`).join('');
-      hosts.innerHTML=`<table><thead><tr><th>名称</th><th>状态</th><th>HTTP</th><th>ms</th><th>说明</th><th>详情</th></tr></thead><tbody>${rows||'<tr><td colspan="6" class="muted">未配置外部主机探测。</td></tr>'}</tbody></table>`;
+      if(!items||!items.length){hosts.innerHTML='<div class="muted">未配置外部主机探测。</div>';return}
+      hosts.innerHTML=`<div class="hostrows">`+items.map((item)=>{
+        const meta=[item.status_code?`HTTP ${item.status_code}`:'',item.latency_ms?`${item.latency_ms}ms`:'',item.description||item.message||item.url||''].filter(Boolean).join(' · ');
+        return `<div class="hostrow" onclick="openHost('${encodeURIComponent(item.name)}')"><span class="hdot ${item.ok?'':'bad'}"></span><div class="hbody"><div class="hname">${item.name}</div><div class="hmeta">${meta||'-'}</div></div><span class="arrow">›</span></div>`;
+      }).join('')+`</div>`;
     }
     function scrollToHosts(){hosts.scrollIntoView({behavior:'smooth',block:'start'});}
     function openModal(title,html){modalTitle.textContent=title;modalBody.innerHTML=html;detailModal.classList.add('show');}
@@ -139,6 +228,7 @@
       refreshBtn.disabled=true;
       try{
         latestStatus=await loadStatus();
+        renderStatusBar(latestStatus);
         renderSummary(latestStatus);
         renderAttention(latestStatus.attention_items);
         renderHosts(latestStatus.hosts||[]);
@@ -150,6 +240,8 @@
     logoutBtn.onclick=()=>{clearAuthToken();applyGate(null);showSuccess('已退出登录。');};
     coupleEntryBtn.onclick=()=>location.assign('/couple/');
     addWechatBtn.onclick=openWechatQr;addWechatPanelBtn.onclick=openWechatQr;closeWechatQrBtn.onclick=closeWechatQr;refreshWechatQrBtn.onclick=loadWechatLoginQr;wechatQrModal.onclick=(event)=>{if(event.target===wechatQrModal)closeWechatQr();};
+    menuToggle.onclick=(e)=>{e.stopPropagation();menuList.classList.toggle('hidden');};
+    document.addEventListener('click',(e)=>{if(!e.target.closest('.menu'))menuList.classList.add('hidden');});
     (async()=>{applyGate(await fetchMe());})();
   </script>
 </body>
