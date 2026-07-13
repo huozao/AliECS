@@ -10,6 +10,29 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+ATTRIBUTE_FIELDS: tuple[tuple[str, str], ...] = (
+    ("is_purchase", "IsPurchase"),
+    ("is_sale", "IsSale"),
+    ("is_made_self", "IsMadeSelf"),
+    ("is_material", "IsMaterial"),
+    ("is_made_request", "IsMadeRequest"),
+    ("is_phantom", "IsPhantom"),
+)
+
+
+def _attribute_flags(item: dict[str, Any], kind: str) -> dict[str, bool]:
+    """属性键全缺（旧草稿）时回退旧 kind 写死逻辑，且不引入新键。"""
+    if all(item.get(key) is None for key, _ in ATTRIBUTE_FIELDS):
+        is_parent = kind == "parent"
+        return {
+            "IsPurchase": not is_parent,
+            "IsSale": is_parent,
+            "IsMadeSelf": is_parent,
+            "IsMaterial": not is_parent,
+        }
+    return {dto_key: bool(item.get(key)) for key, dto_key in ATTRIBUTE_FIELDS}
+
+
 def _positive_decimal(value: Any, field: str) -> str:
     raw = _text(value)
     try:
@@ -34,6 +57,9 @@ def _validate_custom_inventory(item: dict[str, Any], label: str) -> list[str]:
     ):
         if not _text(item.get(key)):
             errors.append(f"{label}的{field}不能为空")
+    provided = [item.get(key) for key, _ in ATTRIBUTE_FIELDS if item.get(key) is not None]
+    if provided and not any(provided):
+        errors.append(f"{label}至少勾选一项存货属性")
     return errors
 
 
@@ -92,7 +118,6 @@ def build_inventory_create_payload(item: dict[str, Any], *, kind: str) -> dict[s
         errors.append("自定义存货编码不能为空")
     if errors:
         raise ValueError("；".join(errors))
-    is_parent = kind == "parent"
     dto: dict[str, Any] = {
         "Code": _text(item["code"]),
         "Name": _text(item["name"]),
@@ -105,12 +130,9 @@ def build_inventory_create_payload(item: dict[str, Any], *, kind: str) -> dict[s
         "IsSingleUnit": True,
         "UnitType": {"Code": "00"},
         "ValueType": {"Code": "01"},
-        "IsPurchase": not is_parent,
-        "IsSale": is_parent,
-        "IsMadeSelf": is_parent,
-        "IsMaterial": not is_parent,
         "BaseVoucherState": {"Code": "01"},
     }
+    dto.update(_attribute_flags(item, kind))
     return {"dto": dto}
 
 

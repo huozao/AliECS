@@ -34,6 +34,12 @@ class BomParent(BaseModel):
     source: Literal["tplus", "custom"] = "tplus"
     inventory_class_code: str = Field(default="", max_length=100)
     inventory_class_name: str = Field(default="", max_length=200)
+    is_purchase: bool | None = None
+    is_sale: bool | None = None
+    is_made_self: bool | None = None
+    is_material: bool | None = None
+    is_made_request: bool | None = None
+    is_phantom: bool | None = None
 
 
 class BomChild(BomParent):

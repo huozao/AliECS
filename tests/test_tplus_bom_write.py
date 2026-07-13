@@ -71,6 +71,46 @@ class TPlusBomWriteDomainTests(unittest.TestCase):
         self.assertTrue(any("计量单位编码" in error for error in errors))
         self.assertTrue(any("存货分类编码" in error for error in errors))
 
+    def test_explicit_attributes_override_kind_defaults(self):
+        item = {
+            "source": "custom", "code": "06000013", "name": "新父件",
+            "inventory_class_code": "06", "inventory_class_name": "物料清单",
+            "unit_code": "1", "unit_name": "kg",
+            "is_purchase": True, "is_sale": True, "is_made_self": True,
+            "is_material": True, "is_made_request": True, "is_phantom": False,
+        }
+        dto = main.build_inventory_create_payload(item, kind="parent")["dto"]
+        self.assertTrue(dto["IsPurchase"])
+        self.assertTrue(dto["IsMaterial"])
+        self.assertTrue(dto["IsMadeRequest"])
+        self.assertFalse(dto["IsPhantom"])
+
+    def test_legacy_item_without_attribute_keys_keeps_old_kind_defaults(self):
+        item = {
+            "source": "custom", "code": "RM-NEW", "name": "新原料",
+            "inventory_class_code": "01", "inventory_class_name": "原材料",
+            "unit_code": "1", "unit_name": "kg",
+        }
+        dto = main.build_inventory_create_payload(item, kind="material")["dto"]
+        self.assertTrue(dto["IsPurchase"])
+        self.assertTrue(dto["IsMaterial"])
+        self.assertFalse(dto["IsSale"])
+        self.assertFalse(dto["IsMadeSelf"])
+        self.assertNotIn("IsMadeRequest", dto)
+        self.assertNotIn("IsPhantom", dto)
+
+    def test_all_false_attributes_rejected(self):
+        parent = {
+            "source": "custom", "code": "06000013", "name": "新父件",
+            "inventory_class_code": "06", "inventory_class_name": "物料清单",
+            "unit_code": "1", "unit_name": "kg",
+            "is_purchase": False, "is_sale": False, "is_made_self": False,
+            "is_material": False, "is_made_request": False, "is_phantom": False,
+        }
+        _, children, options = self._draft()
+        errors = main.validate_bom_draft(parent, children, options)
+        self.assertTrue(any("至少勾选一项存货属性" in error for error in errors))
+
 
 if __name__ == "__main__":
     unittest.main()
