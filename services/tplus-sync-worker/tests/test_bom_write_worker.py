@@ -124,6 +124,41 @@ class BomWriteWorkerTests(unittest.TestCase):
 
     @patch.object(bom_write_worker, "add_event")
     @patch.object(bom_write_worker, "finish_submission")
+    def test_scalar_create_response_verified_by_query_is_success(self, finish, _event):
+        # 生产实锤：T+ Create 成功返回裸标量 ID（非 {result:...} 包裹）
+        client = FakeClient([
+            [],
+            123,
+            [{"ID": 123, "Code": "FG-001", "Version": "V1"}],
+        ])
+        status = bom_write_worker.process_submission(self._submission(), client=client)
+        self.assertEqual("success", status)
+        self.assertEqual("123", finish.call_args.kwargs["result_bom_id"])
+
+    @patch.object(bom_write_worker, "add_event")
+    @patch.object(bom_write_worker, "finish_submission")
+    def test_custom_inventory_scalar_create_response_is_accepted(self, finish, _event):
+        submission = self._submission()
+        submission["request_json"] = {
+            "bom": submission["request_json"],
+            "custom_inventories": [{
+                "kind": "parent", "code": "06000001",
+                "payload": {"dto": {"Code": "06000001", "Name": "新父件"}},
+            }],
+        }
+        client = FakeClient([
+            [],
+            None,
+            568,
+            [{"ID": 568, "Code": "06000001", "Name": "新父件"}],
+            123,
+            [{"ID": 123, "Code": "FG-001", "Version": "V1"}],
+        ])
+        status = bom_write_worker.process_submission(submission, client=client)
+        self.assertEqual("success", status)
+
+    @patch.object(bom_write_worker, "add_event")
+    @patch.object(bom_write_worker, "finish_submission")
     def test_tplus_business_rejection_is_definite_failure(self, finish, _event):
         submission = self._submission()
         submission["request_json"] = {

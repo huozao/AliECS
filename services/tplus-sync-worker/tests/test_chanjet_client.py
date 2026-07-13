@@ -58,6 +58,16 @@ class ChanjetClientErrorTests(unittest.TestCase):
         self.assertEqual("", ctx.exception.business_message)
         self.assertIn("HTTP 502", str(ctx.exception))
 
+    def test_scalar_json_success_is_returned_not_rejected(self):
+        # T+ Create 类接口成功返回裸标量（如新记录 ID）；生产实锤：inventory/Create
+        # 返回标量被旧守卫误判 → 存货已建成却报 needs_review（2026-07-13 提交#2）。
+        client = self._client(FakeResponse(200, "568"))
+        self.assertEqual(568, client.post("/tplus/api/v2/inventory/Create", {"dto": {}}))
+
+    def test_null_json_success_is_returned_as_none(self):
+        client = self._client(FakeResponse(200, "null"))
+        self.assertIsNone(client.post("/tplus/api/v2/inventory/Query", {"param": {}}))
+
 
 if __name__ == "__main__":
     unittest.main()

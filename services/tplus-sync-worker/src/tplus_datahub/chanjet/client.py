@@ -93,13 +93,8 @@ class ChanjetClient:
                 body_preview=body_preview,
             ) from exc
 
-        if not isinstance(result, (dict, list)):
-            raise ChanjetAPIError(
-                message="接口返回 JSON 不是对象或列表结构",
-                endpoint=endpoint,
-                status_code=status_code,
-                body_preview=text_preview(result, 300),
-            )
+        # T+ Create 类接口成功时可能返回裸标量（如新记录 ID）或 null（Query 无结果），
+        # 一律原样返回，由调用方按语义处理（BOM 写入以写后查询验证为权威）。
         return result
 
     def _url(self, endpoint: str) -> str:
