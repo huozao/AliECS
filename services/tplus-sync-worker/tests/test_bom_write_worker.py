@@ -4,6 +4,7 @@ import os
 import unittest
 from unittest.mock import patch
 
+from tplus_datahub.core.exceptions import ChanjetAPIError
 from tplus_datahub.jobs import bom_write_worker
 
 
@@ -120,6 +121,39 @@ class BomWriteWorkerTests(unittest.TestCase):
         self.assertEqual("failed", status)
         self.assertEqual(2, len(client.calls))
         self.assertIn("名称为", finish.call_args.kwargs["error"]["message"])
+
+    @patch.object(bom_write_worker, "add_event")
+    @patch.object(bom_write_worker, "finish_submission")
+    def test_tplus_business_rejection_is_definite_failure(self, finish, _event):
+        submission = self._submission()
+        submission["request_json"] = {
+            "bom": submission["request_json"],
+            "custom_inventories": [{
+                "kind": "parent", "code": "06000013",
+                "payload": {"dto": {"Code": "06000013", "Name": "新父件"}},
+            }],
+        }
+        rejection = ChanjetAPIError(
+            "T+ 返回错误：存货编号：06000013不唯一，请尝试修改该编号中的流水号后再操作",
+            endpoint="/inv/Create", status_code=500,
+            business_message="存货编号：06000013不唯一，请尝试修改该编号中的流水号后再操作",
+        )
+        client = FakeClient([[], [], rejection])
+        status = bom_write_worker.process_submission(submission, client=client)
+        self.assertEqual("failed", status)
+        self.assertIn("不唯一", finish.call_args.kwargs["error"]["message"])
+
+    @patch.object(bom_write_worker, "add_event")
+    @patch.object(bom_write_worker, "finish_submission")
+    def test_bom_create_business_rejection_is_definite_failure(self, finish, _event):
+        rejection = ChanjetAPIError(
+            "T+ 返回错误：BOM 数据不合法", endpoint="/bom/Create",
+            status_code=500, business_message="BOM 数据不合法",
+        )
+        client = FakeClient([[], rejection])
+        status = bom_write_worker.process_submission(self._submission(), client=client)
+        self.assertEqual("failed", status)
+        self.assertIn("BOM 数据不合法", finish.call_args.kwargs["error"]["message"])
 
     def test_disabled_worker_never_claims(self):
         with patch.dict(os.environ, {"TPLUS_BOM_WRITE_ENABLED": "false"}, clear=False):

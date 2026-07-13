@@ -7,6 +7,7 @@ import time
 from typing import Any, Callable
 
 from tplus_datahub.chanjet.client import ChanjetClient
+from tplus_datahub.core.exceptions import ChanjetAPIError
 from tplus_datahub.core.logger import get_logger
 from tplus_datahub.jobs.db_bom_submissions import add_event, claim_next_submission, finish_submission
 
@@ -141,6 +142,19 @@ def process_submission(submission: dict[str, Any], client: ChanjetClient | None 
         try:
             action, inventory = _ensure_custom_inventory(submission_id, inventory_request, client)
             prepared.append({"code": inventory_request.get("code"), "action": action, "inventory": inventory})
+        except ChanjetAPIError as exc:
+            if exc.business_message:
+                # T+ 明确拒绝（返回了业务错误文本），是确定失败，原文透传给用户。
+                finish_submission(
+                    submission_id, status="failed", verification={"inventories": prepared},
+                    error={"type": type(exc).__name__, "message": str(exc)},
+                )
+                return "failed"
+            finish_submission(
+                submission_id, status="needs_review", verification={"inventories": prepared},
+                error={"type": type(exc).__name__, "message": f"自定义存货处理结果不确定：{exc}"},
+            )
+            return "needs_review"
         except ValueError as exc:
             finish_submission(
                 submission_id, status="failed", verification={"inventories": prepared},
@@ -179,6 +193,19 @@ def process_submission(submission: dict[str, Any], client: ChanjetClient | None 
             verification={"ID": result_id, "Code": parent_code, "Version": version}, result_bom_id=result_id,
         )
         return "success"
+    except ChanjetAPIError as exc:
+        if exc.business_message:
+            # T+ 明确拒绝创建请求，确定失败，错误原文透传给用户。
+            finish_submission(
+                submission_id, status="failed",
+                error={"type": type(exc).__name__, "message": str(exc)},
+            )
+            return "failed"
+        finish_submission(
+            submission_id, status="needs_review",
+            error={"type": type(exc).__name__, "message": str(exc)},
+        )
+        return "needs_review"
     except Exception as exc:
         # 网络超时可能发生在 T+ 已落库之后，禁止自动重试以免重复创建。
         finish_submission(
