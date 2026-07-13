@@ -87,6 +87,14 @@ def test_code_suggestion_and_duplicate_check_wiring():
     assert "dupState" in html
 
 
+def test_version_defaults_to_yymmdd_today():
+    html = read_page()
+    # 版本号默认当日日期（如 260713），不再是固定 V1
+    assert "function todayVersion()" in html
+    assert 'value="V1"' not in html
+    assert "form.version||todayVersion()" in html
+
+
 def test_desktop_two_column_layout_and_inventory_events():
     html = read_page()
     assert 'class="layout"' in html

@@ -23,6 +23,8 @@ def _truthy(value: str | None) -> bool:
 
 
 def _result_id(response: Any) -> str | None:
+    if isinstance(response, (str, int, float)) and not isinstance(response, bool) and str(response).strip():
+        return str(response).strip()
     if not isinstance(response, dict):
         return None
     for key in ("result", "Result", "value", "Value"):
