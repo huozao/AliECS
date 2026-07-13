@@ -25,6 +25,11 @@
     .msg{display:none;border-left:4px solid var(--danger);padding:10px 12px;background:#fff;border-radius:8px;margin-bottom:12px;white-space:pre-wrap}
     .msg.good{border-color:var(--good)}.msg.warn{border-color:var(--warn)}
     details.adv{margin-top:8px}details.adv summary{cursor:pointer;color:var(--muted);font-size:13px;padding:4px 0}
+    details.group{border:1px solid var(--line);border-radius:12px;padding:8px 12px;margin-top:10px}
+    details.group summary{cursor:pointer;font-weight:650;font-size:14px;padding:4px 0}
+    .attr-row{display:flex;flex-wrap:wrap;gap:10px 16px;margin-top:8px}
+    .attr-row label{display:flex;align-items:center;gap:5px;font-size:14px;color:var(--text)}
+    .attr-row input{width:auto}
     .table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;margin-bottom:8px}
     table{width:100%;border-collapse:collapse;background:#fff}
     th,td{padding:8px 9px;border-bottom:1px solid var(--line);text-align:left;font-size:13px;white-space:nowrap;vertical-align:middle}
@@ -48,6 +53,7 @@
     .modal.show{display:flex}
     .modal-panel{width:min(560px,100%);max-height:92vh;overflow:auto;background:#fff;border-radius:16px;padding:16px;border:1px solid var(--line)}
     .hint{padding:10px;border-radius:10px;background:#f2f6f1;color:var(--muted);font-size:13px;margin-bottom:10px}
+    @media(min-width:901px){.wrap{max-width:1100px}.layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;align-items:start}.layout>.panel{margin-bottom:0}}
     @media(max-width:420px){.grid{grid-template-columns:1fr}.field.wide{grid-column:auto}}
   </style>
 </head>
@@ -59,15 +65,34 @@
     </header>
     <div id="msg" class="msg"></div>
 
+    <div class="layout">
     <section class="panel" id="parentPanel">
       <div class="row" style="justify-content:space-between"><h2 style="margin:0">父件</h2><button id="parentModeBtn" class="linklike" type="button">改为选用 T+ 已有存货</button></div>
       <div id="parentNewBox">
-        <div class="grid" style="margin-top:10px">
-          <div class="field"><label for="parentCode">父件编码 *</label><input id="parentCode" maxlength="100" autocomplete="off"/></div>
-          <div class="field"><label for="parentName">父件名称 *</label><input id="parentName" maxlength="200" autocomplete="off"/></div>
-          <div class="field"><label for="parentClassSelect">所属类别 *</label><select id="parentClassSelect"><option value="">读取 T+ 分类中…</option></select></div>
-          <div class="field"><label for="parentUnitSelect">单位 *</label><select id="parentUnitSelect"><option value="">读取单位中…</option></select></div>
-        </div>
+        <details class="group" open><summary>基本信息</summary>
+          <div class="grid" style="margin-top:8px">
+            <div class="field"><label for="parentCode">父件编码 *</label><input id="parentCode" maxlength="100" autocomplete="off"/>
+              <div id="parentCodeHint" class="small muted"></div>
+              <div id="parentCodeWarn" class="small" style="color:var(--danger)"></div></div>
+            <div class="field"><label for="parentName">父件名称 *</label><input id="parentName" maxlength="200" autocomplete="off"/></div>
+            <div class="field"><label for="parentClassSelect">所属类别 *</label><select id="parentClassSelect"><option value="">读取 T+ 分类中…</option></select></div>
+          </div>
+        </details>
+        <details class="group" open><summary>计量单位</summary>
+          <div class="grid" style="margin-top:8px">
+            <div class="field"><label for="parentUnitSelect">单位 *</label><select id="parentUnitSelect"><option value="">读取单位中…</option></select></div>
+          </div>
+        </details>
+        <details class="group" open><summary>存货属性</summary>
+          <div class="attr-row" id="parentAttrBox">
+            <label><input type="checkbox" data-attr="is_purchase" checked/> 外购</label>
+            <label><input type="checkbox" data-attr="is_sale" checked/> 销售</label>
+            <label><input type="checkbox" data-attr="is_made_self" checked/> 自制</label>
+            <label><input type="checkbox" data-attr="is_material" checked/> 生产耗用</label>
+            <label><input type="checkbox" data-attr="is_made_request" checked/> 委外</label>
+            <label><input type="checkbox" data-attr="is_phantom"/> 虚拟件</label>
+          </div>
+        </details>
       </div>
       <div id="parentPickBox" class="hidden" style="margin-top:10px">
         <div class="adder"><input id="parentSearchInput" placeholder="搜 T+ 存货：编码 / 名称 / 规格" autocomplete="off"/><div id="parentResults" class="dropdown hidden"></div></div>
@@ -99,6 +124,7 @@
       </div>
       <div class="adder"><input id="adderInput" placeholder="搜原料：编码 / 名称 / 规格" autocomplete="off"/><div id="adderResults" class="dropdown hidden"></div></div>
     </section>
+    </div>
 
     <div id="submissionBox" class="panel hidden"></div>
   </main>
@@ -109,12 +135,23 @@
     <div class="row" style="justify-content:space-between"><h2 style="margin:0">新增原料存货</h2><button id="closeCustomBtn" type="button">关闭</button></div>
     <div class="hint">该原料将在提交时先创建到 T+ 并审核存货档案（编码不能与已有存货重复）。</div>
     <div class="grid">
-      <div class="field"><label for="customCode">存货编码 *</label><input id="customCode" maxlength="100"/></div>
+      <div class="field"><label for="customCode">存货编码 *</label><input id="customCode" maxlength="100"/>
+        <div id="customCodeHint" class="small muted"></div>
+        <div id="customCodeWarn" class="small" style="color:var(--danger)"></div></div>
       <div class="field"><label for="customName">存货名称 *</label><input id="customName" maxlength="200"/></div>
       <div class="field wide"><label for="customSpec">规格型号</label><input id="customSpec" maxlength="200"/></div>
       <div class="field"><label for="customClassSelect">存货分类 *</label><select id="customClassSelect"><option value="">读取中…</option></select></div>
       <div class="field"><label for="customUnitSelect">计量单位 *</label><select id="customUnitSelect"><option value="">读取中…</option></select></div>
     </div>
+    <div class="field wide" style="margin-top:8px"><label>存货属性</label>
+      <div class="attr-row" id="customAttrBox">
+        <label><input type="checkbox" data-attr="is_purchase" checked/> 外购</label>
+        <label><input type="checkbox" data-attr="is_sale"/> 销售</label>
+        <label><input type="checkbox" data-attr="is_made_self"/> 自制</label>
+        <label><input type="checkbox" data-attr="is_material" checked/> 生产耗用</label>
+        <label><input type="checkbox" data-attr="is_made_request"/> 委外</label>
+        <label><input type="checkbox" data-attr="is_phantom"/> 虚拟件</label>
+      </div></div>
     <div class="row" style="justify-content:flex-end;margin-top:14px"><button id="addCustomBtn" class="primary" type="button">加入子件</button></div>
   </div></div>
 
@@ -138,6 +175,10 @@
     async function api(path,opt={}){const headers=Object.assign({'Content-Type':'application/json'},opt.headers||{});if(token())headers.Authorization=`Bearer ${token()}`;const response=await fetch(`${API_BASE}${path}`,{...opt,headers});const text=await response.text();let data={};if(text){try{data=JSON.parse(text)}catch{data={raw:text}}}if(!response.ok){if(response.status===401){clearToken();syncAuth();}throw new Error(data.detail||`HTTP ${response.status}`)}return data;}
     function debounce(fn,ms){let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms)};}
 
+    // ---------- 存货属性复选框 ----------
+    function attrValues(box){const out={};box.querySelectorAll('[data-attr]').forEach((el)=>{out[el.dataset.attr]=el.checked});return out;}
+    function restoreAttrs(box,saved){if(!saved)return;box.querySelectorAll('[data-attr]').forEach((el)=>{if(saved[el.dataset.attr]!==undefined)el.checked=!!saved[el.dataset.attr]});}
+
     // ---------- 选项（类别/单位）：名称匹配预选，匹配不到回退编码 ----------
     function pickOption(select,preferName,fallbackCode){const byName=[...select.options].find((o)=>o.dataset.name===preferName);if(byName){select.value=byName.value;return}if([...select.options].some((o)=>o.value===fallbackCode))select.value=fallbackCode;}
     async function ensureOptions(){if(state.options)return state.options;const data=await api('/v1/tplus/inventory-create-options');state.options=data;
@@ -152,7 +193,7 @@
     // ---------- 父件 ----------
     function parentItem(){if(state.parentMode==='pick')return state.parentPicked;
       const classOption=$('parentClassSelect').selectedOptions[0],unitOption=$('parentUnitSelect').selectedOptions[0];
-      return{source:'custom',code:$('parentCode').value.trim(),name:$('parentName').value.trim(),specification:$('parentSpec').value.trim(),inventory_class_code:classOption?.value||'',inventory_class_name:classOption?.dataset.name||'',unit_code:unitOption?.value||'',unit_name:unitOption?.dataset.name||''};}
+      return{source:'custom',code:$('parentCode').value.trim(),name:$('parentName').value.trim(),specification:$('parentSpec').value.trim(),inventory_class_code:classOption?.value||'',inventory_class_name:classOption?.dataset.name||'',unit_code:unitOption?.value||'',unit_name:unitOption?.dataset.name||'',...attrValues($('parentAttrBox'))};}
     function renderParentChosen(){const p=state.parentPicked;$('parentChosenBox').classList.toggle('hidden',!p);if(p)$('parentChosenBox').innerHTML=`<span class="tag">T+ 已有</span> <b>${esc(p.code)} · ${esc(p.name)}</b><div class="muted small">${esc(p.specification||'无规格')} · ${esc(p.unit_name)}</div><button class="linklike" id="unpickParentBtn" type="button">撤销，改回新建父件</button>`;const btn=$('unpickParentBtn');if(btn)btn.onclick=()=>{state.parentPicked=null;setParentMode('new');markDirty();};}
     function setParentMode(mode){state.parentMode=mode;$('parentNewBox').classList.toggle('hidden',mode!=='new');$('parentPickBox').classList.toggle('hidden',mode!=='pick');$('parentModeBtn').textContent=mode==='new'?'改为选用 T+ 已有存货':'改回新建父件';renderParentChosen();}
 
@@ -172,6 +213,30 @@
         catch(e){box.innerHTML=`<div class="dd-item" style="color:var(--danger)">搜索失败：${esc(e.message)}（改动关键词重试）</div>`;box.classList.remove('hidden');}},250);
       input.addEventListener('input',run);
       input.addEventListener('focus',()=>{if(input.value.trim())run();});}
+
+    // ---------- 建议编码与查重（辅助功能：接口失败不阻塞录入） ----------
+    const dupState={parentCode:false,customCode:false};
+    async function refreshCodeSuggestion(selectEl,hintEl,inputEl){
+      hintEl.textContent='';
+      const cls=selectEl.value;if(!cls||!token())return;
+      try{const data=await api(`/v1/tplus/inventory-code-suggestion?class_code=${encodeURIComponent(cls)}`);
+        if(selectEl.value!==cls)return;
+        hintEl.innerHTML=`建议编码：<button type="button" class="linklike" data-suggest>${esc(data.suggested)}</button>（点击填入，避免与已有编码重复）`;
+        hintEl.querySelector('[data-suggest]').onclick=()=>{inputEl.value=data.suggested;inputEl.dispatchEvent(new Event('input',{bubbles:true}));};}
+      catch(e){hintEl.textContent=`建议编码不可用：${e.message}`;}}
+    async function checkCodeDuplicate(inputEl,warnEl){
+      const key=inputEl.id,code=inputEl.value.trim();
+      warnEl.textContent='';dupState[key]=false;
+      if(!code||!token())return;
+      try{const data=await api(`/v1/tplus/inventories?q=${encodeURIComponent(code)}&limit=50&scope=all&include_disabled=true`);
+        if(inputEl.value.trim()!==code)return;
+        const hit=(data.items||[]).find((x)=>x.code===code);
+        if(hit){dupState[key]=true;warnEl.textContent=`编码已存在：${hit.name}（请修改流水号）`;}}
+      catch{warnEl.textContent='查重暂不可用（提交时以 T+ 校验为准）';}}
+    function wireCodeChecks(inputEl,warnEl){
+      const run=debounce(()=>checkCodeDuplicate(inputEl,warnEl),400);
+      inputEl.addEventListener('input',run);
+      inputEl.addEventListener('blur',()=>checkCodeDuplicate(inputEl,warnEl));}
 
     // ---------- 子件 ----------
     function findChild(code){return state.children.findIndex((c)=>c.code===code);}
@@ -203,15 +268,20 @@
       $('customCode').value='';$('customName').value=prefillName||'';$('customSpec').value='';
       pickOption($('customClassSelect'),DEFAULT_MATERIAL_CLASS_NAME,FALLBACK_MATERIAL_CLASS_CODE);
       pickOption($('customUnitSelect'),DEFAULT_UNIT_NAME,FALLBACK_UNIT_CODE);
+      $('customAttrBox').querySelectorAll('[data-attr]').forEach((el)=>{el.checked=['is_purchase','is_material'].includes(el.dataset.attr)});
+      $('customCodeWarn').textContent='';dupState.customCode=false;
+      refreshCodeSuggestion($('customClassSelect'),$('customCodeHint'),$('customCode'));
       $('customModal').classList.add('show');$('customCode').focus();}
     function addCustom(){
       const classOption=$('customClassSelect').selectedOptions[0],unitOption=$('customUnitSelect').selectedOptions[0];
-      const item={source:'custom',code:$('customCode').value.trim(),name:$('customName').value.trim(),specification:$('customSpec').value.trim(),inventory_class_code:classOption?.value||'',inventory_class_name:classOption?.dataset.name||'',unit_code:unitOption?.value||'',unit_name:unitOption?.dataset.name||''};
+      const item={source:'custom',code:$('customCode').value.trim(),name:$('customName').value.trim(),specification:$('customSpec').value.trim(),inventory_class_code:classOption?.value||'',inventory_class_name:classOption?.dataset.name||'',unit_code:unitOption?.value||'',unit_name:unitOption?.dataset.name||'',...attrValues($('customAttrBox'))};
       for(const [key,label] of [['code','存货编码'],['name','存货名称'],['inventory_class_code','存货分类'],['unit_code','计量单位']]){if(!item[key]){message(`新增原料的${label}不能为空。`);return}}
+      if(!Object.values(attrValues($('customAttrBox'))).some(Boolean)){message('新增原料至少勾选一项存货属性。');return}
+      if(dupState.customCode){message('新增原料编码已存在，请修改流水号或点击建议编码。');return}
       $('customModal').classList.remove('show');$('adderInput').value='';addChild(item);}
 
     // ---------- 自动保存 ----------
-    function snapshot(){return{parentMode:state.parentMode,parentPicked:state.parentPicked,children:state.children,draftId:state.draftId,form:{parentCode:$('parentCode').value,parentName:$('parentName').value,parentClass:$('parentClassSelect').value,parentUnit:$('parentUnitSelect').value,parentSpec:$('parentSpec').value,version:$('versionInput').value,produceQty:$('produceQtyInput').value,yieldRate:$('yieldRateInput').value,warehouse:$('warehouseInput').value,routing:$('routingInput').value,plant:$('plantInput').value,defaultBom:$('defaultBomInput').checked}};}
+    function snapshot(){return{parentMode:state.parentMode,parentPicked:state.parentPicked,children:state.children,draftId:state.draftId,form:{parentCode:$('parentCode').value,parentName:$('parentName').value,parentClass:$('parentClassSelect').value,parentUnit:$('parentUnitSelect').value,parentSpec:$('parentSpec').value,parentAttrs:attrValues($('parentAttrBox')),version:$('versionInput').value,produceQty:$('produceQtyInput').value,yieldRate:$('yieldRateInput').value,warehouse:$('warehouseInput').value,routing:$('routingInput').value,plant:$('plantInput').value,defaultBom:$('defaultBomInput').checked}};}
     function payload(){const form=snapshot().form;return{parent:parentItem(),children:state.children.map((c)=>({...c,required_quantity:String(c.required_quantity)})),options:{version:form.version.trim(),produce_quantity:form.produceQty,yield_rate:form.yieldRate,is_default_bom:form.defaultBom,warehouse_code:form.warehouse.trim(),routing_code:form.routing.trim(),manufacture_plant_code:form.plant.trim()}};}
     const serverSave=debounce(async()=>{if(!token())return;try{const body=JSON.stringify(payload());const data=state.draftId?await api(`/v1/tplus/bom-drafts/${state.draftId}`,{method:'PATCH',body}):await api('/v1/tplus/bom-drafts',{method:'POST',body});state.draftId=data.id;localStorage.setItem(LS_KEY,JSON.stringify(snapshot()));$('saveHint').textContent=`草稿 #${state.draftId} 已自动保存`;}catch{$('saveHint').textContent='服务端草稿保存失败（本地已暂存）';}},2000);
     function markDirty(){localStorage.setItem(LS_KEY,JSON.stringify(snapshot()));$('saveHint').textContent=token()?'保存中…':'未登录：仅本地暂存';if(token())serverSave();}
@@ -221,13 +291,14 @@
       if(!confirm('检测到上次未提交的配方，恢复继续录入吗？（取消则丢弃）')){localStorage.removeItem(LS_KEY);return}
       state.children=saved.children||[];state.draftId=saved.draftId||null;state.parentPicked=saved.parentPicked||null;
       const form=saved.form||{};$('parentCode').value=form.parentCode||'';$('parentName').value=form.parentName||'';$('parentSpec').value=form.parentSpec||'';$('versionInput').value=form.version||'V1';$('produceQtyInput').value=form.produceQty||'1';$('yieldRateInput').value=form.yieldRate||'1';$('warehouseInput').value=form.warehouse||'';$('routingInput').value=form.routing||'';$('plantInput').value=form.plant||'';$('defaultBomInput').checked=!!form.defaultBom;
+      restoreAttrs($('parentAttrBox'),form.parentAttrs);
       if(form.parentClass)state.pendingParentClass=form.parentClass;if(form.parentUnit)state.pendingParentUnit=form.parentUnit;
       setParentMode(saved.parentMode==='pick'&&state.parentPicked?'pick':'new');}
 
     // ---------- 校验并写入 ----------
     function localCheck(){const p=parentItem();
       if(!p||!p.code)throw new Error('请填写父件编码。');
-      if(state.parentMode==='new'){if(!p.name)throw new Error('请填写父件名称。');if(!p.inventory_class_code)throw new Error('请选择父件所属类别。');if(!p.unit_code)throw new Error('请选择父件单位。');}
+      if(state.parentMode==='new'){if(!p.name)throw new Error('请填写父件名称。');if(!p.inventory_class_code)throw new Error('请选择父件所属类别。');if(!p.unit_code)throw new Error('请选择父件单位。');if(!Object.values(attrValues($('parentAttrBox'))).some(Boolean))throw new Error('父件至少勾选一项存货属性。');if(dupState.parentCode)throw new Error('父件编码已存在，请修改流水号或点击建议编码。');}
       if(!$('versionInput').value.trim())throw new Error('请填写版本号。');
       if(!state.children.length)throw new Error('请至少添加一个子件。');
       const bad=state.children.find((c)=>{const qty=Number(c.required_quantity);return !Number.isFinite(qty)||qty<=0});
@@ -251,7 +322,8 @@
     async function pollSubmission(){if(!state.submissionId)return;const data=await api(`/v1/tplus/bom-submissions/${state.submissionId}`);
       const terminal=['success','failed','needs_review'].includes(data.status);
       const labels={pending:'等待处理',processing:'正在写入 T+',success:'创建并验证成功',failed:'创建失败',needs_review:'需要人工复核'};
-      $('submissionBox').innerHTML=`<span class="status">${esc(labels[data.status]||data.status)}</span> <b>提交 #${data.id}</b><div class="muted small" style="margin-top:7px">T+ BOM ID：${esc(data.result_bom_id||'-')} · 尝试次数：${esc(data.attempts)}</div>${data.error&&data.error.message?`<div style="color:var(--danger);margin-top:7px">${esc(data.error.message)}</div>`:''}${data.status==='success'?'<div style="margin-top:10px"><button id="againBtn" class="btn" type="button">再录一个配方</button></div>':''}`;
+      const invLines=(data.events||[]).filter((ev)=>['inventory_created','inventory_reused'].includes(ev.type)).map((ev)=>`<div class="small" style="margin-top:5px;color:var(--good)">${ev.type==='inventory_created'?'已在 T+ 创建存货':'复用 T+ 已有存货'} ${esc((ev.detail||{}).code||'')} ${esc((ev.detail||{}).name||'')}</div>`).join('');
+      $('submissionBox').innerHTML=`<span class="status">${esc(labels[data.status]||data.status)}</span> <b>提交 #${data.id}</b><div class="muted small" style="margin-top:7px">T+ BOM ID：${esc(data.result_bom_id||'-')} · 尝试次数：${esc(data.attempts)}</div>${invLines}${data.error&&data.error.message?`<div style="color:var(--danger);margin-top:7px;white-space:pre-wrap">${esc(data.error.message)}</div>`:''}${data.status==='success'?'<div style="margin-top:10px"><button id="againBtn" class="btn" type="button">再录一个配方</button></div>':''}`;
       const again=$('againBtn');if(again)again.onclick=()=>{localStorage.removeItem(LS_KEY);location.reload();};
       if(!terminal)setTimeout(()=>pollSubmission().catch((e)=>message(e.message)),2000);
       else if(data.status==='success'){localStorage.removeItem(LS_KEY);message('T+ BOM 创建成功，并已完成写后查询验证。','good');}
@@ -271,7 +343,12 @@
       $('addCustomBtn').onclick=addCustom;
       $('submitBtn').onclick=submit;
       document.querySelectorAll('#parentCode,#parentName,#parentSpec,#versionInput,#produceQtyInput,#yieldRateInput,#warehouseInput,#routingInput,#plantInput,#defaultBomInput,#parentClassSelect,#parentUnitSelect').forEach((el)=>{el.addEventListener('input',markDirty);el.addEventListener('change',markDirty);});
-      if(token())ensureOptions().then(()=>{if(state.pendingParentClass)$('parentClassSelect').value=state.pendingParentClass;if(state.pendingParentUnit)$('parentUnitSelect').value=state.pendingParentUnit;}).catch((e)=>message(`读取 T+ 分类/单位失败：${e.message}（父件类别与单位暂不可选，可稍后刷新重试）`,'warn'));
+      $('parentAttrBox').querySelectorAll('[data-attr]').forEach((el)=>el.addEventListener('change',markDirty));
+      wireCodeChecks($('parentCode'),$('parentCodeWarn'));
+      wireCodeChecks($('customCode'),$('customCodeWarn'));
+      $('parentClassSelect').addEventListener('change',()=>refreshCodeSuggestion($('parentClassSelect'),$('parentCodeHint'),$('parentCode')));
+      $('customClassSelect').addEventListener('change',()=>refreshCodeSuggestion($('customClassSelect'),$('customCodeHint'),$('customCode')));
+      if(token())ensureOptions().then(()=>{if(state.pendingParentClass)$('parentClassSelect').value=state.pendingParentClass;if(state.pendingParentUnit)$('parentUnitSelect').value=state.pendingParentUnit;refreshCodeSuggestion($('parentClassSelect'),$('parentCodeHint'),$('parentCode'));}).catch((e)=>message(`读取 T+ 分类/单位失败：${e.message}（父件类别与单位暂不可选，可稍后刷新重试）`,'warn'));
       else message('请先点右上角「登录（SSO）」再开始录入。','warn');
     });
   </script>

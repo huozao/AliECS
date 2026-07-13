@@ -5,11 +5,15 @@ from pathlib import Path
 
 
 FORMULA_PAGE = Path(__file__).resolve().parents[1] / "services" / "public-web" / "formula" / "index.html"
+COMPARE_CORE = Path(__file__).resolve().parents[1] / "services" / "public-web" / "formula" / "compare-core.js"
 
 
 class FormulaFrontendTests(unittest.TestCase):
     def setUp(self) -> None:
         self.html = FORMULA_PAGE.read_text(encoding="utf-8")
+        # PR#185 把对比核心逻辑抽到 compare-core.js（页面薄壳化）；涉及算法的断言查两个文件的合集。
+        self.core = COMPARE_CORE.read_text(encoding="utf-8")
+        self.bundle = self.html + self.core
 
     def test_cost_panel_matches_reset_and_grouped_table_contract(self) -> None:
         self.assertIn("重置模拟数量", self.html)
@@ -93,9 +97,9 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertIn("来源：${data.source_file||'unknown'}", self.html)
 
     def test_query_compare_logic_has_bars_filters_and_code_warnings(self) -> None:
-        self.assertIn("function refreshMajorityPatterns(", self.html)
-        self.assertIn("function isSpecialItemCode(", self.html)
-        self.assertIn("function buildCompareMatrix(", self.html)
+        self.assertIn("majorityPatterns(", self.bundle)
+        self.assertIn("function isSpecialItemCode(", self.core)
+        self.assertIn("function buildCompareMatrix(", self.bundle)
         self.assertIn("function renderCompareTable(", self.html)
         self.assertIn("function downloadCompareResult(", self.html)
         self.assertIn("codeWarn", self.html)
@@ -139,10 +143,11 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertNotIn("state.targetKey=event.target.dataset.key", self.html)
 
     def test_multi_target_compare_uses_single_base(self) -> None:
-        self.assertIn("targetVersions().some((target)=>target.key===version.key)", self.html)
+        self.assertIn("targetVersions()", self.html)
+        self.assertIn("targetVersions(", self.core)
         self.assertIn("function normalizeTargets()", self.html)
-        self.assertIn("function rowStatusForTarget(row,rows,target)", self.html)
-        self.assertIn("const priority=['replace','add','del','change','same','history'];", self.html)
+        self.assertIn("rowStatusForTarget(row, rows, target", self.core)
+        self.assertIn("priority = ['replace', 'add', 'del', 'change', 'same', 'history']", self.core)
         self.assertIn("targets.map((target)=>targetLabel(target)).join('、')", self.html)
 
     def test_version_card_set_row_is_compact_single_row_without_max_ratio(self) -> None:
@@ -177,7 +182,7 @@ class FormulaFrontendTests(unittest.TestCase):
 
     def test_view_options_persist_with_qty_pct_guard(self) -> None:
         self.assertIn("const VIEW_KEY='formula_display_options';", self.html)
-        self.assertIn("const VIEW_DEFAULTS={spec:true,qty:true,pct:true,arrow:true,delta:true,newTag:true,bar:true};", self.html)
+        self.assertIn("VIEW_DEFAULTS = { spec: true, qty: true, pct: true, arrow: true, delta: true, newTag: true, bar: true }", self.core)
         self.assertIn("if(!state.view.qty&&!state.view.pct){", self.html)
         self.assertIn("至少保留一项", self.html)
         for key in ("spec", "qty", "pct", "arrow", "delta", "newTag", "bar"):
@@ -193,15 +198,15 @@ class FormulaFrontendTests(unittest.TestCase):
     def test_compare_excel_export_via_backend_xlsx(self) -> None:
         # 对比表导出改为后端真 xlsx（伪xls在Excel/WPS只认内联、移动端连内联都丢，2026-07-05 拍板）
         self.assertIn("/v1/recipes/compare/export", self.html)
-        self.assertIn("function buildComparePayload(", self.html)
-        self.assertIn("const EXPORT_ST_ORDER={replace:0,add:1,del:2,change:3,same:4,history:5};", self.html)
-        self.assertIn("filter_label:", self.html)
+        self.assertIn("function buildComparePayload(", self.bundle)
+        self.assertIn("EXPORT_ST_ORDER = { replace: 0, add: 1, del: 2, change: 3, same: 4, history: 5 }", self.core)
+        self.assertIn("filter_label:", self.core)
         self.assertIn("view:state.view,", self.html)
-        self.assertIn("code_warn:isSpecialItemCode(row.itemCode),", self.html)
-        self.assertNotIn("downloadHtmlAsXls", self.html)
-        self.assertNotIn("mso-data-placement", self.html)
-        self.assertNotIn("application/vnd.ms-excel", self.html)
-        self.assertNotIn("barBg", self.html)
+        self.assertIn("code_warn: isSpecialItemCode(row.itemCode", self.core)
+        self.assertNotIn("downloadHtmlAsXls", self.bundle)
+        self.assertNotIn("mso-data-placement", self.bundle)
+        self.assertNotIn("application/vnd.ms-excel", self.bundle)
+        self.assertNotIn("barBg", self.bundle)
 
     def test_version_card_shows_parent_name_on_top_without_label(self) -> None:
         self.assertIn('<div class="v-name" title="${escapeHtml(version.parentName)}">', self.html)

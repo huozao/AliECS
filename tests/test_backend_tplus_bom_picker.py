@@ -18,6 +18,7 @@ def _write_inventory(directory: Path) -> None:
     ws.append(["Code", "Name", "Specification", "BaseUnitCode", "BaseUnitName", "Disabled"])
     ws.append(["515", "测试原料515", "25kg", "1", "kg", "False"])
     ws.append(["FG-1", "测试成品", "", "2", "个", "False"])
+    ws.append(["06000088", "停用旧父件", "", "1", "kg", "True"])
     wb.save(directory / "inventory_20260711_010830.xlsx")
 
 
@@ -81,6 +82,16 @@ class TPlusBomPickerTests(unittest.TestCase):
         self.assertEqual(10.0, result["items"][0]["available_quantity"])
         self.assertEqual(13.0, result["items"][0]["existing_quantity"])
 
+    def test_disabled_rows_hidden_by_default(self):
+        result = self.main.tplus_inventory_choices(q="06000088", limit=20, scope="all", user=self._user())
+        self.assertEqual(0, result["total"])
+
+    def test_include_disabled_reveals_disabled_rows(self):
+        result = self.main.tplus_inventory_choices(
+            q="06000088", limit=20, scope="all", include_disabled=True, user=self._user()
+        )
+        self.assertEqual(["06000088"], [item["code"] for item in result["items"]])
+
     def test_create_options_use_tplus_classes_and_synced_units(self):
         old_post = self.main._chanjet_read_post
         self.main._chanjet_read_post = lambda endpoint, payload: [
@@ -96,6 +107,72 @@ class TPlusBomPickerTests(unittest.TestCase):
             [{"code": "1", "name": "kg"}, {"code": "2", "name": "个"}],
             result["units"],
         )
+
+
+def _write_inventory_for_suggestion(directory: Path) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Code", "Name", "Specification", "BaseUnitCode", "BaseUnitName", "Disabled"])
+    ws.append(["06000009", "旧父件九", "", "1", "kg", "False"])
+    ws.append(["06000012", "旧父件十二", "", "1", "kg", "False"])
+    ws.append(["0316-CO712", "历史杂码", "", "1", "kg", "False"])
+    ws.append(["069999", "位数不足不算", "", "1", "kg", "False"])
+    ws.append(["01000030", "原料", "", "1", "kg", "False"])
+    wb.save(directory / "inventory_20260713_010000.xlsx")
+
+
+class TPlusCodeSuggestionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        for name in list(sys.modules):
+            if name == "app" or name.startswith("app."):
+                del sys.modules[name]
+        sys.path.insert(0, str(BACKEND_ROOT))
+        from app.routers import tplus_bom as module
+        cls.main = module
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        for name in list(sys.modules):
+            if name == "app" or name.startswith("app."):
+                del sys.modules[name]
+        sys.path[:] = [item for item in sys.path if item != str(BACKEND_ROOT)]
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old_dir = os.environ.get("TPLUS_EXPORT_DIR")
+        os.environ["TPLUS_EXPORT_DIR"] = self.tmp.name
+        _write_inventory_for_suggestion(Path(self.tmp.name))
+
+    def tearDown(self) -> None:
+        if self.old_dir is None:
+            os.environ.pop("TPLUS_EXPORT_DIR", None)
+        else:
+            os.environ["TPLUS_EXPORT_DIR"] = self.old_dir
+        self.tmp.cleanup()
+
+    def _user(self) -> dict:
+        return {"sub": "tester", "roles": [], "permissions": ["tplus.bom.write"]}
+
+    def test_suggests_max_serial_plus_one_for_prefix(self):
+        result = self.main.tplus_inventory_code_suggestion(class_code="06", user=self._user())
+        self.assertEqual("06000013", result["suggested"])
+        self.assertEqual("06", result["prefix"])
+
+    def test_first_code_when_prefix_unused(self):
+        result = self.main.tplus_inventory_code_suggestion(class_code="09", user=self._user())
+        self.assertEqual("09000001", result["suggested"])
+
+    def test_subclass_code_uses_first_two_digits(self):
+        # 末级分类 1201 → 前缀 12
+        result = self.main.tplus_inventory_code_suggestion(class_code="1201", user=self._user())
+        self.assertEqual("12000001", result["suggested"])
+
+    def test_rejects_non_numeric_prefix(self):
+        from fastapi import HTTPException
+        with self.assertRaises(HTTPException) as ctx:
+            self.main.tplus_inventory_code_suggestion(class_code="AB", user=self._user())
+        self.assertEqual(400, ctx.exception.status_code)
 
 
 if __name__ == "__main__":

@@ -55,3 +55,50 @@ def test_children_render_as_table_without_more_section():
     # 「更多（预出仓库/子BOM版本）」已删：生产数据 2032/2034 子件两字段皆空，留空由 T+ 解析
     assert "更多（预出仓库" not in html
     assert "预出仓库编码" not in html.split("<script>")[1]
+
+
+def test_parent_new_mode_grouped_with_attributes():
+    html = read_page()
+    # 三分组标题
+    for title in ("基本信息", "计量单位", "存货属性"):
+        assert title in html, title
+    assert 'id="parentAttrBox"' in html
+    assert 'id="customAttrBox"' in html
+    # 6 个属性复选框锚点
+    for attr in ("is_purchase", "is_sale", "is_made_self", "is_material", "is_made_request", "is_phantom"):
+        assert f'data-attr="{attr}"' in html, attr
+
+
+def test_parent_attribute_defaults_five_checked_phantom_off():
+    html = read_page()
+    parent_box = html.split('id="parentAttrBox"')[1].split("</details>")[0]
+    for attr in ("is_purchase", "is_sale", "is_made_self", "is_material", "is_made_request"):
+        assert f'data-attr="{attr}" checked' in parent_box, attr
+    assert 'data-attr="is_phantom" checked' not in parent_box
+
+
+def test_code_suggestion_and_duplicate_check_wiring():
+    html = read_page()
+    assert "/v1/tplus/inventory-code-suggestion" in html
+    assert "include_disabled=true" in html
+    assert 'id="parentCodeHint"' in html and 'id="parentCodeWarn"' in html
+    assert 'id="customCodeHint"' in html and 'id="customCodeWarn"' in html
+    assert "编码已存在" in html
+    assert "dupState" in html
+
+
+def test_desktop_two_column_layout_and_inventory_events():
+    html = read_page()
+    assert 'class="layout"' in html
+    assert "min-width:901px" in html
+    assert "inventory_created" in html
+    assert "已在 T+ 创建存货" in html
+
+
+def test_custom_material_attribute_defaults_purchase_and_material_only():
+    html = read_page()
+    custom_box = html.split('id="customAttrBox"')[1].split("</div></div>")[0]
+    assert 'data-attr="is_purchase" checked' in custom_box
+    assert 'data-attr="is_material" checked' in custom_box
+    for attr in ("is_sale", "is_made_self", "is_made_request", "is_phantom"):
+        assert f'data-attr="{attr}" checked' not in custom_box, attr

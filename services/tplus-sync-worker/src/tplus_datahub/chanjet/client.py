@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from typing import Any
 
 try:
@@ -12,6 +14,37 @@ from tplus_datahub.chanjet.auth import build_auth_headers
 from tplus_datahub.core.exceptions import ChanjetAPIError
 from tplus_datahub.core.logger import get_logger
 from tplus_datahub.core.utils import text_preview
+
+
+_MESSAGE_KEYS = ("message", "Message", "msg", "Msg", "error", "Error", "detail", "Detail")
+
+
+def _business_message(text: str) -> str:
+    """从 T+ 错误返回体提取业务错误原文；解析不了返回空串。"""
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError):
+        return ""
+
+    def walk(node: Any) -> str:
+        if isinstance(node, dict):
+            for key in _MESSAGE_KEYS:
+                value = node.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            for value in node.values():
+                if isinstance(value, (dict, list)):
+                    nested = walk(value)
+                    if nested:
+                        return nested
+        elif isinstance(node, list):
+            for value in node:
+                nested = walk(value)
+                if nested:
+                    return nested
+        return ""
+
+    return walk(data)
 
 
 class ChanjetClient:
@@ -40,11 +73,14 @@ class ChanjetClient:
         body_preview = text_preview(getattr(response, "text", ""), 300)
 
         if status_code is not None and status_code >= 400:
+            raw_text = getattr(response, "text", "")
+            business = _business_message(raw_text)
             raise ChanjetAPIError(
-                message=f"接口返回 HTTP {status_code}",
+                message=f"T+ 返回错误：{business}" if business else f"接口返回 HTTP {status_code}",
                 endpoint=endpoint,
                 status_code=status_code,
-                body_preview=body_preview,
+                body_preview=text_preview(raw_text, 1000),
+                business_message=business,
             )
 
         try:
