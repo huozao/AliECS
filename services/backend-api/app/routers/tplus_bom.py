@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 
@@ -253,6 +254,45 @@ def tplus_inventory_choices(
     return {
         "items": items, "total": len(items), "source_file": path.name,
         "synced_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+    }
+
+
+CODE_SERIAL_WIDTH = 6
+CODE_SERIAL_MAX = 10 ** CODE_SERIAL_WIDTH - 1
+
+
+@router.get("/inventory-code-suggestion")
+def tplus_inventory_code_suggestion(
+    class_code: str = Query(min_length=2, max_length=100),
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, Any]:
+    """按用户约定：分类编码前 2 位 + 6 位不重复流水；历史杂乱编码不参与。"""
+    _require_bom_write(user)
+    prefix = class_code.strip()[:2]
+    if not re.fullmatch(r"\d{2}", prefix):
+        raise HTTPException(status_code=400, detail="分类编码前两位必须是数字")
+    path = _latest_tplus_export_file("inventory")
+    if path is None:
+        raise HTTPException(status_code=404, detail="存货档案尚未同步")
+    import pandas as pd
+
+    df = pd.read_excel(path, dtype=str).fillna("")
+    code_col = _inventory_column(df, "Code", "InventoryCode", "存货编码")
+    if not code_col:
+        raise HTTPException(status_code=409, detail="存货档案缺少编码字段")
+    pattern = re.compile(rf"^{prefix}(\d{{{CODE_SERIAL_WIDTH}}})$")
+    serials = [
+        int(match.group(1))
+        for code in df[code_col].astype(str).str.strip()
+        if (match := pattern.fullmatch(code))
+    ]
+    next_serial = (max(serials) + 1) if serials else 1
+    if next_serial > CODE_SERIAL_MAX:
+        raise HTTPException(status_code=409, detail="该类别流水号已用尽，请人工定义编码")
+    return {
+        "suggested": f"{prefix}{next_serial:0{CODE_SERIAL_WIDTH}d}",
+        "prefix": prefix,
+        "source_file": path.name,
     }
 
 
