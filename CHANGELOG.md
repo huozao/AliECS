@@ -1,5 +1,10 @@
 # 版本记录
 
+## v2.1.14：formula 对比核心抽共享模块 compare-core.js（网站/小程序单源）
+
+- 对比算法（行归一化/版本聚合/基准目标/矩阵/状态判定/筛选/导出payload）从 `formula/index.html` 内联抽出为 `formula/compare-core.js`（UMD 纯函数，禁 ?.,??,Intl 以兼容小程序 iOS JSCore），页面改薄壳委托，渲染代码不动；Playwright 双端口 stub 金样前后对比验证行为不变。
+- 权威源=本文件；微信小程序 weapp-lab 持字节一致副本（sync 脚本），行为单测 11 例在 weapp-lab node --test。
+
 ## v2.1.13：formula 只读 API token 通道（小程序云函数代理）
 
 - `services/backend-api/app/routers/recipes.py` 新增 `formula_login_or_token` 依赖：请求头 `X-API-Key` 与 env `FORMULA_API_TOKEN` 匹配即放行 5 条只读 formula 路由（query/cost/cost-export/compare-export/download），合成只读权限用户；不匹配回落现有 Bearer 登录鉴权；env 缺失=通道关闭。写路由（sync-bom）及其他域不挂载。
