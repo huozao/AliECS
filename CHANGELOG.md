@@ -1,5 +1,13 @@
 # 版本记录
 
+## v2.1.15：bom-builder 新建存货完整选项 + 建议编码查重 + T+ 报错透传 + 桌面两栏
+
+- 新端点 `GET /v1/tplus/inventory-code-suggestion?class_code=`：按约定「分类编码前 2 位 + 6 位流水」扫每日存货导出取最大流水 +1（物料清单首个建议 `06000001`），历史杂乱编码不参与；前端选类别后显示建议条，点击填入。
+- `GET /v1/tplus/inventories` 新增 `include_disabled` 参数（默认 false 行为不变）；前端编码输入失焦/停顿 400ms 精确查重（含停用存货），重复红字提示并阻断提交；接口失败只提示不阻塞录入。
+- 存货属性 6 项（外购 `IsPurchase`/销售 `IsSale`/自制 `IsMadeSelf`/生产耗用 `IsMaterial`/委外 `IsMadeRequest`/虚拟件 `IsPhantom`，生产实测验证字段名）进 T+ 创建 payload：父件默认勾前 5 项（虚拟件不勾），原料弹窗默认外购+生产耗用；属性全不勾双端拦截；旧草稿缺属性键回退旧 kind 写死逻辑（不引入新键）。
+- worker 报错透传：`ChanjetAPIError` 新增 `business_message`（解析 T+ 错误返回体原文，如「存货编号：xxx不唯一…」）；有业务错误文本=确定拒绝转 `failed` 并原文透传到提交卡，无文本（网络类）维持 `needs_review`。
+- 前端父件新建区重组三分组（基本信息/计量单位/存货属性，`<details>` 可折叠默认展开）；桌面 >900px 两栏布局（父件左/子件右），手机保持单列；提交状态卡展示存货创建/复用事件与错误原文全文。
+
 ## v2.1.14：formula 对比核心抽共享模块 compare-core.js（网站/小程序单源）
 
 - 对比算法（行归一化/版本聚合/基准目标/矩阵/状态判定/筛选/导出payload）从 `formula/index.html` 内联抽出为 `formula/compare-core.js`（UMD 纯函数，禁 ?.,??,Intl 以兼容小程序 iOS JSCore），页面改薄壳委托，渲染代码不动；Playwright 双端口 stub 金样前后对比验证行为不变。
