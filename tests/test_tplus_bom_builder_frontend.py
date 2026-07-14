@@ -37,6 +37,13 @@ class TPlusBomBuilderFrontendTests(unittest.TestCase):
         self.assertIn("tplus_bom_submissions", self.migration)
         self.assertIn("tplus_bom_submission_events", self.migration)
 
+    def test_audit_migration_adds_permission(self):
+        from pathlib import Path
+        sql = (ROOT / "db" / "migrations" / "0028_tplus_bom_audit.sql").read_text(encoding="utf-8")
+        self.assertIn("tplus.bom.audit", sql)
+        self.assertIn("role_permissions", sql)
+        self.assertIn("admin", sql)
+
 
 if __name__ == "__main__":
     unittest.main()
