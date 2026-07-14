@@ -222,6 +222,37 @@ class TPlusBomPendingTests(unittest.TestCase):
             self.main.tplus_bom_pending(scope="mine", user={"sub": "x", "roles": [], "permissions": []})
         self.assertEqual(403, ctx.exception.status_code)
 
+    def test_audit_success_when_recheck_flips_to_audited(self):
+        calls = []
+        def fake_audit_post(endpoint, payload):
+            calls.append(endpoint)
+            return {"result": "ok"}, ""
+        def fake_query(endpoint, payload):
+            return [{"Code": "06000001", "Version": "V1", "ID": 1, "VoucherState": {"Code": "01", "Name": "已审"}}]
+        self.main._chanjet_business_post = fake_audit_post
+        self.main._chanjet_read_post = fake_query
+        body = self.main.BomAuditBody(code="06000001", version="V1", bom_id="1")
+        result = self.main.tplus_bom_audit(body=body, user=self._user())
+        self.assertTrue(result["audited"])
+        self.assertEqual("01", result["voucher_state"]["code"])
+        self.assertIn(self.main.BOM_AUDIT_ENDPOINT, calls)
+
+    def test_audit_not_audited_when_recheck_still_pending(self):
+        self.main._chanjet_business_post = lambda endpoint, payload: ({}, "存货记账中，暂不能审核")
+        self.main._chanjet_read_post = lambda endpoint, payload: [
+            {"Code": "06000001", "Version": "V1", "ID": 1, "VoucherState": {"Code": "00", "Name": "未审"}}]
+        body = self.main.BomAuditBody(code="06000001", version="V1", bom_id="1")
+        result = self.main.tplus_bom_audit(body=body, user=self._user())
+        self.assertFalse(result["audited"])
+        self.assertIn("记账中", result["message"])
+
+    def test_audit_requires_permission(self):
+        from fastapi import HTTPException
+        body = self.main.BomAuditBody(code="06000001", version="V1", bom_id="1")
+        with self.assertRaises(HTTPException) as ctx:
+            self.main.tplus_bom_audit(body=body, user={"sub": "x", "roles": [], "permissions": []})
+        self.assertEqual(403, ctx.exception.status_code)
+
 
 if __name__ == "__main__":
     unittest.main()

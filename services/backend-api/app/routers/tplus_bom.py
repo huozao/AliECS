@@ -76,6 +76,12 @@ class BomSubmitBody(BaseModel):
     confirmed: bool = False
 
 
+class BomAuditBody(BaseModel):
+    code: str = Field(min_length=1, max_length=100)
+    version: str = Field(min_length=1, max_length=100)
+    bom_id: str = Field(default="", max_length=40)
+
+
 def _actor(user: dict[str, Any]) -> str:
     return str(user.get("username") or user.get("sub") or "").strip()
 
@@ -369,6 +375,78 @@ def tplus_bom_pending(
                 break
             page += 1
     return {"items": items, "scope": scope, "synced_at": datetime.now(timezone.utc).isoformat()}
+
+
+_AUDIT_MESSAGE_KEYS = ("message", "Message", "msg", "Msg", "error", "Error", "detail", "Detail")
+
+
+def _extract_business_message(text: str) -> str:
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError):
+        return ""
+
+    def walk(node: Any) -> str:
+        if isinstance(node, dict):
+            for key in _AUDIT_MESSAGE_KEYS:
+                value = node.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            for value in node.values():
+                nested = walk(value)
+                if nested:
+                    return nested
+        elif isinstance(node, list):
+            for value in node:
+                nested = walk(value)
+                if nested:
+                    return nested
+        return ""
+
+    return walk(data)
+
+
+def _chanjet_business_post(endpoint: str, payload: dict[str, Any]) -> tuple[Any, str]:
+    app_key = os.getenv("CHANJET_APP_KEY", "").strip()
+    app_secret = os.getenv("CHANJET_APP_SECRET", "").strip()
+    open_token = _chanjet_open_token()
+    if not app_key or not app_secret or not open_token:
+        raise HTTPException(status_code=503, detail="T+ 查询凭据未配置")
+    base_url = os.getenv("CHANJET_BASE_URL", "https://openapi.chanjet.com").rstrip("/")
+    request = urllib.request.Request(
+        f"{base_url}/{endpoint.lstrip('/')}",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json", "appKey": app_key, "appSecret": app_secret, "openToken": open_token},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return json.loads(response.read().decode("utf-8")), ""
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        return None, _extract_business_message(body) or f"T+ 返回 HTTP {exc.code}"
+    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail=f"T+ 审核请求失败：{type(exc).__name__}") from exc
+
+
+def _text_state(state: dict[str, Any], key: str) -> str:
+    return str(state.get(key) or "").strip()
+
+
+@router.post("/bom-audit")
+def tplus_bom_audit(body: BomAuditBody, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
+    _require_bom_audit(user)
+    _body, message = _chanjet_business_post(BOM_AUDIT_ENDPOINT, build_audit_payload(body.code, body.version, body.bom_id))
+    rows = _bom_query_rows(_chanjet_read_post(BOM_QUERY_ENDPOINT, {"dto": {"Code": body.code, "Version": body.version}}))
+    state = (rows[0].get("VoucherState") if rows else {}) or {}
+    audited = bool(rows) and not voucher_is_pending(rows[0])
+    if audited:
+        _audit(_actor(user), "tplus.bom.audit", "tplus_bom", f"{body.code}@{body.version}")
+    return {
+        "audited": audited,
+        "voucher_state": {"code": _text_state(state, "Code"), "name": _text_state(state, "Name")},
+        "message": "" if audited else (message or "审核后复查仍为未审，请刷新重试"),
+    }
 
 
 @router.post("/bom-drafts", status_code=201)
