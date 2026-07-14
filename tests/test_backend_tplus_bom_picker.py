@@ -175,5 +175,53 @@ class TPlusCodeSuggestionTests(unittest.TestCase):
         self.assertEqual(400, ctx.exception.status_code)
 
 
+class TPlusBomPendingTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        for name in list(sys.modules):
+            if name == "app" or name.startswith("app."):
+                del sys.modules[name]
+        sys.path.insert(0, str(BACKEND_ROOT))
+        from app.routers import tplus_bom as module
+        cls.main = module
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        for name in list(sys.modules):
+            if name == "app" or name.startswith("app."):
+                del sys.modules[name]
+        sys.path[:] = [item for item in sys.path if item != str(BACKEND_ROOT)]
+
+    def _user(self) -> dict:
+        return {"sub": "tester", "roles": [], "permissions": ["tplus.bom.audit"]}
+
+    def test_mine_scope_returns_only_pending(self):
+        self.main._load_success_submissions = lambda: [
+            {"bom": {"dto": {"Inventory": {"Code": "06000001"}, "Version": "V1"}}},
+            {"bom": {"dto": {"Inventory": {"Code": "06000002"}, "Version": "V1"}}},
+        ]
+        def fake_query(endpoint, payload):
+            code = payload["dto"]["Code"]
+            state = "00" if code == "06000001" else "01"
+            return [{"Code": code, "Version": "V1", "ID": 1, "VoucherState": {"Code": state, "Name": "x"}, "BOMChildDTOs": []}]
+        self.main._chanjet_read_post = fake_query
+        result = self.main.tplus_bom_pending(scope="mine", user=self._user())
+        self.assertEqual(["06000001"], [i["code"] for i in result["items"]])
+
+    def test_all_scope_filters_pending_from_list(self):
+        self.main._chanjet_read_post = lambda endpoint, payload: [
+            {"Code": "A", "Version": "V1", "ID": 1, "VoucherState": {"Code": "00", "Name": "未审"}, "BOMChildDTOs": []},
+            {"Code": "B", "Version": "V1", "ID": 2, "VoucherState": {"Code": "01", "Name": "已审"}, "BOMChildDTOs": []},
+        ]
+        result = self.main.tplus_bom_pending(scope="all", user=self._user())
+        self.assertEqual(["A"], [i["code"] for i in result["items"]])
+
+    def test_requires_audit_permission(self):
+        from fastapi import HTTPException
+        with self.assertRaises(HTTPException) as ctx:
+            self.main.tplus_bom_pending(scope="mine", user={"sub": "x", "roles": [], "permissions": []})
+        self.assertEqual(403, ctx.exception.status_code)
+
+
 if __name__ == "__main__":
     unittest.main()
