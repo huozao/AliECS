@@ -1,5 +1,14 @@
 # 版本记录
 
+## v2.1.17：bom-builder 增加 BOM 审核（录入/审核 Tab）
+
+- 同页顶部加 `录入 / 审核` Tab；提交成功自动跳审核页。
+- `GET /v1/tplus/bom-pending?scope=mine|all`：实时查 T+ 未审 BOM（mine=本工具 success 提交逐条 bom/Query 过滤未审；all=列表分页过滤），返回含子件明细。列表以 T+ VoucherState 为准，不查本地表，杜绝"假装提交"。
+- `POST /v1/tplus/bom-audit`：真调 T+ bom/Audit 后立即 bom/Query 复查 VoucherState，翻已审才 audited=true 并从列表移除，否则透传 T+ 原文，杜绝"假装审核"。
+- 新权限 `tplus.bom.audit`（迁移 0028，授 admin 角色，与 tplus.bom.write 分离）。
+- 审核列表行内可展开看子件明细、逐条二次确认审核、审核后同步消失、手动刷新+同步时间戳。
+- ⚠️ T+ bom/Audit 精确参数形态部署后现场校准（build_audit_payload 单函数封装，默认 dto 带 Code+Version+ID）。
+
 ## v2.1.16：修复 T+ 写入被标量返回体误杀（真机首单实锤）+ 版本号默认当日日期
 
 - 生产实锤（提交 #1/#2 均倒在此）：T+ Create 类接口**成功**时返回裸标量 JSON（如新记录 ID `568`），`ChanjetClient.post` 的 dict/list 守卫把成功当异常抛 `接口返回 JSON 不是对象或列表结构` → 存货已在 T+ 建成但提交卡 needs_review。守卫移除，标量/null 原样返回，由调用方按语义处理（BOM 写入以写后查询验证为权威）。
