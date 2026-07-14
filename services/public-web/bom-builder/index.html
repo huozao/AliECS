@@ -30,6 +30,14 @@
     .attr-row{display:flex;flex-wrap:wrap;gap:10px 16px;margin-top:8px}
     .attr-row label{display:flex;align-items:center;gap:5px;font-size:14px;color:var(--text)}
     .attr-row input{width:auto}
+    .tabs{display:flex;gap:8px;margin-bottom:14px}
+    .tab{flex:1;text-align:center;padding:10px;border-radius:12px;background:#e6ece6;font-weight:650;cursor:pointer;border:1px solid var(--line)}
+    .tab.active{background:var(--primary);color:#fff}
+    .audit-row{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:8px;background:#fff}
+    .audit-row.gone{opacity:0;transition:opacity .5s}
+    .audit-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .audit-children{margin-top:8px;border-top:1px dashed var(--line);padding-top:8px}
+    .audit-child{display:flex;justify-content:space-between;font-size:13px;color:var(--muted);padding:2px 0}
     .table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;margin-bottom:8px}
     table{width:100%;border-collapse:collapse;background:#fff}
     th,td{padding:8px 9px;border-bottom:1px solid var(--line);text-align:left;font-size:13px;white-space:nowrap;vertical-align:middle}
@@ -65,6 +73,12 @@
     </header>
     <div id="msg" class="msg"></div>
 
+    <div class="tabs">
+      <div id="tabEntry" class="tab active" role="button">录入</div>
+      <div id="tabAudit" class="tab" role="button">审核</div>
+    </div>
+
+    <div id="entryTab">
     <div class="layout">
     <section class="panel" id="parentPanel">
       <div class="row" style="justify-content:space-between"><h2 style="margin:0">父件</h2><button id="parentModeBtn" class="linklike" type="button">改为选用 T+ 已有存货</button></div>
@@ -127,6 +141,21 @@
     </div>
 
     <div id="submissionBox" class="panel hidden"></div>
+    </div>
+
+    <div id="auditTab" class="hidden">
+      <section class="panel">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <div class="row" id="auditScope" style="gap:6px">
+            <label class="small"><input type="radio" name="auditScope" value="mine" checked/> 本工具建的</label>
+            <label class="small"><input type="radio" name="auditScope" value="all"/> T+ 全部未审</label>
+          </div>
+          <button id="refreshAuditBtn" class="btn" type="button">刷新</button>
+        </div>
+        <div id="auditSyncedAt" class="small muted" style="margin:6px 0"></div>
+        <div id="auditList"></div>
+      </section>
+    </div>
   </main>
 
   <div class="sticky-bar"><div><div id="totalsLine" class="small">0 项</div><div id="saveHint" class="small muted"></div></div><button id="submitBtn" class="primary" type="button">校验并写入 T+</button></div>
@@ -174,6 +203,46 @@
     function syncAuth(){$('loginBtn').classList.toggle('hidden',!!token());$('logoutBtn').classList.toggle('hidden',!token());}
     async function api(path,opt={}){const headers=Object.assign({'Content-Type':'application/json'},opt.headers||{});if(token())headers.Authorization=`Bearer ${token()}`;const response=await fetch(`${API_BASE}${path}`,{...opt,headers});const text=await response.text();let data={};if(text){try{data=JSON.parse(text)}catch{data={raw:text}}}if(!response.ok){if(response.status===401){clearToken();syncAuth();}throw new Error(data.detail||`HTTP ${response.status}`)}return data;}
     function debounce(fn,ms){let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms)};}
+
+    // ---------- 录入/审核 Tab + 审核列表 ----------
+    function switchTab(name){
+      const audit=name==='audit';
+      $('entryTab').classList.toggle('hidden',audit);
+      $('auditTab').classList.toggle('hidden',!audit);
+      $('tabEntry').classList.toggle('active',!audit);
+      $('tabAudit').classList.toggle('active',audit);
+      document.querySelector('.sticky-bar').classList.toggle('hidden',audit);
+      if(audit)loadPending();
+    }
+    function auditScope(){return (document.querySelector('input[name=auditScope]:checked')||{}).value||'mine';}
+    async function loadPending(){
+      if(!token()){$('auditList').innerHTML='<div class="muted small">请先登录（SSO）。</div>';return}
+      $('auditList').innerHTML='<div class="muted small">加载中…</div>';
+      try{const data=await api(`/v1/tplus/bom-pending?scope=${auditScope()}`);
+        $('auditSyncedAt').textContent=`同步于 ${new Date(data.synced_at).toLocaleTimeString('zh-CN')}`;
+        renderPending(data.items||[]);}
+      catch(e){$('auditList').innerHTML=`<div style="color:var(--danger)" class="small">加载失败：${esc(e.message)}（点刷新重试）</div>`;}}
+    function renderPending(items){
+      if(!items.length){$('auditList').innerHTML='<div class="muted small">当前没有待审核 BOM。</div>';return}
+      $('auditList').innerHTML=items.map((it,i)=>`<div class="audit-row" data-i="${i}">
+        <div class="audit-head"><b>${esc(it.code)}</b> <span>${esc(it.name)}</span>
+          <span class="tag">版本 ${esc(it.version)}</span><span class="tag">生产 ${esc(it.produce_quantity||'-')}</span>
+          <span class="status" style="margin-left:auto">${esc(it.voucher_state.name||'未审')}</span></div>
+        <button class="linklike" data-toggle="${i}" type="button">展开子件（${(it.children||[]).length}）</button>
+        <div class="audit-children hidden" data-children="${i}">${(it.children||[]).map((c)=>`<div class="audit-child"><span>${esc(c.code)} ${esc(c.name)}</span><span>${esc(c.required_quantity)} ${esc(c.unit_name)}</span></div>`).join('')||'<div class="muted small">无子件</div>'}</div>
+        <div style="margin-top:8px"><button class="primary" data-audit="${i}" type="button">审核</button></div>
+        <div class="small" data-err="${i}" style="color:var(--danger);margin-top:6px"></div></div>`).join('');
+      $('auditList').querySelectorAll('[data-toggle]').forEach((el)=>el.onclick=()=>$('auditList').querySelector(`[data-children="${el.dataset.toggle}"]`).classList.toggle('hidden'));
+      $('auditList').querySelectorAll('[data-audit]').forEach((el)=>el.onclick=()=>auditRow(items[Number(el.dataset.audit)],el.closest('.audit-row')));
+    }
+    async function auditRow(item,rowEl){
+      if(!confirm(`确认审核：${item.code}（${item.name}）版本 ${item.version}，${(item.children||[]).length} 个子件？`))return;
+      const errEl=rowEl.querySelector('[data-err]');errEl.textContent='';
+      const btn=rowEl.querySelector('[data-audit]');btn.disabled=true;
+      try{const data=await api('/v1/tplus/bom-audit',{method:'POST',body:JSON.stringify({code:item.code,version:item.version,bom_id:item.bom_id})});
+        if(data.audited){rowEl.classList.add('gone');setTimeout(()=>loadPending(),600);}
+        else{errEl.textContent=`未通过：${esc(data.message||'复查仍未审')}`;btn.disabled=false;}}
+      catch(e){errEl.textContent=`审核失败：${esc(e.message)}`;btn.disabled=false;}}
 
     // ---------- 版本号默认=当日日期（如 260713） ----------
     function todayVersion(){const d=new Date();return String(d.getFullYear()).slice(2)+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0');}
@@ -329,7 +398,7 @@
       $('submissionBox').innerHTML=`<span class="status">${esc(labels[data.status]||data.status)}</span> <b>提交 #${data.id}</b><div class="muted small" style="margin-top:7px">T+ BOM ID：${esc(data.result_bom_id||'-')} · 尝试次数：${esc(data.attempts)}</div>${invLines}${data.error&&data.error.message?`<div style="color:var(--danger);margin-top:7px;white-space:pre-wrap">${esc(data.error.message)}</div>`:''}${data.status==='success'?'<div style="margin-top:10px"><button id="againBtn" class="btn" type="button">再录一个配方</button></div>':''}`;
       const again=$('againBtn');if(again)again.onclick=()=>{localStorage.removeItem(LS_KEY);location.reload();};
       if(!terminal)setTimeout(()=>pollSubmission().catch((e)=>message(e.message)),2000);
-      else if(data.status==='success'){localStorage.removeItem(LS_KEY);message('T+ BOM 创建成功，并已完成写后查询验证。','good');}
+      else if(data.status==='success'){localStorage.removeItem(LS_KEY);message('T+ BOM 创建成功，并已完成写后查询验证。','good');switchTab('audit');}
       else message('提交已停止自动处理，请根据状态人工复核。','warn');}
 
     // ---------- 装配 ----------
@@ -349,6 +418,10 @@
       $('parentAttrBox').querySelectorAll('[data-attr]').forEach((el)=>el.addEventListener('change',markDirty));
       wireCodeChecks($('parentCode'),$('parentCodeWarn'));
       wireCodeChecks($('customCode'),$('customCodeWarn'));
+      $('tabEntry').onclick=()=>switchTab('entry');
+      $('tabAudit').onclick=()=>switchTab('audit');
+      $('refreshAuditBtn').onclick=loadPending;
+      document.querySelectorAll('input[name=auditScope]').forEach((el)=>el.addEventListener('change',loadPending));
       $('parentClassSelect').addEventListener('change',()=>refreshCodeSuggestion($('parentClassSelect'),$('parentCodeHint'),$('parentCode')));
       $('customClassSelect').addEventListener('change',()=>refreshCodeSuggestion($('customClassSelect'),$('customCodeHint'),$('customCode')));
       if(token())ensureOptions().then(()=>{if(state.pendingParentClass)$('parentClassSelect').value=state.pendingParentClass;if(state.pendingParentUnit)$('parentUnitSelect').value=state.pendingParentUnit;refreshCodeSuggestion($('parentClassSelect'),$('parentCodeHint'),$('parentCode'));}).catch((e)=>message(`读取 T+ 分类/单位失败：${e.message}（父件类别与单位暂不可选，可稍后刷新重试）`,'warn'));

@@ -95,6 +95,34 @@ def test_version_defaults_to_yymmdd_today():
     assert "form.version||todayVersion()" in html
 
 
+def test_entry_audit_tabs_present():
+    html = read_page()
+    for anchor in ("tabEntry", "tabAudit", "entryTab", "auditTab"):
+        assert f'id="{anchor}"' in html, anchor
+    assert "function switchTab(" in html
+    assert "录入" in html and "审核" in html
+
+
+def test_audit_list_wiring():
+    html = read_page()
+    assert "/v1/tplus/bom-pending" in html
+    assert "/v1/tplus/bom-audit" in html
+    assert 'id="auditList"' in html
+    assert 'id="auditScope"' in html
+    assert 'id="refreshAuditBtn"' in html
+    assert "function loadPending(" in html
+    assert "function auditRow(" in html
+    assert "本工具建的" in html and "T+ 全部未审" in html
+    assert "当前没有待审核" in html
+
+
+def test_audit_row_confirm_and_recheck_semantics():
+    html = read_page()
+    assert "确认审核" in html
+    assert "data.audited" in html
+    assert "switchTab('audit')" in html
+
+
 def test_desktop_two_column_layout_and_inventory_events():
     html = read_page()
     assert 'class="layout"' in html
