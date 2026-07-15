@@ -1,6 +1,6 @@
 # 版本记录
 
-## v2.1.17：bom-builder 增加 BOM 审核（录入/审核 Tab）
+## v2.1.18：bom-builder 增加 BOM 审核（录入/审核 Tab）
 
 - 同页顶部加 `录入 / 审核` Tab；提交成功自动跳审核页。
 - `GET /v1/tplus/bom-pending?scope=mine|all`：实时查 T+ 未审 BOM（mine=本工具 success 提交逐条 bom/Query 过滤未审；all=列表分页过滤），返回含子件明细。列表以 T+ VoucherState 为准，不查本地表，杜绝"假装提交"。
@@ -8,6 +8,13 @@
 - 新权限 `tplus.bom.audit`（迁移 0028，授 admin 角色，与 tplus.bom.write 分离）。
 - 审核列表行内可展开看子件明细、逐条二次确认审核、审核后同步消失、手动刷新+同步时间戳。
 - ⚠️ T+ bom/Audit 精确参数形态部署后现场校准（build_audit_payload 单函数封装，默认 dto 带 Code+Version+ID）。
+
+## v2.1.17：修复 admin-ui 被 #188 静默 revert 的 safeHref 与系统配置面板
+
+- 根因：#188 移动端重设计基于落后于 main 的 WIP 分支重写后覆盖 origin/main，静默回退了 #171 的「系统配置生效总览」面板与 feature 链接的 `safeHref`/`renderSafeLink` XSS 加固，致 main 的 admin 前端测试一直红（连带阻塞其它 PR 的全量 pytest 门禁）。
+- 以 cb22880 为事实源恢复两者，保留 #188 的移动端卡片/弹层新 UI；`comm` 符号级比对确认零意外功能丢失（仅 `requireNumberList` 为复选框化的故意移除）。
+- feature 链接与系统配置编辑家链接改回 `renderSafeLink`（挡 `javascript:` 等危险协议，Playwright 实测生效）；系统配置面板加载改为面板级容错（读取失败只在面板内提示，不阻断整页）。
+- 顺带修 #188 的 /health 页文案改名遗留的两个测试（`畅捷通同步`→`T+ 同步时间线`、微信入口挪进 ⋯ 菜单）：功能未丢，仅更新测试断言到新结构锚点。
 
 ## v2.1.16：修复 T+ 写入被标量返回体误杀（真机首单实锤）+ 版本号默认当日日期
 

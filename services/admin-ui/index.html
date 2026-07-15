@@ -5,251 +5,90 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>AliECS · 系统管理后台</title>
   <style>
-    :root {
-      --bg: #f7f5f0;
-      --card: #fffdf8;
-      --text: #25211b;
-      --muted: #766f63;
-      --line: #e7dfd0;
-      --primary: #6f5e46;
-      --primary-dark: #4d412f;
-      --danger: #a6423a;
-      --ok: #3f7a4c;
-      --warn: #a36b16;
-      --shadow: 0 12px 30px rgba(69, 56, 38, 0.08);
-    }
-
-    * { box-sizing: border-box; }
-
-    body {
-      margin: 0;
-      background:
-        radial-gradient(circle at top left, rgba(180, 157, 118, 0.2), transparent 35%),
-        var(--bg);
-      color: var(--text);
-      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-        "Microsoft YaHei", sans-serif;
-    }
-
-    a { color: var(--primary-dark); }
-
-    .wrap {
-      max-width: 1180px;
-      margin: 0 auto;
-      padding: 28px 18px 56px;
-    }
-
-    .hero {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 20px;
-      margin-bottom: 22px;
-    }
-
-    .hero h1 {
-      margin: 0 0 8px;
-      font-size: 30px;
-      letter-spacing: -0.03em;
-    }
-
-    .hero p {
-      margin: 0;
-      color: var(--muted);
-      line-height: 1.7;
-    }
-
-    .top-actions {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-    }
-
-    .grid {
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 16px;
-    }
-
-    .grid.two {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .grid.three {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
-
-    @media (max-width: 900px) {
-      .hero { flex-direction: column; }
-      .grid.two, .grid.three { grid-template-columns: 1fr; }
-    }
-
-    .card {
-      background: rgba(255, 253, 248, 0.92);
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      padding: 18px;
-      box-shadow: var(--shadow);
-    }
-
-    .card h2 {
-      margin: 0 0 14px;
-      font-size: 18px;
-    }
-
-    .muted { color: var(--muted); }
-
-    .row {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-      align-items: center;
-    }
-
-    input, select, textarea {
-      width: 100%;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 11px 12px;
-      background: white;
-      color: var(--text);
-      outline: none;
-      font-size: 14px;
-    }
-
-    input:focus, select:focus, textarea:focus {
-      border-color: #b69b69;
-      box-shadow: 0 0 0 3px rgba(182, 155, 105, 0.18);
-    }
-
-    label {
-      display: block;
-      color: var(--muted);
-      font-size: 13px;
-      margin: 8px 0 6px;
-    }
-
-    button, .btn {
-      border: 0;
-      border-radius: 999px;
-      padding: 10px 14px;
-      background: #e8dfcf;
-      color: var(--text);
-      cursor: pointer;
-      font-weight: 650;
-      text-decoration: none;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-    }
-
-    button.primary, .btn.primary {
-      background: var(--primary);
-      color: white;
-    }
-
-    button.danger {
-      background: #f1d4d1;
-      color: var(--danger);
-    }
-
-    button:disabled {
-      opacity: 0.55;
-      cursor: not-allowed;
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 14px;
-      overflow: hidden;
-    }
-
-    th, td {
-      padding: 10px 8px;
-      border-bottom: 1px solid var(--line);
-      text-align: left;
-      vertical-align: top;
-    }
-
-    th {
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 700;
-      text-transform: uppercase;
-    }
-
-    .table-wrap {
-      overflow-x: auto;
-    }
-
-    .tag {
-      display: inline-flex;
-      align-items: center;
-      border-radius: 999px;
-      padding: 4px 8px;
-      font-size: 12px;
-      background: #eee6d8;
-      color: var(--muted);
-      margin: 2px 4px 2px 0;
-      white-space: nowrap;
-    }
-
-    .tag.ok { background: #dfeee3; color: var(--ok); }
-    .tag.warn { background: #f4e4c7; color: var(--warn); }
-    .tag.danger { background: #f1d4d1; color: var(--danger); }
-
-    .notice {
-      border-radius: 14px;
-      padding: 12px 14px;
-      background: #f2eadc;
-      color: var(--muted);
-      line-height: 1.7;
-      margin-bottom: 14px;
-    }
-
-    .error {
-      display: none;
-      border-radius: 14px;
-      padding: 12px 14px;
-      background: #f5d7d3;
-      color: var(--danger);
-      margin-bottom: 14px;
-      white-space: pre-wrap;
-    }
-
-    .success {
-      display: none;
-      border-radius: 14px;
-      padding: 12px 14px;
-      background: #dfeee3;
-      color: var(--ok);
-      margin-bottom: 14px;
-      white-space: pre-wrap;
-    }
-
-    .hidden { display: none !important; }
-    .small { font-size: 12px; }
-    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
-    .company-board { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-    .source-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: white; margin-bottom: 10px; }
-    @media (max-width: 900px) { .company-board { grid-template-columns: 1fr; } }
+    :root{--bg:#f7f5f0;--card:#fffdf8;--text:#25211b;--muted:#8a8172;--line:#e7dfd0;--primary:#6f5e46;--primary-dark:#4d412f;--danger:#a6423a;--ok:#3f7a4c;--warn:#a36b16;--shadow:0 10px 26px rgba(69,56,38,.07)}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+    a{color:var(--primary-dark)}
+    .wrap{max-width:1180px;margin:0 auto;padding:16px 16px 48px}
+    /* 顶栏 */
+    .hero{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:6px 4px 12px}
+    .hero h1{margin:0;font-size:24px;letter-spacing:-.02em}
+    .top-actions{display:flex;gap:8px;align-items:center;flex:0 0 auto}
+    button,.btn{border:0;border-radius:999px;padding:9px 14px;background:#e8dfcf;color:var(--text);cursor:pointer;font-weight:650;font-size:14px;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap}
+    button.primary,.btn.primary{background:var(--primary);color:#fff}
+    button.danger{background:#f1d4d1;color:var(--danger)}
+    button:disabled{opacity:.55;cursor:not-allowed}
+    .menu{position:relative}
+    .menu-toggle{padding:9px 13px;line-height:1}
+    .menu-list{position:absolute;right:0;top:calc(100% + 6px);background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:6px;min-width:150px;z-index:30}
+    .menu-list a,.menu-list button{display:block;width:100%;text-align:left;background:transparent;border-radius:10px;padding:10px 12px;font-weight:600}
+    .menu-list a:hover,.menu-list button:hover{background:#f3ede2}
+    /* 卡片区块 */
+    .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;box-shadow:var(--shadow);margin-bottom:14px}
+    .card>h2{margin:0 0 12px;font-size:16px;display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap}
+    .card>h2 .htitle{display:flex;align-items:center;gap:8px}
+    .badge{background:#eee6d8;color:var(--muted);border-radius:999px;padding:2px 10px;font-size:13px;font-weight:700}
+    .grid.two{display:grid;grid-template-columns:1fr;gap:14px}
+    @media(min-width:720px){.grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    .muted{color:var(--muted)}.small{font-size:12px}
+    .identity{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:12px 15px;margin-bottom:14px;font-size:14px}
+    label{display:block;color:var(--muted);font-size:13px;margin:8px 0 6px}
+    input,select,textarea{width:100%;border:1px solid var(--line);border-radius:12px;padding:11px 12px;background:#fff;color:var(--text);outline:none;font-size:14px}
+    input:focus,select:focus,textarea:focus{border-color:#b69b69;box-shadow:0 0 0 3px rgba(182,155,105,.18)}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .tag{display:inline-flex;align-items:center;border-radius:999px;padding:4px 8px;font-size:12px;background:#eee6d8;color:var(--muted);margin:2px 4px 2px 0;white-space:nowrap;text-decoration:none}
+    .tag.ok{background:#dfeee3;color:var(--ok)}.tag.warn{background:#f4e4c7;color:var(--warn)}.tag.danger{background:#f1d4d1;color:var(--danger)}
+    .notice{border-radius:14px;padding:12px 14px;background:#f2eadc;color:var(--muted);line-height:1.7;margin-bottom:14px}
+    .error{display:none;border-radius:14px;padding:12px 14px;background:#f5d7d3;color:var(--danger);margin-bottom:14px;white-space:pre-wrap}
+    .success{display:none;border-radius:14px;padding:12px 14px;background:#dfeee3;color:var(--ok);margin-bottom:14px;white-space:pre-wrap}
+    .hidden{display:none!important}
+    .collapse{margin:4px 0 14px;padding-top:12px;border-top:1px dashed var(--line)}
+    /* 实体卡片行 */
+    .entity-grid{display:grid;grid-template-columns:1fr;gap:10px}
+    @media(min-width:720px){.entity-grid{grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}}
+    .entity{background:#fff;border:1px solid var(--line);border-radius:14px;padding:13px 14px}
+    .entity .etop{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+    .entity .ename{font-weight:700;font-size:15px}
+    .entity .esub{font-size:12px;color:var(--muted);margin-top:2px;word-break:break-all}
+    .entity .etags{margin-top:8px}
+    .entity .eact{display:flex;gap:8px;flex-wrap:wrap;margin-top:11px}
+    .entity .eact button{padding:7px 12px;font-size:13px}
+    .logrow{background:#fff;border:1px solid var(--line);border-radius:11px;padding:10px 12px;margin-bottom:8px}
+    /* 弹层 */
+    .modal{position:fixed;inset:0;background:rgba(30,22,12,.3);display:none;align-items:center;justify-content:center;padding:16px;z-index:50}
+    .modal.show{display:flex}
+    .modal-panel{width:min(520px,100%);max-height:88vh;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:16px;padding:18px}
+    .modal-panel h3{margin:0 0 4px}
+    .check-list{display:grid;gap:6px;margin-top:12px;max-height:52vh;overflow:auto}
+    .check-item{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line);border-radius:10px;cursor:pointer}
+    .check-item input{width:auto;flex:0 0 auto;margin:0}
+    .check-item .ci-code{font-size:12px;color:var(--muted)}
+    .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+    /* 系统配置总览表 */
+    .table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+    .table-wrap table{width:100%;border-collapse:collapse;background:#fff;font-size:13px}
+    .table-wrap th,.table-wrap td{padding:9px 11px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;white-space:nowrap}
+    .table-wrap th{background:#f3ede2;font-weight:700;position:sticky;top:0}
+    .table-wrap tbody tr:last-child td{border-bottom:0}
+    details.card>summary{list-style:none;cursor:pointer}
+    details.card>summary::-webkit-details-marker{display:none}
+    details.card>summary>h2{margin:0}
   </style>
 </head>
 <body>
   <div class="wrap">
     <header class="hero">
-      <div>
-        <h1>系统管理后台</h1>
-        <p>用于管理账号、角色、权限和业务入口。普通员工请从业务入口首页登录。</p>
-      </div>
+      <h1>系统管理后台</h1>
       <div class="top-actions">
-        <a class="btn" href="/">首页</a>
-        <a class="btn" href="/health/" target="_blank" rel="noreferrer">API Health</a>
-        <button id="refreshAllBtn">刷新数据</button>
-        <button id="logoutBtn" class="danger hidden">退出登录</button>
+        <button id="refreshAllBtn" class="primary" type="button">刷新</button>
+        <button id="logoutBtn" class="danger hidden" type="button">退出</button>
+        <div class="menu">
+          <button id="menuToggle" class="menu-toggle" type="button" aria-label="更多">⋯</button>
+          <div id="menuList" class="menu-list hidden">
+            <a href="/">返回首页</a>
+            <a href="/health/" target="_blank" rel="noreferrer">API Health</a>
+          </div>
+        </div>
       </div>
     </header>
 
@@ -257,328 +96,164 @@
     <div id="successBox" class="success"></div>
 
     <section id="loginCard" class="card">
-      <h2>登录</h2>
-      <div class="notice">
-        只有系统管理员或具备 <code>admin.access</code> 权限的用户可以进入后台。
-        统一走单点登录（Authelia SSO）。
-      </div>
+      <h2><span class="htitle">登录</span></h2>
+      <div class="notice">只有系统管理员或具备 <code>admin.access</code> 权限的用户可以进入后台。统一走单点登录（Authelia SSO）。</div>
       <div class="row" style="margin-top:14px;">
         <button id="loginBtn" class="primary" type="button">使用统一登录（SSO）</button>
         <span id="loginHint" class="muted small">跳转 Authelia 完成登录后自动返回后台。</span>
       </div>
     </section>
 
-    <section id="appArea" class="grid hidden">
+    <div id="appArea" class="hidden">
+      <div id="identityBox" class="identity muted">未登录</div>
+
+      <!-- 用户 -->
       <section class="card">
-        <h2>当前身份</h2>
-        <div id="identityBox" class="muted">未登录</div>
+        <h2><span class="htitle">用户 <span id="userCountBadge" class="badge">0</span></span>
+          <button id="toggleUserForm" type="button">＋ 新增用户</button></h2>
+        <div id="userForm" class="collapse hidden">
+          <div class="grid two">
+            <div><label>用户名</label><input id="newUsername" placeholder="例如 zhangsan" /></div>
+            <div><label>显示名</label><input id="newDisplayName" placeholder="例如 张三" /></div>
+            <div><label>初始密码</label><input id="newPassword" type="password" placeholder="建议使用强密码" /></div>
+            <div><label>是否管理员</label><select id="newIsAdmin"><option value="false">否</option><option value="true">是</option></select></div>
+          </div>
+          <div class="row" style="margin-top:14px;"><button id="createUserBtn" class="primary" type="button">新增用户</button></div>
+        </div>
+        <div id="usersBody" class="entity-grid"></div>
       </section>
 
-      <section class="grid three">
-        <div class="card">
-          <h2>用户数量</h2>
-          <div id="userCount" style="font-size:32px;font-weight:800;">-</div>
-        </div>
-        <div class="card">
-          <h2>角色数量</h2>
-          <div id="roleCount" style="font-size:32px;font-weight:800;">-</div>
-        </div>
-        <div class="card">
-          <h2>功能入口</h2>
-          <div id="featureCount" style="font-size:32px;font-weight:800;">-</div>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>用户管理</h2>
-        <div class="grid two">
-          <div>
-            <label>用户名</label>
-            <input id="newUsername" placeholder="例如 zhangsan" />
-          </div>
-          <div>
-            <label>显示名</label>
-            <input id="newDisplayName" placeholder="例如 张三" />
-          </div>
-          <div>
-            <label>初始密码</label>
-            <input id="newPassword" type="password" placeholder="建议使用强密码" />
-          </div>
-          <div>
-            <label>是否管理员</label>
-            <select id="newIsAdmin">
-              <option value="false">否</option>
-              <option value="true">是</option>
-            </select>
-          </div>
-        </div>
-        <div class="row" style="margin-top:14px;">
-          <button id="createUserBtn" class="primary" type="button">新增用户</button>
-        </div>
-        <div class="table-wrap" style="margin-top:16px;">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>用户名</th>
-                <th>显示名</th>
-                <th>状态</th>
-                <th>管理员</th>
-                <th>角色</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody id="usersBody"></tbody>
-          </table>
-        </div>
-      </section>
-
+      <!-- 角色 / 权限 -->
       <section class="grid two">
         <section class="card">
-          <h2>角色</h2>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Code</th>
-                  <th>名称</th>
-                  <th>说明</th>
-                  <th>权限</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody id="rolesBody"></tbody>
-            </table>
-          </div>
+          <h2><span class="htitle">角色 <span id="roleCountBadge" class="badge">0</span></span></h2>
+          <div id="rolesBody" class="entity-grid"></div>
         </section>
-
         <section class="card">
-          <h2>权限</h2>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Code</th>
-                  <th>名称</th>
-                </tr>
-              </thead>
-              <tbody id="permissionsBody"></tbody>
-            </table>
-          </div>
+          <h2><span class="htitle">权限</span></h2>
+          <div id="permissionsBody" style="line-height:2.2">-</div>
         </section>
       </section>
 
+      <!-- 功能入口 -->
+      <section class="card">
+        <h2><span class="htitle">功能入口 <span id="featureCountBadge" class="badge">0</span></span>
+          <button id="toggleFeatureForm" type="button">＋ 新增功能</button></h2>
+        <div id="featureForm" class="collapse hidden">
+          <div class="grid two">
+            <div><label>Code</label><input id="featureCode" placeholder="raw_inventory" /></div>
+            <div><label>标题</label><input id="featureTitle" placeholder="原材料库存" /></div>
+            <div><label>链接</label><input id="featureUrl" placeholder="没有链接可留空" /></div>
+            <div><label>所需权限</label><input id="featurePermission" placeholder="inventory.raw.read，可留空表示公开" /></div>
+            <div><label>分类</label><input id="featureCategory" placeholder="业务查询" /></div>
+            <div><label>状态</label><select id="featureStatus"><option value="active">active</option><option value="reserved">reserved</option><option value="disabled">disabled</option></select></div>
+            <div><label>排序</label><input id="featureSort" type="number" value="100" /></div>
+            <div><label>说明</label><input id="featureDescription" placeholder="入口说明" /></div>
+          </div>
+          <div class="row" style="margin-top:14px;"><button id="createFeatureBtn" class="primary" type="button">新增功能</button></div>
+        </div>
+        <div id="featuresBody" class="entity-grid"></div>
+      </section>
+
+      <!-- 系统配置生效总览 -->
       <section id="systemConfigPanel" class="card">
-        <h2>系统配置生效总览</h2>
+        <h2><span class="htitle">系统配置生效总览</span></h2>
         <div class="table-wrap">
           <table>
             <thead>
-              <tr>
-                <th>域</th>
-                <th>配置项</th>
-                <th>生效值</th>
-                <th>来源</th>
-                <th>最后同步</th>
-                <th>编辑家</th>
-                <th>应急</th>
-              </tr>
+              <tr><th>域</th><th>配置项</th><th>生效值</th><th>来源</th><th>最后同步</th><th>编辑家</th><th>应急</th></tr>
             </thead>
             <tbody id="systemConfigBody"></tbody>
           </table>
         </div>
       </section>
 
-      <section id="featuresPanel" class="card">
-        <h2>功能入口管理</h2>
-        <div class="grid two">
-          <div>
-            <label>Code</label>
-            <input id="featureCode" placeholder="raw_inventory" />
-          </div>
-          <div>
-            <label>标题</label>
-            <input id="featureTitle" placeholder="原材料库存" />
-          </div>
-          <div>
-            <label>链接</label>
-            <input id="featureUrl" placeholder="没有链接可留空" />
-          </div>
-          <div>
-            <label>所需权限</label>
-            <input id="featurePermission" placeholder="inventory.raw.read，可留空表示公开" />
-          </div>
-          <div>
-            <label>分类</label>
-            <input id="featureCategory" placeholder="业务查询" />
-          </div>
-          <div>
-            <label>状态</label>
-            <select id="featureStatus">
-              <option value="active">active</option>
-              <option value="reserved">reserved</option>
-              <option value="disabled">disabled</option>
-            </select>
-          </div>
-          <div>
-            <label>排序</label>
-            <input id="featureSort" type="number" value="100" />
-          </div>
-          <div>
-            <label>说明</label>
-            <input id="featureDescription" placeholder="入口说明" />
-          </div>
-        </div>
-        <div class="row" style="margin-top:14px;">
-          <button id="createFeatureBtn" class="primary" type="button">新增功能</button>
-        </div>
-        <div class="table-wrap" style="margin-top:16px;">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Code</th>
-                <th>标题</th>
-                <th>状态</th>
-                <th>权限</th>
-                <th>链接</th>
-                <th>排序</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody id="featuresBody"></tbody>
-          </table>
-        </div>
-      </section>
-
+      <!-- 审计日志 -->
       <details id="auditLogPanel" class="card">
         <summary><h2>审计日志</h2></summary>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>操作者</th>
-                <th>动作</th>
-                <th>对象</th>
-                <th>时间</th>
-              </tr>
-            </thead>
-            <tbody id="logsBody"></tbody>
-          </table>
-        </div>
+        <div id="logsBody" style="margin-top:12px"></div>
         <div class="row" style="justify-content:space-between;margin-top:12px;">
           <button id="auditPrevBtn" type="button">上一页</button>
           <span id="auditPageInfo" class="muted small">第 1 / 1 页</span>
           <button id="auditNextBtn" type="button">下一页</button>
         </div>
       </details>
-    </section>
+    </div>
+  </div>
+
+  <!-- 勾选分配弹层（角色/权限通用） -->
+  <div id="assignModal" class="modal">
+    <div class="modal-panel">
+      <h3 id="assignTitle">分配</h3>
+      <p class="muted small" style="margin:0">勾选后保存即生效。</p>
+      <div id="assignList" class="check-list"></div>
+      <div class="modal-actions"><button id="assignCancel" type="button">取消</button><button id="assignSave" class="primary" type="button">保存</button></div>
+    </div>
+  </div>
+
+  <!-- 重置密码弹层 -->
+  <div id="pwModal" class="modal">
+    <div class="modal-panel" style="width:min(420px,100%)">
+      <h3 id="pwTitle">重置密码</h3>
+      <label>新密码</label><input id="pwInput" type="password" placeholder="输入新密码" />
+      <div class="modal-actions"><button id="pwCancel" type="button">取消</button><button id="pwSave" class="primary" type="button">保存</button></div>
+    </div>
+  </div>
+
+  <!-- 功能入口编辑弹层 -->
+  <div id="featureModal" class="modal">
+    <div class="modal-panel">
+      <h3 id="efHead">编辑功能</h3>
+      <div class="grid two">
+        <div><label>标题</label><input id="efTitle" /></div>
+        <div><label>分类</label><input id="efCategory" /></div>
+        <div><label>链接</label><input id="efUrl" placeholder="留空表示无" /></div>
+        <div><label>所需权限</label><input id="efPermission" placeholder="留空表示公开" /></div>
+        <div><label>状态</label><select id="efStatus"><option value="active">active</option><option value="reserved">reserved</option><option value="disabled">disabled</option></select></div>
+        <div><label>排序</label><input id="efSort" type="number" /></div>
+        <div style="grid-column:1/-1"><label>说明</label><input id="efDescription" /></div>
+      </div>
+      <div class="modal-actions"><button id="efCancel" type="button">取消</button><button id="efSave" class="primary" type="button">保存</button></div>
+    </div>
   </div>
 
   <script>
     const API_BASE = location.port === "8081" ? "http://localhost:8000" : "/api";
-
-    const state = {
-      token: "",
-      me: null,
-      users: [],
-      roles: [],
-      permissions: [],
-      features: [],
-      systemConfig: [],
-      logs: [],
-      auditLogs:{items:[],page:1,page_size:50,total:0}
-    };
-
+    const state = {token:"",me:null,users:[],roles:[],permissions:[],features:[],logs:[],systemConfig:[],auditLogs:{items:[],page:1,page_size:50,total:0}};
     const $ = (id) => document.getElementById(id);
-
-    const AUTH_KEYS = ["aliecs_auth_token", "portal_token", "admin_token"];
-    const getAuthToken = () => AUTH_KEYS.map((k) => localStorage.getItem(k) || "").find(Boolean) || "";
-    const setAuthToken = (token) => AUTH_KEYS.forEach((k) => localStorage.setItem(k, token));
-    const clearAuthToken = () => AUTH_KEYS.forEach((k) => localStorage.removeItem(k));
+    const AUTH_KEYS = ["aliecs_auth_token","portal_token","admin_token"];
+    const getAuthToken = () => AUTH_KEYS.map((k)=>localStorage.getItem(k)||"").find(Boolean)||"";
+    const clearAuthToken = () => AUTH_KEYS.forEach((k)=>localStorage.removeItem(k));
     const syncTokenState = () => { state.token = getAuthToken(); };
 
-    function showError(message) {
-      $("errorBox").textContent = message;
-      $("errorBox").style.display = "block";
-      $("successBox").style.display = "none";
-    }
+    function showError(m){$("errorBox").textContent=m;$("errorBox").style.display="block";$("successBox").style.display="none";}
+    function showSuccess(m){$("successBox").textContent=m;$("successBox").style.display="block";$("errorBox").style.display="none";}
+    function clearMessage(){$("errorBox").style.display="none";$("successBox").style.display="none";}
 
-    function showSuccess(message) {
-      $("successBox").textContent = message;
-      $("successBox").style.display = "block";
-      $("errorBox").style.display = "none";
-    }
-
-    function clearMessage() {
-      $("errorBox").style.display = "none";
-      $("successBox").style.display = "none";
-    }
-
-    async function api(path, options = {}) {
-      const headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
-      if (state.token) headers.Authorization = `Bearer ${state.token}`;
-
+    async function api(path, options={}){
+      const headers=Object.assign({"Content-Type":"application/json"},options.headers||{});
+      if(state.token)headers.Authorization=`Bearer ${state.token}`;
       let resp;
-      try {
-        resp = await fetch(`${API_BASE}${path}`, {
-          ...options,
-          headers
-        });
-      } catch (error) {
-        const isHttps = location.protocol === "https:";
-        const hint = isHttps ? "HTTPS 链路异常，请检查 443 证书、反向代理和 /api 转发配置。" : "网络请求失败，请检查 API 与反向代理。";
-        throw new Error(`${hint} (${error instanceof Error ? error.message : "network error"})`);
+      try{resp=await fetch(`${API_BASE}${path}`,{...options,headers});}
+      catch(error){
+        const isHttps=location.protocol==="https:";
+        const hint=isHttps?"HTTPS 链路异常，请检查 443 证书、反向代理和 /api 转发配置。":"网络请求失败，请检查 API 与反向代理。";
+        throw new Error(`${hint} (${error instanceof Error?error.message:"network error"})`);
       }
-
-      let data = null;
-      const text = await resp.text();
-      if (text) {
-        try {
-          data = JSON.parse(text);
-        } catch {
-          data = { raw: text };
-        }
-      }
-
-      if (!resp.ok) {
-        const detail = data && data.detail ? data.detail : `HTTP ${resp.status}`;
-        if (resp.status === 401) {
-          clearAuthToken();
-          syncTokenState();
-          renderAuth();
-        }
+      let data=null;const text=await resp.text();
+      if(text){try{data=JSON.parse(text)}catch{data={raw:text}}}
+      if(!resp.ok){
+        const detail=data&&data.detail?data.detail:`HTTP ${resp.status}`;
+        if(resp.status===401){clearAuthToken();syncTokenState();renderAuth();}
         throw new Error(String(detail));
       }
-
-      return data || {};
+      return data||{};
     }
 
-    function requireNumberList(input) {
-      return input
-        .split(",")
-        .map((x) => x.trim())
-        .filter(Boolean)
-        .map((x) => Number(x))
-        .filter((x) => Number.isFinite(x));
-    }
+    function tag(text,kind=""){return `<span class="${kind?`tag ${kind}`:"tag"}">${escapeHtml(text)}</span>`;}
+    function escapeHtml(value){return String(value??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;");}
 
-    function tag(text, kind = "") {
-      const cls = kind ? `tag ${kind}` : "tag";
-      return `<span class="${cls}">${escapeHtml(text)}</span>`;
-    }
-
-    function escapeHtml(value) {
-      return String(value ?? "")
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#039;");
-    }
-
+    // 仅允许站内相对路径或 http/https 绝对链接，挡住 javascript: 等危险协议
     function safeHref(value) {
       const raw = String(value || "").trim();
       if (!raw) return "";
@@ -591,439 +266,238 @@
       }
       return "";
     }
-
     function renderSafeLink(url, label) {
       const href = safeHref(url);
       if (!href) return '<span class="muted">无效链接</span>';
       return `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${escapeHtml(label || "打开")}</a>`;
     }
 
-    function renderAuth() {
+    function renderAuth(){
       syncTokenState();
-      const loggedIn = Boolean(state.token);
-      $("loginCard").classList.toggle("hidden", loggedIn);
-      $("appArea").classList.toggle("hidden", !loggedIn);
-      $("logoutBtn").classList.toggle("hidden", !loggedIn);
+      const loggedIn=Boolean(state.token);
+      $("loginCard").classList.toggle("hidden",loggedIn);
+      $("appArea").classList.toggle("hidden",!loggedIn);
+      $("logoutBtn").classList.toggle("hidden",!loggedIn);
     }
-
-    function renderIdentity() {
-      if (!state.me) {
-        $("identityBox").textContent = "未登录";
-        return;
-      }
-
-      $("identityBox").innerHTML = `
-        <div><strong>${escapeHtml(state.me.sub || state.me.username || "-")}</strong></div>
-        <div class="muted small">显示名：${escapeHtml(state.me.display_name || "-")}</div>
-        <div style="margin-top:8px;">
-          ${(state.me.roles || []).map((x) => tag(x, x === "admin" ? "ok" : "")).join("")}
-        </div>
-        <div style="margin-top:8px;">
-          ${(state.me.permissions || []).map((x) => tag(x)).join("")}
-        </div>
-      `;
+    function renderIdentity(){
+      if(!state.me){$("identityBox").textContent="未登录";return;}
+      const roles=(state.me.roles||[]).map((x)=>tag(x,x==="admin"?"ok":"")).join("");
+      $("identityBox").innerHTML=`<span><strong>${escapeHtml(state.me.sub||state.me.username||"-")}</strong>`+
+        `<span class="muted small">（${escapeHtml(state.me.display_name||"-")}）</span></span>${roles}`;
     }
-
-    function renderUsers() {
-      $("userCount").textContent = state.users.length;
-      $("usersBody").innerHTML = state.users.map((u) => {
-        const userRoles = (u.roles || []).map((r) => tag(r.code || r)).join("");
-        const statusKind = u.status === "active" ? "ok" : "danger";
-        return `
-          <tr>
-            <td>${u.id}</td>
-            <td>${escapeHtml(u.username)}</td>
-            <td>${escapeHtml(u.display_name)}</td>
-            <td>${tag(u.status, statusKind)}</td>
-            <td>${u.is_admin ? tag("是", "ok") : tag("否")}</td>
-            <td>${userRoles || '<span class="muted">未分配</span>'}</td>
-            <td>
-              <div class="actions">
-                <button type="button" onclick="resetPassword(${u.id})">重置密码</button>
-                <button type="button" onclick="assignRoles(${u.id})">分配角色</button>
-                ${
-                  u.status === "active"
-                    ? `<button class="danger" type="button" onclick="disableUser(${u.id})">禁用</button>`
-                    : `<button type="button" onclick="enableUser(${u.id})">启用</button>`
-                }
-              </div>
-            </td>
-          </tr>
-        `;
-      }).join("");
+    function renderUsers(){
+      $("userCountBadge").textContent=state.users.length;
+      $("usersBody").innerHTML=state.users.map((u)=>{
+        const roles=(u.roles||[]).map((r)=>tag(r.code||r)).join("")||'<span class="muted small">未分配角色</span>';
+        const statusKind=u.status==="active"?"ok":"danger";
+        const toggle=u.status==="active"
+          ?`<button class="danger" type="button" onclick="disableUser(${u.id})">禁用</button>`
+          :`<button type="button" onclick="enableUser(${u.id})">启用</button>`;
+        return `<div class="entity"><div class="etop"><div><div class="ename">${escapeHtml(u.display_name||u.username)}</div><div class="esub">${escapeHtml(u.username)} · #${u.id}</div></div><div style="text-align:right">${tag(u.status,statusKind)}${u.is_admin?tag("管理员","ok"):""}</div></div><div class="etags">${roles}</div><div class="eact"><button type="button" onclick="assignRoles(${u.id})">分配角色</button><button type="button" onclick="resetPassword(${u.id})">重置密码</button>${toggle}</div></div>`;
+      }).join("")||'<div class="muted">暂无用户。</div>';
     }
-
-    function renderRoles() {
-      $("roleCount").textContent = state.roles.length;
-      $("rolesBody").innerHTML = state.roles.map((r) => `
-        <tr>
-          <td>${r.id}</td>
-          <td>${escapeHtml(r.code)}</td>
-          <td>${escapeHtml(r.name)}</td>
-          <td>${escapeHtml(r.description || "")}</td>
-          <td>${(r.permissions && r.permissions.length) ? r.permissions.map((p) => tag(p)).join(" ") : '<span class="muted">无</span>'}</td>
-          <td><button type="button" onclick="assignRolePermissions(${r.id})">分配权限</button></td>
-        </tr>
-      `).join("");
+    function renderRoles(){
+      $("roleCountBadge").textContent=state.roles.length;
+      $("rolesBody").innerHTML=state.roles.map((r)=>`<div class="entity"><div class="etop"><div><div class="ename">${escapeHtml(r.name)}</div><div class="esub">${escapeHtml(r.code)}${r.description?" · "+escapeHtml(r.description):""}</div></div></div><div class="etags">${(r.permissions&&r.permissions.length)?r.permissions.map((p)=>tag(p)).join(""):'<span class="muted small">无权限</span>'}</div><div class="eact"><button type="button" onclick="assignRolePermissions(${r.id})">分配权限</button></div></div>`).join("")||'<div class="muted">暂无角色。</div>';
     }
-
-    function renderPermissions() {
-      $("permissionsBody").innerHTML = state.permissions.map((p) => `
-        <tr>
-          <td>${p.id}</td>
-          <td>${escapeHtml(p.code)}</td>
-          <td>${escapeHtml(p.name)}</td>
-        </tr>
-      `).join("");
+    function renderPermissions(){
+      $("permissionsBody").innerHTML=state.permissions.length
+        ?state.permissions.map((p)=>`<span class="tag" title="${escapeHtml(p.name)}">${escapeHtml(p.code)}</span>`).join("")
+        :'<span class="muted">暂无权限。</span>';
     }
-
-    function renderFeatures() {
-      $("featureCount").textContent = state.features.length;
-      $("featuresBody").innerHTML = state.features.map((f) => `
-        <tr>
-          <td>${f.id}</td>
-          <td>${escapeHtml(f.code)}</td>
-          <td>${escapeHtml(f.title)}</td>
-          <td>${tag(f.status, f.status === "active" ? "ok" : "warn")}</td>
-          <td>${f.required_permission ? tag(f.required_permission) : tag("公开", "ok")}</td>
-          <td>${f.url ? renderSafeLink(f.url, "打开") : '<span class="muted">无</span>'}</td>
-          <td>${f.sort_order}</td>
-          <td><button type="button" onclick="editFeature(${f.id})">编辑</button></td>
-        </tr>
-      `).join("");
+    function renderFeatures(){
+      $("featureCountBadge").textContent=state.features.length;
+      $("featuresBody").innerHTML=state.features.map((f)=>`<div class="entity"><div class="etop"><div><div class="ename">${escapeHtml(f.title)}</div><div class="esub">${escapeHtml(f.code)}${f.category?" · "+escapeHtml(f.category):""}</div></div><div>${tag(f.status,f.status==="active"?"ok":"warn")}</div></div><div class="etags">${f.required_permission?tag(f.required_permission):tag("公开","ok")}${f.url?`<span class="tag">${renderSafeLink(f.url, "打开")}</span>`:'<span class="tag">无链接</span>'}<span class="tag">排序 ${f.sort_order}</span></div><div class="eact"><button type="button" onclick="editFeature(${f.id})">编辑</button></div></div>`).join("")||'<div class="muted">暂无功能入口。</div>';
     }
-
-    function renderSystemConfigEmergency(group, rowIndex) {
-      if (rowIndex > 0) return "";
-      const emergency = group.emergency || {};
-      if (group.domain === "doc_sync" && emergency.pause_supported) {
-        const paused = Boolean(emergency.pull_paused);
-        const label = paused ? "恢复拉取" : "暂停拉取";
-        return `<button type="button" onclick="toggleDocSyncPullPaused(${!paused})">${label}</button>`;
+    function renderSystemConfigEmergency(group,rowIndex){
+      if(rowIndex>0)return "";
+      const emergency=group.emergency||{};
+      if(group.domain==="doc_sync"&&emergency.pause_supported){
+        const paused=Boolean(emergency.pull_paused);
+        return `<button type="button" onclick="toggleDocSyncPullPaused(${!paused})">${paused?"恢复拉取":"暂停拉取"}</button>`;
       }
       return '<span class="muted">-</span>';
     }
-
-    function renderSystemConfigEditor(editor) {
-      if (!editor) return '<span class="muted">未配置</span>';
-      if (editor.url) {
-        return renderSafeLink(editor.url, editor.label || "打开");
-      }
-      return `<span class="muted">${escapeHtml(editor.label || "未配置")}</span>`;
+    function renderSystemConfigEditor(editor){
+      if(!editor)return '<span class="muted">未配置</span>';
+      if(editor.url)return renderSafeLink(editor.url, editor.label || "打开");
+      return `<span class="muted">${escapeHtml(editor.label||"未配置")}</span>`;
     }
-
-    function renderSystemConfig() {
-      const rows = [];
-      (state.systemConfig || []).forEach((group) => {
-        const groupRows = group.rows && group.rows.length ? group.rows : [{ key: group.domain, label: "-", value: "-", source: group.source }];
-        groupRows.forEach((row, index) => {
-          const statusKind = group.status === "ok" ? "ok" : "warn";
-          rows.push(`
-            <tr>
-              <td>${index === 0 ? `${tag(group.title || group.domain, statusKind)}${group.note ? `<div class="muted small">${escapeHtml(group.note)}</div>` : ""}` : ""}</td>
-              <td>${escapeHtml(row.label || row.key || "")}</td>
-              <td>${escapeHtml(row.value || "")}</td>
-              <td>${tag(row.source || group.source || "-", row.source === "应急开关" ? "warn" : statusKind)}</td>
-              <td>${index === 0 ? escapeHtml(group.last_synced_at || "-") : ""}</td>
-              <td>${index === 0 ? renderSystemConfigEditor(group.editor) : ""}</td>
-              <td>${renderSystemConfigEmergency(group, index)}</td>
-            </tr>
-          `);
+    function renderSystemConfig(){
+      const rows=[];
+      (state.systemConfig||[]).forEach((group)=>{
+        const groupRows=group.rows&&group.rows.length?group.rows:[{key:group.domain,label:"-",value:"-",source:group.source}];
+        groupRows.forEach((row,index)=>{
+          const statusKind=group.status==="ok"?"ok":"warn";
+          rows.push(`<tr><td>${index===0?`${tag(group.title||group.domain,statusKind)}${group.note?`<div class="muted small">${escapeHtml(group.note)}</div>`:""}`:""}</td>`+
+            `<td>${escapeHtml(row.label||row.key||"")}</td>`+
+            `<td>${escapeHtml(row.value||"")}</td>`+
+            `<td>${tag(row.source||group.source||"-",row.source==="应急开关"?"warn":statusKind)}</td>`+
+            `<td>${index===0?escapeHtml(group.last_synced_at||"-"):""}</td>`+
+            `<td>${index===0?renderSystemConfigEditor(group.editor):""}</td>`+
+            `<td>${renderSystemConfigEmergency(group,index)}</td></tr>`);
         });
       });
-      $("systemConfigBody").innerHTML = rows.join("") || '<tr><td colspan="7" class="muted">暂无系统配置数据。</td></tr>';
+      $("systemConfigBody").innerHTML=rows.join("")||'<tr><td colspan="7" class="muted">暂无系统配置数据。</td></tr>';
     }
-
-    function renderLogs() {
-      const totalPages = Math.max(1, Math.ceil(state.auditLogs.total / state.auditLogs.page_size));
-      $("logsBody").innerHTML = state.logs.map((l) => `
-        <tr>
-          <td>${l.id}</td>
-          <td>${escapeHtml(l.actor_username || "")}</td>
-          <td>${escapeHtml(l.action)}</td>
-          <td>${escapeHtml([l.target_type, l.target_id].filter(Boolean).join(":"))}</td>
-          <td>${escapeHtml(l.created_at)}</td>
-        </tr>
-      `).join("") || '<tr><td colspan="5" class="muted">暂无审计日志。</td></tr>';
-      $("auditPageInfo").textContent = `第 ${state.auditLogs.page} / ${totalPages} 页 · 共 ${state.auditLogs.total} 条`;
-      $("auditPrevBtn").disabled = state.auditLogs.page <= 1;
-      $("auditNextBtn").disabled = state.auditLogs.page >= totalPages;
-    }
-
-    async function loadAuditLogs(page = state.auditLogs.page) {
-      const logsResp = await api(`/v1/admin/audit-logs?page=${page}&page_size=${state.auditLogs.page_size}`);
-      state.auditLogs = {
-        items: logsResp.items || [],
-        page: logsResp.page || page,
-        page_size: logsResp.page_size || state.auditLogs.page_size,
-        total: logsResp.total || 0
-      };
-      state.logs = state.auditLogs.items;
-      renderLogs();
-    }
-
-    async function loadSystemConfig() {
-      try {
-        const systemConfigResp = await api("/v1/admin/system-config/effective");
-        state.systemConfig = systemConfigResp.items || [];
-      } catch (error) {
-        state.systemConfig = [{
-          domain: "system_config",
-          title: "系统配置",
-          status: "warn",
-          source: "读取失败",
-          editor: { label: "稍后重试", url: null },
-          last_synced_at: null,
-          rows: [{
-            key: "system_config.error",
-            label: "总览接口",
-            value: error instanceof Error ? error.message : "读取失败",
-            source: "读取失败"
-          }],
-          emergency: { pause_supported: false, override_supported: false }
-        }];
+    async function loadSystemConfig(){
+      try{
+        const systemConfigResp=await api("/v1/admin/system-config/effective");
+        state.systemConfig=systemConfigResp.items||[];
+      }catch(error){
+        state.systemConfig=[{domain:"system_config",title:"系统配置",status:"warn",source: "读取失败",
+          editor:{label:"稍后重试",url:null},last_synced_at:null,
+          rows:[{key:"system_config.error",label:"总览接口",value:error instanceof Error?error.message:"读取失败",source: "读取失败"}],
+          emergency:{pause_supported:false,override_supported:false}}];
       }
       renderSystemConfig();
     }
+    async function toggleDocSyncPullPaused(paused){
+      const group=(state.systemConfig||[]).find((item)=>item.domain==="doc_sync");
+      const emergency=group&&group.emergency?group.emergency:null;
+      if(!emergency||!emergency.pause_supported){showError("当前环境不支持文档同步应急暂停。");return;}
+      await api("/v1/ops/doc-sync/sync-config",{method:"PUT",body:JSON.stringify({
+        enabled:Boolean(emergency.enabled??true),interval_hours:Number(emergency.interval_hours||24),
+        anchor_time:String(emergency.anchor_time||""),pull_paused:Boolean(paused)})});
+      showSuccess(paused?"已暂停文档同步表格拉取。":"已恢复文档同步表格拉取。");await loadAll();
+    }
 
-    async function loadAll() {
+    function renderLogs(){
+      const totalPages=Math.max(1,Math.ceil(state.auditLogs.total/state.auditLogs.page_size));
+      $("logsBody").innerHTML=state.logs.map((l)=>`<div class="logrow"><div><strong>${escapeHtml(l.action)}</strong> <span class="muted small">· ${escapeHtml(l.actor_username||"-")}</span></div><div class="muted small">${escapeHtml([l.target_type,l.target_id].filter(Boolean).join(":"))||"-"} · ${escapeHtml(l.created_at)}</div></div>`).join("")||'<div class="muted">暂无审计日志。</div>';
+      $("auditPageInfo").textContent=`第 ${state.auditLogs.page} / ${totalPages} 页 · 共 ${state.auditLogs.total} 条`;
+      $("auditPrevBtn").disabled=state.auditLogs.page<=1;
+      $("auditNextBtn").disabled=state.auditLogs.page>=totalPages;
+    }
+    async function loadAuditLogs(page=state.auditLogs.page){
+      const logsResp=await api(`/v1/admin/audit-logs?page=${page}&page_size=${state.auditLogs.page_size}`);
+      state.auditLogs={items:logsResp.items||[],page:logsResp.page||page,page_size:logsResp.page_size||state.auditLogs.page_size,total:logsResp.total||0};
+      state.logs=state.auditLogs.items;renderLogs();
+    }
+    async function loadAll(){
       clearMessage();
-      state.me = await api("/v1/auth/me");
-      const roles = state.me.roles || [];
-      const permissions = state.me.permissions || [];
-      const isAdmin = roles.includes("admin") || permissions.includes("admin.access");
-      if (!isAdmin) {
-        throw new Error("当前账号没有 admin.access 权限，无法进入管理后台。");
-      }
-      const [usersResp, rolesResp, permissionsResp, featuresResp] = await Promise.all([
-        api("/v1/admin/users"),
-        api("/v1/admin/rbac-overview"),
-        api("/v1/admin/permissions"),
-        api("/v1/admin/features")
+      state.me=await api("/v1/auth/me");
+      const roles=state.me.roles||[],permissions=state.me.permissions||[];
+      if(!(roles.includes("admin")||permissions.includes("admin.access")))throw new Error("当前账号没有 admin.access 权限，无法进入管理后台。");
+      const [usersResp,rolesResp,permissionsResp,featuresResp]=await Promise.all([
+        api("/v1/admin/users"),api("/v1/admin/rbac-overview"),api("/v1/admin/permissions"),api("/v1/admin/features")
       ]);
-
-      state.users = usersResp.items || [];
-      state.roles = rolesResp.roles || [];
-      state.permissions = permissionsResp.items || [];
-      state.features = featuresResp.items || [];
-
-      renderAuth();
-      renderIdentity();
-      renderUsers();
-      renderRoles();
-      renderPermissions();
-      renderFeatures();
+      state.users=usersResp.items||[];state.roles=rolesResp.roles||[];state.permissions=permissionsResp.items||[];state.features=featuresResp.items||[];
+      renderAuth();renderIdentity();renderUsers();renderRoles();renderPermissions();renderFeatures();
       await loadSystemConfig();
       await loadAuditLogs(1);
     }
+    function ssoLogin(){location.href=`${API_BASE}/v1/auth/oidc/login`;}
+    function logout(){clearAuthToken();syncTokenState();state.me=null;renderAuth();showSuccess("已退出登录。");}
 
-    function ssoLogin() {
-      location.href = `${API_BASE}/v1/auth/oidc/login?rd=${encodeURIComponent(location.pathname + location.search)}`;
+    async function createUser(){
+      const username=$("newUsername").value.trim(),displayName=$("newDisplayName").value.trim(),password=$("newPassword").value,isAdmin=$("newIsAdmin").value==="true";
+      if(!username||!displayName||!password){showError("新增用户需要填写用户名、显示名和初始密码。");return;}
+      await api("/v1/admin/users",{method:"POST",body:JSON.stringify({username,display_name:displayName,password,is_admin:isAdmin})});
+      $("newUsername").value="";$("newDisplayName").value="";$("newPassword").value="";$("newIsAdmin").value="false";
+      $("userForm").classList.add("hidden");showSuccess("用户已创建。");await loadAll();
+    }
+    async function disableUser(userId){await api(`/v1/admin/users/${userId}/disable`,{method:"POST"});showSuccess("用户已禁用。");await loadAll();}
+    async function enableUser(userId){await api(`/v1/admin/users/${userId}/enable`,{method:"POST"});showSuccess("用户已启用。");await loadAll();}
+
+    /* —— 勾选分配弹层（用户→角色 / 角色→权限）—— */
+    let assignCtx=null;
+    function openAssignModal(title,items,selected,ctx){
+      assignCtx=ctx;$("assignTitle").textContent=title;
+      $("assignList").innerHTML=items.map((it)=>`<label class="check-item"><input type="checkbox" value="${it.id}" ${selected.has(it.id)?"checked":""}/><span>${escapeHtml(it.name||it.code)} <span class="ci-code">${escapeHtml(it.code)}</span></span></label>`).join("")||'<div class="muted">无可选项。</div>';
+      $("assignModal").classList.add("show");
+    }
+    function closeAssignModal(){$("assignModal").classList.remove("show");assignCtx=null;}
+    async function saveAssign(){
+      if(!assignCtx)return;
+      const ids=[...$("assignList").querySelectorAll("input:checked")].map((el)=>Number(el.value));
+      if(assignCtx.type==="user-roles"){await api(`/v1/admin/users/${assignCtx.id}/roles`,{method:"PUT",body:JSON.stringify({role_ids:ids})});showSuccess("用户角色已更新。");}
+      else if(assignCtx.type==="role-perms"){await api(`/v1/admin/roles/${assignCtx.id}/permissions`,{method:"PUT",body:JSON.stringify({permission_ids:ids})});showSuccess("角色权限已更新。");}
+      closeAssignModal();await loadAll();
+    }
+    function assignRoles(userId){
+      const u=state.users.find((x)=>x.id===userId);
+      const codes=new Set((u&&u.roles||[]).map((r)=>r.code||r));
+      const selected=new Set(state.roles.filter((r)=>codes.has(r.code)).map((r)=>r.id));
+      openAssignModal(`分配角色 · ${u?escapeHtml(u.username):userId}`,state.roles.map((r)=>({id:r.id,name:r.name,code:r.code})),selected,{type:"user-roles",id:userId});
+    }
+    function assignRolePermissions(roleId){
+      const r=state.roles.find((x)=>x.id===roleId);
+      const codes=new Set((r&&r.permissions||[]).map((p)=>p.code||p));
+      const selected=new Set(state.permissions.filter((p)=>codes.has(p.code)).map((p)=>p.id));
+      openAssignModal(`分配权限 · ${r?escapeHtml(r.name):roleId}`,state.permissions.map((p)=>({id:p.id,name:p.name,code:p.code})),selected,{type:"role-perms",id:roleId});
     }
 
-    function logout() {
-      clearAuthToken();
-      syncTokenState();
-      state.me = null;
-      renderAuth();
-      showSuccess("已退出登录。");
+    /* —— 重置密码弹层 —— */
+    let pwUserId=null;
+    function resetPassword(userId){
+      pwUserId=userId;const u=state.users.find((x)=>x.id===userId);
+      $("pwTitle").textContent=`重置密码 · ${u?escapeHtml(u.username):userId}`;$("pwInput").value="";
+      $("pwModal").classList.add("show");setTimeout(()=>$("pwInput").focus(),50);
+    }
+    function closePwModal(){$("pwModal").classList.remove("show");pwUserId=null;}
+    async function savePw(){
+      const np=$("pwInput").value;if(!np){showError("请输入新密码。");return;}
+      await api(`/v1/admin/users/${pwUserId}/reset-password`,{method:"POST",body:JSON.stringify({new_password:np})});
+      closePwModal();showSuccess("密码已重置。");
     }
 
-    async function createUser() {
-      const username = $("newUsername").value.trim();
-      const displayName = $("newDisplayName").value.trim();
-      const password = $("newPassword").value;
-      const isAdmin = $("newIsAdmin").value === "true";
-
-      if (!username || !displayName || !password) {
-        showError("新增用户需要填写用户名、显示名和初始密码。");
-        return;
-      }
-
-      await api("/v1/admin/users", {
-        method: "POST",
-        body: JSON.stringify({
-          username,
-          display_name: displayName,
-          password,
-          is_admin: isAdmin
-        })
-      });
-
-      $("newUsername").value = "";
-      $("newDisplayName").value = "";
-      $("newPassword").value = "";
-      $("newIsAdmin").value = "false";
-      showSuccess("用户已创建。");
-      await loadAll();
+    /* —— 功能入口新增/编辑 —— */
+    async function createFeature(){
+      const code=$("featureCode").value.trim(),title=$("featureTitle").value.trim();
+      if(!code||!title){showError("新增功能需要填写 Code 和标题。");return;}
+      await api("/v1/admin/features",{method:"POST",body:JSON.stringify({code,title,description:$("featureDescription").value.trim()||null,url:$("featureUrl").value.trim()||null,category:$("featureCategory").value.trim()||null,required_permission:$("featurePermission").value.trim()||null,status:$("featureStatus").value,sort_order:Number($("featureSort").value||100)})});
+      ["featureCode","featureTitle","featureDescription","featureUrl","featureCategory","featurePermission"].forEach((id)=>$(id).value="");
+      $("featureStatus").value="active";$("featureSort").value="100";$("featureForm").classList.add("hidden");
+      showSuccess("功能入口已创建。");await loadAll();
+    }
+    let editFeatureId=null;
+    function editFeature(featureId){
+      const f=state.features.find((x)=>x.id===featureId);if(!f)return;
+      editFeatureId=featureId;
+      $("efHead").textContent=`编辑功能 · ${f.code}`;
+      $("efTitle").value=f.title||"";$("efCategory").value=f.category||"";$("efUrl").value=f.url||"";
+      $("efPermission").value=f.required_permission||"";$("efStatus").value=f.status||"active";
+      $("efSort").value=f.sort_order==null?100:f.sort_order;$("efDescription").value=f.description||"";
+      $("featureModal").classList.add("show");
+    }
+    function closeFeatureModal(){$("featureModal").classList.remove("show");editFeatureId=null;}
+    async function saveFeature(){
+      if(editFeatureId==null)return;
+      await api(`/v1/admin/features/${editFeatureId}`,{method:"PATCH",body:JSON.stringify({title:$("efTitle").value.trim(),description:$("efDescription").value.trim()||null,url:$("efUrl").value.trim()||null,category:$("efCategory").value.trim()||null,required_permission:$("efPermission").value.trim()||null,status:$("efStatus").value,sort_order:Number($("efSort").value||100)})});
+      closeFeatureModal();showSuccess("功能入口已更新。");await loadAll();
     }
 
-    async function resetPassword(userId) {
-      const newPassword = prompt("请输入新密码：");
-      if (!newPassword) return;
+    window.resetPassword=resetPassword;window.disableUser=disableUser;window.enableUser=enableUser;
+    window.assignRoles=assignRoles;window.assignRolePermissions=assignRolePermissions;window.editFeature=editFeature;
+    window.toggleDocSyncPullPaused=toggleDocSyncPullPaused;
 
-      await api(`/v1/admin/users/${userId}/reset-password`, {
-        method: "POST",
-        body: JSON.stringify({ new_password: newPassword })
-      });
+    document.addEventListener("DOMContentLoaded",async()=>{
+      $("loginBtn").addEventListener("click",ssoLogin);
+      $("logoutBtn").addEventListener("click",logout);
+      $("refreshAllBtn").addEventListener("click",()=>loadAll().catch((e)=>showError(e.message)));
+      $("auditPrevBtn").addEventListener("click",()=>loadAuditLogs(state.auditLogs.page-1).catch((e)=>showError(e.message)));
+      $("auditNextBtn").addEventListener("click",()=>loadAuditLogs(state.auditLogs.page+1).catch((e)=>showError(e.message)));
+      $("createUserBtn").addEventListener("click",()=>createUser().catch((e)=>showError(e.message)));
+      $("createFeatureBtn").addEventListener("click",()=>createFeature().catch((e)=>showError(e.message)));
+      $("toggleUserForm").addEventListener("click",()=>$("userForm").classList.toggle("hidden"));
+      $("toggleFeatureForm").addEventListener("click",()=>$("featureForm").classList.toggle("hidden"));
+      // 顶栏菜单
+      $("menuToggle").addEventListener("click",(e)=>{e.stopPropagation();$("menuList").classList.toggle("hidden");});
+      document.addEventListener("click",(e)=>{if(!e.target.closest(".menu"))$("menuList").classList.add("hidden");});
+      // 弹层
+      $("assignCancel").addEventListener("click",closeAssignModal);
+      $("assignSave").addEventListener("click",()=>saveAssign().catch((e)=>showError(e.message)));
+      $("assignModal").addEventListener("click",(e)=>{if(e.target===$("assignModal"))closeAssignModal();});
+      $("pwCancel").addEventListener("click",closePwModal);
+      $("pwSave").addEventListener("click",()=>savePw().catch((e)=>showError(e.message)));
+      $("pwModal").addEventListener("click",(e)=>{if(e.target===$("pwModal"))closePwModal();});
+      $("efCancel").addEventListener("click",closeFeatureModal);
+      $("efSave").addEventListener("click",()=>saveFeature().catch((e)=>showError(e.message)));
+      $("featureModal").addEventListener("click",(e)=>{if(e.target===$("featureModal"))closeFeatureModal();});
 
-      showSuccess("密码已重置。");
-    }
-
-    async function disableUser(userId) {
-      if (!confirm("确认禁用该用户？")) return;
-      await api(`/v1/admin/users/${userId}/disable`, { method: "POST" });
-      showSuccess("用户已禁用。");
-      await loadAll();
-    }
-
-    async function enableUser(userId) {
-      await api(`/v1/admin/users/${userId}/enable`, { method: "POST" });
-      showSuccess("用户已启用。");
-      await loadAll();
-    }
-
-    async function assignRoles(userId) {
-      const hint = state.roles.map((r) => `${r.id}:${r.code}`).join("，");
-      const input = prompt(`请输入角色 ID，多个用英文逗号分隔。\n可选：${hint}`);
-      if (input === null) return;
-
-      await api(`/v1/admin/users/${userId}/roles`, {
-        method: "PUT",
-        body: JSON.stringify({ role_ids: requireNumberList(input) })
-      });
-
-      showSuccess("用户角色已更新。");
-      await loadAll();
-    }
-
-    async function assignRolePermissions(roleId) {
-      const hint = state.permissions.map((p) => `${p.id}:${p.code}`).join("，");
-      const input = prompt(`请输入权限 ID，多个用英文逗号分隔。\n可选：${hint}`);
-      if (input === null) return;
-
-      await api(`/v1/admin/roles/${roleId}/permissions`, {
-        method: "PUT",
-        body: JSON.stringify({ permission_ids: requireNumberList(input) })
-      });
-
-      showSuccess("角色权限已更新。");
-      await loadAll();
-    }
-
-    async function createFeature() {
-      const code = $("featureCode").value.trim();
-      const title = $("featureTitle").value.trim();
-
-      if (!code || !title) {
-        showError("新增功能需要填写 Code 和标题。");
-        return;
-      }
-
-      await api("/v1/admin/features", {
-        method: "POST",
-        body: JSON.stringify({
-          code,
-          title,
-          description: $("featureDescription").value.trim() || null,
-          url: $("featureUrl").value.trim() || null,
-          category: $("featureCategory").value.trim() || null,
-          required_permission: $("featurePermission").value.trim() || null,
-          status: $("featureStatus").value,
-          sort_order: Number($("featureSort").value || 100)
-        })
-      });
-
-      ["featureCode", "featureTitle", "featureDescription", "featureUrl", "featureCategory", "featurePermission"].forEach((id) => $(id).value = "");
-      $("featureStatus").value = "active";
-      $("featureSort").value = "100";
-      showSuccess("功能入口已创建。");
-      await loadAll();
-    }
-
-    async function editFeature(featureId) {
-      const f = state.features.find((x) => x.id === featureId);
-      if (!f) return;
-
-      const title = prompt("标题：", f.title);
-      if (title === null) return;
-
-      const status = prompt("状态 active/reserved/disabled：", f.status);
-      if (status === null) return;
-
-      const requiredPermission = prompt("所需权限，留空表示公开：", f.required_permission || "");
-      if (requiredPermission === null) return;
-
-      const url = prompt("链接，留空表示无：", f.url || "");
-      if (url === null) return;
-
-      const sort = prompt("排序：", String(f.sort_order || 100));
-      if (sort === null) return;
-
-      await api(`/v1/admin/features/${featureId}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          title,
-          status,
-          required_permission: requiredPermission.trim() || null,
-          url: url.trim() || null,
-          sort_order: Number(sort || 100)
-        })
-      });
-
-      showSuccess("功能入口已更新。");
-      await loadAll();
-    }
-
-    async function toggleDocSyncPullPaused(paused) {
-      const group = (state.systemConfig || []).find((item) => item.domain === "doc_sync");
-      const emergency = group && group.emergency ? group.emergency : null;
-      if (!emergency || !emergency.pause_supported) {
-        showError("当前环境不支持文档同步应急暂停。");
-        return;
-      }
-
-      await api("/v1/ops/doc-sync/sync-config", {
-        method: "PUT",
-        body: JSON.stringify({
-          enabled: Boolean(emergency.enabled ?? true),
-          interval_hours: Number(emergency.interval_hours || 24),
-          anchor_time: String(emergency.anchor_time || ""),
-          pull_paused: Boolean(paused)
-        })
-      });
-
-      showSuccess(paused ? "已暂停文档同步表格拉取。" : "已恢复文档同步表格拉取。");
-      await loadAll();
-    }
-
-    window.resetPassword = resetPassword;
-    window.disableUser = disableUser;
-    window.enableUser = enableUser;
-    window.assignRoles = assignRoles;
-    window.assignRolePermissions = assignRolePermissions;
-    window.editFeature = editFeature;
-    window.toggleDocSyncPullPaused = toggleDocSyncPullPaused;
-
-    document.addEventListener("DOMContentLoaded", async () => {
-      $("loginBtn").addEventListener("click", ssoLogin);
-      $("logoutBtn").addEventListener("click", logout);
-      $("refreshAllBtn").addEventListener("click", () => loadAll().catch((e) => showError(e.message)));
-      $("auditPrevBtn").addEventListener("click", () => loadAuditLogs(state.auditLogs.page - 1).catch((e) => showError(e.message)));
-      $("auditNextBtn").addEventListener("click", () => loadAuditLogs(state.auditLogs.page + 1).catch((e) => showError(e.message)));
-      $("createUserBtn").addEventListener("click", () => createUser().catch((e) => showError(e.message)));
-      $("createFeatureBtn").addEventListener("click", () => createFeature().catch((e) => showError(e.message)));
-
-      syncTokenState();
-      renderAuth();
-
-      if (state.token) {
-        try {
-          await loadAll();
-        } catch (e) {
-          showError(`自动加载失败：${e.message}`);
-        }
-      }
+      syncTokenState();renderAuth();
+      if(state.token){try{await loadAll();}catch(e){showError(`自动加载失败：${e.message}`);}}
     });
   </script>
 </body>
