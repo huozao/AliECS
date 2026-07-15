@@ -1,5 +1,14 @@
 # 版本记录
 
+## v2.1.18：bom-builder 增加 BOM 审核（录入/审核 Tab）
+
+- 同页顶部加 `录入 / 审核` Tab；提交成功自动跳审核页。
+- `GET /v1/tplus/bom-pending?scope=mine|all`：实时查 T+ 未审 BOM（mine=本工具 success 提交逐条 bom/Query 过滤未审；all=列表分页过滤），返回含子件明细。列表以 T+ VoucherState 为准，不查本地表，杜绝"假装提交"。
+- `POST /v1/tplus/bom-audit`：真调 T+ bom/Audit 后立即 bom/Query 复查 VoucherState，翻已审才 audited=true 并从列表移除，否则透传 T+ 原文，杜绝"假装审核"。
+- 新权限 `tplus.bom.audit`（迁移 0028，授 admin 角色，与 tplus.bom.write 分离）。
+- 审核列表行内可展开看子件明细、逐条二次确认审核、审核后同步消失、手动刷新+同步时间戳。
+- ⚠️ T+ bom/Audit 精确参数形态部署后现场校准（build_audit_payload 单函数封装，默认 dto 带 Code+Version+ID）。
+
 ## v2.1.17：修复 admin-ui 被 #188 静默 revert 的 safeHref 与系统配置面板
 
 - 根因：#188 移动端重设计基于落后于 main 的 WIP 分支重写后覆盖 origin/main，静默回退了 #171 的「系统配置生效总览」面板与 feature 链接的 `safeHref`/`renderSafeLink` XSS 加固，致 main 的 admin 前端测试一直红（连带阻塞其它 PR 的全量 pytest 门禁）。

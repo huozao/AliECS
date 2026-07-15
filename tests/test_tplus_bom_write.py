@@ -112,5 +112,48 @@ class TPlusBomWriteDomainTests(unittest.TestCase):
         self.assertTrue(any("至少勾选一项存货属性" in error for error in errors))
 
 
+    def test_voucher_is_pending_only_for_code_00(self):
+        self.assertTrue(main.voucher_is_pending({"VoucherState": {"Code": "00", "Name": "未审"}}))
+        self.assertFalse(main.voucher_is_pending({"VoucherState": {"Code": "01", "Name": "已审"}}))
+        self.assertFalse(main.voucher_is_pending({}))
+
+    def test_bom_children_tolerates_key_variants(self):
+        bom = {"BOMChildDTOs": [
+            {"Inventory": {"Code": "RM-1", "Name": "原料一"}, "Unit": {"Name": "kg"}, "RequiredQuantity": "2.5"},
+            {"InventoryCode": "RM-2", "InventoryName": "原料二", "BaseUnitName": "个", "RequireQty": "1"},
+        ]}
+        children = main.bom_children(bom)
+        self.assertEqual(["RM-1", "RM-2"], [c["code"] for c in children])
+        self.assertEqual(["原料一", "原料二"], [c["name"] for c in children])
+        self.assertEqual(["kg", "个"], [c["unit_name"] for c in children])
+        self.assertEqual(["2.5", "1"], [c["required_quantity"] for c in children])
+
+    def test_pending_item_shape(self):
+        bom = {
+            "Code": "06000001", "Version": "260713F", "ID": 267,
+            "Inventory": {"Name": "hyd测试"}, "ProduceQuantity": "5",
+            "VoucherState": {"Code": "00", "Name": "未审"}, "BOMChildDTOs": [],
+        }
+        item = main.pending_item(bom)
+        self.assertEqual("06000001", item["code"])
+        self.assertEqual("hyd测试", item["name"])
+        self.assertEqual("260713F", item["version"])
+        self.assertEqual("267", item["bom_id"])
+        self.assertEqual("00", item["voucher_state"]["code"])
+        self.assertEqual([], item["children"])
+
+    def test_submission_bom_key_from_envelope(self):
+        req = {"bom": {"dto": {"Inventory": {"Code": "06000001"}, "Version": "260713F"}}}
+        self.assertEqual(("06000001", "260713F"), main.submission_bom_key(req))
+        self.assertIsNone(main.submission_bom_key({"bom": {"dto": {}}}))
+
+    def test_build_audit_payload_carries_business_keys(self):
+        payload = main.build_audit_payload("06000001", "260713F", "267")
+        dto = payload["dto"]
+        self.assertEqual("06000001", dto["Code"])
+        self.assertEqual("260713F", dto["Version"])
+        self.assertEqual("267", str(dto["ID"]))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -19,7 +19,15 @@ from pydantic import BaseModel, Field
 
 from app.core import _audit, _conn, require_login, require_permission
 from app.routers.exports import _inventory_scope_config, _latest_tplus_export_file
-from app.tplus_bom import build_bom_create_payload, build_custom_inventory_requests, validate_bom_draft
+from app.tplus_bom import (
+    build_audit_payload,
+    build_bom_create_payload,
+    build_custom_inventory_requests,
+    pending_item,
+    submission_bom_key,
+    validate_bom_draft,
+    voucher_is_pending,
+)
 
 
 router = APIRouter(prefix="/v1/tplus", tags=["tplus-bom"])
@@ -66,6 +74,12 @@ class BomDraftBody(BaseModel):
 
 class BomSubmitBody(BaseModel):
     confirmed: bool = False
+
+
+class BomAuditBody(BaseModel):
+    code: str = Field(min_length=1, max_length=100)
+    version: str = Field(min_length=1, max_length=100)
+    bom_id: str = Field(default="", max_length=40)
 
 
 def _actor(user: dict[str, Any]) -> str:
@@ -300,6 +314,138 @@ def tplus_inventory_code_suggestion(
         "suggested": f"{prefix}{next_serial:0{CODE_SERIAL_WIDTH}d}",
         "prefix": prefix,
         "source_file": path.name,
+    }
+
+
+BOM_QUERY_ENDPOINT = "/tplus/api/v2/bom/Query"
+BOM_AUDIT_ENDPOINT = "/tplus/api/v2/bom/Audit"
+
+
+def _require_bom_audit(user: dict[str, Any]) -> None:
+    require_permission("tplus.bom.audit", user)
+
+
+def _load_success_submissions() -> list[dict[str, Any]]:
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT request_json FROM tplus_bom_submissions WHERE status='success' ORDER BY id DESC LIMIT 500"
+            )
+            return [row[0] for row in cur.fetchall()]
+
+
+def _bom_query_rows(response: Any) -> list[dict[str, Any]]:
+    if isinstance(response, list):
+        return [r for r in response if isinstance(r, dict)]
+    if isinstance(response, dict):
+        for key in ("result", "Result", "data", "Data", "value", "Value", "rows", "Rows"):
+            value = response.get(key)
+            if isinstance(value, list):
+                return [r for r in value if isinstance(r, dict)]
+    return []
+
+
+@router.get("/bom-pending")
+def tplus_bom_pending(
+    scope: Literal["mine", "all"] = Query(default="mine"),
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, Any]:
+    _require_bom_audit(user)
+    items: list[dict[str, Any]] = []
+    if scope == "mine":
+        seen: set[tuple[str, str]] = set()
+        for request_json in _load_success_submissions():
+            key = submission_bom_key(request_json or {})
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            code, version = key
+            rows = _bom_query_rows(_chanjet_read_post(BOM_QUERY_ENDPOINT, {"dto": {"Code": code, "Version": version}}))
+            items.extend(pending_item(row) for row in rows if voucher_is_pending(row))
+    else:
+        page = 1
+        while True:
+            rows = _bom_query_rows(_chanjet_read_post(
+                BOM_QUERY_ENDPOINT,
+                {"param": {"PageSize": 200, "PageIndex": page,
+                           "SelectFields": "ID,Code,Version,Inventory.Name,ProduceQuantity,VoucherState.Code,VoucherState.Name,BOMChildDTOs"}},
+            ))
+            items.extend(pending_item(r) for r in rows if voucher_is_pending(r))
+            if len(rows) < 200 or page > 50:
+                break
+            page += 1
+    return {"items": items, "scope": scope, "synced_at": datetime.now(timezone.utc).isoformat()}
+
+
+_AUDIT_MESSAGE_KEYS = ("message", "Message", "msg", "Msg", "error", "Error", "detail", "Detail")
+
+
+def _extract_business_message(text: str) -> str:
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError):
+        return ""
+
+    def walk(node: Any) -> str:
+        if isinstance(node, dict):
+            for key in _AUDIT_MESSAGE_KEYS:
+                value = node.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            for value in node.values():
+                nested = walk(value)
+                if nested:
+                    return nested
+        elif isinstance(node, list):
+            for value in node:
+                nested = walk(value)
+                if nested:
+                    return nested
+        return ""
+
+    return walk(data)
+
+
+def _chanjet_business_post(endpoint: str, payload: dict[str, Any]) -> tuple[Any, str]:
+    app_key = os.getenv("CHANJET_APP_KEY", "").strip()
+    app_secret = os.getenv("CHANJET_APP_SECRET", "").strip()
+    open_token = _chanjet_open_token()
+    if not app_key or not app_secret or not open_token:
+        raise HTTPException(status_code=503, detail="T+ 查询凭据未配置")
+    base_url = os.getenv("CHANJET_BASE_URL", "https://openapi.chanjet.com").rstrip("/")
+    request = urllib.request.Request(
+        f"{base_url}/{endpoint.lstrip('/')}",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json", "appKey": app_key, "appSecret": app_secret, "openToken": open_token},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return json.loads(response.read().decode("utf-8")), ""
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        return None, _extract_business_message(body) or f"T+ 返回 HTTP {exc.code}"
+    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail=f"T+ 审核请求失败：{type(exc).__name__}") from exc
+
+
+def _text_state(state: dict[str, Any], key: str) -> str:
+    return str(state.get(key) or "").strip()
+
+
+@router.post("/bom-audit")
+def tplus_bom_audit(body: BomAuditBody, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
+    _require_bom_audit(user)
+    _body, message = _chanjet_business_post(BOM_AUDIT_ENDPOINT, build_audit_payload(body.code, body.version, body.bom_id))
+    rows = _bom_query_rows(_chanjet_read_post(BOM_QUERY_ENDPOINT, {"dto": {"Code": body.code, "Version": body.version}}))
+    state = (rows[0].get("VoucherState") if rows else {}) or {}
+    audited = bool(rows) and not voucher_is_pending(rows[0])
+    if audited:
+        _audit(_actor(user), "tplus.bom.audit", "tplus_bom", f"{body.code}@{body.version}")
+    return {
+        "audited": audited,
+        "voucher_state": {"code": _text_state(state, "Code"), "name": _text_state(state, "Name")},
+        "message": "" if audited else (message or "审核后复查仍为未审，请刷新重试"),
     }
 
 

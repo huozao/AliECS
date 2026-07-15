@@ -185,3 +185,66 @@ def build_bom_create_payload(
             row["ChildBOM"] = {"Version": _text(child["child_bom_version"])}
         dto["BOMChildDTOs"].append(row)
     return {"dto": dto}
+
+
+def _first(bom: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if "." in key:
+            head, tail = key.split(".", 1)
+            nested = bom.get(head)
+            if isinstance(nested, dict) and _text(nested.get(tail)):
+                return nested[tail]
+        elif _text(bom.get(key)):
+            return bom[key]
+    return ""
+
+
+def voucher_is_pending(bom: dict[str, Any]) -> bool:
+    state = bom.get("VoucherState") or {}
+    return _text(state.get("Code")) == "00"
+
+
+def bom_children(bom: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = bom.get("BOMChildDTOs") or bom.get("Children") or []
+    children: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        children.append({
+            "code": _text(_first(row, "Inventory.Code", "InventoryCode", "Code")),
+            "name": _text(_first(row, "Inventory.Name", "InventoryName", "Name")),
+            "unit_name": _text(_first(row, "Unit.Name", "BaseUnitName", "UnitName")),
+            "required_quantity": _text(_first(row, "RequiredQuantity", "RequireQty", "Quantity")),
+        })
+    return children
+
+
+def pending_item(bom: dict[str, Any]) -> dict[str, Any]:
+    state = bom.get("VoucherState") or {}
+    return {
+        "code": _text(_first(bom, "Code", "Inventory.Code")),
+        "name": _text(_first(bom, "Inventory.Name", "Name")),
+        "version": _text(bom.get("Version")),
+        "produce_quantity": _text(bom.get("ProduceQuantity")),
+        "voucher_state": {"code": _text(state.get("Code")), "name": _text(state.get("Name"))},
+        "bom_id": _text(_first(bom, "ID", "Id", "id")),
+        "children": bom_children(bom),
+    }
+
+
+def submission_bom_key(request_json: dict[str, Any]) -> tuple[str, str] | None:
+    payload = request_json.get("bom") or request_json
+    dto = (payload or {}).get("dto") or {}
+    code = _text((dto.get("Inventory") or {}).get("Code"))
+    version = _text(dto.get("Version"))
+    if code and version:
+        return code, version
+    return None
+
+
+def build_audit_payload(code: str, version: str, bom_id: str) -> dict[str, Any]:
+    # T+ bom/Audit：带业务键超集，ID 优先、Code+Version 兜底（确切形态由部署后现场校准）。
+    dto: dict[str, Any] = {"Code": _text(code), "Version": _text(version)}
+    if _text(bom_id):
+        dto["ID"] = _text(bom_id)
+    return {"dto": dto}
