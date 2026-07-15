@@ -33,6 +33,16 @@ class BackupRunReport(BaseModel):
     error_message: str | None = Field(default=None, max_length=2000)
 
 
+class BackupRestoreCheckReport(BaseModel):
+    policy_code: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,63}$")
+    status: str = Field(pattern="^(success|failed)$")
+    checked_at: datetime
+    source_snapshot_id: str | None = Field(default=None, max_length=200)
+    target_device: str = Field(min_length=1, max_length=80)
+    detail: dict[str, Any] = Field(default_factory=dict)
+    error_message: str | None = Field(default=None, max_length=2000)
+
+
 def _require_backup_report_token(x_backup_report_token: str | None = Header(default=None)) -> None:
     expected = os.getenv("BACKUP_REPORT_TOKEN", "").strip()
     supplied = (x_backup_report_token or "").strip()
@@ -85,6 +95,37 @@ def report_backup_run(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"backup report write failed: {type(exc).__name__}") from exc
     return {"ok": True, "id": row_id, "policy_code": body.policy_code, "run_id": body.run_id}
+
+
+@router.post("/v1/internal/backups/restore-check")
+def report_backup_restore_check(
+    body: BackupRestoreCheckReport,
+    _: None = Depends(_require_backup_report_token),
+) -> dict[str, Any]:
+    try:
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM backup_policies WHERE code = %s", (body.policy_code,))
+                if not cur.fetchone():
+                    raise HTTPException(status_code=404, detail="backup policy not found")
+                cur.execute(
+                    """
+                    INSERT INTO backup_restore_checks(
+                      policy_code, status, checked_at, source_snapshot_id,
+                      target_device, detail_json, error_message
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (body.policy_code, body.status, body.checked_at, body.source_snapshot_id,
+                     body.target_device, Jsonb(body.detail), body.error_message),
+                )
+                row_id = int(cur.fetchone()[0])
+            conn.commit()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"restore check report write failed: {type(exc).__name__}") from exc
+    return {"ok": True, "id": row_id, "policy_code": body.policy_code}
 
 
 def _as_iso(value: Any) -> str | None:
