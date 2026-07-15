@@ -121,6 +121,21 @@ def _inventory_column(df, *names: str) -> str:
     return ""
 
 
+def _infer_subject_type(code: str, name: str, class_name: str) -> str:
+    text = f"{class_name} {name}".lower()
+    finished_words = ("色母", "母粒", "改性料", "改性塑料", "成品")
+    package_words = ("色粉包", "助剂包")
+    if any(word in text for word in finished_words) and not any(word in text for word in package_words):
+        return "finished_product"
+    raw_words = (
+        "原料", "材料", "色粉", "颜料", "树脂", "助剂", "填充", "粉体", "钛白粉", "炭黑",
+        "pp ", "pp-", "pe ", "abs树脂", "pc ", "pmma", "pa6", "pa66", "pbt", "pet ", "pom ",
+    )
+    if any(word in text for word in raw_words) or code.startswith(("0", "1", "5")):
+        return "raw_material"
+    return "finished_product"
+
+
 def _tplus_subjects(q: str, limit: int) -> list[dict[str, Any]]:
     path = _latest_tplus_export_file("inventory")
     if path is None:
@@ -146,7 +161,6 @@ def _tplus_subjects(q: str, limit: int) -> list[dict[str, Any]]:
             mask |= df[spec_col].str.lower().str.contains(keyword, regex=False)
         df = df[mask]
     rows: list[dict[str, Any]] = []
-    raw_words = ("原料", "材料", "色粉", "颜料", "树脂", "助剂", "填充", "粉体")
     for _, row in df.drop_duplicates(subset=[code_col]).head(limit).iterrows():
         code = str(row[code_col]).strip()
         name = str(row[name_col]).strip()
@@ -158,7 +172,7 @@ def _tplus_subjects(q: str, limit: int) -> list[dict[str, Any]]:
             "specification": str(row[spec_col]).strip() if spec_col else "",
             "inventory_class_code": str(row[class_code_col]).strip() if class_code_col else "",
             "inventory_class_name": class_name,
-            "suggested_subject_type": "raw_material" if any(word in class_name for word in raw_words) else "finished_product",
+            "suggested_subject_type": _infer_subject_type(code, name, class_name),
         })
     return rows
 
