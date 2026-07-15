@@ -13,11 +13,12 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.core import _conn, get_current_user, require_login, require_permission
+from app.business_audit import sha256_file, write_business_audit
 from app.recipes.bom_query import calculate_recipe_costs, export_path_for_id, load_detail_from_workbook, locate_recipe_source, new_export_path, query_recipe_workbook, recipe_cost_export_filename, recipe_raw_export_filename, save_recipe_cost_workbook, save_recipe_human_workbook, save_recipe_workbook
 from app.recipes.compare_export import compare_export_filename, save_compare_workbook
 from app.recipes.price_lookup import latest_purchase_prices, latest_sales_prices
@@ -188,7 +189,7 @@ def _start_recipe_cache_warmer() -> None:
 
 
 @router.post("/v1/recipes/query")
-def recipe_query(body: RecipeQueryRequest, user: dict[str, Any] = Depends(formula_login_or_token)) -> dict[str, Any]:
+def recipe_query(request: Request, body: RecipeQueryRequest, user: dict[str, Any] = Depends(formula_login_or_token)) -> dict[str, Any]:
     require_permission("formula.read", user)
     try:
         source_path = locate_recipe_source()
@@ -207,7 +208,7 @@ def recipe_query(body: RecipeQueryRequest, user: dict[str, Any] = Depends(formul
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"配方查询失败：{type(exc).__name__}") from exc
 
-    return {
+    response = {
         "query": body.query,
         "source_file": source_path.name,
         "source_sync": _latest_bom_sync_run(),
@@ -219,6 +220,12 @@ def recipe_query(body: RecipeQueryRequest, user: dict[str, Any] = Depends(formul
         "download_url": f"/v1/recipes/download/{file_id}",
         "preview": result.preview_rows(limit=5000),
     }
+    write_business_audit(
+        user=user, request=request, action="formula.query", resource_type="formula",
+        query={"query": body.query, "default_bom": body.default_bom, "include_disabled": body.include_disabled},
+        result_count=result.recipe_count,
+    )
+    return response
 
 
 def _recipe_price_maps() -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]]]:
@@ -230,7 +237,7 @@ def _recipe_price_maps() -> tuple[dict[str, dict[str, object]], dict[str, dict[s
 
 
 @router.post("/v1/recipes/cost")
-def recipe_cost(body: RecipeCostRequest, user: dict[str, Any] = Depends(formula_login_or_token)) -> dict[str, Any]:
+def recipe_cost(request: Request, body: RecipeCostRequest, user: dict[str, Any] = Depends(formula_login_or_token)) -> dict[str, Any]:
     require_permission("formula.cost.calculate", user)
     try:
         source_path = locate_recipe_source()
@@ -255,7 +262,7 @@ def recipe_cost(body: RecipeCostRequest, user: dict[str, Any] = Depends(formula_
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"配方成本核算失败：{type(exc).__name__}") from exc
 
-    return {
+    response = {
         "query": body.query,
         "source_file": source_path.name,
         "recipe_count": len(recipes),
@@ -265,10 +272,16 @@ def recipe_cost(body: RecipeCostRequest, user: dict[str, Any] = Depends(formula_
         "simulated_quantity_count": len(body.simulated_quantities),
         "recipes": recipes,
     }
+    write_business_audit(
+        user=user, request=request, action="formula.cost.calculate", resource_type="formula",
+        query={"query": body.query, "default_bom": body.default_bom, "include_disabled": body.include_disabled},
+        result_count=len(recipes), detail={"manual_price_count": len(body.manual_prices), "simulated_quantity_count": len(body.simulated_quantities)},
+    )
+    return response
 
 
 @router.post("/v1/recipes/cost/export")
-def recipe_cost_export(body: RecipeCostRequest, user: dict[str, Any] = Depends(formula_login_or_token)) -> FileResponse:
+def recipe_cost_export(request: Request, body: RecipeCostRequest, user: dict[str, Any] = Depends(formula_login_or_token)) -> FileResponse:
     require_permission("formula.cost.calculate", user)
     try:
         source_path = locate_recipe_source()
@@ -296,6 +309,11 @@ def recipe_cost_export(body: RecipeCostRequest, user: dict[str, Any] = Depends(f
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"配方成本核算导出失败：{type(exc).__name__}") from exc
 
+    write_business_audit(
+        user=user, request=request, action="formula.cost.export", resource_type="formula_export",
+        resource_id=output_path.name, query={"query": body.query}, result_count=len(recipes),
+        file_sha256=sha256_file(output_path), required=True,
+    )
     return FileResponse(
         output_path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -305,7 +323,7 @@ def recipe_cost_export(body: RecipeCostRequest, user: dict[str, Any] = Depends(f
 
 
 @router.post("/v1/recipes/compare/export")
-def recipe_compare_export(body: CompareExportRequest, user: dict[str, Any] = Depends(formula_login_or_token)) -> FileResponse:
+def recipe_compare_export(request: Request, body: CompareExportRequest, user: dict[str, Any] = Depends(formula_login_or_token)) -> FileResponse:
     require_permission("formula.read", user)
     for row in body.rows:
         if len(row.cells) != len(body.versions):
@@ -316,6 +334,11 @@ def recipe_compare_export(body: CompareExportRequest, user: dict[str, Any] = Dep
         filename = compare_export_filename(body.query)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"对比表导出失败：{type(exc).__name__}") from exc
+    write_business_audit(
+        user=user, request=request, action="formula.compare.export", resource_type="formula_export",
+        resource_id=output_path.name, query={"query": body.query, "filter": body.filter_label},
+        result_count=len(body.rows), file_sha256=sha256_file(output_path), required=True,
+    )
     return FileResponse(
         output_path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -339,7 +362,7 @@ def recipe_sync_bom(user: dict[str, Any] = Depends(require_login)) -> dict[str, 
 
 
 @router.get("/v1/recipes/download/{file_id}")
-def recipe_download(file_id: str, sheet: str | None = None, user: dict[str, Any] = Depends(formula_login_or_token)) -> FileResponse:
+def recipe_download(request: Request, file_id: str, sheet: str | None = None, user: dict[str, Any] = Depends(formula_login_or_token)) -> FileResponse:
     require_permission("formula.read", user)
     if sheet not in (None, "", "human"):
         raise HTTPException(status_code=400, detail="不支持的 sheet 参数，目前仅支持 human。")
@@ -367,6 +390,11 @@ def recipe_download(file_id: str, sheet: str | None = None, user: dict[str, Any]
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"导出文件生成失败：{type(exc).__name__}") from exc
     filename = recipe_raw_export_filename(str(context["query"]) if context else None, human_only=human_only)
+    write_business_audit(
+        user=user, request=request, action="formula.download", resource_type="formula_export",
+        resource_id=file_id, query={"sheet": "human" if human_only else "full"},
+        file_sha256=sha256_file(path), required=True,
+    )
     return FileResponse(
         path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
