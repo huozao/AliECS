@@ -69,7 +69,8 @@ class WechatLoginQrTests(unittest.TestCase):
     def test_health_page_has_add_wechat_entry(self) -> None:
         html = HEALTH_PAGE.read_text(encoding="utf-8")
 
-        self.assertIn("渠道与其他", html)
+        # #188 移动端重设计把「添加新微信」从「渠道与其他」分区挪进顶栏 ⋯ 菜单（addWechatBtn），功能不变
+        self.assertIn('id="addWechatBtn"', html)
         self.assertIn("添加新微信", html)
         self.assertIn("wechatQrModal", html)
         self.assertIn("/v1/ops/wechat/login-qr", html)

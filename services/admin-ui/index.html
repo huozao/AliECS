@@ -64,6 +64,15 @@
     .check-item input{width:auto;flex:0 0 auto;margin:0}
     .check-item .ci-code{font-size:12px;color:var(--muted)}
     .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+    /* 系统配置总览表 */
+    .table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+    .table-wrap table{width:100%;border-collapse:collapse;background:#fff;font-size:13px}
+    .table-wrap th,.table-wrap td{padding:9px 11px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;white-space:nowrap}
+    .table-wrap th{background:#f3ede2;font-weight:700;position:sticky;top:0}
+    .table-wrap tbody tr:last-child td{border-bottom:0}
+    details.card>summary{list-style:none;cursor:pointer}
+    details.card>summary::-webkit-details-marker{display:none}
+    details.card>summary>h2{margin:0}
   </style>
 </head>
 <body>
@@ -146,9 +155,22 @@
         <div id="featuresBody" class="entity-grid"></div>
       </section>
 
+      <!-- 系统配置生效总览 -->
+      <section id="systemConfigPanel" class="card">
+        <h2><span class="htitle">系统配置生效总览</span></h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>域</th><th>配置项</th><th>生效值</th><th>来源</th><th>最后同步</th><th>编辑家</th><th>应急</th></tr>
+            </thead>
+            <tbody id="systemConfigBody"></tbody>
+          </table>
+        </div>
+      </section>
+
       <!-- 审计日志 -->
       <details id="auditLogPanel" class="card">
-        <summary style="cursor:pointer;font-size:16px;font-weight:700">审计日志</summary>
+        <summary><h2>审计日志</h2></summary>
         <div id="logsBody" style="margin-top:12px"></div>
         <div class="row" style="justify-content:space-between;margin-top:12px;">
           <button id="auditPrevBtn" type="button">上一页</button>
@@ -197,7 +219,7 @@
 
   <script>
     const API_BASE = location.port === "8081" ? "http://localhost:8000" : "/api";
-    const state = {token:"",me:null,users:[],roles:[],permissions:[],features:[],logs:[],auditLogs:{items:[],page:1,page_size:50,total:0}};
+    const state = {token:"",me:null,users:[],roles:[],permissions:[],features:[],logs:[],systemConfig:[],auditLogs:{items:[],page:1,page_size:50,total:0}};
     const $ = (id) => document.getElementById(id);
     const AUTH_KEYS = ["aliecs_auth_token","portal_token","admin_token"];
     const getAuthToken = () => AUTH_KEYS.map((k)=>localStorage.getItem(k)||"").find(Boolean)||"";
@@ -230,6 +252,25 @@
 
     function tag(text,kind=""){return `<span class="${kind?`tag ${kind}`:"tag"}">${escapeHtml(text)}</span>`;}
     function escapeHtml(value){return String(value??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;");}
+
+    // 仅允许站内相对路径或 http/https 绝对链接，挡住 javascript: 等危险协议
+    function safeHref(value) {
+      const raw = String(value || "").trim();
+      if (!raw) return "";
+      if (raw.startsWith("/") && !raw.startsWith("//")) return raw;
+      try {
+        const parsed = new URL(raw, location.origin);
+        if (parsed.protocol === "http:" || parsed.protocol === "https:") return raw;
+      } catch {
+        return "";
+      }
+      return "";
+    }
+    function renderSafeLink(url, label) {
+      const href = safeHref(url);
+      if (!href) return '<span class="muted">无效链接</span>';
+      return `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${escapeHtml(label || "打开")}</a>`;
+    }
 
     function renderAuth(){
       syncTokenState();
@@ -266,8 +307,61 @@
     }
     function renderFeatures(){
       $("featureCountBadge").textContent=state.features.length;
-      $("featuresBody").innerHTML=state.features.map((f)=>`<div class="entity"><div class="etop"><div><div class="ename">${escapeHtml(f.title)}</div><div class="esub">${escapeHtml(f.code)}${f.category?" · "+escapeHtml(f.category):""}</div></div><div>${tag(f.status,f.status==="active"?"ok":"warn")}</div></div><div class="etags">${f.required_permission?tag(f.required_permission):tag("公开","ok")}${f.url?`<a class="tag" href="${escapeHtml(f.url)}" target="_blank" rel="noreferrer">打开 ↗</a>`:'<span class="tag">无链接</span>'}<span class="tag">排序 ${f.sort_order}</span></div><div class="eact"><button type="button" onclick="editFeature(${f.id})">编辑</button></div></div>`).join("")||'<div class="muted">暂无功能入口。</div>';
+      $("featuresBody").innerHTML=state.features.map((f)=>`<div class="entity"><div class="etop"><div><div class="ename">${escapeHtml(f.title)}</div><div class="esub">${escapeHtml(f.code)}${f.category?" · "+escapeHtml(f.category):""}</div></div><div>${tag(f.status,f.status==="active"?"ok":"warn")}</div></div><div class="etags">${f.required_permission?tag(f.required_permission):tag("公开","ok")}${f.url?`<span class="tag">${renderSafeLink(f.url, "打开")}</span>`:'<span class="tag">无链接</span>'}<span class="tag">排序 ${f.sort_order}</span></div><div class="eact"><button type="button" onclick="editFeature(${f.id})">编辑</button></div></div>`).join("")||'<div class="muted">暂无功能入口。</div>';
     }
+    function renderSystemConfigEmergency(group,rowIndex){
+      if(rowIndex>0)return "";
+      const emergency=group.emergency||{};
+      if(group.domain==="doc_sync"&&emergency.pause_supported){
+        const paused=Boolean(emergency.pull_paused);
+        return `<button type="button" onclick="toggleDocSyncPullPaused(${!paused})">${paused?"恢复拉取":"暂停拉取"}</button>`;
+      }
+      return '<span class="muted">-</span>';
+    }
+    function renderSystemConfigEditor(editor){
+      if(!editor)return '<span class="muted">未配置</span>';
+      if(editor.url)return renderSafeLink(editor.url, editor.label || "打开");
+      return `<span class="muted">${escapeHtml(editor.label||"未配置")}</span>`;
+    }
+    function renderSystemConfig(){
+      const rows=[];
+      (state.systemConfig||[]).forEach((group)=>{
+        const groupRows=group.rows&&group.rows.length?group.rows:[{key:group.domain,label:"-",value:"-",source:group.source}];
+        groupRows.forEach((row,index)=>{
+          const statusKind=group.status==="ok"?"ok":"warn";
+          rows.push(`<tr><td>${index===0?`${tag(group.title||group.domain,statusKind)}${group.note?`<div class="muted small">${escapeHtml(group.note)}</div>`:""}`:""}</td>`+
+            `<td>${escapeHtml(row.label||row.key||"")}</td>`+
+            `<td>${escapeHtml(row.value||"")}</td>`+
+            `<td>${tag(row.source||group.source||"-",row.source==="应急开关"?"warn":statusKind)}</td>`+
+            `<td>${index===0?escapeHtml(group.last_synced_at||"-"):""}</td>`+
+            `<td>${index===0?renderSystemConfigEditor(group.editor):""}</td>`+
+            `<td>${renderSystemConfigEmergency(group,index)}</td></tr>`);
+        });
+      });
+      $("systemConfigBody").innerHTML=rows.join("")||'<tr><td colspan="7" class="muted">暂无系统配置数据。</td></tr>';
+    }
+    async function loadSystemConfig(){
+      try{
+        const systemConfigResp=await api("/v1/admin/system-config/effective");
+        state.systemConfig=systemConfigResp.items||[];
+      }catch(error){
+        state.systemConfig=[{domain:"system_config",title:"系统配置",status:"warn",source: "读取失败",
+          editor:{label:"稍后重试",url:null},last_synced_at:null,
+          rows:[{key:"system_config.error",label:"总览接口",value:error instanceof Error?error.message:"读取失败",source: "读取失败"}],
+          emergency:{pause_supported:false,override_supported:false}}];
+      }
+      renderSystemConfig();
+    }
+    async function toggleDocSyncPullPaused(paused){
+      const group=(state.systemConfig||[]).find((item)=>item.domain==="doc_sync");
+      const emergency=group&&group.emergency?group.emergency:null;
+      if(!emergency||!emergency.pause_supported){showError("当前环境不支持文档同步应急暂停。");return;}
+      await api("/v1/ops/doc-sync/sync-config",{method:"PUT",body:JSON.stringify({
+        enabled:Boolean(emergency.enabled??true),interval_hours:Number(emergency.interval_hours||24),
+        anchor_time:String(emergency.anchor_time||""),pull_paused:Boolean(paused)})});
+      showSuccess(paused?"已暂停文档同步表格拉取。":"已恢复文档同步表格拉取。");await loadAll();
+    }
+
     function renderLogs(){
       const totalPages=Math.max(1,Math.ceil(state.auditLogs.total/state.auditLogs.page_size));
       $("logsBody").innerHTML=state.logs.map((l)=>`<div class="logrow"><div><strong>${escapeHtml(l.action)}</strong> <span class="muted small">· ${escapeHtml(l.actor_username||"-")}</span></div><div class="muted small">${escapeHtml([l.target_type,l.target_id].filter(Boolean).join(":"))||"-"} · ${escapeHtml(l.created_at)}</div></div>`).join("")||'<div class="muted">暂无审计日志。</div>';
@@ -290,6 +384,7 @@
       ]);
       state.users=usersResp.items||[];state.roles=rolesResp.roles||[];state.permissions=permissionsResp.items||[];state.features=featuresResp.items||[];
       renderAuth();renderIdentity();renderUsers();renderRoles();renderPermissions();renderFeatures();
+      await loadSystemConfig();
       await loadAuditLogs(1);
     }
     function ssoLogin(){location.href=`${API_BASE}/v1/auth/oidc/login`;}
@@ -375,6 +470,7 @@
 
     window.resetPassword=resetPassword;window.disableUser=disableUser;window.enableUser=enableUser;
     window.assignRoles=assignRoles;window.assignRolePermissions=assignRolePermissions;window.editFeature=editFeature;
+    window.toggleDocSyncPullPaused=toggleDocSyncPullPaused;
 
     document.addEventListener("DOMContentLoaded",async()=>{
       $("loginBtn").addEventListener("click",ssoLogin);
