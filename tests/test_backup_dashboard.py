@@ -37,12 +37,22 @@ class BackupDashboardTests(unittest.TestCase):
         self.assertIn('href="/backups/"', html)
         self.assertIn("function renderBackupSummary(", html)
 
+    def test_catalog_correction_uses_single_core_repository_and_planned_quality_pool(self) -> None:
+        sql = (ROOT / "db" / "migrations" / "0031_backup_catalog_correction.sql").read_text(encoding="utf-8")
+        self.assertIn("核心系统 Restic（单仓库）", sql)
+        self.assertIn("核心 Restic（polymerone）", sql)
+        self.assertIn("不保存重复副本", sql)
+        self.assertIn("质检报告文件存储（待建设）", sql)
+        self.assertIn("尚未实施，不代表文件已经备份", sql)
+
     def test_backup_page_has_catalog_and_history_api(self) -> None:
         html = BACKUPS_PAGE.read_text(encoding="utf-8")
         self.assertIn("备份总账", html)
         self.assertIn("/v1/ops/backups", html)
         self.assertIn("运行历史", html)
         self.assertIn("明确排除", html)
+        self.assertIn("恢复校验", html)
+        self.assertIn("未执行", html)
 
     def test_policy_classification_uses_freshness_and_replica_status(self) -> None:
         from app.routers.backups import _classify_policy

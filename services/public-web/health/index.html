@@ -195,7 +195,7 @@
       backupSummary.innerHTML=[
         `<article class="metric"><div class="label">整体状态 ${chip(state==='failed'?'failed':(state==='warning'||state==='unknown'?'warning':'ok'))}</div><div class="value">${state}</div><div class="sub">纳管 ${b.monitored||0} / 总账 ${b.total||0}</div></article>`,
         `<article class="metric"><div class="label">正常 / 警告 / 异常</div><div class="value">${b.ok||0} / ${b.warning||0} / ${b.failed||0}</div><div class="sub">未知 ${b.unknown||0}，计划中 ${b.planned||0}</div></article>`,
-        `<article class="metric"><div class="label">最近成功</div><div class="value sm">${fmtTime(b.last_success_at)}</div><div class="sub">主副存储状态进入明细页查看</div></article>`
+        `<article class="metric"><div class="label">最近成功</div><div class="value sm">${fmtTime(b.last_success_at)}</div><div class="sub">存储位置与恢复校验进入明细页查看</div></article>`
       ].join('');
     }
     function renderSummary(data){
