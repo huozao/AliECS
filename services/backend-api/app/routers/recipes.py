@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import secrets
 import threading
 import time
 import uuid
@@ -13,11 +12,11 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from app.core import _conn, get_current_user, require_login, require_permission
+from app.core import _conn, require_login, require_permission
 from app.business_audit import sha256_file, write_business_audit
 from app.recipes.bom_query import calculate_recipe_costs, export_path_for_id, load_detail_from_workbook, locate_recipe_source, new_export_path, query_recipe_workbook, recipe_cost_export_filename, recipe_raw_export_filename, save_recipe_cost_workbook, save_recipe_human_workbook, save_recipe_workbook
 from app.recipes.compare_export import compare_export_filename, save_compare_workbook
@@ -25,23 +24,6 @@ from app.recipes.price_lookup import latest_purchase_prices, latest_sales_prices
 
 
 router = APIRouter()
-
-
-# 只读 formula 通道：服务端调用方（小程序云函数代理等）持 FORMULA_API_TOKEN（请求头
-# X-API-Key）访问查询/成本/导出/下载等只读路由；写路由（sync-bom）与其他域一律不挂载
-# 本依赖。env 缺失或为空 = 通道关闭，行为与纯登录鉴权完全一致。
-def formula_login_or_token(
-    authorization: str | None = Header(default=None),
-    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
-) -> dict[str, Any]:
-    expected = os.getenv("FORMULA_API_TOKEN", "").strip()
-    if expected and x_api_key and secrets.compare_digest(x_api_key.strip(), expected):
-        return {
-            "sub": "formula-api-token",
-            "roles": [],
-            "permissions": ["formula.read", "formula.cost.calculate"],
-        }
-    return get_current_user(authorization)
 
 
 class RecipeQueryRequest(BaseModel):
@@ -189,7 +171,7 @@ def _start_recipe_cache_warmer() -> None:
 
 
 @router.post("/v1/recipes/query")
-def recipe_query(request: Request, body: RecipeQueryRequest, user: dict[str, Any] = Depends(formula_login_or_token)) -> dict[str, Any]:
+def recipe_query(request: Request, body: RecipeQueryRequest, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
     require_permission("formula.read", user)
     try:
         source_path = locate_recipe_source()
@@ -237,7 +219,7 @@ def _recipe_price_maps() -> tuple[dict[str, dict[str, object]], dict[str, dict[s
 
 
 @router.post("/v1/recipes/cost")
-def recipe_cost(request: Request, body: RecipeCostRequest, user: dict[str, Any] = Depends(formula_login_or_token)) -> dict[str, Any]:
+def recipe_cost(request: Request, body: RecipeCostRequest, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
     require_permission("formula.cost.calculate", user)
     try:
         source_path = locate_recipe_source()
@@ -281,7 +263,7 @@ def recipe_cost(request: Request, body: RecipeCostRequest, user: dict[str, Any] 
 
 
 @router.post("/v1/recipes/cost/export")
-def recipe_cost_export(request: Request, body: RecipeCostRequest, user: dict[str, Any] = Depends(formula_login_or_token)) -> FileResponse:
+def recipe_cost_export(request: Request, body: RecipeCostRequest, user: dict[str, Any] = Depends(require_login)) -> FileResponse:
     require_permission("formula.cost.calculate", user)
     try:
         source_path = locate_recipe_source()
@@ -323,7 +305,7 @@ def recipe_cost_export(request: Request, body: RecipeCostRequest, user: dict[str
 
 
 @router.post("/v1/recipes/compare/export")
-def recipe_compare_export(request: Request, body: CompareExportRequest, user: dict[str, Any] = Depends(formula_login_or_token)) -> FileResponse:
+def recipe_compare_export(request: Request, body: CompareExportRequest, user: dict[str, Any] = Depends(require_login)) -> FileResponse:
     require_permission("formula.read", user)
     for row in body.rows:
         if len(row.cells) != len(body.versions):
@@ -362,7 +344,7 @@ def recipe_sync_bom(user: dict[str, Any] = Depends(require_login)) -> dict[str, 
 
 
 @router.get("/v1/recipes/download/{file_id}")
-def recipe_download(request: Request, file_id: str, sheet: str | None = None, user: dict[str, Any] = Depends(formula_login_or_token)) -> FileResponse:
+def recipe_download(request: Request, file_id: str, sheet: str | None = None, user: dict[str, Any] = Depends(require_login)) -> FileResponse:
     require_permission("formula.read", user)
     if sheet not in (None, "", "human"):
         raise HTTPException(status_code=400, detail="不支持的 sheet 参数，目前仅支持 human。")
