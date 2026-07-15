@@ -19,6 +19,7 @@ from app.routers.miniapp_accounts import router as miniapp_accounts_router
 from app.routers.ops import router as ops_router
 from app.routers.backups import router as backups_router
 from app.routers.recipes import router as recipes_router
+from app.routers.quality_reports import router as quality_reports_router
 from app.routers.system_config import router as system_config_router
 from app.routers.tplus_bom import router as tplus_bom_router
 from app.routers.webhooks import router as webhooks_router
@@ -31,6 +32,7 @@ app.include_router(backups_router)
 app.include_router(auth_admin_router)
 app.include_router(auth_oidc_router)
 app.include_router(recipes_router)
+app.include_router(quality_reports_router)
 app.include_router(tplus_bom_router)
 app.include_router(exports_router)
 app.include_router(miniapp_accounts_router)
