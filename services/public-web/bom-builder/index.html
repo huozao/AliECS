@@ -146,10 +146,7 @@
     <div id="auditTab" class="hidden">
       <section class="panel">
         <div class="row" style="justify-content:space-between;align-items:center">
-          <div class="row" id="auditScope" style="gap:6px">
-            <label class="small"><input type="radio" name="auditScope" value="mine" checked/> 本工具建的</label>
-            <label class="small"><input type="radio" name="auditScope" value="all"/> T+ 全部未审</label>
-          </div>
+          <div class="small muted">本工具提交的未审 BOM（实时取自 T+）</div>
           <button id="refreshAuditBtn" class="btn" type="button">刷新</button>
         </div>
         <div id="auditSyncedAt" class="small muted" style="margin:6px 0"></div>
@@ -214,11 +211,10 @@
       document.querySelector('.sticky-bar').classList.toggle('hidden',audit);
       if(audit)loadPending();
     }
-    function auditScope(){return (document.querySelector('input[name=auditScope]:checked')||{}).value||'mine';}
     async function loadPending(){
       if(!token()){$('auditList').innerHTML='<div class="muted small">请先登录（SSO）。</div>';return}
       $('auditList').innerHTML='<div class="muted small">加载中…</div>';
-      try{const data=await api(`/v1/tplus/bom-pending?scope=${auditScope()}`);
+      try{const data=await api('/v1/tplus/bom-pending');
         $('auditSyncedAt').textContent=`同步于 ${new Date(data.synced_at).toLocaleTimeString('zh-CN')}`;
         renderPending(data.items||[]);}
       catch(e){$('auditList').innerHTML=`<div style="color:var(--danger)" class="small">加载失败：${esc(e.message)}（点刷新重试）</div>`;}}
@@ -421,7 +417,6 @@
       $('tabEntry').onclick=()=>switchTab('entry');
       $('tabAudit').onclick=()=>switchTab('audit');
       $('refreshAuditBtn').onclick=loadPending;
-      document.querySelectorAll('input[name=auditScope]').forEach((el)=>el.addEventListener('change',loadPending));
       $('parentClassSelect').addEventListener('change',()=>refreshCodeSuggestion($('parentClassSelect'),$('parentCodeHint'),$('parentCode')));
       $('customClassSelect').addEventListener('change',()=>refreshCodeSuggestion($('customClassSelect'),$('customCodeHint'),$('customCode')));
       if(token())ensureOptions().then(()=>{if(state.pendingParentClass)$('parentClassSelect').value=state.pendingParentClass;if(state.pendingParentUnit)$('parentUnitSelect').value=state.pendingParentUnit;refreshCodeSuggestion($('parentClassSelect'),$('parentCodeHint'),$('parentCode'));}).catch((e)=>message(`读取 T+ 分类/单位失败：${e.message}（父件类别与单位暂不可选，可稍后刷新重试）`,'warn'));

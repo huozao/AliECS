@@ -346,35 +346,21 @@ def _bom_query_rows(response: Any) -> list[dict[str, Any]]:
 
 
 @router.get("/bom-pending")
-def tplus_bom_pending(
-    scope: Literal["mine", "all"] = Query(default="mine"),
-    user: dict[str, Any] = Depends(require_login),
-) -> dict[str, Any]:
+def tplus_bom_pending(user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
+    # 只回本工具建的未审 BOM：对每个 success 提交按 (Code, Version) 逐条实时查 T+ VoucherState。
+    # T+ bom/Query 只支持单条 dto 形态（param 列表形态被拒 EXSV0011），故不做"全部未审"。
     _require_bom_audit(user)
     items: list[dict[str, Any]] = []
-    if scope == "mine":
-        seen: set[tuple[str, str]] = set()
-        for request_json in _load_success_submissions():
-            key = submission_bom_key(request_json or {})
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            code, version = key
-            rows = _bom_query_rows(_chanjet_read_post(BOM_QUERY_ENDPOINT, {"dto": {"Code": code, "Version": version}}))
-            items.extend(pending_item(row) for row in rows if voucher_is_pending(row))
-    else:
-        page = 1
-        while True:
-            rows = _bom_query_rows(_chanjet_read_post(
-                BOM_QUERY_ENDPOINT,
-                {"param": {"PageSize": 200, "PageIndex": page,
-                           "SelectFields": "ID,Code,Version,Inventory.Name,ProduceQuantity,VoucherState.Code,VoucherState.Name,BOMChildDTOs"}},
-            ))
-            items.extend(pending_item(r) for r in rows if voucher_is_pending(r))
-            if len(rows) < 200 or page > 50:
-                break
-            page += 1
-    return {"items": items, "scope": scope, "synced_at": datetime.now(timezone.utc).isoformat()}
+    seen: set[tuple[str, str]] = set()
+    for request_json in _load_success_submissions():
+        key = submission_bom_key(request_json or {})
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        code, version = key
+        rows = _bom_query_rows(_chanjet_read_post(BOM_QUERY_ENDPOINT, {"dto": {"Code": code, "Version": version}}))
+        items.extend(pending_item(row) for row in rows if voucher_is_pending(row))
+    return {"items": items, "synced_at": datetime.now(timezone.utc).isoformat()}
 
 
 _AUDIT_MESSAGE_KEYS = ("message", "Message", "msg", "Msg", "error", "Error", "detail", "Detail")
