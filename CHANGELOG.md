@@ -1,5 +1,10 @@
 # 版本记录
 
+## v2.1.19：BOM 审核列表砍掉「T+ 全部未审」，只留「本工具建的」
+
+- 生产校准发现 T+ `bom/Query` 只支持单条 `dto` 形态，列表 `param` 形态被拒（`EXSV0011 提供的服务名称(bom/Query)不正确`），故 `scope=all`（全部未审）无法工作。按用户决定砍掉，`bom-pending` 端点固定只回本工具 success 提交、逐条实时查 T+ 仍未审的 BOM；前端移除范围切换单选。
+- 附带校准结论（生产实测，测试 BOM 建/审/删闭环后清理无残留）：`bom/Audit`、`bom/UnAudit`、`bom/Delete` 参数形态均为 `{"dto":{"Code","Version","ID"}}`/`{"dto":{"ID"}}`；发布的 `build_audit_payload`（dto 带 Code+Version+ID）实测审核成功（未审 00 → 生效 01），无需改动。
+
 ## v2.1.18：bom-builder 增加 BOM 审核（录入/审核 Tab）
 
 - 同页顶部加 `录入 / 审核` Tab；提交成功自动跳审核页。

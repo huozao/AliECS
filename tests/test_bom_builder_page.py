@@ -108,11 +108,12 @@ def test_audit_list_wiring():
     assert "/v1/tplus/bom-pending" in html
     assert "/v1/tplus/bom-audit" in html
     assert 'id="auditList"' in html
-    assert 'id="auditScope"' in html
     assert 'id="refreshAuditBtn"' in html
     assert "function loadPending(" in html
     assert "function auditRow(" in html
-    assert "本工具建的" in html and "T+ 全部未审" in html
+    # 只保留「本工具建的」实时未审列表（T+ bom/Query 不支持列表形态，故砍掉「全部未审」）
+    assert "本工具提交的未审" in html
+    assert "T+ 全部未审" not in html
     assert "当前没有待审核" in html
 
 

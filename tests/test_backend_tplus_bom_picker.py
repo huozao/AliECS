@@ -205,21 +205,13 @@ class TPlusBomPendingTests(unittest.TestCase):
             state = "00" if code == "06000001" else "01"
             return [{"Code": code, "Version": "V1", "ID": 1, "VoucherState": {"Code": state, "Name": "x"}, "BOMChildDTOs": []}]
         self.main._chanjet_read_post = fake_query
-        result = self.main.tplus_bom_pending(scope="mine", user=self._user())
+        result = self.main.tplus_bom_pending(user=self._user())
         self.assertEqual(["06000001"], [i["code"] for i in result["items"]])
-
-    def test_all_scope_filters_pending_from_list(self):
-        self.main._chanjet_read_post = lambda endpoint, payload: [
-            {"Code": "A", "Version": "V1", "ID": 1, "VoucherState": {"Code": "00", "Name": "未审"}, "BOMChildDTOs": []},
-            {"Code": "B", "Version": "V1", "ID": 2, "VoucherState": {"Code": "01", "Name": "已审"}, "BOMChildDTOs": []},
-        ]
-        result = self.main.tplus_bom_pending(scope="all", user=self._user())
-        self.assertEqual(["A"], [i["code"] for i in result["items"]])
 
     def test_requires_audit_permission(self):
         from fastapi import HTTPException
         with self.assertRaises(HTTPException) as ctx:
-            self.main.tplus_bom_pending(scope="mine", user={"sub": "x", "roles": [], "permissions": []})
+            self.main.tplus_bom_pending(user={"sub": "x", "roles": [], "permissions": []})
         self.assertEqual(403, ctx.exception.status_code)
 
     def test_audit_success_when_recheck_flips_to_audited(self):
