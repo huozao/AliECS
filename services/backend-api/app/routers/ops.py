@@ -27,6 +27,7 @@ from app.core import _audit, _conn, _db_ping, require_admin
 from app.recipes.active_bom import copy_latest_bom_source, export_active_bom_rows
 from app.routers.couple import _upload_disk_usage
 from app.routers.exports import _match_export_files_to_runs, _tplus_export_dir
+from app.routers.backups import backup_summary_from_db
 
 
 router = APIRouter()
@@ -429,6 +430,7 @@ def ops_status(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
         "system": _system_status(),
         "tplus": _tplus_status_from_db() if db_ok else _empty_tplus_status(),
         "reconciliation": _reconciliation_status_from_db() if db_ok else {"needs_review": 0, "recent": []},
+        "backups": backup_summary_from_db() if db_ok else {"status": "unknown", "total": 0, "monitored": 0},
         "hosts": _configured_host_statuses(),
     }
     status["attention_items"] = build_ops_attention_items(status)

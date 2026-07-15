@@ -58,6 +58,7 @@ class BackendOpsStatusTests(unittest.TestCase):
         self.assertIn("system", result)
         self.assertIn("tplus", result)
         self.assertIn("reconciliation", result)
+        self.assertIn("backups", result)
         self.assertIn("hosts", result)
         self.assertIn("attention_items", result)
         self.assertIn("database_unhealthy", [item["code"] for item in result["attention_items"]])
