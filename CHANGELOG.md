@@ -1,5 +1,12 @@
 # 版本记录
 
+## v2.1.17：修复 admin-ui 被 #188 静默 revert 的 safeHref 与系统配置面板
+
+- 根因：#188 移动端重设计基于落后于 main 的 WIP 分支重写后覆盖 origin/main，静默回退了 #171 的「系统配置生效总览」面板与 feature 链接的 `safeHref`/`renderSafeLink` XSS 加固，致 main 的 admin 前端测试一直红（连带阻塞其它 PR 的全量 pytest 门禁）。
+- 以 cb22880 为事实源恢复两者，保留 #188 的移动端卡片/弹层新 UI；`comm` 符号级比对确认零意外功能丢失（仅 `requireNumberList` 为复选框化的故意移除）。
+- feature 链接与系统配置编辑家链接改回 `renderSafeLink`（挡 `javascript:` 等危险协议，Playwright 实测生效）；系统配置面板加载改为面板级容错（读取失败只在面板内提示，不阻断整页）。
+- 顺带修 #188 的 /health 页文案改名遗留的两个测试（`畅捷通同步`→`T+ 同步时间线`、微信入口挪进 ⋯ 菜单）：功能未丢，仅更新测试断言到新结构锚点。
+
 ## v2.1.16：修复 T+ 写入被标量返回体误杀（真机首单实锤）+ 版本号默认当日日期
 
 - 生产实锤（提交 #1/#2 均倒在此）：T+ Create 类接口**成功**时返回裸标量 JSON（如新记录 ID `568`），`ChanjetClient.post` 的 dict/list 守卫把成功当异常抛 `接口返回 JSON 不是对象或列表结构` → 存货已在 T+ 建成但提交卡 needs_review。守卫移除，标量/null 原样返回，由调用方按语义处理（BOM 写入以写后查询验证为权威）。
