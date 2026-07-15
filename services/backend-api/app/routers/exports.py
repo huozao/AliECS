@@ -333,10 +333,16 @@ def inventory_current_stock(
     q: str = Query(default=""),
     warehouse: str = Query(default=""),
     scope: str = Query(default="raw"),
+    limit: int | None = None,
+    offset: int = 0,
     user: dict[str, Any] = Depends(require_login),
 ) -> dict[str, Any]:
     if scope not in ("raw", "finished"):
         raise HTTPException(status_code=400, detail="scope must be raw or finished")
+    if limit is not None and (limit < 1 or limit > 200):
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be non-negative")
     roles = user.get("roles", [])
     permissions = user.get("permissions", [])
     scope_permission = "inventory.raw.read" if scope == "raw" else "inventory.finished.read"
@@ -388,10 +394,13 @@ def inventory_current_stock(
     for column in ("ExistingQuantity", "AvailableQuantity"):
         df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0)
 
+    total = int(len(df))
+    if limit is not None:
+        df = df.iloc[offset : offset + limit]
     stat = path.stat()
     return {
         "items": df.to_dict("records"),
-        "total": int(len(df)),
+        "total": total,
         "warehouses": warehouses,
         "source_file": path.name,
         "synced_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
