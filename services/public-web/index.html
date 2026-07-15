@@ -78,10 +78,10 @@
       raw_inventory:'🧱',finished_inventory:'📦',formula_query:'🧪',formula_color_space:'🎨',
       tplus_bom_builder:'➕',new_model_form:'🆕',schedule_form:'📅',pending_return_alert:'🔔',
       naming_form:'🏷️',qc_form:'🔬',density_calculator:'⚖️',midea_requirement:'📋',
-      personal_section:'👤',admin_ui:'⚙️',ash_calculator:'🔢',ai_file_transfer:'📁'
+      personal_section:'👤',admin_ui:'⚙️',ash_calculator:'🔢',ai_file_transfer:'📁',quality_reports:'📄'
     };
     // 仅这些功能的说明确实补充了标题之外的信息，才显示小灰字
-    const DESC_WHITELIST=new Set(['formula_query','formula_color_space','ash_calculator','ai_file_transfer']);
+    const DESC_WHITELIST=new Set(['formula_query','formula_color_space','ash_calculator','ai_file_transfer','quality_reports']);
 
     const ssoLogin=()=>{location.href=`${API_BASE}/v1/auth/oidc/login`;};
     const getAuthToken=()=>AUTH_KEYS.map((k)=>localStorage.getItem(k)||'').find(Boolean)||'';
