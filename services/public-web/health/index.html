@@ -105,6 +105,13 @@
         <div id="hosts"></div>
       </section>
       <section class="band">
+        <h2>备份与恢复</h2>
+        <div id="backupSummary" class="metrics"></div>
+        <div class="row" style="margin-top:12px">
+          <a class="btn primary" href="/backups/">查看全部备份</a>
+        </div>
+      </section>
+      <section class="band">
         <h2>同步与工具</h2>
         <div class="linkgrid">
           <a class="card-link" href="/tplus-sync/">
@@ -168,7 +175,7 @@
     const ssoLogin=()=>{location.href=`${API_BASE}/v1/auth/oidc/login`;};
 
     function renderStatusBar(data){
-      const t=data.tplus||{},r=data.reconciliation||{},hosts=data.hosts||[];
+      const t=data.tplus||{},r=data.reconciliation||{},b=data.backups||{},hosts=data.hosts||[];
       const overall=(data.status||'unknown').toLowerCase();
       const dotClass=overall==='ok'?'':(overall==='critical'||overall==='failed'?'bad':'warn');
       const hostsOk=hosts.filter((h)=>h.ok).length;
@@ -178,8 +185,18 @@
         `<span class="seg">主机 <b>${hostsOk}/${hosts.length}</b></span>`,
         `<span class="seg">待处理 <b>${t.pending_requests||0}</b></span>`,
         `<span class="seg">失败 <b>${t.failed_requests||0}</b></span>`,
+        `<span class="seg">备份 <b>${b.ok||0}/${b.monitored||0}</b></span>`,
         `<span class="seg">差异待审 <b>${r.needs_review||0}</b></span>`
-      ].join('')+(hostBad?`<span class="chip failed">主机异常 ${hostBad}</span>`:'');
+      ].join('')+(hostBad?`<span class="chip failed">主机异常 ${hostBad}</span>`:'')+(b.status&&b.status!=='ok'?`<span class="chip ${b.status==='failed'?'failed':'warning'}">备份 ${b.status}</span>`:'');
+    }
+    function renderBackupSummary(data){
+      const b=data.backups||{};
+      const state=b.status||'unknown';
+      backupSummary.innerHTML=[
+        `<article class="metric"><div class="label">整体状态 ${chip(state==='failed'?'failed':(state==='warning'||state==='unknown'?'warning':'ok'))}</div><div class="value">${state}</div><div class="sub">纳管 ${b.monitored||0} / 总账 ${b.total||0}</div></article>`,
+        `<article class="metric"><div class="label">正常 / 警告 / 异常</div><div class="value">${b.ok||0} / ${b.warning||0} / ${b.failed||0}</div><div class="sub">未知 ${b.unknown||0}，计划中 ${b.planned||0}</div></article>`,
+        `<article class="metric"><div class="label">最近成功</div><div class="value sm">${fmtTime(b.last_success_at)}</div><div class="sub">主副存储状态进入明细页查看</div></article>`
+      ].join('');
     }
     function renderSummary(data){
       const sys=data.system||{},db=data.database||{},t=data.tplus||{},r=data.reconciliation||{},hosts=data.hosts||[];
@@ -230,6 +247,7 @@
         latestStatus=await loadStatus();
         renderStatusBar(latestStatus);
         renderSummary(latestStatus);
+        renderBackupSummary(latestStatus);
         renderAttention(latestStatus.attention_items);
         renderHosts(latestStatus.hosts||[]);
       }catch(error){attention.innerHTML=`<div class="attention critical"><strong>health_load_failed</strong><br/>${error.message}</div>`;}

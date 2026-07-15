@@ -68,6 +68,7 @@ def build_ops_attention_items(status: dict[str, Any]) -> list[dict[str, Any]]:
     tplus = status.get("tplus") if isinstance(status.get("tplus"), dict) else {}
     reconciliation = status.get("reconciliation") if isinstance(status.get("reconciliation"), dict) else {}
     system = status.get("system") if isinstance(status.get("system"), dict) else {}
+    backups = status.get("backups") if isinstance(status.get("backups"), dict) else {}
     hosts = status.get("hosts") if isinstance(status.get("hosts"), list) else []
 
     if not database.get("ok", False):
@@ -84,6 +85,10 @@ def build_ops_attention_items(status: dict[str, Any]) -> list[dict[str, Any]]:
         items.append({"level": "warning", "code": "disk_high", "message": f"Disk usage is {system.get('disk_percent')}%"})
     if float(system.get("memory_percent") or 0) >= 90:
         items.append({"level": "warning", "code": "memory_high", "message": f"Memory usage is {system.get('memory_percent')}%"})
+    if backups.get("status") == "failed":
+        items.append({"level": "critical", "code": "backup_failed", "message": "关键备份失败，请查看备份与恢复页面"})
+    elif backups.get("status") in {"warning", "unknown"}:
+        items.append({"level": "warning", "code": "backup_attention", "message": "关键备份过期、未上报或副本异常"})
     for host in hosts:
         if isinstance(host, dict) and not host.get("ok", False):
             items.append({"level": "warning", "code": "host_unreachable", "message": f"{host.get('name', 'host')}: {host.get('message', 'unreachable')}"})
