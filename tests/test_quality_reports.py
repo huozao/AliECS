@@ -10,6 +10,7 @@ sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.main import app
 from app.quality_storage import StorageBackend, StorageError, WebDavStorage
+from app.routers.quality_reports import _infer_subject_type
 
 
 def _backend() -> StorageBackend:
@@ -41,3 +42,18 @@ def test_webdav_url_quotes_path_but_keeps_directories(monkeypatch: pytest.Monkey
     assert storage._url("quality-reports/产品 A/report.pdf").endswith(
         "quality-reports/%E4%BA%A7%E5%93%81%20A/report.pdf"
     )
+
+
+@pytest.mark.parametrize(
+    ("code", "name", "expected"),
+    [
+        ("10001001", "ABS树脂0215H", "raw_material"),
+        ("10001017", "PP  548R", "raw_material"),
+        ("01000701", "701助剂", "raw_material"),
+        ("40101003", "耐候ABS色粉包", "raw_material"),
+        ("40000003", "空调耐候ABS1022色母", "finished_product"),
+        ("40000024", "4789-PP钛钢灰色母", "finished_product"),
+    ],
+)
+def test_quality_subject_type_inference(code: str, name: str, expected: str) -> None:
+    assert _infer_subject_type(code, name, "") == expected
