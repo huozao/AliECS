@@ -301,6 +301,18 @@ class InventoryCurrentStockTests(unittest.TestCase):
         self.assertEqual("ABS树脂0215H", keyword["items"][0]["InventoryName"])
         self.assertAlmostEqual(232.0825, keyword["items"][0]["ExistingQuantity"])
 
+    def test_optional_pagination_preserves_filtered_total(self) -> None:
+        _write_stock_excel(Path(self._tmp.name))
+        user = self._user(permissions=["inventory.raw.read"])
+
+        result = self.main.inventory_current_stock(
+            q="", warehouse="", scope="raw", limit=1, offset=1, user=user
+        )
+
+        self.assertEqual(2, result["total"])
+        self.assertEqual(1, len(result["items"]))
+        self.assertEqual("20002", result["items"][0]["InventoryCode"])
+
 
 if __name__ == "__main__":
     unittest.main()
