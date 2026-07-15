@@ -123,6 +123,17 @@
         <div id="usersBody" class="entity-grid"></div>
       </section>
 
+      <!-- 微信小程序账号申请 -->
+      <section class="card">
+        <h2><span class="htitle">小程序账号申请 <span id="miniappRequestCountBadge" class="badge">0</span></span>
+          <select id="miniappRequestStatus" style="width:auto;padding:8px 34px 8px 12px">
+            <option value="pending">待审核</option><option value="approved">已通过</option>
+            <option value="rejected">已拒绝</option><option value="all">全部</option>
+          </select></h2>
+        <div class="notice">账号与权限仍由 LLDAP / Authelia / 本站 RBAC 管理。若是“申请新账号”，请先在现有 SSO 中开户并在本站建立同名用户、分配角色，再选择该用户完成绑定；此处不创建或重置 SSO 密码。</div>
+        <div id="miniappRequestsBody" class="entity-grid"></div>
+      </section>
+
       <!-- 角色 / 权限 -->
       <section class="grid two">
         <section class="card">
@@ -219,7 +230,7 @@
 
   <script>
     const API_BASE = location.port === "8081" ? "http://localhost:8000" : "/api";
-    const state = {token:"",me:null,users:[],roles:[],permissions:[],features:[],logs:[],systemConfig:[],auditLogs:{items:[],page:1,page_size:50,total:0}};
+    const state = {token:"",me:null,users:[],roles:[],permissions:[],features:[],miniappRequests:[],logs:[],systemConfig:[],auditLogs:{items:[],page:1,page_size:50,total:0}};
     const $ = (id) => document.getElementById(id);
     const AUTH_KEYS = ["aliecs_auth_token","portal_token","admin_token"];
     const getAuthToken = () => AUTH_KEYS.map((k)=>localStorage.getItem(k)||"").find(Boolean)||"";
@@ -295,6 +306,39 @@
           :`<button type="button" onclick="enableUser(${u.id})">启用</button>`;
         return `<div class="entity"><div class="etop"><div><div class="ename">${escapeHtml(u.display_name||u.username)}</div><div class="esub">${escapeHtml(u.username)} · #${u.id}</div></div><div style="text-align:right">${tag(u.status,statusKind)}${u.is_admin?tag("管理员","ok"):""}</div></div><div class="etags">${roles}</div><div class="eact"><button type="button" onclick="assignRoles(${u.id})">分配角色</button><button type="button" onclick="resetPassword(${u.id})">重置密码</button>${toggle}</div></div>`;
       }).join("")||'<div class="muted">暂无用户。</div>';
+    }
+    function renderMiniappRequests(){
+      $("miniappRequestCountBadge").textContent=state.miniappRequests.length;
+      $("miniappRequestsBody").innerHTML=state.miniappRequests.map((r)=>{
+        const pending=r.status==="pending",kind=r.status==="approved"?"ok":r.status==="pending"?"warn":"danger";
+        const requestLabel=r.request_type==="create_new"?"申请新 SSO 账号":"绑定已有 SSO 账号";
+        const accountOptions=state.users.filter((u)=>u.status==="active").map((u)=>`<option value="${u.id}" ${u.username===r.requested_username?"selected":""}>${escapeHtml(u.username)} · ${escapeHtml(u.display_name||u.username)}</option>`).join("");
+        const review=pending?`<div style="margin-top:10px"><label>关联现有 SSO 用户</label><select id="miniappUser_${r.id}"><option value="">请选择用户</option>${accountOptions}</select></div><div class="eact"><button class="primary" type="button" onclick="approveMiniappRequest(${r.id})">通过并绑定</button><button class="danger" type="button" onclick="rejectMiniappRequest(${r.id})">拒绝</button></div>`:(r.status==="approved"&&r.target_user_id?`<div class="eact"><button class="danger" type="button" onclick="disableMiniappLink(${r.target_user_id})">停用微信绑定</button></div>`:"");
+        const target=r.target_username?`<div class="muted small" style="margin-top:8px">已关联：${escapeHtml(r.target_username)}${r.target_display_name?`（${escapeHtml(r.target_display_name)}）`:""}</div>`:"";
+        return `<div class="entity"><div class="etop"><div><div class="ename">${escapeHtml(r.display_name)} · ${escapeHtml(r.requested_username)}</div><div class="esub">${escapeHtml(requestLabel)} · 申请 #${r.id}</div></div><div>${tag(r.status,kind)}</div></div><div class="etags">${r.department?tag(r.department):""}<span class="tag" title="${escapeHtml(r.openid)}">OpenID ${escapeHtml(String(r.openid||"").slice(0,8))}…</span></div>${r.reason?`<div class="muted small" style="margin-top:8px">说明：${escapeHtml(r.reason)}</div>`:""}${r.review_note?`<div class="muted small" style="margin-top:8px">审核备注：${escapeHtml(r.review_note)}</div>`:""}${target}${review}</div>`;
+      }).join("")||'<div class="muted">当前没有账号申请。</div>';
+    }
+    async function loadMiniappRequests(){
+      const status=$("miniappRequestStatus").value;
+      const response=await api(`/v1/admin/miniapp-account-requests?status=${encodeURIComponent(status)}`);
+      state.miniappRequests=response.items||[];renderMiniappRequests();
+    }
+    async function approveMiniappRequest(requestId){
+      const userId=Number($(`miniappUser_${requestId}`).value||0);
+      if(!userId){showError("请先选择已在 SSO 中完成开户的用户。");return;}
+      const note=window.prompt("审核备注（可留空）","");if(note===null)return;
+      await api(`/v1/admin/miniapp-account-requests/${requestId}/approve`,{method:"POST",body:JSON.stringify({user_id:userId,review_note:note.trim()||null})});
+      showSuccess("申请已通过，微信身份已关联到现有 SSO 用户。");await loadAll();
+    }
+    async function rejectMiniappRequest(requestId){
+      const note=window.prompt("请输入拒绝原因（可留空）","");if(note===null)return;
+      await api(`/v1/admin/miniapp-account-requests/${requestId}/reject`,{method:"POST",body:JSON.stringify({review_note:note.trim()||null})});
+      showSuccess("申请已拒绝。");await loadAll();
+    }
+    async function disableMiniappLink(userId){
+      if(!window.confirm("确认停用该用户的微信身份绑定？SSO 账号本身不会被禁用。"))return;
+      await api(`/v1/admin/miniapp-account-links/${userId}/disable`,{method:"POST"});
+      showSuccess("微信身份绑定已停用，SSO 账号未受影响。");await loadAll();
     }
     function renderRoles(){
       $("roleCountBadge").textContent=state.roles.length;
@@ -384,6 +428,7 @@
       ]);
       state.users=usersResp.items||[];state.roles=rolesResp.roles||[];state.permissions=permissionsResp.items||[];state.features=featuresResp.items||[];
       renderAuth();renderIdentity();renderUsers();renderRoles();renderPermissions();renderFeatures();
+      await loadMiniappRequests();
       await loadSystemConfig();
       await loadAuditLogs(1);
     }
@@ -470,6 +515,7 @@
 
     window.resetPassword=resetPassword;window.disableUser=disableUser;window.enableUser=enableUser;
     window.assignRoles=assignRoles;window.assignRolePermissions=assignRolePermissions;window.editFeature=editFeature;
+    window.approveMiniappRequest=approveMiniappRequest;window.rejectMiniappRequest=rejectMiniappRequest;window.disableMiniappLink=disableMiniappLink;
     window.toggleDocSyncPullPaused=toggleDocSyncPullPaused;
 
     document.addEventListener("DOMContentLoaded",async()=>{
@@ -478,6 +524,7 @@
       $("refreshAllBtn").addEventListener("click",()=>loadAll().catch((e)=>showError(e.message)));
       $("auditPrevBtn").addEventListener("click",()=>loadAuditLogs(state.auditLogs.page-1).catch((e)=>showError(e.message)));
       $("auditNextBtn").addEventListener("click",()=>loadAuditLogs(state.auditLogs.page+1).catch((e)=>showError(e.message)));
+      $("miniappRequestStatus").addEventListener("change",()=>loadMiniappRequests().catch((e)=>showError(e.message)));
       $("createUserBtn").addEventListener("click",()=>createUser().catch((e)=>showError(e.message)));
       $("createFeatureBtn").addEventListener("click",()=>createFeature().catch((e)=>showError(e.message)));
       $("toggleUserForm").addEventListener("click",()=>$("userForm").classList.toggle("hidden"));
