@@ -7,7 +7,7 @@ import os
 import re
 from contextlib import closing
 from datetime import date
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
@@ -18,6 +18,7 @@ from psycopg.errors import UniqueViolation
 from app.business_audit import write_business_audit
 from app.core import _conn, require_login, require_permission
 from app.quality_storage import StorageBackend, StorageError, WebDavStorage
+from app.routers.exports import _latest_tplus_export_file
 
 
 router = APIRouter(prefix="/v1/quality-reports", tags=["quality-reports"])
@@ -31,16 +32,31 @@ _ALLOWED_MIME_TYPES = {
 
 
 class QualityReportCreate(BaseModel):
-    report_no: str = Field(min_length=1, max_length=120)
+    external_report_no: str | None = Field(default=None, max_length=120)
+    subject_source: Literal["tplus", "custom"]
+    subject_type: Literal["raw_material", "finished_product", "custom_product"]
     product_code: str = Field(min_length=1, max_length=120)
     product_name: str = Field(min_length=1, max_length=240)
     batch_no: str | None = Field(default=None, max_length=120)
-    report_type: str = Field(min_length=1, max_length=120)
+    report_source_code: str = Field(min_length=1, max_length=80)
+    document_type_code: str = Field(min_length=1, max_length=80)
+    test_item_codes: list[str] = Field(default_factory=list, max_length=50)
+    material_category_code: str | None = Field(default=None, max_length=80)
+    material_subcategory_code: str | None = Field(default=None, max_length=80)
     inspection_date: date | None = None
     issued_at: date | None = None
     revision: int = Field(default=1, ge=1, le=999)
     recipe_snapshot_id: str | None = Field(default=None, max_length=200)
     supersedes_report_id: int | None = None
+
+
+class QualitySubjectCreate(BaseModel):
+    subject_type: Literal["raw_material", "finished_product", "custom_product"] = "custom_product"
+    code: str | None = Field(default=None, max_length=120)
+    name: str = Field(min_length=1, max_length=240)
+    specification: str | None = Field(default=None, max_length=240)
+    material_category_code: str | None = Field(default=None, max_length=80)
+    material_subcategory_code: str | None = Field(default=None, max_length=80)
 
 
 def _uid(user: dict[str, Any]) -> int:
@@ -66,6 +82,11 @@ def _report_dict(row: tuple[Any, ...]) -> dict[str, Any]:
         "supersedes_report_id": row[11], "created_by": row[12], "published_by": row[13],
         "created_at": row[14].isoformat() if row[14] else None,
         "published_at": row[15].isoformat() if row[15] else None,
+        "system_code": row[16] or row[1], "external_report_no": row[17],
+        "subject_source": row[18], "subject_type": row[19],
+        "report_source_code": row[20], "document_type_code": row[21],
+        "material_category_code": row[22], "material_subcategory_code": row[23],
+        "test_item_codes": list(row[24] or []),
     }
 
 
@@ -73,8 +94,73 @@ _REPORT_SELECT = """
 SELECT id, report_no, product_code, product_name, batch_no, report_type,
        inspection_date, issued_at, revision, status, recipe_snapshot_id,
        supersedes_report_id, created_by, published_by, created_at, published_at
+       , system_code, external_report_no, subject_source, subject_type,
+       report_source_code, document_type_code, material_category_code,
+       material_subcategory_code, test_item_codes
 FROM quality_reports
 """
+
+
+def _catalog_name(catalog_type: str, code: str) -> str:
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT name FROM quality_report_catalog_items WHERE catalog_type = %s AND code = %s AND active",
+                (catalog_type, code),
+            )
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=422, detail=f"无效的质检分类：{catalog_type}/{code}")
+    return str(row[0])
+
+
+def _inventory_column(df, *names: str) -> str:
+    for name in names:
+        if name in df.columns:
+            return name
+    return ""
+
+
+def _tplus_subjects(q: str, limit: int) -> list[dict[str, Any]]:
+    path = _latest_tplus_export_file("inventory")
+    if path is None:
+        raise HTTPException(status_code=404, detail="T+ 存货档案尚未同步")
+    import pandas as pd
+
+    df = pd.read_excel(path, dtype=str).fillna("")
+    code_col = _inventory_column(df, "Code", "InventoryCode", "存货编码")
+    name_col = _inventory_column(df, "Name", "InventoryName", "存货名称")
+    class_code_col = _inventory_column(df, "InventoryClass.Code", "InventoryClassCode", "存货分类编码")
+    class_name_col = _inventory_column(df, "InventoryClass.Name", "InventoryClassName", "存货分类")
+    spec_col = _inventory_column(df, "Specification", "规格型号")
+    disabled_col = _inventory_column(df, "Disabled", "停用")
+    if not code_col or not name_col:
+        raise HTTPException(status_code=409, detail="T+ 存货档案缺少编码或名称字段")
+    if disabled_col:
+        disabled = df[disabled_col].astype(str).str.strip().str.lower()
+        df = df[~disabled.isin({"1", "true", "yes", "是"})]
+    keyword = q.strip().lower()
+    if keyword:
+        mask = df[code_col].str.lower().str.contains(keyword, regex=False) | df[name_col].str.lower().str.contains(keyword, regex=False)
+        if spec_col:
+            mask |= df[spec_col].str.lower().str.contains(keyword, regex=False)
+        df = df[mask]
+    rows: list[dict[str, Any]] = []
+    raw_words = ("原料", "材料", "色粉", "颜料", "树脂", "助剂", "填充", "粉体")
+    for _, row in df.drop_duplicates(subset=[code_col]).head(limit).iterrows():
+        code = str(row[code_col]).strip()
+        name = str(row[name_col]).strip()
+        if not code or not name:
+            continue
+        class_name = str(row[class_name_col]).strip() if class_name_col else ""
+        rows.append({
+            "source": "tplus", "code": code, "name": name,
+            "specification": str(row[spec_col]).strip() if spec_col else "",
+            "inventory_class_code": str(row[class_code_col]).strip() if class_code_col else "",
+            "inventory_class_name": class_name,
+            "suggested_subject_type": "raw_material" if any(word in class_name for word in raw_words) else "finished_product",
+        })
+    return rows
 
 
 def _fetch_report(report_id: int) -> dict[str, Any]:
@@ -111,9 +197,9 @@ def list_quality_reports(
     clauses = ["status = %s"]
     params: list[Any] = [status]
     if q.strip():
-        clauses.append("(report_no ILIKE %s OR product_code ILIKE %s OR product_name ILIKE %s OR COALESCE(batch_no, '') ILIKE %s)")
+        clauses.append("(report_no ILIKE %s OR COALESCE(system_code, '') ILIKE %s OR COALESCE(external_report_no, '') ILIKE %s OR product_code ILIKE %s OR product_name ILIKE %s OR COALESCE(batch_no, '') ILIKE %s)")
         needle = f"%{q.strip()}%"
-        params.extend([needle] * 4)
+        params.extend([needle] * 6)
     for column, value in (("product_code", product_code), ("batch_no", batch_no), ("report_type", report_type)):
         if value.strip():
             clauses.append(f"{column} ILIKE %s")
@@ -137,6 +223,131 @@ def list_quality_reports(
     safe_query = {"q": q.strip(), "product_code": product_code.strip(), "batch_no": batch_no.strip(), "report_type": report_type.strip(), "status": status}
     write_business_audit(user=user, request=request, action="quality_report.query", resource_type="quality_report", query=safe_query, result_count=total)
     return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+@router.get("/catalog")
+def quality_report_catalog(user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
+    require_permission("quality_report.read", user)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT catalog_type, code, name, parent_code, description, sort_order
+                FROM quality_report_catalog_items
+                WHERE active
+                ORDER BY catalog_type, sort_order, id
+                """
+            )
+            rows = cur.fetchall()
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        groups.setdefault(str(row[0]), []).append({
+            "code": row[1], "name": row[2], "parent_code": row[3],
+            "description": row[4], "sort_order": row[5],
+        })
+    return {"catalogs": groups}
+
+
+@router.get("/subjects")
+def quality_report_subjects(
+    q: str = Query(default="", max_length=100),
+    limit: int = Query(default=50, ge=1, le=100),
+    source: Literal["all", "tplus", "custom"] = Query(default="all"),
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, Any]:
+    require_permission("quality_report.manage", user)
+    items: list[dict[str, Any]] = []
+    if source in {"all", "tplus"}:
+        items.extend(_tplus_subjects(q, limit))
+    if source in {"all", "custom"}:
+        needle = f"%{q.strip()}%"
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT code, name, specification, subject_type,
+                           material_category_code, material_subcategory_code
+                    FROM quality_subjects
+                    WHERE active AND (%s = '%%' OR code ILIKE %s OR name ILIKE %s OR COALESCE(specification, '') ILIKE %s)
+                    ORDER BY id DESC LIMIT %s
+                    """,
+                    (needle, needle, needle, needle, limit),
+                )
+                for row in cur.fetchall():
+                    items.append({
+                        "source": "custom", "code": row[0], "name": row[1],
+                        "specification": row[2] or "", "suggested_subject_type": row[3],
+                        "material_category_code": row[4], "material_subcategory_code": row[5],
+                        "inventory_class_code": "", "inventory_class_name": "自定义档案",
+                    })
+    return {"items": items[:limit], "total": min(len(items), limit)}
+
+
+@router.post("/subjects")
+def create_quality_subject(
+    request: Request,
+    body: QualitySubjectCreate,
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, Any]:
+    require_permission("quality_report.manage", user)
+    if body.material_category_code:
+        _catalog_name("material_category", body.material_category_code)
+    if body.material_subcategory_code:
+        _catalog_name("material_subcategory", body.material_subcategory_code)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            code = (body.code or "").strip().upper()
+            if not code:
+                cur.execute("SELECT nextval('quality_custom_subject_code_seq')")
+                code = f"CUSTOM-{int(cur.fetchone()[0]):06d}"
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO quality_subjects(
+                      subject_type, code, name, specification, material_category_code,
+                      material_subcategory_code, created_by
+                    ) VALUES (%s, %s, %s, NULLIF(%s, ''), NULLIF(%s, ''), NULLIF(%s, ''), %s)
+                    RETURNING id
+                    """,
+                    (body.subject_type, code, body.name.strip(), (body.specification or "").strip(),
+                     (body.material_category_code or "").strip(), (body.material_subcategory_code or "").strip(), _uid(user)),
+                )
+                subject_id = int(cur.fetchone()[0])
+                write_business_audit(user=user, request=request, action="quality_report.subject.create", resource_type="quality_subject", resource_id=str(subject_id), detail={"code": code}, required=True)
+                conn.commit()
+            except UniqueViolation as exc:
+                conn.rollback()
+                raise HTTPException(status_code=409, detail="自定义物料编码已存在") from exc
+    return {"id": subject_id, "source": "custom", "code": code, "name": body.name.strip(), "specification": (body.specification or "").strip(), "suggested_subject_type": body.subject_type, "material_category_code": body.material_category_code, "material_subcategory_code": body.material_subcategory_code}
+
+
+@router.get("/manage/drafts")
+def quality_report_drafts(user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
+    require_permission("quality_report.manage", user)
+    admin = "admin" in user.get("roles", []) or "admin.access" in user.get("permissions", [])
+    owner_clause = "" if admin else " AND created_by = %s"
+    params: list[Any] = [] if admin else [_uid(user)]
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                _REPORT_SELECT + f"""
+                WHERE status = 'draft'{owner_clause}
+                ORDER BY created_at DESC LIMIT 30
+                """,
+                params,
+            )
+            reports = [_report_dict(row) for row in cur.fetchall()]
+            ids = [item["id"] for item in reports]
+            counts: dict[int, int] = {}
+            if ids:
+                cur.execute(
+                    "SELECT report_id, COUNT(*) FROM quality_report_files WHERE report_id = ANY(%s) AND status = 'active' GROUP BY report_id",
+                    (ids,),
+                )
+                counts = {int(row[0]): int(row[1]) for row in cur.fetchall()}
+    for report in reports:
+        report["file_count"] = counts.get(report["id"], 0)
+    return {"items": reports}
 
 
 @router.get("/{report_id}")
@@ -169,28 +380,71 @@ def quality_report_detail(request: Request, report_id: int, user: dict[str, Any]
 @router.post("")
 def create_quality_report(request: Request, body: QualityReportCreate, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
     require_permission("quality_report.manage", user)
+    report_source_name = _catalog_name("report_source", body.report_source_code)
+    document_type_name = _catalog_name("document_type", body.document_type_code)
+    if body.material_category_code:
+        _catalog_name("material_category", body.material_category_code)
+    if body.material_subcategory_code:
+        _catalog_name("material_subcategory", body.material_subcategory_code)
+    clean_test_items = list(dict.fromkeys(code.strip() for code in body.test_item_codes if code.strip()))
+    for code in clean_test_items:
+        _catalog_name("test_item", code)
+    if body.subject_source == "tplus":
+        matches = [item for item in _tplus_subjects(body.product_code.strip(), 10) if item["code"] == body.product_code.strip()]
+        if not matches or matches[0]["name"] != body.product_name.strip():
+            raise HTTPException(status_code=422, detail="请选择当前 T+ 存货档案中的物料，编码和名称不能手工组合")
+    else:
+        with closing(_conn()) as subject_conn:
+            with subject_conn.cursor() as cur:
+                cur.execute("SELECT name FROM quality_subjects WHERE code = %s AND active", (body.product_code.strip(),))
+                row = cur.fetchone()
+        if not row or str(row[0]) != body.product_name.strip():
+            raise HTTPException(status_code=422, detail="请选择已登记的自定义产品")
     try:
         with closing(_conn()) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
+                    INSERT INTO quality_report_daily_sequences(report_date, last_value)
+                    VALUES ((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai')::date, 1)
+                    ON CONFLICT(report_date) DO UPDATE
+                    SET last_value = quality_report_daily_sequences.last_value + 1
+                    WHERE quality_report_daily_sequences.last_value < 999
+                    RETURNING to_char(report_date, 'YYYYMMDD') || lpad(last_value::text, 3, '0')
+                    """
+                )
+                sequence_row = cur.fetchone()
+                if not sequence_row:
+                    raise HTTPException(status_code=409, detail="当日质检报告数量已达到 999 份")
+                system_code = str(sequence_row[0])
+                cur.execute(
+                    """
                     INSERT INTO quality_reports(
-                      report_no, product_code, product_name, batch_no, report_type,
+                      report_no, system_code, external_report_no,
+                      subject_source, subject_type, product_code, product_name, batch_no,
+                      report_type, report_source_code, document_type_code, test_item_codes,
+                      material_category_code, material_subcategory_code,
                       inspection_date, issued_at, revision, recipe_snapshot_id,
                       supersedes_report_id, created_by
-                    ) VALUES (%s, %s, %s, NULLIF(%s, ''), %s, %s, %s, %s, NULLIF(%s, ''), %s, %s)
+                    ) VALUES (
+                      %s, %s, NULLIF(%s, ''), %s, %s, %s, %s, NULLIF(%s, ''),
+                      %s, %s, %s, %s, NULLIF(%s, ''), NULLIF(%s, ''),
+                      %s, %s, %s, NULLIF(%s, ''), %s, %s
+                    )
                     RETURNING id
                     """,
-                    (body.report_no.strip(), body.product_code.strip(), body.product_name.strip(),
-                     (body.batch_no or "").strip(), body.report_type.strip(), body.inspection_date,
-                     body.issued_at, body.revision, (body.recipe_snapshot_id or "").strip(),
-                     body.supersedes_report_id, _uid(user)),
+                    (system_code, system_code, (body.external_report_no or "").strip(),
+                     body.subject_source, body.subject_type, body.product_code.strip(), body.product_name.strip(),
+                     (body.batch_no or "").strip(), document_type_name, body.report_source_code,
+                     body.document_type_code, clean_test_items, (body.material_category_code or "").strip(),
+                     (body.material_subcategory_code or "").strip(), body.inspection_date, body.issued_at,
+                     body.revision, (body.recipe_snapshot_id or "").strip(), body.supersedes_report_id, _uid(user)),
                 )
                 report_id = int(cur.fetchone()[0])
-                write_business_audit(user=user, request=request, action="quality_report.create", resource_type="quality_report", resource_id=str(report_id), resource_revision=str(body.revision), required=True)
+                write_business_audit(user=user, request=request, action="quality_report.create", resource_type="quality_report", resource_id=str(report_id), resource_revision=str(body.revision), detail={"system_code": system_code, "report_source": report_source_name, "document_type": document_type_name}, required=True)
             conn.commit()
     except UniqueViolation as exc:
-        raise HTTPException(status_code=409, detail="同一报告编号和修订版本已存在") from exc
+        raise HTTPException(status_code=409, detail="质检报告系统编号冲突，请重试") from exc
     return _fetch_report(report_id)
 
 
@@ -309,10 +563,11 @@ def publish_quality_report(request: Request, report_id: int, user: dict[str, Any
             cur.execute("SELECT COUNT(*) FROM quality_report_files WHERE report_id = %s AND status = 'active'", (report_id,))
             if int(cur.fetchone()[0]) == 0:
                 raise HTTPException(status_code=409, detail="报告至少需要一个有效文件")
-            cur.execute(
-                "UPDATE quality_reports SET status = 'superseded', updated_at = NOW() WHERE report_no = %s AND id <> %s AND status = 'published'",
-                (report["report_no"], report_id),
-            )
+            if report["supersedes_report_id"]:
+                cur.execute(
+                    "UPDATE quality_reports SET status = 'superseded', updated_at = NOW() WHERE id = %s AND status = 'published'",
+                    (report["supersedes_report_id"],),
+                )
             cur.execute(
                 "UPDATE quality_reports SET status = 'published', published_by = %s, published_at = NOW(), updated_at = NOW() WHERE id = %s",
                 (_uid(user), report_id),

@@ -22,6 +22,9 @@ def test_quality_report_routes_are_registered() -> None:
     assert "/v1/quality-reports/{report_id}/files" in paths
     assert "/v1/quality-reports/files/{file_id}/download" in paths
     assert "/v1/quality-reports/storage/health-check" in paths
+    assert "/v1/quality-reports/catalog" in paths
+    assert "/v1/quality-reports/subjects" in paths
+    assert "/v1/quality-reports/manage/drafts" in paths
 
 
 def test_webdav_requires_secret_credentials(monkeypatch: pytest.MonkeyPatch) -> None:

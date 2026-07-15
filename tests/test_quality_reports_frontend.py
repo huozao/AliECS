@@ -27,6 +27,24 @@ class QualityReportsFrontendTests(unittest.TestCase):
         self.assertIn("function createDraft(", self.html)
         self.assertIn("function uploadFile(", self.html)
         self.assertIn("function publishDraft(", self.html)
+        self.assertIn("/v1/quality-reports/catalog", self.html)
+        self.assertIn("/v1/quality-reports/subjects", self.html)
+        self.assertIn("/v1/quality-reports/manage/drafts", self.html)
+
+    def test_file_selection_auto_uploads_and_publish_waits_for_server(self) -> None:
+        self.assertIn("$('reportFile').onchange", self.html)
+        self.assertIn("服务器已确认", self.html)
+        self.assertIn('id="publishBtn" class="primary hidden" type="button" disabled', self.html)
+
+    def test_mobile_message_is_visible_near_bottom(self) -> None:
+        self.assertIn("bottom:calc(16px + env(safe-area-inset-bottom))", self.html)
+
+    def test_report_number_and_classification_are_separated(self) -> None:
+        self.assertIn("系统编号", self.html)
+        self.assertIn('name="external_report_no"', self.html)
+        self.assertIn('name="report_source_code"', self.html)
+        self.assertIn('name="document_type_code"', self.html)
+        self.assertIn("selectedTestItems", self.html)
 
     def test_inputs_have_non_clipping_height(self) -> None:
         self.assertIn("min-height:46px", self.html)
