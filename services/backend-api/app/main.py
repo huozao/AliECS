@@ -15,6 +15,7 @@ from app.routers.auth_admin import router as auth_admin_router
 from app.routers.auth_oidc import router as auth_oidc_router
 from app.routers.couple import router as couple_router
 from app.routers.exports import router as exports_router
+from app.routers.miniapp_accounts import router as miniapp_accounts_router
 from app.routers.ops import router as ops_router
 from app.routers.recipes import router as recipes_router
 from app.routers.system_config import router as system_config_router
@@ -30,6 +31,7 @@ app.include_router(auth_oidc_router)
 app.include_router(recipes_router)
 app.include_router(tplus_bom_router)
 app.include_router(exports_router)
+app.include_router(miniapp_accounts_router)
 app.include_router(couple_router)
 app.include_router(system_config_router)
 
