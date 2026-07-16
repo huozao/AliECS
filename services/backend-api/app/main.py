@@ -22,6 +22,7 @@ from app.routers.recipes import router as recipes_router
 from app.routers.quality_reports import router as quality_reports_router
 from app.routers.system_config import router as system_config_router
 from app.routers.tplus_bom import router as tplus_bom_router
+from app.routers.wecom_assistant import router as wecom_assistant_router
 from app.routers.webhooks import router as webhooks_router
 
 
@@ -38,6 +39,7 @@ app.include_router(exports_router)
 app.include_router(miniapp_accounts_router)
 app.include_router(couple_router)
 app.include_router(system_config_router)
+app.include_router(wecom_assistant_router)
 
 def _cors_origins() -> list[str]:
     defaults = [

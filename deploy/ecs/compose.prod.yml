@@ -63,6 +63,8 @@ services:
       WECOM_COMPANY_B_CORP_ID: ${WECOM_COMPANY_B_CORP_ID:-}
       WECOM_COMPANY_B_APP_SECRET: ${WECOM_COMPANY_B_APP_SECRET:-}
       WECOM_DOC_ADMIN_USERS: ${WECOM_DOC_ADMIN_USERS:-}
+      OPENCLAW_INTERNAL_TOKEN: ${OPENCLAW_INTERNAL_TOKEN:-}
+      WECOM_GROUP_MEDIA_DIR: /app/wecom-group-media
       CHANJET_WEBHOOK_AES_KEY: ${CHANJET_WEBHOOK_AES_KEY:-}
       CHANJET_CERTIFICATE: ${CHANJET_CERTIFICATE:-}
       CHANJET_OPEN_TOKEN_FILE: /app/tplus-sync-requests/chanjet_open_token.txt
@@ -87,6 +89,7 @@ services:
       - recipe_active_bom:/app/recipe-active-bom
       - tplus_sync_requests:/app/tplus-sync-requests
       - uploads:/app/uploads
+      - wecom_group_media:/app/wecom-group-media
     depends_on:
       postgres:
         condition: service_healthy
@@ -169,6 +172,9 @@ services:
       WECOM_STRUCTURE_BACKUP_DOCID: ${WECOM_STRUCTURE_BACKUP_DOCID:-}
       WECOM_STRUCTURE_BACKUP_PROFILE: ${WECOM_STRUCTURE_BACKUP_PROFILE:-COMPANY_A}
       WECOM_STRUCTURE_BACKUP_MAX_SHEETS: ${WECOM_STRUCTURE_BACKUP_MAX_SHEETS:-20}
+      WECOM_GROUP_MEDIA_DIR: /app/wecom-group-media
+    volumes:
+      - wecom_group_media:/app/wecom-group-media
     depends_on:
       postgres:
         condition: service_healthy
@@ -274,3 +280,4 @@ volumes:
   tplus_sync_requests:
   mcp_oauth_data:
   uploads:
+  wecom_group_media:

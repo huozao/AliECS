@@ -453,6 +453,11 @@ def routing_feishu_projects() -> dict[str, Any]:
     return _routing_projects("feishu")
 
 
+@router.get("/v1/routing/wecom-projects.json")
+def routing_wecom_projects() -> dict[str, Any]:
+    return _routing_projects("wecom")
+
+
 @router.get("/v1/exports/external/{source_id}")
 def exports_external_download(source_id: int, _: dict[str, Any] = Depends(require_admin)) -> FileResponse:
     with closing(_conn()) as conn:

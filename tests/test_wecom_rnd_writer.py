@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -57,6 +59,10 @@ class RndWriterTestCase(unittest.TestCase):
         _clear_app_modules()
 
     def _mod(self):
+        worker_path = str(WORKER_ROOT)
+        while worker_path in sys.path:
+            sys.path.remove(worker_path)
+        sys.path.insert(0, worker_path)
         import app.pipelines.rnd_record_writer as mod
 
         return mod
@@ -79,6 +85,20 @@ class RndWriterTestCase(unittest.TestCase):
         self.assertEqual(["http://a/x.jpg"], mod._quote_image_urls({"msgtype": "image", "image": {"url": "http://a/x.jpg"}}))
         self.assertEqual([], mod._quote_image_urls({"msgtype": "text", "text": {"content": "hi"}}))
         self.assertEqual([], mod._quote_image_urls({}))
+
+    def test_local_image_bytes_only_reads_configured_root(self) -> None:
+        mod = self._mod()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            image = root / "node.jpg"
+            image.write_bytes(b"image-bytes")
+            outside = root.parent / "outside-node.jpg"
+            outside.write_bytes(b"outside")
+            try:
+                with patch.dict("os.environ", {"WECOM_GROUP_MEDIA_DIR": temp_dir}):
+                    self.assertEqual([b"image-bytes"], mod._local_image_bytes([str(image), str(outside)]))
+            finally:
+                outside.unlink(missing_ok=True)
 
     def test_ensure_rnd_sheet_existing(self) -> None:
         mod = self._mod()

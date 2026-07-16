@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Any, Callable
 
 import requests
@@ -69,6 +71,23 @@ def _quote_image_urls(quote: Any) -> list[str]:
     return []
 
 
+def _local_image_bytes(paths: Any) -> list[bytes]:
+    if not isinstance(paths, list):
+        return []
+    root = Path(os.getenv("WECOM_GROUP_MEDIA_DIR", "/app/wecom-group-media")).resolve()
+    result: list[bytes] = []
+    for value in paths:
+        try:
+            path = Path(str(value)).resolve()
+            path.relative_to(root)
+            size = path.stat().st_size
+            if 0 < size <= 20 * 1024 * 1024:
+                result.append(path.read_bytes())
+        except (OSError, ValueError):
+            continue
+    return result
+
+
 def build_node_row_values(msg: dict[str, Any], requirement_key: str, image_url: str = "") -> dict[str, Any]:
     content = str(msg.get("node_summary") or "").strip() or str(msg.get("text_content") or "").strip()
     values: dict[str, Any] = {
@@ -109,7 +128,17 @@ def run_write_rnd_records(
                 binding = store.get_group_binding(msg["chatid"]) or {}
                 requirement_key = str(binding.get("requirement_key") or "")
                 image_url = ""
-                for url in _quote_image_urls(msg.get("quote_json")):
+                for content in _local_image_bytes(msg.get("media_paths")):
+                    try:
+                        image_url = client.upload_image(docid, content)
+                        break
+                    except Exception as exc:  # noqa: BLE001 - 图片失败不挡文本入表
+                        print(f"[研发记录] 本地图片上传失败（继续尝试引用图片）：{exc}")
+                if image_url:
+                    urls: list[str] = []
+                else:
+                    urls = _quote_image_urls(msg.get("quote_json"))
+                for url in urls:
                     try:
                         content = requests.get(url, timeout=20).content
                         image_url = client.upload_image(docid, content)

@@ -57,6 +57,17 @@ class RoutingApiTests(unittest.TestCase):
 
         self.assertEqual("https://chatgpt.com/g/f1/project", body["lanes"]["ou_x"]["project_url"])
 
+    def test_wecom_routing_api_uses_wecom_channel(self) -> None:
+        rows = [("wr_group", "研发群", "https://chatgpt.com/g/q1/project", "企微研发")]
+        old_conn = self.main._conn
+        self.main._conn = lambda: FakeConn(rows)
+        try:
+            body = self.main.routing_wecom_projects()
+        finally:
+            self.main._conn = old_conn
+
+        self.assertEqual("https://chatgpt.com/g/q1/project", body["lanes"]["wr_group"]["project_url"])
+
     def test_admin_contacts_can_upsert_contact(self) -> None:
         conn = FakeAdminConn()
         old_conn = self.admin._conn

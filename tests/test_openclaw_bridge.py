@@ -223,6 +223,102 @@ def test_bridge_forwards_feishu_open_id_as_isolated_lane(monkeypatch):
     assert bridge.lane_batch_key(outbound["metadata"]) == "feishu:user:ou_abc"
 
 
+def test_bridge_forwards_wecom_as_isolated_lane(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_MODEL", "browser-chatgpt")
+
+    outbound = bridge.build_webdock_body(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Conversation info (untrusted metadata):\n"
+                        "```json\n"
+                        '{"channel":"wecom","accountId":"company-b","chat_type":"group",'
+                        '"peer_id":"group:wr_group","message_id":"wecom-msg-1"}\n'
+                        "```\n\n"
+                        "企微群消息"
+                    ),
+                },
+            ],
+        }
+    )
+
+    assert outbound["messages"] == [{"role": "user", "content": "企微群消息"}]
+    assert outbound["metadata"] == {
+        "channel": "wecom",
+        "wechat_account": "company-b",
+        "chat_type": "group",
+        "peer_id": "group:wr_group",
+        "message_id": "wecom-msg-1",
+        "chatgpt_project": "WeCom",
+    }
+    assert bridge.lane_batch_key(outbound["metadata"]) == "wecom|company-b|group|group:wr_group"
+
+
+def test_wecom_preflight_uses_real_openclaw_context(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("OPENCLAW_INTERNAL_TOKEN", "test-token")
+    seen = {}
+
+    def fake_post(path, payload):
+        seen["path"] = path
+        seen["payload"] = payload
+        return {"action": "reply", "reply": "ok"}
+
+    monkeypatch.setattr(bridge, "_wecom_business_post", fake_post)
+    details = bridge.request_details(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        'Sender (untrusted metadata):\n```json\n{"SenderId":"WangHao"}\n```\n\n'
+                        "[message_id: wecom-real-1]\n#节点 打样 第一版完成"
+                    ),
+                }
+            ],
+            "metadata": {
+                "Provider": "wecom",
+                "AccountId": "company-b",
+                "ChatType": "group",
+                "peer_id": "group:Wr_Group",
+            },
+        }
+    )
+
+    result = bridge.wecom_business_preflight(details)
+
+    assert result["reply"] == "ok"
+    assert seen["path"] == "inbound"
+    assert seen["payload"]["msgid"] == "wecom-real-1"
+    assert seen["payload"]["chatid"] == "Wr_Group"
+    assert seen["payload"]["from_userid"] == "WangHao"
+    assert seen["payload"]["chattype"] == "group"
+
+
+def test_wecom_ai_draft_overrides_only_prompt_text(monkeypatch):
+    bridge = load_bridge()
+    body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "原始问题"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,UE5H"}},
+                ],
+            }
+        ],
+        "_bridge_user_text": "只输出事实摘要",
+    }
+
+    outbound = bridge.build_webdock_body(body)
+
+    assert outbound["messages"][0]["content"][0] == {"type": "text", "text": "只输出事实摘要"}
+    assert outbound["messages"][0]["content"][1]["type"] == "image_url"
+
+
 def test_bridge_detects_feishu_from_real_openclaw_metadata():
     bridge = load_bridge()
 

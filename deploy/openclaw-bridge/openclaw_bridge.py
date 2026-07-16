@@ -38,6 +38,7 @@ OPENCLAW_METADATA_PREFIX_RE = re.compile(
     flags=re.DOTALL,
 )
 OPENCLAW_MESSAGE_ID_LINE_RE = re.compile(r"^[ \t]*\[message_id:[^\]\n]*\][ \t]*\n?", re.IGNORECASE | re.MULTILINE)
+OPENCLAW_MESSAGE_ID_CAPTURE_RE = re.compile(r"\[message_id:\s*([^\]\n]+)\]", re.IGNORECASE)
 FEISHU_MENTION_HELPER_PREFIXES = (
     "[System: The content may include mention tags in the form ",
     "[System: If user_id is ",
@@ -503,9 +504,20 @@ def webdock_timeout() -> int:
 def request_details(body: dict[str, Any]) -> dict[str, Any]:
     messages = body.get("messages")
     user_text = get_last_user_message(messages)
+    if isinstance(body.get("_bridge_user_text"), str):
+        user_text = body["_bridge_user_text"].strip()
     images = get_last_user_images(messages)
     raw_metadata = collect_request_metadata(body)
+    if not _first_metadata_value(raw_metadata, "message_id", "messageId", "msgid"):
+        raw_text = get_last_user_raw_text(messages)
+        match = OPENCLAW_MESSAGE_ID_CAPTURE_RE.search(raw_text)
+        if match:
+            raw_metadata["message_id"] = match.group(1).strip()
     metadata = build_webdock_metadata(body)
+    if not metadata.get("message_id"):
+        message_id = _first_metadata_value(raw_metadata, "message_id", "messageId", "msgid")
+        if message_id:
+            metadata["message_id"] = str(message_id)
     if metadata.get("channel") == "feishu":
         user_text = _strip_feishu_sender_prefix(user_text, get_last_user_metadata(messages))
         user_text = strip_feishu_mention_helper_text(user_text)
@@ -559,12 +571,22 @@ def build_webdock_metadata(body: dict[str, Any]) -> dict[str, Any]:
     metadata = collect_request_metadata(body)
 
     normalized: dict[str, Any] = {}
-    channel = normalize_channel(_first_metadata_value(metadata, "channel", "platform", "source", "adapter"))
+    channel = normalize_channel(
+        _first_metadata_value(metadata, "channel", "platform", "source", "adapter", "provider", "surface", "originatingChannel")
+    )
     if not channel and _looks_like_feishu(metadata):
         channel = "feishu"
     channel = channel or "wechat"
-    wechat_account = _first_metadata_value(metadata, "wechat_account", "account", "channel_id", "channel_name")
-    chat_type = _first_metadata_value(metadata, "chat_type", "conversation_type", "room_type") or "private"
+    channel_account = _first_metadata_value(
+        metadata,
+        "wechat_account",
+        "account_id",
+        "accountId",
+        "account",
+        "channel_id",
+        "channel_name",
+    )
+    chat_type = _first_metadata_value(metadata, "chat_type", "chatType", "conversation_type", "room_type") or "private"
     if channel == "feishu":
         chat_type = _infer_feishu_chat_type(metadata, chat_type)
     if channel == "feishu":
@@ -580,22 +602,29 @@ def build_webdock_metadata(body: dict[str, Any]) -> dict[str, Any]:
             "sender_id",
         )
 
-    has_lane_identity = bool(wechat_account or peer_id)
+    has_lane_identity = bool(channel_account or peer_id)
 
-    if channel != "wechat":
+    if channel == "wecom":
+        normalized["channel"] = "wecom"
+        normalized["wechat_account"] = str(channel_account or "company-b")
+        normalized["chatgpt_project"] = str(
+            _first_metadata_value(metadata, "chatgpt_project", "project") or "WeCom"
+        )
+    elif channel != "wechat":
         normalized["channel"] = channel
         normalized["chatgpt_project"] = str(_first_metadata_value(metadata, "chatgpt_project", "project") or "Feishu")
-    elif wechat_account:
-        normalized["wechat_account"] = str(wechat_account)
+    elif channel_account:
+        normalized["wechat_account"] = str(channel_account)
         normalized["chatgpt_project"] = str(
-            _first_metadata_value(metadata, "chatgpt_project", "project") or f"WeChat-{wechat_account}"
+            _first_metadata_value(metadata, "chatgpt_project", "project") or f"WeChat-{channel_account}"
         )
     if has_lane_identity and chat_type:
         normalized["chat_type"] = str(chat_type)
     if peer_id:
         normalized["peer_id"] = str(peer_id)
-    if metadata.get("message_id"):
-        normalized["message_id"] = str(metadata["message_id"])
+    message_id = _first_metadata_value(metadata, "message_id", "messageId", "msgid")
+    if message_id:
+        normalized["message_id"] = str(message_id)
     return normalized
 
 
@@ -666,7 +695,9 @@ def normalize_channel(value: Any) -> str:
     text = str(value or "").strip().lower()
     if text in {"feishu", "lark"}:
         return "feishu"
-    if text in {"wechat", "wecom", "weixin"}:
+    if text in {"wecom", "qywx", "wework", "enterprise-wechat"}:
+        return "wecom"
+    if text in {"wechat", "weixin"}:
         return "wechat"
     return ""
 
@@ -2321,6 +2352,7 @@ def trace_batch_event(
         "ts": utc_now_iso(),
         "event": event,
         "request_id": details.get("request_id"),
+        "channel": metadata.get("channel") or "wechat",
         "wechat_account": metadata.get("wechat_account"),
         "chat_type": metadata.get("chat_type"),
         "peer_id": metadata.get("peer_id"),
@@ -2694,13 +2726,14 @@ def lane_batch_key(metadata: dict[str, Any]) -> str:
         return ""
     if metadata.get("channel") == "feishu":
         return "feishu:" + str(peer_id)
-    return "|".join(
-        [
-            str(metadata.get("wechat_account") or "default"),
-            str(metadata.get("chat_type") or "private"),
-            str(peer_id),
-        ]
-    )
+    parts = [
+        str(metadata.get("wechat_account") or "default"),
+        str(metadata.get("chat_type") or "private"),
+        str(peer_id),
+    ]
+    if metadata.get("channel") == "wecom":
+        parts.insert(0, "wecom")
+    return "|".join(parts)
 
 
 def done_marker_text() -> str:
@@ -2792,7 +2825,90 @@ def _first_metadata_value(metadata: dict[str, Any], *keys: str) -> Any:
         value = metadata.get(key)
         if value not in (None, ""):
             return value
+    lowered = {str(key).lower(): value for key, value in metadata.items()}
+    for key in keys:
+        value = lowered.get(key.lower())
+        if value not in (None, ""):
+            return value
     return None
+
+
+def wecom_business_configured() -> bool:
+    return bool(os.getenv("OPENCLAW_INTERNAL_TOKEN", "").strip())
+
+
+def _wecom_business_url(path: str) -> str:
+    base = os.getenv("WECOM_ASSISTANT_API_BASE", "http://127.0.0.1:8000/v1/internal/wecom").rstrip("/")
+    return base + "/" + path.lstrip("/")
+
+
+def _wecom_business_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    request = urllib.request.Request(
+        _wecom_business_url(path),
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "X-Internal-Token": os.getenv("OPENCLAW_INTERNAL_TOKEN", ""),
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        result = json.loads(response.read().decode("utf-8"))
+    return result if isinstance(result, dict) else {}
+
+
+def _wecom_image_urls(details: dict[str, Any]) -> list[str]:
+    urls: list[str] = []
+    for part in details.get("images") or []:
+        image_url = part.get("image_url") if isinstance(part, dict) else None
+        url = image_url.get("url") if isinstance(image_url, dict) else image_url
+        if isinstance(url, str) and url.startswith("data:image/"):
+            urls.append(url)
+    return urls
+
+
+def wecom_business_preflight(details: dict[str, Any]) -> dict[str, Any]:
+    metadata = details.get("metadata") or {}
+    if metadata.get("channel") != "wecom" or not wecom_business_configured():
+        return {"action": "continue", "reply": ""}
+    raw = details.get("raw_metadata") or {}
+    peer_id = _strip_lane_peer_prefix(metadata.get("peer_id"))
+    chat_type = str(metadata.get("chat_type") or "private").lower()
+    sender = _first_metadata_value(raw, "sender_id", "from_user_id", "user_id", "SenderId") or ""
+    msgid = _first_metadata_value(metadata, "message_id", "messageId", "msgid") or details.get("request_id")
+    payload = {
+        "msgid": str(msgid),
+        "account_id": str(metadata.get("wechat_account") or "company-b"),
+        "chatid": str(peer_id),
+        "chattype": "group" if _is_group_chat(chat_type) else "private",
+        "from_userid": str(sender),
+        "text_content": str(details.get("user_text") or ""),
+        "images": _wecom_image_urls(details),
+        "raw_metadata": {
+            "message_id": str(msgid),
+            "sender_id": str(sender),
+            "chat_type": chat_type,
+        },
+    }
+    try:
+        return _wecom_business_post("inbound", payload)
+    except Exception as exc:
+        log_line(f"wecom business preflight unavailable: {type(exc).__name__}")
+        if re.search(r"#(?:绑定|节点|AI节点|确认节点|取消节点)", payload["text_content"], re.IGNORECASE):
+            return {"action": "reply", "reply": "企微业务处理暂不可用，请稍后重试该命令。"}
+        return {"action": "continue", "reply": ""}
+
+
+def wecom_business_store_ai_result(draft_msgid: str, result_text: str) -> str:
+    try:
+        result = _wecom_business_post(
+            "ai-result",
+            {"draft_msgid": draft_msgid, "result_text": result_text},
+        )
+        return str(result.get("reply") or "").strip()
+    except Exception as exc:
+        log_line(f"wecom AI draft result store failed: {type(exc).__name__}")
+        return ""
 
 
 def extract_assistant_reply(payload: dict[str, Any]) -> str:
@@ -3215,6 +3331,16 @@ def build_reply(body: dict[str, Any]) -> str:
             return NO_REPLY  # merged into a batch leader; the leader emits chain_result
         write_details = request_details(batched_body)
         write_details["request_id"] = details.get("request_id")
+        wecom_action = wecom_business_preflight(write_details)
+        if wecom_action.get("action") == "reply":
+            reply = str(wecom_action.get("reply") or "").strip() or "企微业务命令已处理。"
+            trace_chain_result(details, started, reply=reply)
+            return reply
+        if wecom_action.get("action") == "ai_draft":
+            ai_prompt = str(wecom_action.get("ai_prompt") or "").strip()
+            if ai_prompt:
+                batched_body["_bridge_user_text"] = ai_prompt
+                write_details["user_text"] = ai_prompt
         lane_key = lane_batch_key(write_details.get("metadata") or {})
         is_overlap = _enter_inflight(lane_key)
         try:
@@ -3227,6 +3353,15 @@ def build_reply(body: dict[str, Any]) -> str:
                     start_placeholder_rotation(placeholder_id, text)
             result = call_webdock(batched_body)
             reply, response_metadata = unpack_webdock_result(result)
+            if wecom_action.get("action") == "ai_draft":
+                if reply == FALLBACK_MESSAGE or reply.startswith(FALLBACK_MESSAGE + "\n"):
+                    reply += "\n\nAI 节点草稿未生成，请稍后重新发送 #AI节点。"
+                else:
+                    saved_reply = wecom_business_store_ai_result(
+                        str(wecom_action.get("draft_msgid") or ""),
+                        reply,
+                    )
+                    reply = saved_reply or (reply + "\n\n⚠️ AI 草稿未能保存，请重新发送 #AI节点。")
             write_details["webdock_footer"] = dict(getattr(result, "footer", None) or {})
             if response_metadata:
                 write_details.setdefault("metadata", {}).update(response_metadata)

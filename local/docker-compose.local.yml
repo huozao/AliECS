@@ -56,6 +56,8 @@ services:
       RECIPE_EXPORT_DIR: ${RECIPE_EXPORT_DIR:-/tmp/aliecs-recipe-exports}
       TPLUS_BOM_SYNC_REQUEST_DIR: ${TPLUS_BOM_SYNC_REQUEST_DIR:-/app/tplus-sync-requests}
       OPS_HEALTH_HTTP_TARGETS_JSON: ${OPS_HEALTH_HTTP_TARGETS_JSON:-}
+      OPENCLAW_INTERNAL_TOKEN: ${OPENCLAW_INTERNAL_TOKEN:-local-openclaw-internal-token}
+      WECOM_GROUP_MEDIA_DIR: /app/wecom-group-media
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -65,6 +67,7 @@ services:
       - recipe_active_bom:/app/recipe-active-bom
       - tplus_sync_requests:/app/tplus-sync-requests
       - uploads:/app/uploads
+      - wecom_group_media:/app/wecom-group-media
     depends_on:
       postgres:
         condition: service_healthy
@@ -124,6 +127,9 @@ services:
       FEISHU_COMPANY_B_WIKI_URL: ${FEISHU_COMPANY_B_WIKI_URL:-}
       FEISHU_COMPANY_B_APP_NAME: ${FEISHU_COMPANY_B_APP_NAME:-}
       FEISHU_COMPANY_B_TABLE_NAME: ${FEISHU_COMPANY_B_TABLE_NAME:-}
+      WECOM_GROUP_MEDIA_DIR: /app/wecom-group-media
+    volumes:
+      - wecom_group_media:/app/wecom-group-media
     depends_on:
       postgres:
         condition: service_healthy
@@ -175,3 +181,4 @@ volumes:
   recipe_active_bom:
   tplus_sync_requests:
   uploads:
+  wecom_group_media:
