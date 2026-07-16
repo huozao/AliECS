@@ -305,7 +305,8 @@ def wecom_inbound(payload: InboundMessage, x_internal_token: str | None = Header
 
             conn.commit()
             if binding is None:
-                return {"action": "reply", "reply": "本群尚未关联需求，请把含审批单编号的群名复制发我，或发送 #绑定 审批单编号。"}
+                # 普通群问答不依赖研发需求绑定；只有写表类命令需要先绑定。
+                return {"action": "continue", "reply": ""}
             return {"action": "continue", "reply": ""}
 
 

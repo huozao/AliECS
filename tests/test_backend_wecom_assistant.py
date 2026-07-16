@@ -67,3 +67,53 @@ def test_internal_token_is_required(monkeypatch) -> None:
         assert exc.status_code == 401
     else:
         raise AssertionError("invalid token must be rejected")
+
+
+def test_unbound_group_plain_question_continues_to_ai(monkeypatch) -> None:
+    mod = _module()
+
+    class FakeCursor:
+        def __init__(self) -> None:
+            self.query = ""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, query, _params=None) -> None:
+            self.query = str(query)
+
+        def fetchone(self):
+            if "INSERT INTO group_messages" in self.query:
+                return (1,)
+            return None
+
+        def fetchall(self):
+            return []
+
+    class FakeConnection:
+        def cursor(self):
+            return FakeCursor()
+
+        def commit(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setenv("OPENCLAW_INTERNAL_TOKEN", "expected")
+    monkeypatch.setattr(mod, "_conn", FakeConnection)
+    result = mod.wecom_inbound(
+        mod.InboundMessage(
+            msgid="plain-question-1",
+            chatid="wr_group",
+            chattype="group",
+            from_userid="WangHao",
+            text_content="后天天气怎么样",
+        ),
+        "expected",
+    )
+
+    assert result == {"action": "continue", "reply": ""}
