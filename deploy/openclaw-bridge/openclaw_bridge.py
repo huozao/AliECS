@@ -821,15 +821,22 @@ def _wecom_lane_peer_id(metadata: dict[str, Any], chat_type: Any) -> str:
 
 
 def strip_wecom_bot_mention(text: str) -> str:
-    """Remove only the official callback's leading self mention."""
+    """Remove only the official callback's leading or trailing self mention."""
     if not text:
         return text
     bot_name = os.getenv("WECOM_ASSISTANT_NAME", "统一 AI 助手").strip() or "统一 AI 助手"
     flexible_name = r"\s*".join(re.escape(part) for part in bot_name.split())
-    return re.sub(
+    cleaned = re.sub(
         rf"^\s*@\s*{flexible_name}(?:[ \t]+|\r?\n+|$)",
         "",
         text,
+        count=1,
+        flags=re.IGNORECASE,
+    ).strip()
+    return re.sub(
+        rf"[ \t]*@\s*{flexible_name}\s*$",
+        "",
+        cleaned,
         count=1,
         flags=re.IGNORECASE,
     ).strip()
@@ -3139,6 +3146,42 @@ def visible_media_fallback(body: str, urls: list[str]) -> str:
     return "\n".join(parts).strip()
 
 
+_WECOM_MEDIA_NOISE_LINES = frozenset({"Edit", "编辑", "预览", "分享", "重试", "下载"})
+
+
+def _clean_wecom_media_caption(text: str) -> str:
+    lines = [
+        line
+        for line in (text or "").splitlines()
+        if line.strip() and line.strip() not in _WECOM_MEDIA_NOISE_LINES
+    ]
+    return "\n".join(lines).strip()
+
+
+def deliver_wecom_media_cards(reply: str, details: dict[str, Any]) -> str:
+    """Convert ``MEDIA:`` images to official WeCom ``news_notice`` cards."""
+    metadata = details.get("metadata") or {}
+    if metadata.get("channel") != "wecom":
+        return reply
+    body, urls = split_media_markers(reply)
+    if not urls:
+        return reply
+    caption = _clean_wecom_media_caption(body)
+    parts = [caption] if caption else []
+    now = time.time_ns()
+    for index, url in enumerate(urls):
+        card = {
+            "card_type": "news_notice",
+            "source": {"desc": "统一 AI 助手", "desc_color": 0},
+            "main_title": {"title": "图片已生成", "desc": "点击卡片查看原图"},
+            "card_image": {"url": url, "aspect_ratio": 1.3},
+            "card_action": {"type": 1, "url": url},
+            "task_id": f"task_ai_image_{now}_{index}",
+        }
+        parts.append("```json\n" + json.dumps(card, ensure_ascii=False) + "\n```")
+    return "\n\n".join(parts).strip()
+
+
 def deliver_feishu_files(reply: str, details: dict[str, Any]) -> str:
     """Send any FILE: markers in a Feishu reply as native Feishu file messages
     (im/v1/files + msg_type=file) and return the remaining text.
@@ -3426,6 +3469,7 @@ def build_reply(body: dict[str, Any]) -> str:
             if response_metadata:
                 write_details.setdefault("metadata", {}).update(response_metadata)
             reply = deliver_feishu_files(reply, write_details)
+            reply = deliver_wecom_media_cards(reply, write_details)
             reply = deliver_feishu_media(reply, write_details)
             reply = deliver_feishu_text_card(reply, write_details)
             reply = finalize_placeholder(reply, write_details)
