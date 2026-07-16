@@ -31,6 +31,12 @@ class BackupDashboardTests(unittest.TestCase):
         self.assertIn("polymerwang", sql)
         self.assertIn("polymerone", sql)
 
+    def test_migration_seeds_docker_image_prune_policy(self) -> None:
+        sql = (ROOT / "db" / "migrations" / "0036_docker_image_maintenance_policy.sql").read_text(encoding="utf-8")
+        self.assertIn("'docker-image-prune'", sql)
+        self.assertIn("'active'", sql)
+        self.assertIn("ON CONFLICT (code) DO UPDATE", sql)
+
     def test_health_has_backup_summary_and_entry(self) -> None:
         html = HEALTH_PAGE.read_text(encoding="utf-8")
         self.assertIn("备份与恢复", html)
