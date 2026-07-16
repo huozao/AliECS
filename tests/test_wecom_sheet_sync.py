@@ -29,6 +29,60 @@ class WorkerImportTestCase(unittest.TestCase):
 
 
 class WeComSheetSyncTests(WorkerImportTestCase):
+    def test_control_plane_doc_is_rescanned_when_modify_time_is_stale(self) -> None:
+        from app.pipelines.sync_wecom_full import _sync_doc
+
+        class FakeClient:
+            def get_doc_base(self, docid: str) -> dict:
+                return {"doc_name": "管理面板", "modify_time": "stale"}
+
+            def get_sheets(self, docid: str) -> list[dict]:
+                return [{"sheet_id": "config", "title": "企微AI助手配置"}]
+
+            def get_fields(self, docid: str, sheet_id: str) -> dict:
+                return {"fields": []}
+
+            def get_records(self, docid: str, sheet_id: str) -> dict:
+                return {"records": [], "page_count": 1}
+
+        class FakeStore:
+            def get_doc_modified(self, *_args) -> str:
+                return "stale"
+
+            def ensure_source(self, **_kwargs) -> int:
+                return 10
+
+            def replace_fields(self, _source_id: int, _fields: list[dict]) -> dict[str, str]:
+                return {}
+
+            def delete_missing_records(self, _source_id: int, _record_ids: list[str]) -> int:
+                return 0
+
+            def mark_source_synced(self, _source_id: int) -> None:
+                pass
+
+            def disable_missing_sheets(self, *_args) -> int:
+                return 0
+
+            def upsert_doc_source(self, **_kwargs) -> int:
+                return 11
+
+        counts = {"sheet_count": 0, "record_count": 0, "created_count": 0, "updated_count": 0, "error_count": 0}
+        _sync_doc(
+            FakeStore(),
+            FakeClient(),
+            profile="COMPANY_A",
+            docid="management",
+            fallback_name="fallback",
+            source_url="",
+            counts=counts,
+            errors=[],
+            skip_unchanged=True,
+        )
+
+        self.assertEqual(1, counts["sheet_count"])
+        self.assertEqual(0, counts.get("skipped_doc_count", 0))
+
     def test_sheet_sync_removes_records_absent_from_latest_pull(self) -> None:
         from app.pipelines.sync_wecom_full import _sync_sheet_records
         from app.storage.postgres import UpsertDecision

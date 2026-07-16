@@ -10,7 +10,7 @@ from app.providers.wecom import (
     env_profiles,
     summarize_wecom_error,
 )
-from app.pipelines.managed_contacts import sync_managed_contact_from_row
+from app.pipelines.managed_contacts import CONTACT_SHEET_CHANNELS, SESSION_INDEX_SHEETS, sync_managed_contact_from_row
 from app.pipelines.sync_feishu_full import sync_feishu_source
 from app.pipelines.wecom_structure_backup import (
     enqueue_copy_auto_structure_backup,
@@ -88,15 +88,17 @@ def _sync_doc(
     doc_base = client.get_doc_base(docid)
     document_name = doc_base["doc_name"] or fallback_name
     modify_time = doc_base["modify_time"]
+    sheets = client.get_sheets(docid)
+    sheet_titles = {_sheet_name(sheet) for sheet in sheets}
+    is_control_plane = bool(sheet_titles & (set(CONTACT_SHEET_CHANNELS) | SESSION_INDEX_SHEETS))
 
-    if skip_unchanged and modify_time:
+    if skip_unchanged and modify_time and not is_control_plane:
         last_seen = store.get_doc_modified("wecom", profile, docid)
         if last_seen and last_seen == modify_time:
             counts["skipped_doc_count"] = counts.get("skipped_doc_count", 0) + 1
             print(f"[企业微信同步] {profile} 「{document_name}」modify_time 未变化（{modify_time}），整簿跳过。")
             return
 
-    sheets = client.get_sheets(docid)
     initial_error_count = int(counts.get("error_count", 0) or 0)
     seen_sheet_ids: list[str] = []
     if not sheets:
