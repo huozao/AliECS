@@ -525,6 +525,8 @@ def request_details(body: dict[str, Any]) -> dict[str, Any]:
         chat_mode = feishu_chat_mode({"metadata": metadata, "raw_metadata": raw_metadata})
         if chat_mode:
             metadata["chatgpt_mode"] = chat_mode
+    elif metadata.get("channel") == "wecom":
+        user_text = strip_wecom_bot_mention(user_text)
     if not metadata.get("peer_id"):
         inherited_metadata = get_recent_lane_metadata()
         if inherited_metadata:
@@ -576,6 +578,8 @@ def build_webdock_metadata(body: dict[str, Any]) -> dict[str, Any]:
     )
     if not channel and _looks_like_feishu(metadata):
         channel = "feishu"
+    if not channel and _looks_like_wecom(metadata):
+        channel = "wecom"
     channel = channel or "wechat"
     channel_account = _first_metadata_value(
         metadata,
@@ -589,8 +593,12 @@ def build_webdock_metadata(body: dict[str, Any]) -> dict[str, Any]:
     chat_type = _first_metadata_value(metadata, "chat_type", "chatType", "conversation_type", "room_type") or "private"
     if channel == "feishu":
         chat_type = _infer_feishu_chat_type(metadata, chat_type)
+    elif channel == "wecom":
+        chat_type = _infer_wecom_chat_type(metadata, chat_type)
     if channel == "feishu":
         peer_id = _feishu_lane_peer_id(metadata, chat_type)
+    elif channel == "wecom":
+        peer_id = _wecom_lane_peer_id(metadata, chat_type)
     else:
         peer_id = _first_metadata_value(
             metadata,
@@ -773,6 +781,58 @@ def _infer_feishu_chat_type(metadata: dict[str, Any], chat_type: Any) -> str:
     if str(metadata.get("is_group_chat") or "").strip().lower() in {"1", "true", "yes"}:
         return "group"
     return str(chat_type or "private")
+
+
+def _looks_like_wecom(metadata: dict[str, Any]) -> bool:
+    chat_id = str(_first_metadata_value(metadata, "chat_id", "chatId") or "").strip().lower()
+    if chat_id.startswith("wecom:"):
+        return True
+    label = str(metadata.get("conversation_label") or "").strip().lower()
+    return label.startswith(("wecom:", "group:wecom:"))
+
+
+def _infer_wecom_chat_type(metadata: dict[str, Any], chat_type: Any) -> str:
+    if _is_group_chat(chat_type):
+        return "group"
+    if str(metadata.get("is_group_chat") or "").strip().lower() in {"1", "true", "yes"}:
+        return "group"
+    if str(metadata.get("conversation_label") or "").strip().lower().startswith("group:"):
+        return "group"
+    return "private"
+
+
+def _strip_wecom_transport_prefix(value: Any) -> str:
+    text = str(value or "").strip()
+    return text[len("wecom:"):] if text.lower().startswith("wecom:") else text
+
+
+def _wecom_lane_peer_id(metadata: dict[str, Any], chat_type: Any) -> str:
+    chat_id = _strip_wecom_transport_prefix(
+        _first_metadata_value(metadata, "chat_id", "chatId", "conversation_id")
+    )
+    sender_id = _strip_wecom_transport_prefix(
+        _first_metadata_value(metadata, "sender_id", "user_id", "from_user_id", "id")
+    )
+    if _is_group_chat(chat_type):
+        peer = chat_id or _strip_lane_peer_prefix(metadata.get("peer_id"))
+        return f"group:{_strip_lane_peer_prefix(peer)}" if peer else ""
+    peer = sender_id or chat_id or _strip_lane_peer_prefix(metadata.get("peer_id"))
+    return f"user:{_strip_lane_peer_prefix(peer)}" if peer else ""
+
+
+def strip_wecom_bot_mention(text: str) -> str:
+    """Remove only the official callback's leading self mention."""
+    if not text:
+        return text
+    bot_name = os.getenv("WECOM_ASSISTANT_NAME", "统一 AI 助手").strip() or "统一 AI 助手"
+    flexible_name = r"\s*".join(re.escape(part) for part in bot_name.split())
+    return re.sub(
+        rf"^\s*@\s*{flexible_name}(?:[ \t]+|\r?\n+|$)",
+        "",
+        text,
+        count=1,
+        flags=re.IGNORECASE,
+    ).strip()
 
 
 def _strip_feishu_sender_prefix(text: str, raw_metadata: dict[str, Any]) -> str:

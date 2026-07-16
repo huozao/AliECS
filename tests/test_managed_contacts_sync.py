@@ -78,6 +78,27 @@ class ManagedContactsSyncTests(unittest.TestCase):
 
         self.assertEqual("李四", store.contacts[("feishu", "user:ou_x")]["display_name"])
 
+    def test_wecom_assistant_sheet_supports_global_project_route(self) -> None:
+        from app.pipelines.managed_contacts import sync_managed_contacts_from_sheet
+
+        store = FakeContactStore()
+        changed = sync_managed_contacts_from_sheet(
+            store,
+            "企微AI助手配置",
+            [{
+                "配置编号": "*",
+                "显示名称": "企微默认项目",
+                "是否启用": "是",
+                "默认新对话项目链接": "https://chatgpt.com/g/g-p-qwecom0/project",
+                "默认新对话项目名称": "qwecom0",
+            }],
+        )
+
+        self.assertEqual(1, changed)
+        row = store.contacts[("wecom", "*")]
+        self.assertEqual("qwecom0", row["project_name"])
+        self.assertEqual("https://chatgpt.com/g/g-p-qwecom0/project", row["project_url"])
+
     def test_feishu_session_index_upserts_current_active_session_route(self) -> None:
         from app.pipelines.managed_contacts import sync_managed_contacts_from_sheet
 

@@ -17,6 +17,15 @@
 - `#确认节点`：确认当前用户在本群最新的 AI 草稿，进入写表队列。
 - `#取消节点`：取消当前用户在本群最新的 AI 草稿。
 
+## 群聊交互与项目路由
+
+- 群聊由企微平台在 `@统一 AI 助手` 时下发；未 @ 的普通群消息不会进入 OpenClaw，服务端无法补收。
+- bridge 会在送入 ChatGPT 前移除开头的机器人 @，避免项目上下文出现无意义提及。
+- 官方企微插件继续复用同一条流式消息：先显示“处理中”，再逐步更新并结束为最终答案。
+- 企微A管理面板的 `企微AI助手配置` 是路由控制面。`配置编号 = *` 为默认项目；
+  `group:<chatid>` / `user:<userid>` 可覆盖单个群聊或私聊，精确项优先。
+- 当前默认项目为 `qwecom0`。在智能表修改后，经 doc-sync、backend 路由 JSON 和 WebDock 定时拉取自动生效。
+
 ## 安全与部署
 
 - Bot ID/Secret 只在 infra 的 SOPS `openclaw.enc.env` 中保存；`openclaw.json` 仅保存 `${WECOM_UNIFIED_BOT_*}` 引用。
@@ -32,3 +41,4 @@
 4. `#AI节点` 返回草稿；确认后 `group_messages.written_to_sheet=true`，智能表格出现对应行和图片。
 5. WebDock archive 的 lane key 以 `wecom:` 开头，不与 `wechat:` / `feishu:` 混用。
 6. 微信和飞书各发一条消息，均正常回复。
+7. 群聊正文进入 archive 后不包含开头的 `@统一 AI 助手`，且未单独配置的会话进入 `qwecom0`。

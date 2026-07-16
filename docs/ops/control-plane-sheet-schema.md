@@ -6,8 +6,12 @@
 
 - `微信用户清单`：同步为 `managed_contacts.channel = 'wechat'`
 - `飞书用户清单`：同步为 `managed_contacts.channel = 'feishu'`
+- `企微AI助手配置`：同步为 `managed_contacts.channel = 'wecom'`
 
 doc-sync 会按 worksheet 名识别渠道；表名不匹配时不会写入 `managed_contacts`。
+
+`企微AI助手配置` 可用 `配置编号 = *` 设置全局默认项目，也可用
+`group:<chatid>` / `user:<userid>` 覆盖指定群聊或私聊。精确配置优先于 `*`。
 
 ## 推荐列
 
@@ -28,10 +32,12 @@ doc-sync 会按 worksheet 名识别渠道；表名不匹配时不会写入 `mana
 doc-sync 也兼容部分中文/旧列名：
 
 - `peer_id`：`用户ID`、`渠道用户ID`、`微信ID`、`微信peer`、`飞书open_id`、`open_id`
+- `peer_id`（企微助手）：`配置编号`、`会话ID`
 - `display_name`：`昵称`、`显示名`、`用户名`、`姓名`、`微信名称`、`飞书名称`
 - `enabled`：`启用`、`是否启用`、`权限开关`、`权限`
 - `project_url`：`ChatGPT项目地址`、`项目地址`、`project`、`新对话链接`
-- `project_name`：`项目名称`、`ChatGPT项目名`、`所属项目名称`
+- `project_url`（企微助手）：`默认新对话项目链接`
+- `project_name`：`项目名称`、`ChatGPT项目名`、`所属项目名称`、`默认新对话项目名称`
 - `tags`：`标签`、`分组`
 - `daily_quota`：`每日配额`、`配额`
 - `notes`：`说明`、`备注说明`
@@ -43,10 +49,11 @@ doc-sync 也兼容部分中文/旧列名：
 3. backend 输出：
    - `/v1/routing/wechat-projects.json`
    - `/v1/routing/feishu-projects.json`
-4. webdock 拉取 `/v1/routing/wechat-projects.json` 覆盖本地 `wechat_projects.json`；backend 不可达时保留旧文件。
+   - `/v1/routing/wecom-projects.json`
+4. webdock 拉取三份路由 JSON 覆盖对应本地配置；backend 不可达时保留旧文件。
 
 ## 待人工验证
 
-- `SMARTSHEET_COMPANY_A_*` 是否指向包含 `微信用户清单` / `飞书用户清单` 的管理面板文档。
+- `SMARTSHEET_COMPANY_A_*` 是否指向包含上述三个 worksheet 的管理面板文档。
 - OpenClaw/webdock 实际上报的微信 `peer_id` 和飞书 `peer_id` 字段名及值是否与表内填写一致。
 - 飞书用户清单的 `peer_id` 需要在 Phase 5 飞书端到端验证后复核。

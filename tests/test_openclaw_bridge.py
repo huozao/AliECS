@@ -257,6 +257,28 @@ def test_bridge_forwards_wecom_as_isolated_lane(monkeypatch):
     assert bridge.lane_batch_key(outbound["metadata"]) == "wecom|company-b|group|group:wr_group"
 
 
+def test_bridge_detects_real_wecom_group_metadata_and_strips_self_mention():
+    bridge = load_bridge()
+    text = (
+        "Conversation info (untrusted metadata):\n```json\n"
+        '{"chat_id":"wecom:wrS7aGNQGroup","message_id":"wecom-real-2",'
+        '"sender_id":"WangHao","conversation_label":"group:wrS7aGNQGroup",'
+        '"is_group_chat":true}\n```\n\n'
+        "Sender (untrusted metadata):\n```json\n"
+        '{"label":"WangHao","id":"WangHao"}\n```\n\n'
+        "@统一 AI 助手 \n后天天气怎么样"
+    )
+
+    outbound = bridge.build_webdock_body({"messages": [{"role": "user", "content": text}]})
+
+    assert outbound["messages"] == [{"role": "user", "content": "后天天气怎么样"}]
+    assert outbound["metadata"]["channel"] == "wecom"
+    assert outbound["metadata"]["chat_type"] == "group"
+    assert outbound["metadata"]["peer_id"] == "group:wrS7aGNQGroup"
+    assert outbound["metadata"]["message_id"] == "wecom-real-2"
+    assert bridge.lane_batch_key(outbound["metadata"]) == "wecom|company-b|group|group:wrS7aGNQGroup"
+
+
 def test_wecom_preflight_uses_real_openclaw_context(monkeypatch):
     bridge = load_bridge()
     monkeypatch.setenv("OPENCLAW_INTERNAL_TOKEN", "test-token")
