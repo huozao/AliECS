@@ -182,15 +182,19 @@ def refresh_upstream(_: None = Depends(_require_report_token)) -> dict[str, Any]
                     status, err = "error", "no upstream version resolved"
             except Exception as exc:
                 status, err = "error", type(exc).__name__
-            with conn.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO version_upstream_state(component_key, latest_version, release_url, "
-                    "checked_at, check_status, check_error) VALUES (%s, %s, %s, NOW(), %s, %s) "
-                    "ON CONFLICT (component_key) DO UPDATE SET latest_version=EXCLUDED.latest_version, "
-                    "release_url=EXCLUDED.release_url, checked_at=NOW(), "
-                    "check_status=EXCLUDED.check_status, check_error=EXCLUDED.check_error",
-                    (key, normalize_version(latest) if latest else None, url, status, err),
-                )
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO version_upstream_state(component_key, latest_version, release_url, "
+                        "checked_at, check_status, check_error) VALUES (%s, %s, %s, NOW(), %s, %s) "
+                        "ON CONFLICT (component_key) DO UPDATE SET latest_version=EXCLUDED.latest_version, "
+                        "release_url=EXCLUDED.release_url, checked_at=NOW(), "
+                        "check_status=EXCLUDED.check_status, check_error=EXCLUDED.check_error",
+                        (key, normalize_version(latest) if latest else None, url, status, err),
+                    )
+            except Exception:
+                # 单组件 UPSERT 失败不应中断整个循环，跳过该组件继续处理其余的
+                continue
             checked += 1
         conn.commit()
     return {"ok": True, "checked": checked}
