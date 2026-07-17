@@ -3158,28 +3158,69 @@ def _clean_wecom_media_caption(text: str) -> str:
     return "\n".join(lines).strip()
 
 
-def _wecom_media_card_heading(details: dict[str, Any], caption: str) -> tuple[str, str]:
+def _wecom_media_card_heading(details: dict[str, Any], caption: str) -> str:
     """Choose a concise business heading instead of labelling every screenshot
     as an AI-generated image.  Prefer the user's intent because widget captions
     may begin with English provider text (for example a weather card)."""
-    prompt = str(details.get("user_text") or "").strip()
-    intent = f"{prompt}\n{caption}".lower()
-    if re.search(r"穿衣|穿什么|衣服|穿搭|搭配", intent):
-        return "穿衣建议", "点击卡片查看穿搭详情"
-    if re.search(r"天气|气温|温度|降雨|下雨|weather", intent):
-        return "天气详情", "点击卡片查看天气详情"
-    if re.search(r"图片|生成图|配图|海报|画一|画个|image", prompt.lower()):
-        return "图片已生成", "点击卡片查看原图"
+    prompt = str(details.get("user_text") or "").strip().lower()
+    asks_weather = bool(re.search(r"天气|气温|温度|降雨|下雨|weather", prompt))
+    asks_clothing = bool(re.search(r"穿衣|穿什么|衣服|穿搭|搭配", prompt))
+    if asks_weather and asks_clothing:
+        return "天气与穿衣建议"
+    if asks_weather:
+        return "天气详情"
+    if asks_clothing:
+        return "穿衣建议"
+    if re.search(r"图片|生成图|配图|海报|画一|画个|image", prompt):
+        return "图片已生成"
     first_line = next((line.strip() for line in caption.splitlines() if line.strip()), "")
     first_line = re.sub(r"^[#>*_`~\-\s]+|[*_`~]+$", "", first_line).strip()
     if first_line:
         title = first_line if len(first_line) <= 24 else first_line[:23] + "…"
-        return title, "点击卡片查看详情"
-    return "图片已生成", "点击卡片查看原图"
+        return title
+    return "图片已生成"
+
+
+def _wecom_card_plain_text(text: str) -> str:
+    text = re.sub(r"!\[([^]]*)\]\([^)]+\)", r"\1", text or "")
+    text = re.sub(r"\[([^]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"[*_`~]", "", text)
+    text = re.sub(r"^[ \t]*#{1,6}[ \t]+", "", text)
+    return re.sub(r"[ \t]+", " ", text).strip()
+
+
+def _wecom_card_caption_fields(caption: str) -> tuple[str, list[dict[str, Any]], list[dict[str, str]]]:
+    """Shape ChatGPT markdown into fields rendered natively by news_notice.
+
+    WeCom replyStream is plain text and shows markdown markers literally.  Card
+    fields are plain text too, so remove markdown and map bullet facts into the
+    card's structured rows instead of sending a second text message.
+    """
+    summary = ""
+    facts: list[dict[str, Any]] = []
+    paragraphs: list[str] = []
+    for raw_line in (caption or "").splitlines():
+        line = _wecom_card_plain_text(raw_line)
+        if not line:
+            continue
+        match = re.match(r"^[•·\-]\s*([^：:]{1,12})[：:]\s*(.+)$", line)
+        if match and len(facts) < 6:
+            key = match.group(1).strip()[:5]
+            value = match.group(2).strip()
+            facts.append({"type": 0, "keyname": key, "value": value[:26]})
+        elif not summary:
+            summary = line[:30]
+        else:
+            paragraphs.append(line)
+    vertical: list[dict[str, str]] = []
+    if paragraphs:
+        advice = " ".join(paragraphs)
+        vertical.append({"title": "补充说明", "desc": advice[:112]})
+    return summary, facts, vertical
 
 
 def deliver_wecom_media_cards(reply: str, details: dict[str, Any]) -> str:
-    """Convert ``MEDIA:`` images to official WeCom ``news_notice`` cards."""
+    """Convert all ``MEDIA:`` images to ONE self-contained WeCom news card."""
     metadata = details.get("metadata") or {}
     if metadata.get("channel") != "wecom":
         return reply
@@ -3187,20 +3228,29 @@ def deliver_wecom_media_cards(reply: str, details: dict[str, Any]) -> str:
     if not urls:
         return reply
     caption = _clean_wecom_media_caption(body)
-    parts = [caption] if caption else []
-    title, description = _wecom_media_card_heading(details, caption)
+    title = _wecom_media_card_heading(details, caption)
+    summary, facts, vertical = _wecom_card_caption_fields(caption)
     now = time.time_ns()
-    for index, url in enumerate(urls):
-        card = {
-            "card_type": "news_notice",
-            "source": {"desc": "统一 AI 助手", "desc_color": 0},
-            "main_title": {"title": title, "desc": description},
-            "card_image": {"url": url, "aspect_ratio": 1.3},
-            "card_action": {"type": 1, "url": url},
-            "task_id": f"task_ai_image_{now}_{index}",
-        }
-        parts.append("```json\n" + json.dumps(card, ensure_ascii=False) + "\n```")
-    return "\n\n".join(parts).strip()
+    card: dict[str, Any] = {
+        "card_type": "news_notice",
+        "source": {"desc": "统一 AI 助手", "desc_color": 0},
+        "main_title": {"title": title, "desc": summary or "点击卡片查看详情"},
+        "card_image": {"url": urls[0], "aspect_ratio": 1.3},
+        "card_action": {"type": 1, "url": urls[0]},
+        "task_id": f"task_ai_reply_{now}",
+    }
+    if facts:
+        card["horizontal_content_list"] = facts
+    if vertical:
+        card["vertical_content_list"] = vertical
+    if len(urls) > 1:
+        card["jump_list"] = [
+            {"type": 1, "title": f"查看图片 {index + 2}", "url": url}
+            for index, url in enumerate(urls[1:4])
+        ]
+    # Card-only output is intentional: the official plugin sends text through a
+    # separate replyStream bubble.  All visible content now lives in this card.
+    return "```json\n" + json.dumps(card, ensure_ascii=False) + "\n```"
 
 
 def deliver_feishu_files(reply: str, details: dict[str, Any]) -> str:
