@@ -25,7 +25,7 @@ aliecs / webdock1 / webdock2(WSL)  systemd timer 每日 05:00±错峰
        ├─ docker ps 全容器: 镜像名+tag+RepoDigest（全量上报，不按清单）
        ├─ aliecs 额外: docker exec openclaw gateway --version（镜像 sha256 锁定，tag 无版本号）
        ├─ apt-get -s upgrade 计数: 总数 + security 数
-       ├─ POST https://hydwang.xyz/api/v1/internal/versions/report（X-Backup-Report-Token，复用现有 token）
+       ├─ POST https://hydwang.xyz/api/v1/internal/versions/report（X-Backup-Report-Token）
        └─ 成功后 POST /v1/internal/backups/report 报心跳 run（复用 stale 告警，零新代码）
 
 aliecs backend（backend-api）
@@ -82,7 +82,8 @@ version_upstream_state (      -- 对比面
 
 ## 端点（services/backend-api/app/routers/versions.py，按域拆分惯例装配进 main）
 
-- `POST /v1/internal/versions/report`：token 同 `_require_backup_report_token`；body=设备+容器列表+apt 计数+extra；写 version_reports。
+- `POST /v1/internal/versions/report`：token 同 `_require_backup_report_token`（复用 `BACKUP_REPORT_TOKEN`）；body=设备+容器列表+apt 计数+extra；写 version_reports。
+  - ⚠️ **token 分发**：aliecs 已有 `BACKUP_REPORT_TOKEN`（在 `backup.enc.env`，仅 aliecs+devbox 可解）。webdock1/webdock2 目前**没有**此 token（其私钥解不了 backup.enc.env）。infra 侧需把同值 token 写进 `webdock1.enc.env` / `webdock2.enc.env`（各机私钥可解自己的文件），render 后由采集脚本读取。三机 POST 走公网 `https://hydwang.xyz/api/`（webdock 不在 tailnet、ECS 也不在，只有正常出站方向可达 backend）。
 - `POST /v1/internal/versions/refresh-upstream`：token 校验；遍历 active 组件查上游（github：`/repos/{ref}/releases/latest`，dockerhub：tags API 按 version_pattern 过滤取最大 semver）；写 version_upstream_state。单组件失败不中断，记 check_error。
 - `POST /v1/internal/versions/weekly-digest`：token 校验；汇总落后/security/未登记/缺席（>48h 无上报的设备）→ 飞书直发；全绿发一行短讯。
 - `GET /v1/ops/versions`：require_admin；按设备分组返回：组件、当前、最新、状态枚举（`current|behind|pinned|unregistered|own-consistent|own-mismatch|stale`）、落后幅度（semver diff 粗算）。
