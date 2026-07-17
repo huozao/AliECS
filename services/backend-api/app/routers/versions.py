@@ -116,7 +116,7 @@ def report_versions(body: VersionReport, _: None = Depends(_require_report_token
                     "INSERT INTO version_reports(device, image, tag, digest, extra_json) "
                     "VALUES (%s, %s, %s, %s, %s)",
                     (body.device, "apt-summary", None, None,
-                     Jsonb({"apt": body.apt, **body.extra})),
+                     Jsonb({**body.extra, "apt": body.apt})),
                 )
             conn.commit()
     except Exception as exc:
@@ -192,11 +192,13 @@ def refresh_upstream(_: None = Depends(_require_report_token)) -> dict[str, Any]
                         "check_status=EXCLUDED.check_status, check_error=EXCLUDED.check_error",
                         (key, normalize_version(latest) if latest else None, url, status, err),
                     )
+                # 每组件独立事务：成功即提交，失败不影响其他组件已提交的结果
+                conn.commit()
             except Exception:
-                # 单组件 UPSERT 失败不应中断整个循环，跳过该组件继续处理其余的
+                # 单组件 UPSERT 失败不应中断整个循环，回滚本组件后跳过继续处理其余的
+                conn.rollback()
                 continue
             checked += 1
-        conn.commit()
     return {"ok": True, "checked": checked}
 
 
@@ -208,6 +210,12 @@ def build_inventory(reports: list[dict], components: list[dict],
         comp = match_component(r["image"], r["device"], components)
         if comp and comp.get("family") == "own":
             own_tags.setdefault(comp["component_key"], set()).add(r.get("tag"))
+
+    # 每设备 apt-summary 行的 extra（承载 sha256 锁定镜像的真实版本，key == component_key）
+    device_extra: dict[str, dict] = {}
+    for r in reports:
+        if r["image"] == "apt-summary":
+            device_extra[r["device"]] = r.get("extra") or {}
 
     devices: dict[str, list] = {}
     summary = {"behind": 0, "current": 0, "pinned": 0, "unregistered": 0,
@@ -229,13 +237,14 @@ def build_inventory(reports: list[dict], components: list[dict],
         else:
             up = upstream.get(comp["component_key"], {})
             latest = up.get("latest_version")
+            current = device_extra.get(dev, {}).get(comp["component_key"], r.get("tag"))
             status = classify_component(family=comp["family"], upstream_source=comp["upstream_source"],
-                                        current=r.get("tag"), latest=latest,
+                                        current=current, latest=latest,
                                         version_pattern=comp.get("version_pattern"))
             if status == "own" and len(own_tags.get(comp["component_key"], set())) > 1:
                 status = "own-mismatch"
             entry = {"key": comp["component_key"], "name": comp["display_name"],
-                     "current": r.get("tag"), "latest": latest, "status": status,
+                     "current": current, "latest": latest, "status": status,
                      "release_url": up.get("release_url"), "note": comp.get("pin_note")}
         summary[entry["status"]] = summary.get(entry["status"], 0) + 1
         devices.setdefault(dev, []).append(entry)

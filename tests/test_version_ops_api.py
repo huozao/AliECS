@@ -52,3 +52,38 @@ class BuildInventoryTests(unittest.TestCase):
         inv = build_inventory(reports, self._comps(), {})
         comp = inv["devices"][0]["components"][0]
         self.assertEqual(comp["status"], "unregistered")
+
+    def _openclaw_comps(self):
+        return [
+            {"component_key": "openclaw", "display_name": "OpenClaw", "family": "third-party",
+             "upstream_source": "github-release", "match_images": ["ghcr.io/anthropic/openclaw"],
+             "devices": None, "version_pattern": None, "pin_note": None},
+        ]
+
+    def test_openclaw_version_sourced_from_apt_summary_extra_behind(self) -> None:
+        # openclaw 容器 tag 是占位串（latest/digest），真实版本藏在同设备
+        # apt-summary 行的 extra 里，key == component_key("openclaw")
+        from app.routers.versions import build_inventory
+        reports = [
+            {"device": "aliecs", "image": "ghcr.io/anthropic/openclaw", "tag": "latest", "extra": {}},
+            {"device": "aliecs", "image": "apt-summary", "tag": None,
+             "extra": {"openclaw": "2026.6.5"}},
+        ]
+        upstream = {"openclaw": {"latest_version": "2026.7.0", "release_url": "http://x"}}
+        inv = build_inventory(reports, self._openclaw_comps(), upstream)
+        oc = next(c for d in inv["devices"] for c in d["components"] if c.get("key") == "openclaw")
+        self.assertEqual(oc["current"], "2026.6.5")
+        self.assertEqual(oc["status"], "behind")
+
+    def test_openclaw_version_current_when_up_to_date(self) -> None:
+        from app.routers.versions import build_inventory
+        reports = [
+            {"device": "aliecs", "image": "ghcr.io/anthropic/openclaw", "tag": "latest", "extra": {}},
+            {"device": "aliecs", "image": "apt-summary", "tag": None,
+             "extra": {"openclaw": "2026.7.0"}},
+        ]
+        upstream = {"openclaw": {"latest_version": "2026.7.0", "release_url": "http://x"}}
+        inv = build_inventory(reports, self._openclaw_comps(), upstream)
+        oc = next(c for d in inv["devices"] for c in d["components"] if c.get("key") == "openclaw")
+        self.assertEqual(oc["current"], "2026.7.0")
+        self.assertEqual(oc["status"], "current")

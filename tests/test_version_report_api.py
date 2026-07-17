@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, sys, unittest
+import json, os, sys, unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,3 +68,20 @@ class VersionReportApiTests(unittest.TestCase):
         self.assertTrue(any(p[1] == "postgres" for p in store["rows"]))       # 容器行已写入
         self.assertTrue(any(p[1] == "apt-summary" for p in store["rows"]))    # apt 汇总行已写入
         self.assertTrue(store["deleted"])  # 先删旧快照
+
+    def test_report_apt_count_not_overridden_by_extra(self) -> None:
+        # extra 含恶意/巧合的 "apt" key 时，真实 apt 计数（body.apt）必须最终生效，不被 extra 覆盖
+        store = {"rows": [], "deleted": []}
+        client = self._client(store)
+        r = client.post("/v1/internal/versions/report",
+                        headers={"X-Backup-Report-Token": "test-token"},
+                        json={"device": "aliecs",
+                              "containers": [],
+                              "apt": {"upgradable": 3, "security": 1},
+                              "extra": {"apt": 999, "openclaw": "2026.6.5"}})
+        self.assertEqual(r.status_code, 200)
+        apt_row = next(p for p in store["rows"] if p[1] == "apt-summary")
+        extra_json = apt_row[4]  # Jsonb 对象
+        payload = extra_json.obj if hasattr(extra_json, "obj") else json.loads(str(extra_json))
+        self.assertEqual(payload["apt"], {"upgradable": 3, "security": 1})
+        self.assertEqual(payload["openclaw"], "2026.6.5")
