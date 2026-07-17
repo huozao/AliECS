@@ -347,5 +347,6 @@ def weekly_digest(_: None = Depends(_require_report_token)) -> dict[str, Any]:
     text = render_digest_text(inv, stale)
     sent = send_feishu_text(
         os.getenv("VERSION_DIGEST_FEISHU_RECEIVE_ID", ""), text,
-        app_id=os.getenv("FEISHU_APP_ID", ""), app_secret=os.getenv("FEISHU_APP_SECRET", ""))
+        app_id=os.getenv("VERSION_DIGEST_FEISHU_APP_ID", ""),
+        app_secret=os.getenv("VERSION_DIGEST_FEISHU_APP_SECRET", ""))
     return {"ok": True, "sent": sent, "stale": stale}
