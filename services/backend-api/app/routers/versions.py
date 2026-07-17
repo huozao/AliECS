@@ -198,3 +198,73 @@ def refresh_upstream(_: None = Depends(_require_report_token)) -> dict[str, Any]
             checked += 1
         conn.commit()
     return {"ok": True, "checked": checked}
+
+
+def build_inventory(reports: list[dict], components: list[dict],
+                    upstream: dict[str, dict]) -> dict[str, Any]:
+    # own 家族跨设备 tag 收集
+    own_tags: dict[str, set] = {}
+    for r in reports:
+        comp = match_component(r["image"], r["device"], components)
+        if comp and comp.get("family") == "own":
+            own_tags.setdefault(comp["component_key"], set()).add(r.get("tag"))
+
+    devices: dict[str, list] = {}
+    summary = {"behind": 0, "current": 0, "pinned": 0, "unregistered": 0,
+               "own": 0, "own-mismatch": 0, "stale": 0}
+    for r in reports:
+        dev = r["device"]
+        comp = match_component(r["image"], dev, components)
+        if r["image"] == "apt-summary":
+            apt = (r.get("extra") or {}).get("apt", {})
+            entry = {"key": "apt-summary", "name": "APT 可升级", "current":
+                     f"可升级 {apt.get('upgradable', 0)}（security {apt.get('security', 0)}）",
+                     "latest": None, "status": "os", "release_url": None, "note": None}
+            devices.setdefault(dev, []).append(entry)
+            continue
+        if comp is None:
+            entry = {"key": None, "name": r["image"], "current": r.get("tag"),
+                     "latest": None, "status": "unregistered", "release_url": None,
+                     "note": "未登记镜像"}
+        else:
+            up = upstream.get(comp["component_key"], {})
+            latest = up.get("latest_version")
+            status = classify_component(family=comp["family"], upstream_source=comp["upstream_source"],
+                                        current=r.get("tag"), latest=latest,
+                                        version_pattern=comp.get("version_pattern"))
+            if status == "own" and len(own_tags.get(comp["component_key"], set())) > 1:
+                status = "own-mismatch"
+            entry = {"key": comp["component_key"], "name": comp["display_name"],
+                     "current": r.get("tag"), "latest": latest, "status": status,
+                     "release_url": up.get("release_url"), "note": comp.get("pin_note")}
+        summary[entry["status"]] = summary.get(entry["status"], 0) + 1
+        devices.setdefault(dev, []).append(entry)
+
+    overall = "ok"
+    if summary["behind"] or summary["own-mismatch"]:
+        overall = "warning"
+    summary["status"] = overall
+    return {"summary": summary,
+            "devices": [{"device": d, "components": c} for d, c in sorted(devices.items())]}
+
+
+@router.get("/v1/ops/versions")
+def ops_versions(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT component_key, display_name, kind, match_images, devices, "
+                        "upstream_source, upstream_ref, version_pattern, pin_note, family "
+                        "FROM version_components WHERE active ORDER BY sort_order")
+            comps = [dict(zip(
+                ["component_key", "display_name", "kind", "match_images", "devices",
+                 "upstream_source", "upstream_ref", "version_pattern", "pin_note", "family"], row))
+                for row in cur.fetchall()]
+            cur.execute("SELECT device, image, tag, digest, extra_json FROM version_reports")
+            reports = [{"device": r[0], "image": r[1], "tag": r[2], "digest": r[3],
+                        "extra": r[4] or {}} for r in cur.fetchall()]
+            cur.execute("SELECT component_key, latest_version, release_url, checked_at, "
+                        "check_status, check_error FROM version_upstream_state")
+            upstream = {r[0]: {"latest_version": r[1], "release_url": r[2],
+                               "checked_at": r[3].isoformat() if r[3] else None,
+                               "check_status": r[4], "check_error": r[5]} for r in cur.fetchall()}
+    return build_inventory(reports, comps, upstream)
