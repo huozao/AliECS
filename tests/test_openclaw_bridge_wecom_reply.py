@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 from pathlib import Path
 
 
@@ -41,154 +40,73 @@ def test_wecom_leading_bot_mention_is_removed():
     assert bridge.strip_wecom_bot_mention("@统一 AI 助手\n后天天气怎么样") == "后天天气怎么样"
 
 
-def test_wecom_media_becomes_news_card_without_media_marker():
+def test_wecom_media_stays_in_response_url_stream():
     bridge = load_bridge()
     reply = "Edit\nMEDIA: https://hydwang.xyz/media/image-1"
     details = {"metadata": {"channel": "wecom"}}
 
-    out = bridge.deliver_wecom_media_cards(reply, details)
+    out = bridge.deliver_wecom_response_url_reply(reply, details)
 
-    assert "MEDIA:" not in out
-    blocks = [part for part in out.split("```json\n") if '"card_type"' in part]
-    assert len(blocks) == 1
-    card = json.loads(blocks[0].split("\n```", 1)[0])
-    assert card["card_type"] == "news_notice"
-    assert card["main_title"]["title"] == "图片已生成"
-    assert card["card_image"]["url"] == "https://hydwang.xyz/media/image-1"
-    assert card["card_action"]["url"] == "https://hydwang.xyz/media/image-1"
+    assert out == "MEDIA: https://hydwang.xyz/media/image-1"
 
 
-def test_wecom_media_card_moves_caption_inside_single_card():
+def test_wecom_response_url_reply_keeps_caption_and_media():
     bridge = load_bridge()
     details = {"metadata": {"channel": "wecom"}}
 
-    out = bridge.deliver_wecom_media_cards(
+    out = bridge.deliver_wecom_response_url_reply(
         "穿衣建议如下\nMEDIA: https://hydwang.xyz/media/image-2", details
     )
 
-    assert out.startswith("```json\n")
-    assert out.count("```json") == 1
-    card = json.loads(out.split("```json\n", 1)[1].split("\n```", 1)[0])
-    assert card["main_title"]["desc"] == "穿衣建议如下"
+    assert out == "穿衣建议如下\nMEDIA: https://hydwang.xyz/media/image-2"
 
 
-def test_wecom_weather_widget_uses_semantic_card_heading():
+def test_wecom_response_url_reply_strips_markdown_markers():
     bridge = load_bridge()
-    details = {
-        "user_text": "帮我查一下今天英国伦敦的天气",
-        "metadata": {"channel": "wecom"},
-    }
-
-    out = bridge.deliver_wecom_media_cards(
-        "Currently 67° · Mostly clear\nMEDIA: https://hydwang.xyz/media/weather", details
-    )
-
-    card = json.loads(out.split("```json\n", 1)[1].split("\n```", 1)[0])
-    assert card["main_title"] == {"title": "天气详情", "desc": "Currently 67° · Mostly clear"}
-
-
-def test_wecom_clothing_widget_uses_semantic_card_heading():
-    bridge = load_bridge()
-    details = {
-        "user_text": "明天适合穿什么衣服",
-        "metadata": {"channel": "wecom"},
-    }
-
-    out = bridge.deliver_wecom_media_cards(
-        "穿衣建议如下\nMEDIA: https://hydwang.xyz/media/outfit", details
-    )
-
-    card = json.loads(out.split("```json\n", 1)[1].split("\n```", 1)[0])
-    assert card["main_title"] == {"title": "穿衣建议", "desc": "穿衣建议如下"}
-
-
-def test_wecom_weather_reply_is_one_structured_card_without_markdown_text():
-    bridge = load_bridge()
-    details = {
-        "user_text": "帮我查一下今天德国法兰克福的天气",
-        "metadata": {"channel": "wecom"},
-    }
+    details = {"metadata": {"channel": "wecom"}}
     reply = """今天（**2026年7月17日**）德国法兰克福天气：
 • **当前：**多云，约 **20°C**
 • **全天：**约 **18–28°C**
-• **上午：**多云间晴，逐渐升温
-• **下午：**可能有雷阵雨，尤其约 **15:00–16:00**
-• **晚上：**约 **20–22°C**，晚间仍可能有雷雨
 外出建议携带雨伞，穿透气夏装，并留意临时雷雨。
 MEDIA: https://hydwang.xyz/media/weather"""
 
-    out = bridge.deliver_wecom_media_cards(reply, details)
+    out = bridge.deliver_wecom_response_url_reply(reply, details)
 
-    assert out.startswith("```json\n")
-    assert out.count("```json") == 1
     assert "**" not in out
-    assert "MEDIA:" not in out
-    card = json.loads(out.split("```json\n", 1)[1].split("\n```", 1)[0])
-    assert card["main_title"] == {
-        "title": "天气详情",
-        "desc": "今天（2026年7月17日）德国法兰克福天气：",
-    }
-    assert card["horizontal_content_list"][0] == {
-        "type": 0,
-        "keyname": "当前",
-        "value": "多云，约 20°C",
-    }
-    assert card["horizontal_content_list"][-1]["keyname"] == "晚上"
-    assert card["vertical_content_list"] == [
-        {"title": "补充说明", "desc": "外出建议携带雨伞，穿透气夏装，并留意临时雷雨。"}
-    ]
+    assert "• 当前：多云，约 20°C" in out
+    assert out.endswith("MEDIA: https://hydwang.xyz/media/weather")
 
 
-def test_wecom_multiple_media_urls_stay_in_one_card():
+def test_wecom_response_url_reply_drops_pipe_table_source():
     bridge = load_bridge()
     details = {"metadata": {"channel": "wecom"}}
 
-    out = bridge.deliver_wecom_media_cards(
-        "MEDIA: https://h/one\nMEDIA: https://h/two\nMEDIA: https://h/three", details
+    out = bridge.deliver_wecom_response_url_reply(
+        "| Time | Weather |\n| --- | --- |\n| 7 am | Cloudy |\n适合穿薄外套\n"
+        "MEDIA: https://h/weather",
+        details,
     )
 
-    assert out.count("```json") == 1
-    card = json.loads(out.split("```json\n", 1)[1].split("\n```", 1)[0])
-    assert card["card_image"]["url"] == "https://h/one"
-    assert card["jump_list"] == [
-        {"type": 1, "title": "查看图片 2", "url": "https://h/two"},
-        {"type": 1, "title": "查看图片 3", "url": "https://h/three"},
-    ]
+    assert "Time" not in out
+    assert out == "适合穿薄外套\nMEDIA: https://h/weather"
 
 
-def test_wecom_weather_facts_without_colons_keep_native_rows():
+def test_wecom_response_url_reply_limits_media_to_four():
     bridge = load_bridge()
-    details = {
-        "user_text": "帮我查一下今天德国法兰克福的天气",
-        "metadata": {"channel": "wecom"},
-    }
-    reply = """今天（2026年7月17日）德国法兰克福天气：
-• 当前多云，约 18°C
-• 全天约 18–28°C
-• 上午多云间晴，逐渐升温
-• 下午 15:00–16:00 左右可能有雷阵雨
-• 晚间约 20–23°C，局部仍可能有雷雨
-外出建议穿透气夏装，并携带雨具。
-MEDIA: https://hydwang.xyz/media/weather"""
+    details = {"metadata": {"channel": "wecom"}}
+    reply = "\n".join(f"MEDIA: https://h/{index}" for index in range(6))
 
-    out = bridge.deliver_wecom_media_cards(reply, details)
-    card = json.loads(out.split("```json\n", 1)[1].split("\n```", 1)[0])
+    out = bridge.deliver_wecom_response_url_reply(reply, details)
 
-    assert [item["keyname"] for item in card["horizontal_content_list"]] == [
-        "当前",
-        "全天",
-        "上午",
-        "下午",
-        "晚间",
-    ]
-    assert card["horizontal_content_list"][3]["value"] == "15:00–16:00 左右可能有雷阵雨"
-    assert card["vertical_content_list"] == [
-        {"title": "补充说明", "desc": "外出建议穿透气夏装，并携带雨具。"}
-    ]
+    assert out.count("MEDIA:") == 4
+    assert "https://h/3" in out
+    assert "https://h/4" not in out
 
 
-def test_wecom_media_card_skips_other_channels():
+def test_wecom_response_url_reply_skips_other_channels():
     bridge = load_bridge()
     reply = "MEDIA: https://hydwang.xyz/media/image-3"
 
-    assert bridge.deliver_wecom_media_cards(reply, {"metadata": {"channel": "wechat"}}) == reply
+    assert bridge.deliver_wecom_response_url_reply(
+        reply, {"metadata": {"channel": "wechat"}}
+    ) == reply
