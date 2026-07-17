@@ -3203,7 +3203,12 @@ def _wecom_card_caption_fields(caption: str) -> tuple[str, list[dict[str, Any]],
         line = _wecom_card_plain_text(raw_line)
         if not line:
             continue
-        match = re.match(r"^[•·\-]\s*([^：:]{1,12})[：:]\s*(.+)$", line)
+        # Weather widgets vary between "• 当前：多云" and "• 当前多云".
+        # Match the known labels first so a time such as "下午 15:00" is not
+        # mistaken for a key named "下午 15".
+        match = re.match(r"^[•·\-]\s*(当前|全天|上午|下午|晚上|晚间)\s*[：:]?\s*(.+)$", line)
+        if not match:
+            match = re.match(r"^[•·\-]\s*([^：:]{1,5})[：:]\s*(.+)$", line)
         if match and len(facts) < 6:
             key = match.group(1).strip()[:5]
             value = match.group(2).strip()

@@ -156,6 +156,37 @@ def test_wecom_multiple_media_urls_stay_in_one_card():
     ]
 
 
+def test_wecom_weather_facts_without_colons_keep_native_rows():
+    bridge = load_bridge()
+    details = {
+        "user_text": "帮我查一下今天德国法兰克福的天气",
+        "metadata": {"channel": "wecom"},
+    }
+    reply = """今天（2026年7月17日）德国法兰克福天气：
+• 当前多云，约 18°C
+• 全天约 18–28°C
+• 上午多云间晴，逐渐升温
+• 下午 15:00–16:00 左右可能有雷阵雨
+• 晚间约 20–23°C，局部仍可能有雷雨
+外出建议穿透气夏装，并携带雨具。
+MEDIA: https://hydwang.xyz/media/weather"""
+
+    out = bridge.deliver_wecom_media_cards(reply, details)
+    card = json.loads(out.split("```json\n", 1)[1].split("\n```", 1)[0])
+
+    assert [item["keyname"] for item in card["horizontal_content_list"]] == [
+        "当前",
+        "全天",
+        "上午",
+        "下午",
+        "晚间",
+    ]
+    assert card["horizontal_content_list"][3]["value"] == "15:00–16:00 左右可能有雷阵雨"
+    assert card["vertical_content_list"] == [
+        {"title": "补充说明", "desc": "外出建议穿透气夏装，并携带雨具。"}
+    ]
+
+
 def test_wecom_media_card_skips_other_channels():
     bridge = load_bridge()
     reply = "MEDIA: https://hydwang.xyz/media/image-3"
