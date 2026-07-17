@@ -3158,29 +3158,6 @@ def _clean_wecom_media_caption(text: str) -> str:
     return "\n".join(lines).strip()
 
 
-def _wecom_media_card_heading(details: dict[str, Any], caption: str) -> str:
-    """Choose a concise business heading instead of labelling every screenshot
-    as an AI-generated image.  Prefer the user's intent because widget captions
-    may begin with English provider text (for example a weather card)."""
-    prompt = str(details.get("user_text") or "").strip().lower()
-    asks_weather = bool(re.search(r"天气|气温|温度|降雨|下雨|weather", prompt))
-    asks_clothing = bool(re.search(r"穿衣|穿什么|衣服|穿搭|搭配", prompt))
-    if asks_weather and asks_clothing:
-        return "天气与穿衣建议"
-    if asks_weather:
-        return "天气详情"
-    if asks_clothing:
-        return "穿衣建议"
-    if re.search(r"图片|生成图|配图|海报|画一|画个|image", prompt):
-        return "图片已生成"
-    first_line = next((line.strip() for line in caption.splitlines() if line.strip()), "")
-    first_line = re.sub(r"^[#>*_`~\-\s]+|[*_`~]+$", "", first_line).strip()
-    if first_line:
-        title = first_line if len(first_line) <= 24 else first_line[:23] + "…"
-        return title
-    return "图片已生成"
-
-
 def _wecom_card_plain_text(text: str) -> str:
     text = re.sub(r"!\[([^]]*)\]\([^)]+\)", r"\1", text or "")
     text = re.sub(r"\[([^]]+)\]\([^)]+\)", r"\1", text)
@@ -3189,73 +3166,40 @@ def _wecom_card_plain_text(text: str) -> str:
     return re.sub(r"[ \t]+", " ", text).strip()
 
 
-def _wecom_card_caption_fields(caption: str) -> tuple[str, list[dict[str, Any]], list[dict[str, str]]]:
-    """Shape ChatGPT markdown into fields rendered natively by news_notice.
+def _wecom_response_url_text(text: str) -> str:
+    """Render ChatGPT markdown as readable WeCom stream text.
 
-    WeCom replyStream is plain text and shows markdown markers literally.  Card
-    fields are plain text too, so remove markdown and map bullet facts into the
-    card's structured rows instead of sending a second text message.
+    response_url streams show markdown punctuation literally. Widget/table
+    visuals are delivered as inline images, so their pipe-table source is
+    removed instead of being flattened into unreadable text.
     """
-    summary = ""
-    facts: list[dict[str, Any]] = []
-    paragraphs: list[str] = []
-    for raw_line in (caption or "").splitlines():
+    lines: list[str] = []
+    for raw_line in (text or "").splitlines():
+        stripped = raw_line.strip()
+        if stripped.startswith("```"):
+            continue
+        if stripped.count("|") >= 2 or re.fullmatch(r"[|:\-\s]+", stripped or "x"):
+            continue
         line = _wecom_card_plain_text(raw_line)
         if not line:
+            if lines and lines[-1]:
+                lines.append("")
             continue
-        # Weather widgets vary between "• 当前：多云" and "• 当前多云".
-        # Match the known labels first so a time such as "下午 15:00" is not
-        # mistaken for a key named "下午 15".
-        match = re.match(r"^[•·\-]\s*(当前|全天|上午|下午|晚上|晚间)\s*[：:]?\s*(.+)$", line)
-        if not match:
-            match = re.match(r"^[•·\-]\s*([^：:]{1,5})[：:]\s*(.+)$", line)
-        if match and len(facts) < 6:
-            key = match.group(1).strip()[:5]
-            value = match.group(2).strip()
-            facts.append({"type": 0, "keyname": key, "value": value[:26]})
-        elif not summary:
-            summary = line[:30]
-        else:
-            paragraphs.append(line)
-    vertical: list[dict[str, str]] = []
-    if paragraphs:
-        advice = " ".join(paragraphs)
-        vertical.append({"title": "补充说明", "desc": advice[:112]})
-    return summary, facts, vertical
+        line = re.sub(r"^[\-•·]\s*", "• ", line)
+        lines.append(line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
-def deliver_wecom_media_cards(reply: str, details: dict[str, Any]) -> str:
-    """Convert all ``MEDIA:`` images to ONE self-contained WeCom news card."""
+def deliver_wecom_response_url_reply(reply: str, details: dict[str, Any]) -> str:
+    """Keep all visible text and MEDIA markers for one response_url stream."""
     metadata = details.get("metadata") or {}
     if metadata.get("channel") != "wecom":
         return reply
     body, urls = split_media_markers(reply)
-    if not urls:
-        return reply
     caption = _clean_wecom_media_caption(body)
-    title = _wecom_media_card_heading(details, caption)
-    summary, facts, vertical = _wecom_card_caption_fields(caption)
-    now = time.time_ns()
-    card: dict[str, Any] = {
-        "card_type": "news_notice",
-        "source": {"desc": "统一 AI 助手", "desc_color": 0},
-        "main_title": {"title": title, "desc": summary or "点击卡片查看详情"},
-        "card_image": {"url": urls[0], "aspect_ratio": 1.3},
-        "card_action": {"type": 1, "url": urls[0]},
-        "task_id": f"task_ai_reply_{now}",
-    }
-    if facts:
-        card["horizontal_content_list"] = facts
-    if vertical:
-        card["vertical_content_list"] = vertical
-    if len(urls) > 1:
-        card["jump_list"] = [
-            {"type": 1, "title": f"查看图片 {index + 2}", "url": url}
-            for index, url in enumerate(urls[1:4])
-        ]
-    # Card-only output is intentional: the official plugin sends text through a
-    # separate replyStream bubble.  All visible content now lives in this card.
-    return "```json\n" + json.dumps(card, ensure_ascii=False) + "\n```"
+    parts = [_wecom_response_url_text(caption)] if caption else []
+    parts.extend(f"MEDIA: {url}" for url in urls[:4])
+    return "\n".join(part for part in parts if part).strip()
 
 
 def deliver_feishu_files(reply: str, details: dict[str, Any]) -> str:
@@ -3545,7 +3489,7 @@ def build_reply(body: dict[str, Any]) -> str:
             if response_metadata:
                 write_details.setdefault("metadata", {}).update(response_metadata)
             reply = deliver_feishu_files(reply, write_details)
-            reply = deliver_wecom_media_cards(reply, write_details)
+            reply = deliver_wecom_response_url_reply(reply, write_details)
             reply = deliver_feishu_media(reply, write_details)
             reply = deliver_feishu_text_card(reply, write_details)
             reply = finalize_placeholder(reply, write_details)
