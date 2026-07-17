@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hmac
+import json
 import os
 import re
+import urllib.request
 from contextlib import closing
 from typing import Any
 
@@ -120,3 +122,75 @@ def report_versions(body: VersionReport, _: None = Depends(_require_report_token
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"version report write failed: {type(exc).__name__}") from exc
     return {"ok": True, "device": body.device, "count": len(body.containers)}
+
+
+_UA = {"User-Agent": "aliecs-version-inventory/1.0"}
+
+
+def fetch_github_latest(ref: str, opener=urllib.request.urlopen) -> tuple[str | None, str | None]:
+    try:
+        req = urllib.request.Request(f"https://api.github.com/repos/{ref}/releases/latest", headers=_UA)
+        with opener(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+        return data.get("tag_name"), data.get("html_url")
+    except Exception:
+        return None, None
+
+
+def fetch_dockerhub_latest(ref: str, pattern: str | None,
+                           opener=urllib.request.urlopen) -> tuple[str | None, str | None]:
+    try:
+        req = urllib.request.Request(
+            f"https://hub.docker.com/v2/repositories/{ref}/tags?page_size=100&ordering=last_updated",
+            headers=_UA)
+        with opener(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+        rx = re.compile(pattern) if pattern else None
+        best = None
+        for t in data.get("results", []):
+            name = t.get("name", "")
+            if name == "latest" or (rx and not rx.search(name)):
+                continue
+            if not re.match(r"^[0-9]", normalize_version(name)):
+                continue
+            if best is None or compare_versions(name, best) > 0:
+                best = name
+        url = f"https://hub.docker.com/_/{ref.split('/')[-1]}?tab=tags"
+        return best, (url if best else None)
+    except Exception:
+        return None, None
+
+
+@router.post("/v1/internal/versions/refresh-upstream")
+def refresh_upstream(_: None = Depends(_require_report_token)) -> dict[str, Any]:
+    checked = 0
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT component_key, upstream_source, upstream_ref, version_pattern "
+                "FROM version_components WHERE active AND upstream_source <> 'none'"
+            )
+            rows = cur.fetchall()
+        for key, source, ref, pattern in rows:
+            latest, url, status, err = None, None, "ok", None
+            try:
+                if source == "github-release":
+                    latest, url = fetch_github_latest(ref)
+                elif source == "dockerhub":
+                    latest, url = fetch_dockerhub_latest(ref, pattern)
+                if latest is None:
+                    status, err = "error", "no upstream version resolved"
+            except Exception as exc:
+                status, err = "error", type(exc).__name__
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO version_upstream_state(component_key, latest_version, release_url, "
+                    "checked_at, check_status, check_error) VALUES (%s, %s, %s, NOW(), %s, %s) "
+                    "ON CONFLICT (component_key) DO UPDATE SET latest_version=EXCLUDED.latest_version, "
+                    "release_url=EXCLUDED.release_url, checked_at=NOW(), "
+                    "check_status=EXCLUDED.check_status, check_error=EXCLUDED.check_error",
+                    (key, normalize_version(latest) if latest else None, url, status, err),
+                )
+            checked += 1
+        conn.commit()
+    return {"ok": True, "checked": checked}
