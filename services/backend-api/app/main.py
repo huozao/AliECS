@@ -18,6 +18,7 @@ from app.routers.exports import router as exports_router
 from app.routers.miniapp_accounts import router as miniapp_accounts_router
 from app.routers.ops import router as ops_router
 from app.routers.backups import router as backups_router
+from app.routers.versions import router as versions_router
 from app.routers.recipes import router as recipes_router
 from app.routers.quality_reports import router as quality_reports_router
 from app.routers.system_config import router as system_config_router
@@ -30,6 +31,7 @@ app = FastAPI(title="AliECS Backend API", version="0.4.0")
 app.include_router(webhooks_router)
 app.include_router(ops_router)
 app.include_router(backups_router)
+app.include_router(versions_router)
 app.include_router(auth_admin_router)
 app.include_router(auth_oidc_router)
 app.include_router(recipes_router)

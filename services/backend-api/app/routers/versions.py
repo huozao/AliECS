@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
+import hmac
+import os
 import re
+from contextlib import closing
+from typing import Any
+
+from fastapi import APIRouter, Depends, Header, HTTPException
+from psycopg.types.json import Jsonb
+from pydantic import BaseModel, Field
+
+from app.core import _conn, require_admin
 
 _V_PREFIX = re.compile(r"^(refs/tags/)?v", re.I)
 _SUFFIX = re.compile(r"-(alpine|bookworm|slim|debian|distroless).*$", re.I)
@@ -62,3 +72,51 @@ def classify_component(*, family: str, upstream_source: str,
     if not latest:
         return "pinned"
     return "behind" if compare_versions(current, latest) < 0 else "current"
+
+
+router = APIRouter()
+
+
+class ContainerReport(BaseModel):
+    image: str = Field(min_length=1, max_length=300)
+    tag: str | None = Field(default=None, max_length=200)
+    digest: str | None = Field(default=None, max_length=200)
+
+
+class VersionReport(BaseModel):
+    device: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,40}$")
+    containers: list[ContainerReport] = Field(default_factory=list, max_length=200)
+    apt: dict[str, int] = Field(default_factory=dict)
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+def _require_report_token(x_backup_report_token: str | None = Header(default=None)) -> None:
+    expected = os.getenv("BACKUP_REPORT_TOKEN", "").strip()
+    supplied = (x_backup_report_token or "").strip()
+    if not expected or not supplied or not hmac.compare_digest(expected, supplied):
+        raise HTTPException(status_code=401, detail="invalid report token")
+
+
+@router.post("/v1/internal/versions/report")
+def report_versions(body: VersionReport, _: None = Depends(_require_report_token)) -> dict[str, Any]:
+    try:
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM version_reports WHERE device = %s", (body.device,))
+                for c in body.containers:
+                    cur.execute(
+                        "INSERT INTO version_reports(device, image, tag, digest, extra_json) "
+                        "VALUES (%s, %s, %s, %s, %s)",
+                        (body.device, c.image, c.tag, c.digest, Jsonb({})),
+                    )
+                # apt 汇总 + extra（openclaw 版本等）作为一条 apt-summary 记录
+                cur.execute(
+                    "INSERT INTO version_reports(device, image, tag, digest, extra_json) "
+                    "VALUES (%s, %s, %s, %s, %s)",
+                    (body.device, "apt-summary", None, None,
+                     Jsonb({"apt": body.apt, **body.extra})),
+                )
+            conn.commit()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"version report write failed: {type(exc).__name__}") from exc
+    return {"ok": True, "device": body.device, "count": len(body.containers)}
