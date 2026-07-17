@@ -3158,6 +3158,26 @@ def _clean_wecom_media_caption(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _wecom_media_card_heading(details: dict[str, Any], caption: str) -> tuple[str, str]:
+    """Choose a concise business heading instead of labelling every screenshot
+    as an AI-generated image.  Prefer the user's intent because widget captions
+    may begin with English provider text (for example a weather card)."""
+    prompt = str(details.get("user_text") or "").strip()
+    intent = f"{prompt}\n{caption}".lower()
+    if re.search(r"穿衣|穿什么|衣服|穿搭|搭配", intent):
+        return "穿衣建议", "点击卡片查看穿搭详情"
+    if re.search(r"天气|气温|温度|降雨|下雨|weather", intent):
+        return "天气详情", "点击卡片查看天气详情"
+    if re.search(r"图片|生成图|配图|海报|画一|画个|image", prompt.lower()):
+        return "图片已生成", "点击卡片查看原图"
+    first_line = next((line.strip() for line in caption.splitlines() if line.strip()), "")
+    first_line = re.sub(r"^[#>*_`~\-\s]+|[*_`~]+$", "", first_line).strip()
+    if first_line:
+        title = first_line if len(first_line) <= 24 else first_line[:23] + "…"
+        return title, "点击卡片查看详情"
+    return "图片已生成", "点击卡片查看原图"
+
+
 def deliver_wecom_media_cards(reply: str, details: dict[str, Any]) -> str:
     """Convert ``MEDIA:`` images to official WeCom ``news_notice`` cards."""
     metadata = details.get("metadata") or {}
@@ -3168,12 +3188,13 @@ def deliver_wecom_media_cards(reply: str, details: dict[str, Any]) -> str:
         return reply
     caption = _clean_wecom_media_caption(body)
     parts = [caption] if caption else []
+    title, description = _wecom_media_card_heading(details, caption)
     now = time.time_ns()
     for index, url in enumerate(urls):
         card = {
             "card_type": "news_notice",
             "source": {"desc": "统一 AI 助手", "desc_color": 0},
-            "main_title": {"title": "图片已生成", "desc": "点击卡片查看原图"},
+            "main_title": {"title": title, "desc": description},
             "card_image": {"url": url, "aspect_ratio": 1.3},
             "card_action": {"type": 1, "url": url},
             "task_id": f"task_ai_image_{now}_{index}",

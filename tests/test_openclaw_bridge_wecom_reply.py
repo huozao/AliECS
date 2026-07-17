@@ -69,6 +69,36 @@ def test_wecom_media_card_keeps_visible_caption_as_stream_text():
     assert out.startswith("穿衣建议如下\n\n```json")
 
 
+def test_wecom_weather_widget_uses_semantic_card_heading():
+    bridge = load_bridge()
+    details = {
+        "user_text": "帮我查一下今天英国伦敦的天气",
+        "metadata": {"channel": "wecom"},
+    }
+
+    out = bridge.deliver_wecom_media_cards(
+        "Currently 67° · Mostly clear\nMEDIA: https://hydwang.xyz/media/weather", details
+    )
+
+    card = json.loads(out.split("```json\n", 1)[1].split("\n```", 1)[0])
+    assert card["main_title"] == {"title": "天气详情", "desc": "点击卡片查看天气详情"}
+
+
+def test_wecom_clothing_widget_uses_semantic_card_heading():
+    bridge = load_bridge()
+    details = {
+        "user_text": "明天适合穿什么衣服",
+        "metadata": {"channel": "wecom"},
+    }
+
+    out = bridge.deliver_wecom_media_cards(
+        "穿衣建议如下\nMEDIA: https://hydwang.xyz/media/outfit", details
+    )
+
+    card = json.loads(out.split("```json\n", 1)[1].split("\n```", 1)[0])
+    assert card["main_title"] == {"title": "穿衣建议", "desc": "点击卡片查看穿搭详情"}
+
+
 def test_wecom_media_card_skips_other_channels():
     bridge = load_bridge()
     reply = "MEDIA: https://hydwang.xyz/media/image-3"
