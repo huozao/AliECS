@@ -268,3 +268,84 @@ def ops_versions(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
                                "checked_at": r[3].isoformat() if r[3] else None,
                                "check_status": r[4], "check_error": r[5]} for r in cur.fetchall()}
     return build_inventory(reports, comps, upstream)
+
+
+def render_digest_text(inventory: dict, stale_devices: list[str]) -> str:
+    behind, mismatch, unregistered = [], [], []
+    for d in inventory.get("devices", []):
+        for c in d["components"]:
+            line = f"  · {d['device']}/{c['name']}：{c.get('current')} → {c.get('latest')}"
+            if c["status"] == "behind":
+                behind.append(line + (f"（{c['release_url']}）" if c.get("release_url") else ""))
+            elif c["status"] == "own-mismatch":
+                mismatch.append(f"  · {c['name']}：{d['device']} tag={c.get('current')}")
+            elif c["status"] == "unregistered":
+                unregistered.append(f"  · {d['device']}/{c['name']}={c.get('current')}")
+    parts = ["📦 每周版本巡检"]
+    if behind:
+        parts.append("🔴 有新版本可用：\n" + "\n".join(behind))
+    if mismatch:
+        parts.append("🟠 自家镜像跨设备 tag 不一致：\n" + "\n".join(mismatch))
+    if unregistered:
+        parts.append("⚠️ 未登记镜像（新部署？请补进组件表）：\n" + "\n".join(unregistered))
+    if stale_devices:
+        parts.append("⛔ 采集未上报（管道可能故障）：" + "、".join(stale_devices))
+    if len(parts) == 1:
+        total = sum(len(d["components"]) for d in inventory.get("devices", []))
+        parts.append(f"✅ 全部最新，{total} 个组件已核对。")
+    return "\n\n".join(parts)
+
+
+def send_feishu_text(receive_id: str, text: str, *, app_id: str, app_secret: str,
+                     opener=urllib.request.urlopen) -> bool:
+    if not (app_id and app_secret and receive_id):
+        return False
+    try:
+        tok_req = urllib.request.Request(
+            "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+            data=json.dumps({"app_id": app_id, "app_secret": app_secret}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        with opener(tok_req, timeout=15) as resp:
+            token = json.loads(resp.read().decode()).get("tenant_access_token")
+        if not token:
+            return False
+        msg_req = urllib.request.Request(
+            "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
+            data=json.dumps({"receive_id": receive_id, "msg_type": "text",
+                             "content": json.dumps({"text": text})}).encode(),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+            method="POST")
+        with opener(msg_req, timeout=15) as resp:
+            return json.loads(resp.read().decode()).get("code") == 0
+    except Exception:
+        return False
+
+
+@router.post("/v1/internal/versions/weekly-digest")
+def weekly_digest(_: None = Depends(_require_report_token)) -> dict[str, Any]:
+    from datetime import datetime, timedelta, timezone
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT component_key, display_name, kind, match_images, devices, "
+                        "upstream_source, upstream_ref, version_pattern, pin_note, family "
+                        "FROM version_components WHERE active ORDER BY sort_order")
+            comps = [dict(zip(
+                ["component_key", "display_name", "kind", "match_images", "devices",
+                 "upstream_source", "upstream_ref", "version_pattern", "pin_note", "family"], row))
+                for row in cur.fetchall()]
+            cur.execute("SELECT device, image, tag, digest, extra_json FROM version_reports")
+            reports = [{"device": r[0], "image": r[1], "tag": r[2], "digest": r[3],
+                        "extra": r[4] or {}} for r in cur.fetchall()]
+            cur.execute("SELECT component_key, latest_version, release_url FROM version_upstream_state")
+            upstream = {r[0]: {"latest_version": r[1], "release_url": r[2]} for r in cur.fetchall()}
+            cur.execute("SELECT device, MAX(reported_at) FROM version_reports GROUP BY device")
+            seen = {r[0]: r[1] for r in cur.fetchall()}
+    inv = build_inventory(reports, comps, upstream)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+    expected = {"aliecs", "webdock1", "webdock2"}
+    stale = sorted(d for d in expected if d not in seen or (seen[d] and seen[d] < cutoff))
+    text = render_digest_text(inv, stale)
+    sent = send_feishu_text(
+        os.getenv("VERSION_DIGEST_FEISHU_RECEIVE_ID", ""), text,
+        app_id=os.getenv("FEISHU_APP_ID", ""), app_secret=os.getenv("FEISHU_APP_SECRET", ""))
+    return {"ok": True, "sent": sent, "stale": stale}
