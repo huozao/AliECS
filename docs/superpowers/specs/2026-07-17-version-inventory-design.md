@@ -94,7 +94,7 @@ version_upstream_state (      -- 对比面
 
 ## 周报（飞书）
 
-- backend 直发：飞书 `im/v1/messages`，`receive_id` 来自新 env `VERSION_DIGEST_FEISHU_RECEIVE_ID`；凭据复用 sops 中现有 FEISHU_APP_ID/SECRET（新增到 backend 的 env 渲染）。
+- backend 直发：飞书 `im/v1/messages`，`receive_id` 来自新 env `VERSION_DIGEST_FEISHU_RECEIVE_ID`；应用凭据用**独立 env 名** `VERSION_DIGEST_FEISHU_APP_ID`/`VERSION_DIGEST_FEISHU_APP_SECRET`（值可复用现有飞书自建应用凭据，但不共用 `FEISHU_APP_ID` 变量名——deploy.sh 的 legacy openclaw fallback 会 `source /root/openclaw/.env` 静默覆盖 `FEISHU_APP_ID`，实现时已避开，见 Task 7 修复）。
 - ⚠️ backend 加 env 三处接线：sops `aliecs.enc.env` → release-meta.env 渲染 → deploy.sh heredoc → compose 映射（2026-07-13 踩过丢键坑，实施计划里逐处列出）。
 - 触发：aliecs systemd timer 每周一 09:00 CST curl 内部端点（与 refresh-upstream timer 同模式）。digest 前先跑一次 refresh-upstream 保证数据新鲜。
 
