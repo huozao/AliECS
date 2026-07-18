@@ -60,7 +60,22 @@
 2. 不得提交真实生产密钥、密码、token、私钥。
 3. 变量缺失时，代码应给出明确报错或降级行为，避免静默失败。
 
-## 5. Chanjet webhook gateway
+## 5. WeChat Customer Service API
+
+| Variable | Scope | Purpose | Required |
+|---|---|---|---|
+| `WECOM_KF_CORP_ID` | backend-api | CorpID used for callback receive-id verification and gettoken | Optional; deploy defaults to `WECOM_COMPANY_B_CORP_ID` |
+| `WECOM_KF_APP_SECRET` | backend-api | Secret of the self-built app authorized under WeChat Customer Service | Optional; deploy defaults to `WECOM_COMPANY_B_APP_SECRET` |
+| `WECOM_KF_CALLBACK_TOKEN` | backend-api | Static callback signature token configured in the management console | Optional; deploy defaults to `WECOM_COMPANY_B_CALLBACK_TOKEN` |
+| `WECOM_KF_CALLBACK_AES_KEY` | backend-api | 43-character callback EncodingAESKey | Optional; deploy defaults to `WECOM_COMPANY_B_CALLBACK_AESKEY` |
+| `WECOM_KF_API_TIMEOUT_SECONDS` | backend-api | Timeout for WeCom API calls | Optional, default 10 |
+| `WECOM_KF_PROCESSOR_URL` | backend-api | OpenAI-compatible local processor; empty means echo | Optional; production deploy defaults to local bridge |
+| `WECOM_KF_PROCESSOR_TIMEOUT_SECONDS` | backend-api | Timeout for the optional processor | Optional, default 1260 |
+
+The callback's dynamic XML `Token` is a short-lived `sync_msg` token and is not
+the same value as `WECOM_KF_CALLBACK_TOKEN`. Never persist either token in logs.
+
+## 6. Chanjet webhook gateway
 
 | Variable | Scope | Purpose | Required |
 |---|---|---|---|
@@ -72,7 +87,7 @@
 
 Do not commit real AppKey, AppSecret, AES key, appTicket, certificate, auth code, refresh token, or openToken.
 
-## 6. T+ sync worker
+## 7. T+ sync worker
 
 | Variable | Scope | Purpose | Required |
 |---|---|---|---|
@@ -89,7 +104,7 @@ Production stores worker output in Docker volumes mounted at `/app/data` and `/a
 The current long-running worker scope is verified read-only `QueryPage` sync for BOM, inventory, and partner records. Other T+ modules must be added only after confirming their official read-only endpoints.
 Homepage manual recipe sync only writes a request file for the BOM worker path. The worker consumes it by running `job_sync_bom`, whose default BOM sync queries both enabled and disabled BOM rows.
 
-## 7. Ops Health
+## 8. Ops Health
 
 | Variable | Scope | Purpose | Required |
 |---|---|---|---|
@@ -106,7 +121,7 @@ Default WebDock health targets use the ECS-side SSH tunnel host alias `host.dock
 | `WEBDOCK_TUNNEL_PROXY_TARGET_PORT` | ECS deploy host | Local reverse SSH tunnel port, normally `11800`. | Optional |
 | `WEBDOCK_TUNNEL_PROXY_BACKLOG` | ECS deploy host | TCP listen backlog for the local proxy. | Optional |
 
-## 8. Recipe query API
+## 9. Recipe query API
 
 | Variable | Scope | Purpose | Required |
 |---|---|---|---|
@@ -117,7 +132,7 @@ Default WebDock health targets use the ECS-side SSH tunnel host alias `host.dock
 
 `backend-api` mounts the T+ worker output volume read-only. Confirmed reconciliation files are written to `RECIPE_ACTIVE_BOM_DIR` and are preferred by recipe query before the raw worker output. Query outputs are generated per request and should be treated as temporary files, not source data.
 
-## 9. Feishu full sync worker
+## 10. Feishu full sync worker
 
 | Variable | Scope | Purpose | Required |
 |---|---|---|---|

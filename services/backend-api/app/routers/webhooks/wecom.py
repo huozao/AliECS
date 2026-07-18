@@ -2,10 +2,26 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Query, Request
+from fastapi.responses import PlainTextResponse
+
+from app.integrations.wecom_kf import (
+    WeComKfConfig,
+    WeComKfError,
+    crypto_for_config,
+    handle_notification,
+    parse_kf_notification,
+)
 
 
 router = APIRouter(prefix="/v1/webhooks", tags=["webhooks"])
+
+
+def _load_kf_config() -> WeComKfConfig:
+    try:
+        return WeComKfConfig.from_env()
+    except WeComKfError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.post("/wecom")
@@ -16,3 +32,42 @@ def receive_wecom_webhook(payload: dict[str, Any] = Body(default_factory=dict)) 
         "mode": "placeholder",
         "received_keys": sorted(payload.keys()),
     }
+
+
+@router.get("/wecom-kf", response_class=PlainTextResponse)
+def verify_wecom_kf_url(
+    msg_signature: str = Query(...),
+    timestamp: str = Query(...),
+    nonce: str = Query(...),
+    echostr: str = Query(...),
+) -> PlainTextResponse:
+    try:
+        config = _load_kf_config()
+        plain = crypto_for_config(config).decrypt_url_echo(
+            msg_signature, timestamp, nonce, echostr
+        )
+        return PlainTextResponse(plain)
+    except WeComKfError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/wecom-kf", response_class=PlainTextResponse)
+async def receive_wecom_kf_callback(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    msg_signature: str = Query(...),
+    timestamp: str = Query(...),
+    nonce: str = Query(...),
+) -> PlainTextResponse:
+    try:
+        config = _load_kf_config()
+        plain_xml = crypto_for_config(config).decrypt_callback(
+            msg_signature, timestamp, nonce, await request.body()
+        )
+        notification = parse_kf_notification(plain_xml)
+    except WeComKfError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if notification is not None:
+        background_tasks.add_task(handle_notification, notification, config)
+    return PlainTextResponse("success")
