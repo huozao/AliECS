@@ -101,12 +101,18 @@ bridge/openclaw 容器
 
 ## 新增设备流程
 
-1. 按"角色+序号"起逻辑名（如 `webdock3`）。
-2. tailscale 机器名、ssh alias 与逻辑名一致（写入 devbox `~/.ssh/config`）。
-3. 在本文档"设备档案"复制一节模板，填全 7 项：别名 / 硬件与OS / 运行什么 / 隧道与端口 / 部署方式 / 日志位置 / 验证命令。
-4. 更新"设备总表"和工作区根 `AGENTS.md` 的简表。
-5. 若接入 webdock 主备池：在新机建反向隧道 unit（分配新 118xx 端口），并按需更新 `/etc/default/webdock-failover-proxy`（含 `*_NAME` 设备名两行）。
-6. ⚠️ webdock 节点必须初始化 `browser_data/runtime.json`（从现有节点复制：`media_base_url` + 三个超时参数）。缺 `media_base_url` 时飞书出图/表格截图整条链路静默失效（2026-07-02 webdock2 踩坑）。
+权威剧本：infra 仓 `roles/webdock/README.md`（机型化装机，2026-07-19 起；按机型 linux-native /
+windows-wsl 分叉，设备参数集中在 infra `config/devices/<name>.env`）。本文只保留原则：
+
+1. 逻辑名=角色+序号；tailscale 机器名、ssh alias 与逻辑名一致（写入 devbox `~/.ssh/config`）。
+2. 端口分配查 infra `roles/webdock/README.md` 端口分配表，先登记后使用（16101=devbox 已占）。
+3. 装机完成后：本文档"设备档案"按 7 项模板补一节（别名 / 硬件与OS / 运行什么 / 隧道与端口 /
+   部署方式 / 日志位置 / 验证命令）+ 更新"设备总表" + 工作区根 `AGENTS.md` 简表。
+4. 若接入 webdock 主备池：按需更新 `/etc/default/webdock-failover-proxy`（含 `*_NAME` 设备名两行）。
+   ⚠️ 池仅 PRIMARY/STANDBY 两槽，且 proxy 脚本目前不在 git（infra spec 2026-07-18 §10 记录在案）。
+5. ⚠️ webdock 节点必须初始化 `browser_data/runtime.json`（从现有节点复制：`media_base_url` +
+   三个超时参数）。缺 `media_base_url` 时飞书出图/表格截图整条链路静默失效（2026-07-02 webdock2 踩坑）。
+   ChatGPT 登录必须人工（红线）。
 
 ## 已知遗留问题（记录未处理）
 
