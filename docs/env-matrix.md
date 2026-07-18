@@ -65,7 +65,7 @@
 | Variable | Scope | Purpose | Required |
 |---|---|---|---|
 | `WECOM_KF_CORP_ID` | backend-api | CorpID used for callback receive-id verification and gettoken | Optional; deploy defaults to `WECOM_COMPANY_B_CORP_ID` |
-| `WECOM_KF_APP_SECRET` | backend-api | Secret of the self-built app authorized under WeChat Customer Service | Optional; deploy defaults to `WECOM_COMPANY_B_APP_SECRET` |
+| `WECOM_KF_APP_SECRET` | backend-api | Dedicated Secret shown under WeChat Customer Service internal access | Required; no self-built-app fallback |
 | `WECOM_KF_CALLBACK_TOKEN` | backend-api | Static callback signature token configured in the management console | Optional; deploy defaults to `WECOM_COMPANY_B_CALLBACK_TOKEN` |
 | `WECOM_KF_CALLBACK_AES_KEY` | backend-api | 43-character callback EncodingAESKey | Optional; deploy defaults to `WECOM_COMPANY_B_CALLBACK_AESKEY` |
 | `WECOM_KF_API_TIMEOUT_SECONDS` | backend-api | Timeout for WeCom API calls | Optional, default 10 |
