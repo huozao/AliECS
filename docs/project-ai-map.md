@@ -1,87 +1,71 @@
-# AliECS AI Project Map
+# AliECS AI 项目地图（代码位置版）
 
-AliECS is the server-side business platform in the `AliECS-WebDock` workspace. Do not modify `webdock` unless the task explicitly asks for WebDock, browser login, noVNC, or old-laptop automation work.
+> 给 AI 用：功能名 → 代码位置 → 输入/输出 → 验证方式。功能的人类语义对照见工作区顶层 `功能地图-人类版.md`。默认只改 AliECS；涉及 webdock/infra 见顶层 AGENTS.md 边界。
 
 ## services/backend-api
 
-FastAPI API service. Owns auth/RBAC, admin APIs, webhook gateway, recipe query, and workbook downloads.
+FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/routers/`（拆域见 `docs/backend-api-domains.md`）：
 
-Runtime inputs: Postgres, runtime env, Chanjet webhook events, and read-only T+ worker output mounted under `/app/tplus-output`.
+| router | 功能 |
+|---|---|
+| `recipes.py` | formula 配方查询、成本核算 |
+| `exports.py` | 对比表导出（真 xlsx，`compare_export.py`） |
+| `tplus_bom.py` | BOM builder（写回 T+ 经独立 write-worker） |
+| `auth_admin.py` / `auth_oidc.py` | 本地登录 + SSO(Authelia OIDC) |
+| `miniapp_accounts.py` | 微信小程序账号 |
+| `webhooks/` | 集成 webhook 网关（chanjet、wecom、飞书） |
+| `wecom_assistant.py` | 企微统一助手 |
+| `system_config.py` | 同步调度等系统配置（DB 生效面） |
+| `ops.py` | /v1/ops/*（T+ timeline、sync-config） |
+| `versions.py` | 版本看板 |
+| `backups.py` | 企微结构备份看板、镜像清理策略看板 |
+| `couple.py` | Couple（相册已由 Immich/AdventureLog 接管，此处仅存量） |
 
-Runtime outputs: API responses, temporary recipe query workbooks, webhook event spool files, and Postgres writes.
-
-Do not commit: real env files, tokens, secrets, generated workbooks, event spool files, logs, or business data.
-
-Validation: `python -m unittest AliECS.tests.test_backend_recipes` and backend compile checks.
+输入：Postgres、runtime env、T+ worker 只读输出（`/app/tplus-output`）。
+验证：`python -m unittest discover -s tests`；相关单测 patch 目标=函数所在文件（已拆域）。
 
 ## services/doc-sync-worker
 
-Worker-only sync for WeCom smart sheets and Feishu bitables. It calls external APIs and writes normalized data to Postgres.
-
-Runtime inputs: `WECOM_*`, `WEDOC_*`, `SMARTSHEET_*`, and `FEISHU_*` env vars.
-
-Runtime outputs: `external_sources`, `external_fields`, `external_records`, `sync_runs`, and `sync_requests` updates in Postgres.
-
-Do not commit: WeCom secrets, Feishu app secrets, app tokens, tenant tokens, table data, logs, or local env files.
-
-Validation: `python -m unittest AliECS.tests.test_doc_sync_worker`.
+企微智能表格 + 飞书多维表 → Postgres 的独立 worker。约束必读：`docs/constraints/doc-sync.md`。
+输出表：`external_sources/fields/records`、`sync_runs`、`sync_requests`。
 
 ## services/tplus-sync-worker
 
-Worker-only read sync for Chanjet/T+ OpenAPI. It writes raw JSON and Excel output.
-
-Runtime inputs: `CHANJET_APP_KEY`, `CHANJET_APP_SECRET`, `CHANJET_OPEN_TOKEN`, and sync interval env vars.
-
-Runtime outputs: raw JSON under runtime `data/` and workbooks under runtime `output/`.
-
-Do not commit: `.env`, AppSecret, openToken, raw JSON, generated Excel, logs, or cache folders.
-
-Validation: run compileall and unittest from the worker folder with `PYTHONPATH=src`.
+畅捷通 T+ 只读拉取（BOM/存货/价格）。排障：`docs/runbooks/tplus.md`。
+测试要 `PYTHONPATH="src;."` 且 CI 不覆盖，改动必须本地跑。
 
 ## services/public-web
 
-Public homepage and business entry UI. It shows feature cards, login/register actions, and the recipe query panel.
-
-Runtime inputs: browser local storage auth token and backend API responses.
-
-Runtime outputs: downloaded recipe query workbook files in the browser.
-
-Do not commit: generated downloads, screenshots used only for manual QA, or embedded secrets.
-
-Validation: static JS syntax check plus browser smoke against `http://localhost:8080` when the local stack is running.
+公网首页（纯 nginx 静态）：功能卡片、登录、formula 入口、工具分区（灰分计算器）。
+生产热更新可 `docker cp`；HTML 已加 no-cache 头。验证：JS 语法检查 + 浏览器 smoke。
 
 ## services/admin-ui
 
-Admin UI for users, roles, features, doc-sync status, and manual sync requests.
+管理后台（`index.html` 内联脚本）。改后必须做前端可执行性验证（语法/作用域错误 + 核心入口点击触发网络请求）。
 
-Runtime inputs: admin auth token and backend admin APIs.
+## services/coding-executor / services/mcp-coding-server
 
-Runtime outputs: admin API mutations such as sync request creation and user/role changes.
+MCP 编程路线（OAuth 已上线；⚠️ ECS nginx 域根的 OAuth 路由不在 git）。
 
-Do not commit: session tokens, screenshots containing credentials, or production data exports.
+## deploy/openclaw-bridge
 
-Validation: browser smoke after UI changes and backend admin API tests when related routes change.
+飞书 ↔ OpenClaw 的 bridge（`openclaw_bridge.py`，跑在 aliecs 容器）。排障：`docs/runbooks/feishu.md`。
+单测 `tests/test_openclaw_bridge.py`；换码永远手动 cutover。
 
 ## deploy/ecs
 
-Production compose and deployment scripts for ECS. Default ECS path is `/root/AliECS`.
+生产 compose 与部署脚本，ECS 路径 `/root/AliECS`。排障：`docs/runbooks/deploy.md`。
+`runtime.env`/`release-meta.env` 是渲染产物（真源=infra/secrets SOPS），勿提交真实值。
+验证：`docker compose --env-file deploy/ecs/runtime.env.example -f deploy/ecs/compose.prod.yml config`。
 
-Runtime inputs: image tags, private runtime env, Docker volumes, and Postgres.
+## db/migrations
 
-Runtime outputs: running containers, deployment metadata, and health check logs.
-
-Do not commit: `runtime.env`, `release-meta.env` with real values, private keys, or production logs.
-
-Validation: `docker compose --env-file deploy/ecs/runtime.env.example -f deploy/ecs/compose.prod.yml config`.
+迁移 SQL。写成幂等；生产 psql = `docker exec -i ecs-postgres-1 psql -U app -d app`。
 
 ## local
 
-Local Docker Compose and local env examples.
+本地验证专用：`docker-compose.local.yml` + `.env.local`（只放本地测试值）。smoke：`scripts/local-smoke-test.ps1|sh`。
 
-Runtime inputs: ignored `local/.env.local` for local testing only.
+## 各目录禁提交
 
-Runtime outputs: local containers and bind-mounted development data.
-
-Do not commit: `local/.env.local`, local logs, or copied production env values.
-
-Validation: `docker compose -f local/docker-compose.local.yml config`.
+真实 env/token/密钥、生成的 Excel/下载物、logs、业务数据导出、含凭证截图。

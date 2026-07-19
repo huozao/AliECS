@@ -2,246 +2,65 @@
 
 ## ⛔ 最高优先级红线：ChatGPT「人工登录 → 自动化接管」流程（不得擅自更改）
 
-旧电脑 WebDock 的 ChatGPT 会话遵循固定设计，任何 AI 必须严格遵守，不得擅改：
+WebDock 的 ChatGPT 会话遵循固定设计，任何 AI 必须严格遵守：
 
 1. **ChatGPT 登录与 Cloudflare 人机验证，必须由人工在 noVNC 手动完成**；完成前，自动化（Playwright/CDP）**必须处于 detach 状态**（不连接 Chrome）。
-2. 原因（2026-05-30 实测确认）：原版 Playwright 连着 CDP 会持续泄漏 `Runtime.enable`，Cloudflare Turnstile 判定为自动化 → 即便人工点击验证也无限循环、无法通过；一旦 detach，人工即可通过。
-3. 正确顺序（原始设计）：**人工登录/过验证 → 会话养熟（cf_clearance）→ 自动化再 attach 接管驱动**。
-4. AI 未经用户明确同意，**不得**：更改此顺序；让自动化在登录/验证阶段自动 attach 或驱动浏览器；重建/重启 WebDock 容器或改其浏览器启动/attach 逻辑而打断已养熟的人工会话；把"纯人工登录"改成自动登录。
-5. 涉及 WebDock 浏览器、ChatGPT 登录态、Cloudflare、自动化 attach/detach 的任何改动：**先读本条、先与用户确认、再动手**。
+2. 原因（2026-05-30 实测）：Playwright 连着 CDP 会泄漏 `Runtime.enable`，Cloudflare 判定为自动化 → 人工点击也无限循环；detach 后人工即可通过。
+3. 正确顺序：**人工登录/过验证 → 会话养熟（cf_clearance）→ 自动化再 attach 接管**。
+4. AI 未经用户明确同意，**不得**：更改此顺序；让自动化在登录/验证阶段 attach 或驱动浏览器；重建/重启 WebDock 容器或改其浏览器启动/attach 逻辑而打断已养熟的会话；把纯人工登录改成自动登录。
+5. 涉及 WebDock 浏览器、ChatGPT 登录态、Cloudflare、attach/detach 的任何改动：**先读本条、先与用户确认、再动手**。
 
-## 项目定位
+## 项目定位与工作方式
 
-AliECS 是一个以 Codex / Claude 等 AI 客户端协作为主要开发方式的 Docker 化 Web/API 项目。
+AliECS 是以 AI 客户端协作为主要开发方式的 Docker 化 Web/API 项目。目标不是复杂架构，而是让业务功能、部署链路和维护对人和 AI 都清晰。
 
-Codex 桌面版、Claude 桌面版、Claude 终端在本项目中承担开发机执行角色，而不是临时辅助工具。修改代码时，应像接手项目的工程师一样，先理解现有结构、运行链路和影响范围，再进行最小必要修改。
+修改时必须：先读相关文件 → 判断影响范围 → 小步可回滚修改 → 不顺手重构无关模块 → 完成后说明改了什么/为什么/如何验证/有什么风险。需求不明确时做最小合理判断并说明假设。
 
-项目目标不是追求复杂架构，而是让业务功能、部署链路和后续维护都足够清晰，方便人和 AI 持续接手。
+架构原则：业务主线显性化，避免过度抽象/封装/配置化；功能入口、主流程、数据来源、关键判断、输出、报错位置应一眼可辨。
 
-## 工作方式
+## 导航与领域约束（按任务加载，未读不得修改对应模块）
 
-Codex 或 Claude 修改项目时必须遵循以下顺序：
+| 任务涉及 | 必读 |
+|---|---|
+| 设备/主备/端口/SSH | `docs/fleet.md`（单一事实源） |
+| 改哪个目录/入口文件 | `docs/project-navigation.md`、`docs/project-ai-map.md` |
+| doc-sync-worker / 同步表结构 | `docs/constraints/doc-sync.md` |
+| 飞书↔ChatGPT 链路 | `docs/runbooks/feishu.md` |
+| 部署/CI/回滚 | `docs/runbooks/deploy.md` |
+| T+ 同步 | `docs/runbooks/tplus.md` |
 
-1. 先阅读与任务相关的现有文件。
-2. 判断修改会影响哪些服务、配置、脚本或数据。
-3. 优先做小范围、可验证、可回滚的修改。
-4. 不顺手重构无关模块。
-5. 不凭空新建复杂结构来替代已有流程。
-6. 修改完成后说明改了什么、为什么改、如何验证、有什么风险。
+## 关键边界
 
-如果需求不明确，应先根据现有项目做最小合理判断，并在结果中说明假设条件。
+不得破坏：`public-web` / `admin-ui` / `backend-api` / `postgres` 四服务分工、Docker Compose 本地链路、ECS 生产部署链路、数据库迁移链路、健康检查链路、GitHub Actions 构建发布链路。必须修改时，同步检查相关配置、脚本、文档。
 
-## AI 友好型架构原则
-
-本项目优先采用 AI 友好型结构。
-
-代码应让不熟悉具体函数的人也能快速判断：
-
-- 功能入口在哪里
-- 主要流程怎么走
-- 数据从哪里来
-- 关键判断在哪里
-- 输出到哪里去
-- 出错时看哪里
-
-允许模块化，但不要为了传统分层把主流程拆得过碎。
-
-优先让业务主线显性化，再抽取通用工具。
-
-避免过度抽象、过度封装、过度配置化。能用清晰流程表达的，不要隐藏到多层间接调用中。
-
-## 项目关键边界
-
-修改时不得破坏以下关键边界：
-
-- `public-web`：公网展示和普通用户入口
-- `admin-ui`：管理后台入口
-- `backend-api`：后端 API、鉴权和业务逻辑入口
-- `postgres`：数据库服务
-- Docker Compose 本地运行链路
-- ECS 生产部署链路
-- 数据库迁移链路
-- 健康检查链路
-- GitHub Actions 构建和发布链路
-
-如果必须修改这些边界，必须同时检查相关配置、脚本和文档是否需要同步调整。
-
-## 修改原则
-
-修改代码时：
-
-- 保持现有目录结构稳定，除非当前结构已经明显阻碍维护。
-- 保持入口文件、主流程文件容易阅读。
-- 新增功能优先放在最接近业务入口的位置。
-- 公共工具只抽取真正复用的逻辑。
-- 不引入无必要的新依赖。
-- 不把简单逻辑拆成多个难追踪的小文件。
-- 不用临时方案污染长期结构。
-- 不提交调试代码、测试账号、真实密钥、token、私钥或生产配置。
-
-## Couple Memory 开发约束
-
-- Couple Memory 采用分阶段推进，当前优先完成 Dashboard 静态版与数据库模型。
-- Memory 是核心对象，照片是素材，不可反向将系统设计为“纯相册”。
-- 第一版不引入 Immich 复杂架构，只借鉴其元数据与缩略图思路。
-- ECS 不长期保存原图，原图应规划到 NAS / OSS / R2 / S3，数据库仅存元数据与链接。
-- 所有 Couple 页面默认需要登录权限控制，未授权不得暴露数据。
-
-## Doc Sync 开发约束
-
-- 企业微信智能表格同步必须由 `services/doc-sync-worker` 独立执行，不要放进 `backend-api` 启动流程。
-- 第一版同步模式默认为 full，必须同步 docid 下所有 sheet，并对每个 sheet 按企业微信分页拉取全部 records。
-- 不允许只取最近记录，不允许只同步一个 sheet，不允许只同步字段后跳过 records。
-- AliECS 的同步主数据源是 Postgres，不要把 PeiFang 的 `output/latest` 或 `data/wecom` 复制成主数据源。
-- backend-api 只能查询同步结果、同步状态和同步日志，不直接调用企业微信 API。
-- Admin UI 可以提供“企微或飞书同步”后台核验模块；同步表格的具体数据属于后台数据，不要放到 public-web 首页作为公网入口。
-- 手动同步应通过 `sync_requests` 或 worker 命令执行，不要让 backend-api 直接调用企业微信或飞书 API。
-- 环境变量示例只写占位值或本地测试值，不提交企业微信真实 corp id、secret、token 或业务数据。
-- 修改 doc-sync-worker、同步表结构、backend 查询接口、Docker Compose 或部署配置后，优先运行：
-
-```bash
-python -m unittest discover -s tests
-docker compose -f local/docker-compose.local.yml config
-```
-
-- 如果 Docker 无法运行，必须说明未验证原因，并给出本地补救命令。
-
-## 配置与环境变量
-
-新增或修改环境变量时，必须说明用途，并同步更新示例配置或文档。
-
-真实生产值不得提交到仓库。
-
-如果代码依赖某个环境变量，应明确处理缺失场景，避免程序无提示失败。
+修改原则：保持目录结构与入口文件稳定；新功能放最接近业务入口处；不引入无必要依赖；不提交调试代码、真实密钥、生产配置。
 
 ## 数据库与迁移
 
-涉及数据库结构、初始化数据或迁移脚本时，必须谨慎处理。
-
-不要直接修改历史迁移文件来伪装新变更。
-
-新增迁移应尽量保持可重复执行、失败可定位。
-
-涉及数据删除、字段重命名、权限变化时，必须在说明中明确风险。
-
-## 部署与运行
-
-本项目通过 Docker Compose 和 ECS 脚本运行。
-
-修改服务端口、镜像名、环境变量、健康检查路径、数据库连接、反向代理相关内容时，必须考虑本地和生产两套运行环境。
-
-不要只验证代码逻辑，而忽略容器、脚本和部署配置。
+不直接修改历史迁移文件伪装新变更；新迁移保持可重复执行、失败可定位；涉及数据删除、字段重命名、权限变化时明确写出风险。
 
 ## GitHub Actions
 
-修改 GitHub Actions 时，应以稳定、可读、可排查为目标。
+以稳定、可读、可排查为目标。未经明确要求，不改变"PR 合并后是否自动部署、手工触发是否必填版本号"等发布触发语义；必须调整时写出"修改前行为 / 修改后行为 / 回退方式"。修改 workflow 时同步检查其调用的脚本、环境变量、镜像命名。
 
-不要为了看起来智能而增加难以验证的自动判断。
+## 环境变量与 ECS 路径
 
-不要伪造 GitHub UI 本身无法提供的动态能力。
-
-修改 workflow 时，应同时检查它调用的脚本、环境变量和镜像命名是否仍然匹配。
-
-新增约束（避免误改发布行为）：
-
-- 未经明确要求，不要改变“PR 合并后是否自动部署、手工触发是否必填版本号”等发布触发语义。
-- 如必须调整发布触发条件，需在变更说明中明确写出“修改前行为 / 修改后行为 / 回退方式”。
+- 新增/修改环境变量必须说明用途并同步示例配置；代码应处理缺失场景。真实生产值不进仓库。
+- ECS 默认项目目录 `/root/AliECS`；`release-meta.env` 中各路径与其保持一致；如实际不同必须在变更说明中写明。
 
 ## 验证要求
 
-修改完成后，应根据影响范围执行验证。
+本地验证只用 `local/docker-compose.local.yml` + `local/.env.local`（只含本地测试值），不读取生产 env、不连生产库。优先 `scripts/local-smoke-test.ps1|sh`。
 
-## 本地模拟验证
+- 通用测试：`python -m unittest discover -s tests`
+- shell 脚本：`bash -n deploy/ecs/{deploy,migrate,healthcheck,rollback}.sh`
+- Compose：`docker compose -f local/docker-compose.local.yml config > /dev/null`（含真实凭证时不粘贴完整输出）
+- 前端（尤其 `services/admin-ui/index.html` 内联脚本）：检查 JS 语法/作用域错误 + 至少一次核心入口 smoke（点击能触发网络请求）。
 
-涉及前后端、登录、数据库、环境变量或 Docker 变更时，Codex 应优先使用本地模拟验证流程。
-
-- 本地验证只使用 `local/docker-compose.local.yml`。
-- 本地验证只使用 `local/.env.local`，该文件只能包含本地测试值。
-- 不读取、不复制、不依赖 `deploy/ecs/runtime.env` 或 `deploy/ecs/release-meta.env` 中的生产值。
-- 不连接 ECS 生产数据库，不使用生产账号密码、SSH 私钥、GitHub PAT、阿里云 AccessKey 或其他真实生产密钥。
-- 优先运行 `scripts/local-smoke-test.ps1` 或 `scripts/local-smoke-test.sh` 验证页面、接口、登录入口和健康检查。
-- 如果当前环境无法运行 Docker，必须说明未验证原因，并给出人工补救命令。
-
-涉及 shell 脚本时，至少检查语法：
-
-```bash
-bash -n deploy/ecs/deploy.sh
-bash -n deploy/ecs/migrate.sh
-bash -n deploy/ecs/healthcheck.sh
-bash -n deploy/ecs/rollback.sh
-```
-
-涉及 Docker Compose 时，至少检查配置：
-
-```bash
-docker compose -f local/docker-compose.local.yml config > /dev/null
-```
-
-如果本机 `local/.env` 或 `local/.env.local` 中含有真实测试凭证，不要把 `docker compose config` 的完整输出粘贴到聊天、日志或 issue 中；该命令会展开环境变量。
-
-涉及 GitHub Actions 时，检查 YAML 结构、触发条件、变量引用和脚本调用是否合理。
-
-涉及前端、后端或镜像构建时，优先使用项目已有 CI、构建或测试命令。
-
-前端页面（尤其是 `services/admin-ui/index.html` 这类内联脚本）修改后，必须额外做“前端可执行性验证”：
-
-- 至少检查是否存在明显 JS 语法/作用域错误（例如重复 `const` 声明、未定义变量、脚本解析报错）。
-- 至少执行一次登录或核心入口的 smoke 流程，确认点击事件能够触发网络请求（不是只看到页面能打开）。
-- 若当前环境无法跑浏览器自动化，必须在结果中明确说明“未完成浏览器侧验证”的影响和补救动作。
-
-如果无法执行验证，必须在结果说明中明确写出未验证原因。
-
-## 交互与提交行为约束
-
-- Codex 桌面版、Claude 桌面版、Claude 终端按同一套开发机规则执行。
-- 当用户明确要求或授权提交、推送、部署、验证时，可以自行完成 commit、push、部署触发和运行验证，不要停在“请用户手动提交/部署”。
-- 提交或推送前必须确认 `git status`、当前分支、remote URL，并检查 `.env`、`logs`、`browser_data`、`_references`、真实密钥、浏览器数据和生产运行态不会被提交。
-- 所有会写入 `.git` 的命令必须串行执行。
-- 文档类变更通常不需要生产部署；如果推送触发 GitHub Actions 或用户明确要求部署，继续完成对应的 Actions / 服务器验证。
-- 完成修改后，不要自动打开差异页面或 PR 预览页面。
-- 仅在用户明确要求时，再执行与“打开预览页面”相关的操作。
+无法验证时必须写明未验证原因和补救命令。
 
 ## 输出要求
 
-Codex 完成任务后，应说明：
+完成后说明：改了哪些文件 / 解决什么问题 / 是否影响本地运行、部署、数据库 / 已执行与未执行的验证 / 如何回退。基于实际内容，不写空泛总结。完成修改后不自动打开差异或 PR 预览页面。
 
-- 修改了哪些文件
-- 解决了什么问题
-- 是否影响本地运行
-- 是否影响部署
-- 是否影响数据库
-- 已执行哪些验证
-- 哪些部分未验证
-- 出问题时如何回退
-
-说明应基于实际修改内容，不写空泛总结。
-
-
-## ECS 默认部署路径约定（重要）
-
-为避免自动部署与手工部署路径不一致，默认约定 ECS 项目目录为：`/root/AliECS`。
-
-- `deploy/ecs/release-meta.env` 中 `APP_ROOT`、`COMPOSE_FILE`、`RUNTIME_ENV_FILE`、`METADATA_DIR`、`MIGRATIONS_DIR` 应与 `/root/AliECS` 保持一致。
-- 如果实际部署目录不是 `/root/AliECS`（例如 `/opt/app`），必须在变更说明中明确写出，并同步更新部署文档/脚本引用路径。
-- 任何 CI/CD 或脚本改动，优先保证 `/root/AliECS` 路径开箱可用。
-
-## 三主机命名与仓库来源（重要）
-
-涉及跨主机、部署、OpenClaw、WebDock、微信账号、ECS 运维或旧电脑排障时，必须先阅读：
-
-- `docs/ops/three-host-architecture.md`
-- `docs/ops/ai-handoff-rules.md`
-
-统一使用以下三个关键名词：
-
-- `开发机`：当前 Windows 开发电脑。AliECS 本地目录为 `C:\Users\ishel\Desktop\编程总库\AliECS-WebDock\AliECS`；WebDock 本地目录为 `C:\Users\ishel\Desktop\编程总库\AliECS-WebDock\webdock`。
-- `服务器`：阿里云 ECS。AliECS 运行目录为 `/root/AliECS`；OpenClaw 运行目录为 `/root/openclaw`；`openclaw-bridge` 安装目录为 `/opt/openclaw-bridge`。
-- `旧电脑`：旧 Ubuntu 笔记本。WebDock 运行目录为 `/opt/webdock`，负责 Chrome / ChatGPT 登录态、noVNC、Playwright 和重任务。
-
-仓库来源：
-
-- AliECS：`git@github.com:huozao/AliECS.git`
-- WebDock：`https://github.com/huozao/webdock.git`
-- OpenClaw runtime：`https://github.com/openclaw/openclaw.git`
-
-不要把 `服务器`、`旧电脑`、`开发机` 混称为“机器”或“节点”。说明问题或修改代码时，必须写清楚影响哪个主机、哪个仓库、哪个运行目录。
+提交与部署授权规则见工作区顶层 `AGENTS.md`（全工作区唯一版本）。
