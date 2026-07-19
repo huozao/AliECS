@@ -70,9 +70,17 @@
     .table-wrap th,.table-wrap td{padding:9px 11px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;white-space:nowrap}
     .table-wrap th{background:#f3ede2;font-weight:700;position:sticky;top:0}
     .table-wrap tbody tr:last-child td{border-bottom:0}
-    details.card>summary{list-style:none;cursor:pointer}
+    details.card>summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;border-radius:10px}
     details.card>summary::-webkit-details-marker{display:none}
-    details.card>summary>h2{margin:0}
+    details.card>summary>h2{margin:0;flex:1 1 auto}
+    details.card>summary::after{content:"›";color:var(--muted);font-size:19px;line-height:1;transform:rotate(90deg);transition:transform .15s;flex:0 0 auto}
+    details.card[open]>summary::after{transform:rotate(-90deg)}
+    details.card[open]>summary{margin-bottom:12px}
+    /* 分区锚点导航 */
+    .secnav{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
+    .secnav button{background:#efe8dc;color:#6e6355;font-size:13px;padding:7px 12px}
+    .subhead{margin:0 0 10px;font-size:13px;color:var(--muted);font-weight:700;letter-spacing:.02em}
+    .sec-tools{display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px;flex-wrap:wrap}
   </style>
 </head>
 <body>
@@ -106,11 +114,19 @@
 
     <div id="appArea" class="hidden">
       <div id="identityBox" class="identity muted">未登录</div>
+      <nav id="secNav" class="secnav">
+        <button type="button" data-target="sec-users">用户</button>
+        <button type="button" data-target="sec-miniapp">小程序申请</button>
+        <button type="button" data-target="sec-rbac">角色权限</button>
+        <button type="button" data-target="sec-features">功能入口</button>
+        <button type="button" data-target="systemConfigPanel">系统配置</button>
+        <button type="button" data-target="auditLogPanel">审计日志</button>
+      </nav>
 
       <!-- 用户 -->
-      <section class="card">
-        <h2><span class="htitle">用户 <span id="userCountBadge" class="badge">0</span></span>
-          <button id="toggleUserForm" type="button">＋ 新增用户</button></h2>
+      <details class="card" id="sec-users" data-sec="users">
+        <summary><h2><span class="htitle">用户 <span id="userCountBadge" class="badge">0</span></span></h2></summary>
+        <div class="sec-tools"><button id="toggleUserForm" type="button">＋ 新增用户</button></div>
         <div id="userForm" class="collapse hidden">
           <div class="grid two">
             <div><label>用户名</label><input id="newUsername" placeholder="例如 zhangsan" /></div>
@@ -121,35 +137,39 @@
           <div class="row" style="margin-top:14px;"><button id="createUserBtn" class="primary" type="button">新增用户</button></div>
         </div>
         <div id="usersBody" class="entity-grid"></div>
-      </section>
+      </details>
 
       <!-- 微信小程序账号申请 -->
-      <section class="card">
-        <h2><span class="htitle">小程序账号申请 <span id="miniappRequestCountBadge" class="badge">0</span></span>
+      <details class="card" id="sec-miniapp" data-sec="miniapp">
+        <summary><h2><span class="htitle">小程序账号申请 <span id="miniappRequestCountBadge" class="badge">0</span></span></h2></summary>
+        <div class="sec-tools">
           <select id="miniappRequestStatus" style="width:auto;padding:8px 34px 8px 12px">
             <option value="pending">待审核</option><option value="approved">已通过</option>
             <option value="rejected">已拒绝</option><option value="all">全部</option>
-          </select></h2>
+          </select></div>
         <div class="notice">账号与权限仍由 LLDAP / Authelia / 本站 RBAC 管理。若是“申请新账号”，请先在现有 SSO 中开户并在本站建立同名用户、分配角色，再选择该用户完成绑定；此处不创建或重置 SSO 密码。</div>
         <div id="miniappRequestsBody" class="entity-grid"></div>
-      </section>
+      </details>
 
       <!-- 角色 / 权限 -->
-      <section class="grid two">
-        <section class="card">
-          <h2><span class="htitle">角色 <span id="roleCountBadge" class="badge">0</span></span></h2>
-          <div id="rolesBody" class="entity-grid"></div>
-        </section>
-        <section class="card">
-          <h2><span class="htitle">权限</span></h2>
-          <div id="permissionsBody" style="line-height:2.2">-</div>
-        </section>
-      </section>
+      <details class="card" id="sec-rbac" data-sec="rbac">
+        <summary><h2><span class="htitle">角色与权限 <span id="roleCountBadge" class="badge">0</span></span></h2></summary>
+        <div class="grid two">
+          <div>
+            <h3 class="subhead">角色</h3>
+            <div id="rolesBody" class="entity-grid"></div>
+          </div>
+          <div>
+            <h3 class="subhead">权限</h3>
+            <div id="permissionsBody" style="line-height:2.2">-</div>
+          </div>
+        </div>
+      </details>
 
       <!-- 功能入口 -->
-      <section class="card">
-        <h2><span class="htitle">功能入口 <span id="featureCountBadge" class="badge">0</span></span>
-          <button id="toggleFeatureForm" type="button">＋ 新增功能</button></h2>
+      <details class="card" id="sec-features" data-sec="features">
+        <summary><h2><span class="htitle">功能入口 <span id="featureCountBadge" class="badge">0</span></span></h2></summary>
+        <div class="sec-tools"><button id="toggleFeatureForm" type="button">＋ 新增功能</button></div>
         <div id="featureForm" class="collapse hidden">
           <div class="grid two">
             <div><label>Code</label><input id="featureCode" placeholder="raw_inventory" /></div>
@@ -164,11 +184,11 @@
           <div class="row" style="margin-top:14px;"><button id="createFeatureBtn" class="primary" type="button">新增功能</button></div>
         </div>
         <div id="featuresBody" class="entity-grid"></div>
-      </section>
+      </details>
 
       <!-- 系统配置生效总览 -->
-      <section id="systemConfigPanel" class="card">
-        <h2><span class="htitle">系统配置生效总览</span></h2>
+      <details id="systemConfigPanel" class="card" data-sec="config">
+        <summary><h2><span class="htitle">系统配置生效总览</span></h2></summary>
         <div class="table-wrap">
           <table>
             <thead>
@@ -177,10 +197,10 @@
             <tbody id="systemConfigBody"></tbody>
           </table>
         </div>
-      </section>
+      </details>
 
       <!-- 审计日志 -->
-      <details id="auditLogPanel" class="card">
+      <details id="auditLogPanel" class="card" data-sec="audit">
         <summary><h2>审计日志</h2></summary>
         <div id="logsBody" style="margin-top:12px"></div>
         <div class="row" style="justify-content:space-between;margin-top:12px;">
@@ -529,6 +549,22 @@
       $("createFeatureBtn").addEventListener("click",()=>createFeature().catch((e)=>showError(e.message)));
       $("toggleUserForm").addEventListener("click",()=>$("userForm").classList.toggle("hidden"));
       $("toggleFeatureForm").addEventListener("click",()=>$("featureForm").classList.toggle("hidden"));
+      // 分区折叠：展开状态记忆 + 锚点导航
+      const SEC_KEY="admin_sections_open";
+      let openSet;
+      try{openSet=new Set(JSON.parse(localStorage.getItem(SEC_KEY)||"[]"));}catch{openSet=new Set();}
+      document.querySelectorAll("details.card[data-sec]").forEach((panel)=>{
+        panel.open=openSet.has(panel.dataset.sec);
+        panel.addEventListener("toggle",()=>{
+          if(panel.open)openSet.add(panel.dataset.sec);else openSet.delete(panel.dataset.sec);
+          localStorage.setItem(SEC_KEY,JSON.stringify([...openSet]));
+        });
+      });
+      $("secNav").addEventListener("click",(e)=>{
+        const btn=e.target.closest("button[data-target]");if(!btn)return;
+        const panel=$(btn.dataset.target);if(!panel)return;
+        panel.open=true;panel.scrollIntoView({behavior:"smooth",block:"start"});
+      });
       // 顶栏菜单
       $("menuToggle").addEventListener("click",(e)=>{e.stopPropagation();$("menuList").classList.toggle("hidden");});
       document.addEventListener("click",(e)=>{if(!e.target.closest(".menu"))$("menuList").classList.add("hidden");});

@@ -70,11 +70,6 @@
     .modal.show{display:flex}
     .modal-panel{width:min(860px,100%);max-height:88vh;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px}
     pre{white-space:pre-wrap;word-break:break-word;background:#f7f5f0;border:1px solid var(--line);border-radius:12px;padding:12px;font-size:12px}
-    /* 版本巡检表格 */
-    .vtable{width:100%;border-collapse:collapse;margin-bottom:14px;font-size:13px}
-    .vtable th,.vtable td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line)}
-    .vtable th{color:var(--muted);font-weight:700;font-size:12px}
-    .vtable a{color:var(--primary)}
   </style>
 </head>
 <body>
@@ -119,7 +114,9 @@
       <section class="band">
         <h2>版本巡检</h2>
         <div id="versionSummary" class="metrics"></div>
-        <div id="versionDevices" style="margin-top:12px"></div>
+        <div class="row" style="margin-top:12px">
+          <a class="btn primary" href="/health/versions/">查看版本明细</a>
+        </div>
       </section>
       <section class="band">
         <h2>同步与工具</h2>
@@ -210,12 +207,6 @@
         `<article class="metric"><div class="label">最近成功</div><div class="value sm">${fmtTime(b.last_success_at)}</div><div class="sub">存储位置与恢复校验进入明细页查看</div></article>`
       ].join('');
     }
-    function versionBadge(entry){
-      const status=entry.status;
-      if(status==='os')return esc(entry.current||'');
-      const map={current:'✅ 最新',behind:'🔴 落后',pinned:'📌 锁定',unregistered:'⚠️ 未登记',own:'⚪ 一致','own-mismatch':'🟠 不一致',stale:'⛔ 停滞'};
-      return map[status]||esc(status||'unknown');
-    }
     function renderVersions(data){
       const summary=(data||{}).summary||{};
       const s=(key)=>summary[key]||0;
@@ -225,17 +216,6 @@
         `<article class="metric"><div class="label">已核对组件</div><div class="value">${checked}</div><div class="sub">未登记 ${s('unregistered')}</div></article>`,
         `<article class="metric"><div class="label">停滞/未上报</div><div class="value">${s('stale')}</div><div class="sub">长期无版本上报的组件</div></article>`
       ].join('');
-      const devices=(data||{}).devices||[];
-      if(!devices.length){versionDevices.innerHTML='<div class="muted">暂无版本上报数据。</div>';return;}
-      versionDevices.innerHTML=devices.map((d)=>{
-        const rows=(d.components||[]).map((c)=>{
-          const latestCell=(c.status==='behind'&&c.release_url)
-            ?`<a href="${esc(c.release_url)}" target="_blank" rel="noreferrer">${esc(c.latest||'-')}</a>`
-            :esc(c.latest||'-');
-          return `<tr><td>${esc(c.name)}</td><td>${esc(c.current||'-')}</td><td>${latestCell}</td><td>${versionBadge(c)}</td></tr>`;
-        }).join('');
-        return `<h3>${esc(d.device)}</h3><table class="vtable"><thead><tr><th>组件</th><th>当前</th><th>最新</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table>`;
-      }).join('');
     }
     function renderSummary(data){
       const sys=data.system||{},db=data.database||{},t=data.tplus||{},r=data.reconciliation||{},hosts=data.hosts||[];
