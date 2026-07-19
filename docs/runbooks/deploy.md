@@ -5,15 +5,17 @@
 ```
 push main（PR 合并）
   → GitHub Actions build-push：镜像标签 = 目录 git tree hash（t-xxxxxxxxxxxx），
-    manifest 命中即跳过构建；发布号 VYYYYMMDDNNN 只是别名
+    manifest 命中即跳过构建；sha-<commit> 只是同批次 GitHub 别名
   → ssh deploy（appleboy，command_timeout 25m）
   → ECS /root/AliECS：git pull → 按目录导出 *_TAG → 迁移（db/ 未变更即跳过）
   → docker compose up -d（内容没变的服务不重建容器）
-  → healthcheck → 写 last-success-commit
+  → healthcheck → 写 last-success-commit + 部署清单（commit/run/attempt/各镜像 digest）
 ```
 
 - 增量部署已实战验证：改 1 个服务只重建 1-2 个容器。
-- 手动 `deploy.sh V号` = 全量部署（所有容器重建）。
+- 纯 Markdown/AGENTS/CLAUDE 变更不触发生产部署。
+- 日常版本权威链：Git commit SHA → GitHub Actions run/attempt → OCI image digest。
+- 旧 `VYYYYMMDDNNN`/semver 仅保留历史兼容，不再为每次 main 部署生成。
 - `FORCE_MIGRATIONS=1` 强制跑迁移。
 
 ## 症状表
@@ -49,4 +51,6 @@ ssh aliecs 'docker exec -i ecs-postgres-1 psql -U app -d app -v ON_ERROR_STOP=1'
 
 ## 回滚
 
-`deploy/ecs/rollback.sh`；发布号别名保证 `deploy.sh V号` 可回任意历史版本。
+默认 `deploy/ecs/rollback.sh` 回上一版本；指定
+`deploy/ecs/rollback.sh <deployment_id>` 可按 `$METADATA_DIR/deployments/<id>.json`
+中的不可变 digest 回滚。现有 V tag 不删除，仅作历史兼容。

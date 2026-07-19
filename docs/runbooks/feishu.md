@@ -51,7 +51,7 @@ ssh webdock2 "wsl -d Ubuntu-24.04-WebDock -- docker ps"  # WebDock 容器状态
 
 ## 已知坑（改代码前必读）
 
-- bridge 换镜像标签：写 `OPENCLAW_BRIDGE_TAG` 后必须先 `docker rm -f` 再 compose up；**bridge 换码永远手动 cutover**，多会话并行时先查当前 tag 再 cutover（曾发生 232 盖 233）。
+- bridge 换码：在 GitHub Actions 手工触发 `bridge-cutover`，无需填写 tag。workflow 按所选 Git ref 自动解析内容镜像与 OCI digest，原子切换、健康检查、失败回滚。禁止登机手改 `.env`；并发由 workflow concurrency 串行化。
 - 改 bridge env 后 `restart` 无效，必须 force-recreate。
 - 新 webdock 节点必须复制 `runtime.json`，否则飞书图/表全丢。
 - OpenClaw 的 dispatch→bridge 延迟 0.9-2.4s 属正常（处理中占位卡即为此设计）。

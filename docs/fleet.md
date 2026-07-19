@@ -45,7 +45,7 @@ bridge/openclaw 容器
 - 主机层：nginx（配置入 infra 仓库；**MCP OAuth 的 `/.well-known/*` 路由是手工加的，重建会丢**）、三个隧道代理 systemd 服务（webdock-failover-proxy、webdock-tunnel-proxy、immich-tunnel-proxy，脚本在 `/opt/aliecs/`）。
 - 隧道端口（127.0.0.1）：11800 为 webdock failover 入口；当前 11810←webdock2 主、11811←webdock1 备（以 `/etc/default/webdock-failover-proxy` 的 NAME 绑定为准）；12283←webdock1 Immich、18015/18016←webdock1 AdventureLog，另有 Gokapi/Authentik 隧道（端口见 webdock1 各 unit 的 env）。
 - 远程控制台（2026-07-04，`https://hydwang.xyz/console/`）：nginx `/console/*` 七路 location（认证=Authelia `two_factor` + lldap `console_admins` 组，成对 deny 兜底；**VNC 层免密设计**，2FA 是唯一闸门）；本机组件 ttyd 7681（unit `ttyd-console`，⚠️ apt 自带 `ttyd.service` 抢端口须 disable）、webtop 3000 按需启停（`/opt/aliecs/aliecs-temp-desktop.sh`，2G 内存用完必须 stop）；ECS `authorized_keys` permitlisten 新增四条 160xx（16080/16081←webdock1、16090/16091←webdock2，与生产 118xx 隔离）。详见 infra `console/README.md`。
-- 部署：push AliECS main → release-deploy 自动构建部署业务镜像；bridge 镜像同流程构建但 **cutover 永远手动**（改 `/root/infra/server/.env` 的 `OPENCLAW_BRIDGE_TAG`，先 `docker rm -f openclaw-bridge` 再 compose up）。
+- 部署：push AliECS main → release-deploy 自动构建部署业务镜像；bridge 镜像同流程构建，但运行切换需在 Actions 手工触发一次 `bridge-cutover`（无需填 tag，自动解析 digest、验证并失败回滚）。
 - 排障：`docker ps`、bridge 日志 `docker logs openclaw-bridge`、部署尖峰时 health 告警多为瞬时（2G 内存超卖）。
 
 ### webdock1（旧笔记本，当前备用）
@@ -97,7 +97,7 @@ bridge/openclaw 容器
 - **`release-meta.env` / bridge `webdock.env` / openclaw `.env` / webdock 两节点 `.env` 都是渲染产物，不要在主机上直接长期修改**（应急热改后必须回灌 sops 源，否则下次 render 覆盖）。
 - 设备侧同步通道：各机本地 bare 仓（aliecs `/root/infra.git`、webdock1/2 `~/infra.git`），由 devbox `git push device-*` 推送（设备未配 GitHub 私仓访问；三把备用 deploy 公钥已生成在各机 `~/.ssh/github_infra_deploy.pub`，需要时人工添加）。
 - aliecs `/root/infra` 自 2026-07-02 起是真 git 克隆（旧手工拷贝备份在 `/root/infra.legacy-20260702`）。
-- bridge 换镜像：Actions 手动触发 `bridge-cutover` workflow（填 tag，失败自动回滚），替代登机手工 runbook。
+- bridge 换镜像：Actions 手动触发一次 `bridge-cutover` workflow（无需填 tag，失败自动回滚），运行状态在 `/root/infra/server/release.env`；禁止登机手改版本。
 
 ## 新增设备流程
 

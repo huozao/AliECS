@@ -4,14 +4,13 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - "*.md"
+      - "**/*.md"
+      - "docs/**"
     tags:
       - "V*"
   workflow_dispatch:
-    inputs:
-      release_version:
-        description: "Planned release version, format VYYYYMMDDNNN"
-        required: false
-        type: string
 
 concurrency:
   group: release-deploy
@@ -21,9 +20,9 @@ jobs:
   resolve-release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     outputs:
-      release_version: ${{ steps.vars.outputs.release_version }}
+      release_id: ${{ steps.vars.outputs.release_id }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -32,59 +31,18 @@ jobs:
       - name: Resolve release version
         id: vars
         run: |
-          git fetch --tags --force
-          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            RELEASE_VERSION="${GITHUB_REF_NAME}"
-          elif [[ -n "${{ inputs.release_version }}" ]]; then
-            RELEASE_VERSION="${{ inputs.release_version }}"
-          else
-            YEAR="$(date -u +%Y)"
-            MONTH="$(date -u +%m)"
-            DAY="$(date -u +%d)"
-            SERIAL="$(printf '%03d' "$((GITHUB_RUN_NUMBER % 1000))")"
-            RELEASE_VERSION="V${YEAR}${MONTH}${DAY}${SERIAL}"
-            echo "No release_version was provided; generated ${RELEASE_VERSION}"
-          fi
-
-          if [[ ! "$RELEASE_VERSION" =~ ^V[0-9]{11}$ ]]; then
-            echo "Invalid release version. Expected VYYYYMMDDNNN, got: ${RELEASE_VERSION}" >&2
-            exit 1
-          fi
-
-          PREVIOUS_VERSION="$(git tag --sort=-v:refname | sed -n '2p')"
-          echo "release_version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
-          echo "previous_version=$PREVIOUS_VERSION" >> "$GITHUB_OUTPUT"
+          RELEASE_ID="sha-${GITHUB_SHA:0:12}"
+          echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
 
           {
-            echo "## Release and deployment"
+            echo "## GitHub-native deployment identity"
             echo ""
             echo "| Item | Value |"
             echo "|---|---|"
-            echo "| Previous version | ${PREVIOUS_VERSION:-not found} |"
-            echo "| Release version | ${RELEASE_VERSION} |"
-            echo "| Deploy version | ${RELEASE_VERSION} |"
+            echo "| Commit | ${GITHUB_SHA} |"
+            echo "| Actions run | ${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT} |"
+            echo "| Release alias | ${RELEASE_ID} |"
           } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Create and validate tag for manual dispatch
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        env:
-          TAG: ${{ steps.vars.outputs.release_version }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            REMOTE_SHA="$(git ls-remote --tags origin "refs/tags/$TAG" | awk '{print $1}')"
-            CURRENT_SHA="$(git rev-parse HEAD)"
-            if [[ "$REMOTE_SHA" != "$CURRENT_SHA" ]]; then
-              echo "Tag already exists but does not point at this commit. Use a new release version." >&2
-              exit 1
-            fi
-            echo "Remote tag already exists and matches this commit: $TAG"
-          else
-            git tag -a "$TAG" -m "Release ${TAG}"
-            git push origin "$TAG"
-          fi
 
   build-push:
     needs: resolve-release
@@ -149,12 +107,12 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
 
-      # 发布号 tag 始终作为内容 tag 的别名存在：rollback.sh / 手动 deploy.sh VYYYYMMDDNNN
-      # 的既有用法不受影响（秒级 manifest 复制，不重新构建）。
-      - name: Alias release tag to content tag
+      # GitHub commit alias groups this deployment while the runtime manifest records
+      # the immutable OCI digest for each service.
+      - name: Alias commit to content tag
         run: |
           docker buildx imagetools create \
-            -t "ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ needs.resolve-release.outputs.release_version }}" \
+            -t "ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ needs.resolve-release.outputs.release_id }}" \
             "ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.tree.outputs.tag }}"
 
   deploy:
@@ -170,12 +128,15 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
           ALIYUN_KMS_SECRET_NAME: ${{ secrets.ALIYUN_KMS_SECRET_NAME }}
           ALIYUN_REGION_ID: ${{ secrets.ALIYUN_REGION_ID }}
+          DEPLOY_COMMIT_SHA: ${{ github.sha }}
+          DEPLOY_RUN_ID: ${{ github.run_id }}
+          DEPLOY_RUN_ATTEMPT: ${{ github.run_attempt }}
         with:
           host: ${{ secrets.ECS_HOST }}
           username: ${{ secrets.ECS_USER }}
           key: ${{ secrets.ECS_SSH_KEY }}
           command_timeout: 40m
-          envs: GHCR_USERNAME,GHCR_TOKEN,ALIYUN_KMS_SECRET_NAME,ALIYUN_REGION_ID
+          envs: GHCR_USERNAME,GHCR_TOKEN,ALIYUN_KMS_SECRET_NAME,ALIYUN_REGION_ID,DEPLOY_COMMIT_SHA,DEPLOY_RUN_ID,DEPLOY_RUN_ATTEMPT
           script: |
             set -euo pipefail
 
@@ -186,7 +147,7 @@ jobs:
 
             APP_ROOT="/root/AliECS"
             BACKUP_DIR="/root/AliECS-private-backup/github-actions"
-            RELEASE_VERSION="${{ needs.resolve-release.outputs.release_version }}"
+            RELEASE_ID="${{ needs.resolve-release.outputs.release_id }}"
             TS="$(date +%Y%m%d-%H%M%S)"
 
             if [[ ! -d "${APP_ROOT}/.git" ]]; then
@@ -257,7 +218,8 @@ jobs:
             export MCP_CODING_SERVER_TAG="$(content_tag services/mcp-coding-server)"
 
             echo "[deploy] Running latest deploy script: ${DEPLOY_SCRIPT}"
-            "${DEPLOY_SCRIPT}" "${RELEASE_VERSION}"
+            export DEPLOY_COMMIT_SHA DEPLOY_RUN_ID DEPLOY_RUN_ATTEMPT
+            "${DEPLOY_SCRIPT}" "${RELEASE_ID}"
 
             POST_DEPLOY_SMOKE="${APP_ROOT}/deploy/ecs/post-deploy-smoke.sh"
             if [[ ! -x "${POST_DEPLOY_SMOKE}" ]]; then

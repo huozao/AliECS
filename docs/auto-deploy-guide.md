@@ -1,12 +1,15 @@
 # AliECS 自动部署总说明（最小可用闭环）
 
+> 当前权威操作见 `docs/runbooks/deploy.md`。本文保留首次部署背景；旧 V tag
+> 流程已于 2026-07-19 被 GitHub commit/run + OCI digest 模型取代。
+
 > 目标：把“手动可运行”升级为“可重复、可记录、可迁移”的自动部署。
 
 ## 1. 当前现状（基于仓库）
 
 ### 1.1 已有 GitHub Actions
 - `ci.yml`：仅在 PR 事件触发检查（opened/synchronize/reopened/ready_for_review），并启用并发互斥取消旧任务，减少反复提交导致的重复运行。
-- `release-deploy.yml`：在 `V*` tag（或手工 workflow_dispatch）触发时，构建并推送 3 个业务镜像到 GHCR，然后 SSH 到 ECS 执行部署脚本（默认 `/root/AliECS/deploy/ecs/deploy.sh`，兼容历史 `/opt/app/deploy/ecs/deploy.sh`）。
+- `release-deploy.yml`：代码合入 main（或手工 workflow_dispatch）后构建并推送业务镜像到 GHCR，再 SSH 到 ECS 部署；纯文档变更跳过生产部署。
 
 ### 1.2 已有部署脚本链
 - `deploy.sh`：拉镜像 -> 迁移 -> 切换 -> 健康检查 -> 失败回滚。
@@ -30,11 +33,10 @@
 
 ```mermaid
 flowchart LR
-    A[本地开发与验证\nlocal docker compose] --> B[push 到 GitHub main]
-    B --> C[创建版本 tag: VYYYYMMDDNNN]
-    C --> D[GitHub Actions release-deploy]
+    A[本地开发与验证\nlocal docker compose] --> B[PR 合并到 GitHub main]
+    B --> D[GitHub Actions release-deploy]
     D --> E[构建镜像并推送 GHCR\npublic-web/admin-ui/backend-api]
-    E --> F[SSH 到 ECS 执行 deploy.sh <tag>]
+    E --> F[SSH 到 ECS 执行 deploy.sh sha-commit]
     F --> G[pull 新镜像]
     G --> H[migrate.sh 执行 SQL]
     H --> I[compose.prod.yml up -d]
@@ -98,7 +100,7 @@ flowchart LR
 2. 准备 `/opt/app` 并拉取仓库。
 3. 复制 `release-meta.env.example -> release-meta.env`，改强密码。
 4. 在 GitHub 配置 `ECS_HOST/ECS_USER/ECS_SSH_KEY`。
-5. 本机或 ECS 手工跑一次：`./deploy/ecs/deploy.sh VYYYYMMDDNNN`。
+5. 在 Actions 手工触发一次 `release-deploy`；workflow 自动使用 `sha-<commit>`。
 6. 验证：`./deploy/ecs/healthcheck.sh`。
 
 详细命令见：`docs/ecs-first-deploy-checklist.md`。
@@ -106,11 +108,10 @@ flowchart LR
 ---
 
 ## 8. 日常更新部署（推荐）
-1. 本地开发并合入 `main`。
-2. **触发方式 A（推荐）**：打 tag `VYYYYMMDDNNN` 并 push，自动部署该 tag。
-3. **触发方式 B（手工）**：在 Actions 页面 `workflow_dispatch` 输入 `release_version`（必须 `VYYYYMMDDNNN`）。
-4. 等待 Actions 执行发布。
-5. 查看 ECS 健康检查与日志。
+1. 本地开发，通过 PR 合入 `main`。
+2. Actions 自动以 commit SHA 标识部署；无需创建或填写版本号。
+3. 补部署时在 Actions 页面直接运行 `release-deploy`。
+4. 查看 Actions、ECS 部署清单、健康检查与公网实证。
 
 ---
 
@@ -147,15 +148,15 @@ cd /opt/app
 ## 12. 手动部署 -> 自动部署迁移步骤
 1. 保留本地调试链路：`local/docker-compose.local.yml`（不改）。
 2. ECS 仅使用 `deploy/ecs/compose.prod.yml` + `deploy.sh`。
-3. 先做一次手工 `deploy.sh <tag>` 验证。
+3. 先手工触发一次 `release-deploy` 验证。
 4. 配好 GitHub Secrets。
-5. 用新 tag 触发 Actions 自动发布。
-6. 若发布成功，后续统一走 tag 自动发布，不再在 ECS 现场 build 源码。
+5. 合并 main 触发 Actions 自动发布。
+6. 若发布成功，后续统一走 GitHub commit/run + OCI digest，不在 ECS 现场 build 源码。
 
 ---
 
 ## 13. 过渡方案说明（还不适合全自动的场景）
-- 若暂时不想用 tag，可先用 `workflow_dispatch` 手工触发 `release-deploy.yml` 并填写 `release_version`（`VYYYYMMDDNNN`）。
+- 补部署可直接用 `workflow_dispatch`，无需输入版本号；它使用所选 Git ref 的 commit SHA。
 - 若网络/权限限制导致 GHCR 无法拉取，可临时使用 `auto-sync.sh`（ECS 拉源码 build），但应视为过渡，不是长期生产主路径。
 
 ---

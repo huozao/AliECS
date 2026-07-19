@@ -199,20 +199,15 @@ git push origin v0.1.0
 ---
 
 
-## 13) 触发方式说明（tag vs workflow_dispatch）
-- **tag 触发（推荐）**：
-  - 命令：`git tag VYYYYMMDDNNN && git push origin VYYYYMMDDNNN`
-  - 特点：版本语义清晰，适合正式发布。
-- **workflow_dispatch（手工）**：
-  - 在 Actions 页面手工启动 `发布并部署`。
-  - 必须输入 `release_version`，且格式必须为 `VYYYYMMDDNNN`（例如 `V20260512049`）。
-  - 适合补部署、重试、回放同一版本。
+## 13) 触发方式说明
+- **main 合并（推荐）**：PR 合并后自动触发；版本由 commit SHA、Actions run/attempt 和镜像 digest 组成。
+- **workflow_dispatch（补部署）**：在 Actions 页面直接启动，无需输入版本号，使用所选 Git ref。
+- 旧 V/semver tag 不删除，仅保留历史回滚兼容；不再为日常部署创建。
 
 ## 14) 日常更新部署（以后）
 1. 本地改代码 -> 合并到 `main`。
-2. 打新 tag：`VYYYYMMDDNNN`。
-3. `git push origin VYYYYMMDDNNN`。
-4. 观察 Actions + ECS 健康检查。
+2. 观察 Actions、ECS 部署清单与健康检查。
+3. 需要补部署时直接运行 `release-deploy` workflow。
 
 ---
 
