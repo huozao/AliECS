@@ -1,4 +1,5 @@
 # Three-Host Architecture
+> ⚠️ 本文档已被 `docs/fleet.md`（四设备单一事实源）取代，仅作历史参考。设备命名、主备、端口以 fleet.md 为准。
 
 This project uses three fixed host names in all documentation, issues, commits, and AI handoff notes. Do not replace them with vague words such as "machine", "remote", "node", or "box" unless the context is already explicit.
 

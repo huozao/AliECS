@@ -1,4 +1,5 @@
 # AI Handoff Rules
+> ⚠️ 本文档部分内容已过时（三主机→四设备）。设备事实以 `docs/fleet.md` 为准，提交/部署授权以工作区顶层 AGENTS.md 为准；本文仅作历史参考。
 
 Read this before changing deployment, OpenClaw, WebDock, Weixin or Feishu account behavior, ECS operations, or cross-host debugging.
 
