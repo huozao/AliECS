@@ -63,4 +63,9 @@ AliECS 是以 AI 客户端协作为主要开发方式的 Docker 化 Web/API 项�
 
 完成后说明：改了哪些文件 / 解决什么问题 / 是否影响本地运行、部署、数据库 / 已执行与未执行的验证 / 如何回退。基于实际内容，不写空泛总结。完成修改后不自动打开差异或 PR 预览页面。
 
-提交与部署授权规则见工作区顶层 `AGENTS.md`（全工作区唯一版本）。
+## 提交与部署
+
+- AliECS 变更走分支 + PR，不直推 main。所有写 `.git` 的命令串行执行。
+- 用户明确授权提交/推送/部署后，完成 PR、CI、合并、Actions 和运行验证，不停在手工指令。
+- 提交前检查 status/分支/remote，并排除 `.env`、logs、browser_data、`_references`、真实密钥和生产数据。
+- 纯文档变更不触发生产 deploy；代码/workflow 变更按 `docs/runbooks/deploy.md` 闭环。

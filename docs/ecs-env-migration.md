@@ -71,7 +71,7 @@ grep -E '^(APP_ROOT|COMPOSE_FILE|RUNTIME_ENV_FILE|DATABASE_URL|WECOM_ENV_PROFILE
 
 ```bash
 cd /root/AliECS/deploy/ecs
-./deploy.sh VYYYYMMDDNNN
+./deploy.sh sha-<Git commit 前12位>
 ```
 
 验证：

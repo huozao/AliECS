@@ -8,8 +8,8 @@ fi
 
 IMAGE_TAG="$1"
 
-if [[ ! "$IMAGE_TAG" =~ ^(v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?|V[0-9]{11})$ ]]; then
-  echo "[部署] 镜像标签格式错误：$IMAGE_TAG（必须是 vX.Y.Z、vX.Y.Z-rc.N 或 VYYYYMMDDNNN）" >&2
+if [[ ! "$IMAGE_TAG" =~ ^(sha-[0-9a-f]{12,40}|v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?|V[0-9]{11})$ ]]; then
+  echo "[部署] 镜像标签格式错误：$IMAGE_TAG（必须是 sha-<commit>；历史 v/V 标签仅保留兼容）" >&2
   exit 1
 fi
 
@@ -244,7 +244,7 @@ if [[ -f "$CURRENT_ENV" ]]; then
 fi
 
 # 每服务镜像标签：优先用调用方传入的内容寻址标签（*_TAG，内容没变 = 标签不变 = 容器不重建），
-# 未提供时回落到发布号 IMAGE_TAG（手动 deploy.sh VYYYYMMDDNNN 的全量部署行为不变）。
+# 未提供时回落到 GitHub commit alias IMAGE_TAG；历史 v/V 标签仍可用于兼容回滚。
 echo "[部署] 服务镜像标签：public-web=${PUBLIC_WEB_TAG:-$IMAGE_TAG} admin-ui=${ADMIN_UI_TAG:-$IMAGE_TAG} backend-api=${BACKEND_API_TAG:-$IMAGE_TAG} doc-sync-worker=${DOC_SYNC_WORKER_TAG:-$IMAGE_TAG} tplus-sync-worker=${TPLUS_SYNC_WORKER_TAG:-$IMAGE_TAG} mcp-coding-server=${MCP_CODING_SERVER_TAG:-$IMAGE_TAG}"
 
 cat > "$CURRENT_ENV" <<ENV
@@ -443,6 +443,7 @@ if "$ROOT_DIR/healthcheck.sh"; then
   if git -C "$REPO_ROOT" rev-parse HEAD >/dev/null 2>&1; then
     git -C "$REPO_ROOT" rev-parse HEAD > "$LAST_SUCCESS_COMMIT_FILE"
   fi
+  "$ROOT_DIR/write-deployment-manifest.sh"
   echo "[部署] 成功"
   exit 0
 fi
