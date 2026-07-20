@@ -73,6 +73,9 @@ services:
       WECOM_KF_API_TIMEOUT_SECONDS: ${WECOM_KF_API_TIMEOUT_SECONDS:-10}
       WECOM_KF_PROCESSOR_URL: ${WECOM_KF_PROCESSOR_URL:-}
       WECOM_KF_PROCESSOR_TIMEOUT_SECONDS: ${WECOM_KF_PROCESSOR_TIMEOUT_SECONDS:-1260}
+      WECOM_KF_TASK_STORAGE_DIR: ${WECOM_KF_TASK_STORAGE_DIR:-/app/wecom-kf-materials}
+      WECOM_KF_TASK_MAX_ATTACHMENTS: ${WECOM_KF_TASK_MAX_ATTACHMENTS:-12}
+      WECOM_KF_TASK_MAX_TOTAL_MB: ${WECOM_KF_TASK_MAX_TOTAL_MB:-40}
       OPENCLAW_INTERNAL_TOKEN: ${OPENCLAW_INTERNAL_TOKEN:-}
       WECOM_GROUP_MEDIA_DIR: /app/wecom-group-media
       CHANJET_WEBHOOK_AES_KEY: ${CHANJET_WEBHOOK_AES_KEY:-}
@@ -100,6 +103,7 @@ services:
       - tplus_sync_requests:/app/tplus-sync-requests
       - uploads:/app/uploads
       - wecom_group_media:/app/wecom-group-media
+      - wecom_kf_materials:/app/wecom-kf-materials
     depends_on:
       postgres:
         condition: service_healthy
@@ -291,3 +295,4 @@ volumes:
   mcp_oauth_data:
   uploads:
   wecom_group_media:
+  wecom_kf_materials:

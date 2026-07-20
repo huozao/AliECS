@@ -71,6 +71,9 @@
 | `WECOM_KF_API_TIMEOUT_SECONDS` | backend-api | Timeout for WeCom API calls | Optional, default 10 |
 | `WECOM_KF_PROCESSOR_URL` | backend-api | OpenAI-compatible local processor; empty means echo | Optional; production deploy defaults to local bridge |
 | `WECOM_KF_PROCESSOR_TIMEOUT_SECONDS` | backend-api | Timeout for the optional processor | Optional, default 1260 |
+| `WECOM_KF_TASK_STORAGE_DIR` | backend-api | Persistent root for original KF attachments and confirmed task manifests | Optional, default `/app/wecom-kf-materials` |
+| `WECOM_KF_TASK_MAX_ATTACHMENTS` | backend-api | Maximum attachments forwarded to the processor per material task | Optional, default 12 |
+| `WECOM_KF_TASK_MAX_TOTAL_MB` | backend-api | Maximum combined attachment bytes forwarded to the processor per material task | Optional, default 40 |
 
 The callback's dynamic XML `Token` is a short-lived `sync_msg` token and is not
 the same value as `WECOM_KF_CALLBACK_TOKEN`. Never persist either token in logs.

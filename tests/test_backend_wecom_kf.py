@@ -172,6 +172,59 @@ def test_send_text_uses_deterministic_reply_id_and_utf8_limit(monkeypatch) -> No
     assert len(sent[0]["text"]["content"].encode("utf-8")) <= 2048
 
 
+def test_send_menu_has_static_confirmation_actions(monkeypatch) -> None:
+    mod = _module()
+    sent: list[dict] = []
+
+    def fake_http(method, url, payload, timeout, *, attempts=2):
+        if "/gettoken?" in url:
+            return {"errcode": 0, "access_token": "token", "expires_in": 7200}
+        sent.append(payload)
+        return {"errcode": 0, "errmsg": "ok"}
+
+    monkeypatch.setattr(mod, "_http_json", fake_http)
+    task_key = "a" * 32
+    mod.WeComKfClient("corp", "secret").send_menu(
+        "wm-user", "wk", "分析结果", "source-1", task_key
+    )
+
+    payload = sent[0]
+    assert payload["msgtype"] == "msgmenu"
+    assert [item["click"]["content"] for item in payload["msgmenu"]["list"]] == [
+        "确认处理", "补充资料", "取消任务"
+    ]
+    assert payload["msgmenu"]["list"][0]["click"]["id"] == f"kf_confirm_{task_key}"
+
+
+def test_download_media_returns_binary_and_filename(monkeypatch) -> None:
+    mod = _module()
+
+    class Response:
+        headers = {
+            "Content-Type": "image/jpeg",
+            "Content-Disposition": "attachment; filename*=UTF-8''%E5%90%88%E5%90%8C.jpg",
+        }
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, limit):
+            return b"jpeg-data"
+
+    client = mod.WeComKfClient("corp", "secret")
+    monkeypatch.setattr(client, "access_token", lambda **_: "token")
+    monkeypatch.setattr(mod.request, "urlopen", lambda req, timeout: Response())
+
+    media = client.download_media("media-1")
+
+    assert media.data == b"jpeg-data"
+    assert media.mime_type == "image/jpeg"
+    assert media.filename == "合同.jpg"
+
+
 def test_notification_only_replies_to_external_customer_text() -> None:
     mod = _module()
     config = _config(mod)
@@ -201,6 +254,76 @@ def test_notification_only_replies_to_external_customer_text() -> None:
     assert mod._cursors["wk"] == "cursor-next"
 
 
+def test_notification_persists_task_cursor_and_outbound_status() -> None:
+    mod = _module()
+    config = _config(mod)
+
+    class FakeStore:
+        def __init__(self):
+            self.cursor = "cursor-old"
+            self.task = None
+            self.outbound = []
+            self.failed = []
+
+        def get_cursor(self, open_kfid):
+            return self.cursor
+
+        def set_cursor(self, open_kfid, cursor):
+            self.cursor = cursor
+
+        def active_task(self, open_kfid, external_userid):
+            return self.task
+
+        def create_task(self, open_kfid, external_userid, title):
+            self.task = {
+                "id": 1, "task_key": "b" * 32, "status": "collecting", "title": title
+            }
+            return self.task
+
+        def record_outbound(self, msgid, task_id, open_kfid, external_userid, purpose):
+            self.outbound.append([msgid, task_id, purpose, "queued"])
+
+        def mark_outbound_sent(self, msgid):
+            self.outbound[-1][-1] = "sent"
+
+        def mark_outbound_failed(self, msgid, fail_type):
+            self.failed.append((msgid, fail_type))
+
+    class FakeClient:
+        def __init__(self):
+            self.sent = []
+
+        def sync_messages(self, open_kfid, sync_token, cursor=""):
+            assert cursor == "cursor-old"
+            return [
+                {
+                    "msgid": "m1", "open_kfid": open_kfid, "external_userid": "wm1",
+                    "origin": 3, "msgtype": "text", "text": {"content": "开始任务：合同"},
+                },
+                {
+                    "msgid": "event-1", "msgtype": "event",
+                    "event": {"event_type": "msg_send_fail", "fail_msgid": "old-reply", "fail_type": 2},
+                },
+            ], "cursor-next"
+
+        def download_media(self, media_id):
+            raise AssertionError("not expected")
+
+        def send_text(self, external_userid, open_kfid, content, source_msgid, *, purpose="reply"):
+            self.sent.append((content, purpose))
+
+    store = FakeStore()
+    client = FakeClient()
+    mod.handle_notification(
+        mod.KfNotification("sync", "wk"), config, client=client, task_store=store
+    )
+
+    assert store.cursor == "cursor-next"
+    assert client.sent[0][1] == "task_started"
+    assert store.outbound[0][2:] == ["task_started", "sent"]
+    assert store.failed == [("old-reply", 2)]
+
+
 def test_processor_forwards_openai_compatible_payload(monkeypatch) -> None:
     mod = _module()
     captured = {}
@@ -226,6 +349,32 @@ def test_processor_forwards_openai_compatible_payload(monkeypatch) -> None:
     assert captured["payload"]["metadata"]["peer_id"] == "wm1"
     assert captured["payload"]["metadata"]["conversation_id"] == "wm1"
     assert captured["payload"]["metadata"]["chatgpt_project"] == "WeCom-KF"
+
+
+def test_processor_forwards_material_attachments_as_data_urls(monkeypatch) -> None:
+    mod = _module()
+    task_mod = importlib.import_module("app.integrations.wecom_kf_tasks")
+    captured = {}
+
+    def fake_http(method, url, payload, timeout, *, attempts=2):
+        captured["payload"] = payload
+        return {"choices": [{"message": {"content": "分析结果"}}]}
+
+    monkeypatch.setattr(mod, "_http_json", fake_http)
+    attachment = task_mod.ProcessorAttachment(
+        "合同.pdf", "application/pdf", 3, "data:application/pdf;base64,cGRm"
+    )
+    reply = mod.call_processor(
+        {"msgid": "m1", "open_kfid": "wk1", "external_userid": "wm1"},
+        _config(mod, processor_url="http://bridge/v1/chat/completions"),
+        "分析这些资料",
+        [attachment],
+    )
+
+    content = captured["payload"]["messages"][0]["content"]
+    assert reply == "分析结果"
+    assert content[0] == {"type": "text", "text": "分析这些资料"}
+    assert content[1]["image_url"]["url"] == attachment.data_url
 
 
 def test_callback_route_validates_before_scheduling(monkeypatch) -> None:
