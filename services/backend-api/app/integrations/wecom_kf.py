@@ -1,9 +1,4 @@
-"""微信客服 API 的最小文本闭环。
-
-责任仅限于：回调验签/解密、sync_msg 拉取、可选转发给
-OpenAI-compatible 处理器，以及 send_msg 文本回复。媒体、持久化游标和
-完整消息库留给后续阶段。
-"""
+"""微信客服 API：文本对话与资料任务入口。"""
 
 from __future__ import annotations
 
@@ -13,6 +8,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import struct
 import threading
 import time
@@ -24,11 +20,20 @@ from urllib import error, parse, request
 
 from Crypto.Cipher import AES
 
+from app.integrations.wecom_kf_tasks import (
+    DownloadedMedia,
+    KfTaskCoordinator,
+    PostgresKfTaskStore,
+    ProcessorAttachment,
+    TaskOutcome,
+)
+
 
 WECOM_API_BASE = "https://qyapi.weixin.qq.com/cgi-bin"
 TOKEN_ERROR_CODES = {40014, 42001}
 MAX_CALLBACK_BYTES = 1024 * 1024
 MAX_SYNC_PAGES = 100
+MAX_MEDIA_BYTES = 20 * 1024 * 1024
 
 logger = logging.getLogger("aliecs.wecom_kf")
 
@@ -303,17 +308,101 @@ class WeComKfClient:
         open_kfid: str,
         content: str,
         source_msgid: str,
+        *,
+        purpose: str = "reply",
     ) -> dict[str, Any]:
         return self._post(
             "/kf/send_msg",
             {
                 "touser": external_userid,
                 "open_kfid": open_kfid,
-                "msgid": reply_msgid(source_msgid),
+                "msgid": reply_msgid(source_msgid, purpose),
                 "msgtype": "text",
                 "text": {"content": _truncate_utf8(content, 2048)},
             },
         )
+
+    def send_menu(
+        self,
+        external_userid: str,
+        open_kfid: str,
+        content: str,
+        source_msgid: str,
+        task_key: str,
+        *,
+        purpose: str = "task_review",
+    ) -> dict[str, Any]:
+        if not task_key or len(task_key) != 32:
+            raise WeComKfError("资料任务标识格式错误")
+        return self._post(
+            "/kf/send_msg",
+            {
+                "touser": external_userid,
+                "open_kfid": open_kfid,
+                "msgid": reply_msgid(source_msgid, purpose),
+                "msgtype": "msgmenu",
+                "msgmenu": {
+                    "head_content": _truncate_utf8(content, 1024),
+                    "list": [
+                        {
+                            "type": "click",
+                            "click": {
+                                "id": f"kf_confirm_{task_key}",
+                                "content": "确认处理",
+                            },
+                        },
+                        {
+                            "type": "click",
+                            "click": {
+                                "id": f"kf_supplement_{task_key}",
+                                "content": "补充资料",
+                            },
+                        },
+                        {
+                            "type": "click",
+                            "click": {
+                                "id": f"kf_cancel_{task_key}",
+                                "content": "取消任务",
+                            },
+                        },
+                    ],
+                    "tail_content": "也可直接发送以上文字指令。",
+                },
+            },
+        )
+
+    def download_media(self, media_id: str) -> DownloadedMedia:
+        if not media_id:
+            raise WeComKfError("media_id 为空")
+        for attempt in range(2):
+            token = self.access_token(force_refresh=attempt == 1)
+            query = parse.urlencode({"access_token": token, "media_id": media_id})
+            req = request.Request(f"{WECOM_API_BASE}/media/get?{query}", method="GET")
+            try:
+                with request.urlopen(req, timeout=self._timeout) as response:
+                    body = response.read(MAX_MEDIA_BYTES + 1)
+                    content_type = str(response.headers.get("Content-Type") or "")
+                    disposition = str(response.headers.get("Content-Disposition") or "")
+            except error.HTTPError as exc:
+                raise WeComKfError(f"下载客服附件 HTTP {exc.code}") from exc
+            except (error.URLError, TimeoutError, OSError) as exc:
+                raise WeComKfError("下载客服附件连接失败或超时") from exc
+            if len(body) > MAX_MEDIA_BYTES:
+                raise WeComKfError("客服附件超过 20MB 限制")
+            api_result = _json_object_or_none(body, content_type)
+            if api_result is not None and "errcode" in api_result:
+                errcode = int(api_result.get("errcode", -1))
+                if errcode in TOKEN_ERROR_CODES and attempt == 0:
+                    continue
+                raise _api_error("media/get", api_result)
+            mime_type = content_type.split(";", 1)[0].strip().lower()
+            if not mime_type or mime_type == "application/octet-stream":
+                mime_type = "application/octet-stream"
+            filename = _content_disposition_filename(disposition) or (
+                f"attachment-{media_id[:12]}"
+            )
+            return DownloadedMedia(body, mime_type, filename)
+        raise WeComKfError("media/get access_token 刷新后仍失败")
 
 
 def _api_error(operation: str, result: dict[str, Any]) -> WeComKfError:
@@ -322,8 +411,28 @@ def _api_error(operation: str, result: dict[str, Any]) -> WeComKfError:
     return WeComKfError(f"{operation} 失败: errcode={code}, errmsg={message}")
 
 
-def reply_msgid(source_msgid: str) -> str:
-    return hashlib.sha256(f"wecom-kf:{source_msgid}".encode("utf-8")).hexdigest()[:32]
+def reply_msgid(source_msgid: str, purpose: str = "reply") -> str:
+    suffix = "" if purpose == "reply" else f":{purpose}"
+    digest = hashlib.sha256(f"wecom-kf:{source_msgid}{suffix}".encode("utf-8"))
+    return digest.hexdigest()[:32]
+
+
+def _json_object_or_none(body: bytes, content_type: str) -> dict[str, Any] | None:
+    if "json" not in content_type.lower() and not body.lstrip().startswith(b"{"):
+        return None
+    try:
+        result = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return result if isinstance(result, dict) else None
+
+
+def _content_disposition_filename(value: str) -> str:
+    extended = re.search(r"filename\*=UTF-8''([^;]+)", value, re.IGNORECASE)
+    if extended:
+        return parse.unquote(extended.group(1)).strip()
+    regular = re.search(r'filename="?([^";]+)', value, re.IGNORECASE)
+    return regular.group(1).strip() if regular else ""
 
 
 def _truncate_utf8(value: str, limit: int) -> str:
@@ -333,15 +442,25 @@ def _truncate_utf8(value: str, limit: int) -> str:
     return data[:limit].decode("utf-8", errors="ignore")
 
 
-def build_reply(message: dict[str, Any], config: WeComKfConfig) -> str:
-    content = str((message.get("text") or {}).get("content") or "").strip()
-    fallback = f"已收到：{content}"
+def call_processor(
+    message: dict[str, Any],
+    config: WeComKfConfig,
+    content: str,
+    attachments: list[ProcessorAttachment] | None = None,
+) -> str:
     if not config.processor_url:
-        return fallback
+        raise WeComKfError("未配置微信客服处理器")
+    user_content: str | list[dict[str, Any]] = content
+    if attachments:
+        user_content = [{"type": "text", "text": content}]
+        user_content.extend(
+            {"type": "image_url", "image_url": {"url": item.data_url}}
+            for item in attachments
+        )
     payload = {
         "model": "browser-chatgpt",
         "stream": False,
-        "messages": [{"role": "user", "content": content}],
+        "messages": [{"role": "user", "content": user_content}],
         "metadata": {
             "channel": "wecom",
             "transport": "wecom_kf",
@@ -354,20 +473,31 @@ def build_reply(message: dict[str, Any], config: WeComKfConfig) -> str:
             "chatgpt_project": "WeCom-KF",
         },
     }
+    result = _http_json(
+        "POST",
+        config.processor_url,
+        payload,
+        config.processor_timeout_seconds,
+        attempts=1,
+    )
+    choices = result.get("choices") or []
     try:
-        result = _http_json(
-            "POST",
-            config.processor_url,
-            payload,
-            config.processor_timeout_seconds,
-            attempts=1,
-        )
-        choices = result.get("choices") or []
         reply = str(((choices[0] or {}).get("message") or {}).get("content") or "").strip()
-        if reply:
-            return reply
+    except (IndexError, TypeError) as exc:
+        raise WeComKfError("处理器返回格式错误") from exc
+    if not reply:
         raise WeComKfError("处理器未返回文本")
-    except (IndexError, TypeError, WeComKfError):
+    return reply
+
+
+def build_reply(message: dict[str, Any], config: WeComKfConfig) -> str:
+    content = str((message.get("text") or {}).get("content") or "").strip()
+    fallback = f"已收到：{content}"
+    if not config.processor_url:
+        return fallback
+    try:
+        return call_processor(message, config, content)
+    except WeComKfError:
         logger.exception("wecom kf processor failed; falling back to echo")
         return fallback
 
@@ -377,6 +507,9 @@ _client_key: tuple[str, str, float] | None = None
 _client: WeComKfClient | None = None
 _sync_lock = threading.Lock()
 _cursors: dict[str, str] = {}
+_task_store_lock = threading.Lock()
+_task_store_key: tuple[str, str] | None = None
+_task_store: PostgresKfTaskStore | None = None
 
 
 def client_for_config(config: WeComKfConfig) -> WeComKfClient:
@@ -389,30 +522,117 @@ def client_for_config(config: WeComKfConfig) -> WeComKfClient:
         return _client
 
 
+def task_store_for_env() -> PostgresKfTaskStore | None:
+    global _task_store, _task_store_key
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if not database_url:
+        return None
+    storage_root = os.getenv(
+        "WECOM_KF_TASK_STORAGE_DIR", "/app/wecom-kf-materials"
+    ).strip()
+    key = (database_url, storage_root)
+    with _task_store_lock:
+        if _task_store is None or _task_store_key != key:
+            _task_store = PostgresKfTaskStore(database_url, storage_root)
+            _task_store_key = key
+        return _task_store
+
+
+def _send_task_outcome(
+    client: WeComKfClient,
+    store: PostgresKfTaskStore,
+    outcome: TaskOutcome,
+    message: dict[str, Any],
+) -> None:
+    if not outcome.reply_type:
+        return
+    source_msgid = str(message["msgid"])
+    open_kfid = str(message["open_kfid"])
+    external_userid = str(message["external_userid"])
+    outbound_msgid = reply_msgid(source_msgid, outcome.purpose)
+    store.record_outbound(
+        outbound_msgid,
+        outcome.task_id,
+        open_kfid,
+        external_userid,
+        outcome.purpose,
+    )
+    if outcome.reply_type == "menu":
+        client.send_menu(
+            external_userid,
+            open_kfid,
+            outcome.text,
+            source_msgid,
+            outcome.task_key,
+            purpose=outcome.purpose,
+        )
+    else:
+        client.send_text(
+            external_userid,
+            open_kfid,
+            outcome.text,
+            source_msgid,
+            purpose=outcome.purpose,
+        )
+    store.mark_outbound_sent(outbound_msgid)
+
+
 def handle_notification(
     notification: KfNotification,
     config: WeComKfConfig,
     *,
     client: WeComKfClient | None = None,
+    task_store: PostgresKfTaskStore | None = None,
 ) -> None:
     active_client = client or client_for_config(config)
+    active_store = task_store or task_store_for_env()
+    coordinator = KfTaskCoordinator(active_store) if active_store else None
     with _sync_lock:
-        cursor = _cursors.get(notification.open_kfid, "")
         try:
+            cursor = (
+                active_store.get_cursor(notification.open_kfid)
+                if active_store
+                else _cursors.get(notification.open_kfid, "")
+            )
             messages, next_cursor = active_client.sync_messages(
                 notification.open_kfid, notification.sync_token, cursor
             )
             for message in messages:
-                if int(message.get("origin") or 0) != 3 or message.get("msgtype") != "text":
+                if message.get("msgtype") == "event":
+                    event = message.get("event") or {}
+                    if active_store and event.get("event_type") == "msg_send_fail":
+                        failed_msgid = str(event.get("fail_msgid") or "").strip()
+                        if failed_msgid:
+                            active_store.mark_outbound_failed(
+                                failed_msgid, int(event.get("fail_type") or 0)
+                            )
+                    continue
+                if int(message.get("origin") or 0) != 3:
                     continue
                 source_msgid = str(message.get("msgid") or "").strip()
                 external_userid = str(message.get("external_userid") or "").strip()
                 open_kfid = str(message.get("open_kfid") or notification.open_kfid).strip()
                 if not source_msgid or not external_userid or not open_kfid:
                     continue
-                reply = build_reply({**message, "open_kfid": open_kfid}, config)
-                active_client.send_text(external_userid, open_kfid, reply, source_msgid)
-            _cursors[notification.open_kfid] = next_cursor
+                normalized = {**message, "open_kfid": open_kfid}
+                if coordinator:
+                    outcome = coordinator.handle(
+                        normalized,
+                        download_media=active_client.download_media,
+                        analyze=lambda prompt, attachments: call_processor(
+                            normalized, config, prompt, attachments
+                        ),
+                    )
+                    if outcome and outcome.handled:
+                        _send_task_outcome(active_client, active_store, outcome, normalized)
+                        continue
+                if message.get("msgtype") == "text":
+                    reply = build_reply(normalized, config)
+                    active_client.send_text(external_userid, open_kfid, reply, source_msgid)
+            if active_store:
+                active_store.set_cursor(notification.open_kfid, next_cursor)
+            else:
+                _cursors[notification.open_kfid] = next_cursor
         except Exception:
             # 不记录消息正文、临时 sync token 或 access_token。
             logger.exception("wecom kf background processing failed")
