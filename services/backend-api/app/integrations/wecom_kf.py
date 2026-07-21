@@ -20,6 +20,7 @@ from urllib import error, parse, request
 
 from Crypto.Cipher import AES
 
+from app.integrations import product_center
 from app.integrations.wecom_kf_tasks import (
     DownloadedMedia,
     KfTaskCoordinator,
@@ -587,6 +588,35 @@ def _send_task_outcome(
     store.mark_outbound_sent(outbound_msgid)
 
 
+def _build_archive_external(
+    store: PostgresKfTaskStore | None,
+) -> Any:
+    """构造确认归档后的外部同步回调；未配置或未启用时返回 None（退化为仅本地归档）。"""
+    if store is None:
+        return None
+    config = product_center.ProductCenterConfig.from_env()
+    if not config.enabled:
+        return None
+
+    def _archive(task: dict[str, Any], items: list[dict[str, Any]]) -> Any:
+        store.set_external_archive_status(int(task["id"]), "pending")
+        try:
+            result = product_center.archive_materials(
+                config, task, items, store.original_bytes
+            )
+        except Exception as exc:  # 不让外部故障影响本地归档主流程。
+            logger.warning("资料任务外部归档异常: %s", exc)
+            store.set_external_archive_status(int(task["id"]), "failed")
+            raise
+        try:
+            store.apply_archive_result(int(task["id"]), result)
+        except Exception as exc:
+            logger.warning("外部归档结果落库失败: %s", exc)
+        return result
+
+    return _archive
+
+
 def _process_message(
     message: dict[str, Any],
     notification: KfNotification,
@@ -619,6 +649,7 @@ def _process_message(
             analyze=lambda prompt, attachments: call_processor(
                 normalized, config, prompt, attachments
             ),
+            archive_external=_build_archive_external(active_store),
         )
         if outcome and outcome.handled:
             _send_task_outcome(active_client, active_store, outcome, normalized)

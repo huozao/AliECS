@@ -56,6 +56,7 @@ RETRY_COMMANDS = frozenset({"重试处理", "重新处理"})
 CONFIRM_COMMANDS = frozenset({"确认处理", "确认归档"})
 SUPPLEMENT_COMMANDS = frozenset({"补充资料", "继续补充"})
 CANCEL_COMMANDS = frozenset({"取消任务", "取消处理"})
+RETRY_ARCHIVE_COMMANDS = frozenset({"重试归档", "重新归档", "重试同步"})
 MENU_RE = re.compile(r"^kf_(confirm|supplement|cancel)_([0-9a-f]{32})$")
 
 
@@ -368,6 +369,93 @@ class PostgresKfTaskStore:
             (f"# {task.get('title') or '微信资料任务'}\n\n{analysis}\n").encode("utf-8"),
         )
 
+    def original_bytes(self, item: dict[str, Any]) -> bytes | None:
+        path_value = str(item.get("storage_path") or "")
+        if not path_value:
+            return None
+        path = (self.storage_root / path_value).resolve()
+        if not path.is_relative_to(self.storage_root) or not path.is_file():
+            return None
+        try:
+            return path.read_bytes()
+        except OSError:
+            return None
+
+    def set_external_archive_status(self, task_id: int, status: str) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE wecom_kf_material_tasks
+                SET external_archive_status=%s, updated_at=NOW()
+                WHERE id=%s
+                """,
+                (status, task_id),
+            )
+
+    def apply_archive_result(self, task_id: int, result: Any) -> None:
+        """把外部归档结果落库：附件 Paperless 字段 + 任务 ERPNext 引用与状态。"""
+        with self._connect() as conn, conn.cursor() as cur:
+            for item in getattr(result, "items", []) or []:
+                cur.execute(
+                    """
+                    UPDATE wecom_kf_material_items
+                    SET paperless_task_uuid=%s,
+                        paperless_document_id=%s,
+                        paperless_document_url=%s,
+                        paperless_error=%s
+                    WHERE id=%s AND task_id=%s
+                    """,
+                    (
+                        str(getattr(item, "task_uuid", "") or ""),
+                        getattr(item, "document_id", None),
+                        str(getattr(item, "document_url", "") or ""),
+                        str(getattr(item, "error", "") or "")[:1000],
+                        int(getattr(item, "item_id")),
+                        task_id,
+                    ),
+                )
+            cur.execute(
+                """
+                UPDATE wecom_kf_material_tasks
+                SET external_archive_status=%s,
+                    external_archive_error=%s,
+                    erpnext_doctype=CASE WHEN %s <> '' THEN %s ELSE erpnext_doctype END,
+                    erpnext_docname=CASE WHEN %s <> '' THEN %s ELSE erpnext_docname END,
+                    erpnext_url=CASE WHEN %s <> '' THEN %s ELSE erpnext_url END,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
+                (
+                    str(getattr(result, "status", "") or "none"),
+                    str(getattr(result, "error", "") or "")[:1000],
+                    str(getattr(result, "erpnext_doctype", "") or ""),
+                    str(getattr(result, "erpnext_doctype", "") or ""),
+                    str(getattr(result, "erpnext_docname", "") or ""),
+                    str(getattr(result, "erpnext_docname", "") or ""),
+                    str(getattr(result, "erpnext_url", "") or ""),
+                    str(getattr(result, "erpnext_url", "") or ""),
+                    task_id,
+                ),
+            )
+
+    def latest_archivable_task(
+        self, open_kfid: str, external_userid: str
+    ) -> dict[str, Any] | None:
+        """最近一条本地已完成但外部归档未成功的任务，用于“重试归档”。"""
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM wecom_kf_material_tasks
+                WHERE open_kfid=%s AND external_userid=%s
+                  AND status='completed'
+                  AND external_archive_status IN ('pending', 'partial', 'failed')
+                ORDER BY id DESC LIMIT 1
+                """,
+                (open_kfid, external_userid),
+            )
+            row = cur.fetchone()
+        return dict(row) if row else None
+
     def record_outbound(
         self,
         msgid: str,
@@ -455,6 +543,38 @@ def _analysis_prompt(task: dict[str, Any], items: list[dict[str, Any]], skipped:
     )
 
 
+def _run_external_archive(
+    archive_external: Callable[[dict[str, Any], list[dict[str, Any]]], Any] | None,
+    task: dict[str, Any],
+    items: list[dict[str, Any]],
+) -> str:
+    """执行外部归档回调并返回给用户的中文状态尾巴。永不抛出，失败也要可观测。"""
+    if archive_external is None:
+        return ""
+    try:
+        summary = archive_external(task, items)
+    except Exception as exc:  # 回调内部应已落库；这里兜底避免影响本地归档回复。
+        return f"\n⚠ 外部归档异常（{type(exc).__name__}），本地已保存，可发送“重试归档”。"
+    if summary is None:
+        return ""
+    status = str(getattr(summary, "status", "") or "")
+    if status == "completed":
+        count = int(getattr(summary, "document_count", 0) or 0)
+        erp = str(getattr(summary, "erpnext_url", "") or "")
+        tail = f"\n📄 已同步 Paperless {count} 个文档"
+        if erp:
+            tail += f"，ERPNext 记录：{erp}"
+        return tail
+    if status == "partial":
+        count = int(getattr(summary, "document_count", 0) or 0)
+        err = str(getattr(summary, "error", "") or "")
+        return f"\n⚠ 部分同步：Paperless {count} 个文档成功，{err}。可发送“重试归档”补齐。"
+    if status == "failed":
+        err = str(getattr(summary, "error", "") or "")
+        return f"\n⚠ 外部归档失败（{err}），本地已保存，可发送“重试归档”。"
+    return ""
+
+
 class KfTaskCoordinator:
     def __init__(self, store: PostgresKfTaskStore) -> None:
         self.store = store
@@ -465,6 +585,7 @@ class KfTaskCoordinator:
         *,
         download_media: Callable[[str], DownloadedMedia],
         analyze: Callable[[str, list[ProcessorAttachment]], str],
+        archive_external: Callable[[dict[str, Any], list[dict[str, Any]]], Any] | None = None,
     ) -> TaskOutcome | None:
         msgid = str(message.get("msgid") or "").strip()
         open_kfid = str(message.get("open_kfid") or "").strip()
@@ -567,10 +688,12 @@ class KfTaskCoordinator:
                 self.store.write_archive(target, items)
                 self.store.set_status(int(target["id"]), "completed")
                 media_count = sum(1 for item in items if item.get("storage_path"))
+                suffix = _run_external_archive(archive_external, target, items)
                 return TaskOutcome(
                     True,
                     "text",
-                    f"✅ 资料任务 {_task_label(target)} 已确认归档，共保存 {media_count} 个附件和分析结果。",
+                    f"✅ 资料任务 {_task_label(target)} 已确认归档，共保存 {media_count} 个附件和分析结果。"
+                    + suffix,
                     "task_completed",
                     int(target["id"]),
                     str(target["task_key"]),
@@ -597,6 +720,23 @@ class KfTaskCoordinator:
                     int(target["id"]),
                     str(target["task_key"]),
                 )
+
+        if text in RETRY_ARCHIVE_COMMANDS:
+            retryable = self.store.latest_archivable_task(open_kfid, external_userid)
+            if not retryable:
+                return TaskOutcome(True, "text", "没有需要重试外部归档的任务。", "task_missing")
+            items = self.store.items(int(retryable["id"]))
+            suffix = _run_external_archive(archive_external, retryable, items)
+            if not suffix:
+                suffix = "\n（未启用外部归档或无可同步内容）"
+            return TaskOutcome(
+                True,
+                "text",
+                f"资料任务 {_task_label(retryable)} 重试外部归档：{suffix.lstrip()}",
+                "task_archive_retry",
+                int(retryable["id"]),
+                str(retryable["task_key"]),
+            )
 
         if text in FINISH_COMMANDS or text in RETRY_COMMANDS:
             task = active
