@@ -31,6 +31,8 @@ from app.integrations.wecom_kf_tasks import (
 
 WECOM_API_BASE = "https://qyapi.weixin.qq.com/cgi-bin"
 TOKEN_ERROR_CODES = {40014, 42001}
+# 95033=repeated msgid：该回复此前已成功下发，属幂等成功而非失败。
+SEND_IDEMPOTENT_CODES = frozenset({95033})
 MAX_CALLBACK_BYTES = 1024 * 1024
 MAX_SYNC_PAGES = 100
 MAX_MEDIA_BYTES = 20 * 1024 * 1024
@@ -260,7 +262,13 @@ class WeComKfClient:
             self._token_deadline = time.monotonic() + max(1, expires_in - 120)
             return self._access_token
 
-    def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def _post(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        ok_codes: frozenset[int] = frozenset(),
+    ) -> dict[str, Any]:
         for attempt in range(2):
             token = self.access_token(force_refresh=attempt == 1)
             query = parse.urlencode({"access_token": token})
@@ -270,7 +278,7 @@ class WeComKfClient:
             errcode = int(result.get("errcode", -1))
             if errcode in TOKEN_ERROR_CODES and attempt == 0:
                 continue
-            if errcode != 0:
+            if errcode != 0 and errcode not in ok_codes:
                 raise _api_error(path, result)
             return result
         raise WeComKfError(f"{path} access_token 刷新后仍失败")
@@ -320,6 +328,7 @@ class WeComKfClient:
                 "msgtype": "text",
                 "text": {"content": _truncate_utf8(content, 2048)},
             },
+            ok_codes=SEND_IDEMPOTENT_CODES,
         )
 
     def send_menu(
@@ -369,6 +378,7 @@ class WeComKfClient:
                     "tail_content": "也可直接发送以上文字指令。",
                 },
             },
+            ok_codes=SEND_IDEMPOTENT_CODES,
         )
 
     def download_media(self, media_id: str) -> DownloadedMedia:
@@ -577,6 +587,58 @@ def _send_task_outcome(
     store.mark_outbound_sent(outbound_msgid)
 
 
+def _process_message(
+    message: dict[str, Any],
+    notification: KfNotification,
+    config: WeComKfConfig,
+    active_client: WeComKfClient,
+    active_store: PostgresKfTaskStore | None,
+    coordinator: KfTaskCoordinator | None,
+) -> None:
+    if message.get("msgtype") == "event":
+        event = message.get("event") or {}
+        if active_store and event.get("event_type") == "msg_send_fail":
+            failed_msgid = str(event.get("fail_msgid") or "").strip()
+            if failed_msgid:
+                active_store.mark_outbound_failed(
+                    failed_msgid, int(event.get("fail_type") or 0)
+                )
+        return
+    if int(message.get("origin") or 0) != 3:
+        return
+    source_msgid = str(message.get("msgid") or "").strip()
+    external_userid = str(message.get("external_userid") or "").strip()
+    open_kfid = str(message.get("open_kfid") or notification.open_kfid).strip()
+    if not source_msgid or not external_userid or not open_kfid:
+        return
+    normalized = {**message, "open_kfid": open_kfid}
+    if coordinator:
+        outcome = coordinator.handle(
+            normalized,
+            download_media=active_client.download_media,
+            analyze=lambda prompt, attachments: call_processor(
+                normalized, config, prompt, attachments
+            ),
+        )
+        if outcome and outcome.handled:
+            _send_task_outcome(active_client, active_store, outcome, normalized)
+            return
+    if message.get("msgtype") == "text":
+        # 文本兜底路径幂等：回复 ID 由源 msgid 确定性派生；重新部署后从空游标
+        # 回放 backlog 时，跳过此前已成功回复的旧消息，避免重复调用处理器与重复回复。
+        outbound_msgid = reply_msgid(source_msgid)
+        if active_store and active_store.outbound_already_sent(outbound_msgid):
+            return
+        reply = build_reply(normalized, config)
+        if active_store:
+            active_store.record_outbound(
+                outbound_msgid, None, open_kfid, external_userid, "reply"
+            )
+        active_client.send_text(external_userid, open_kfid, reply, source_msgid)
+        if active_store:
+            active_store.mark_outbound_sent(outbound_msgid)
+
+
 def handle_notification(
     notification: KfNotification,
     config: WeComKfConfig,
@@ -598,37 +660,19 @@ def handle_notification(
                 notification.open_kfid, notification.sync_token, cursor
             )
             for message in messages:
-                if message.get("msgtype") == "event":
-                    event = message.get("event") or {}
-                    if active_store and event.get("event_type") == "msg_send_fail":
-                        failed_msgid = str(event.get("fail_msgid") or "").strip()
-                        if failed_msgid:
-                            active_store.mark_outbound_failed(
-                                failed_msgid, int(event.get("fail_type") or 0)
-                            )
-                    continue
-                if int(message.get("origin") or 0) != 3:
-                    continue
-                source_msgid = str(message.get("msgid") or "").strip()
-                external_userid = str(message.get("external_userid") or "").strip()
-                open_kfid = str(message.get("open_kfid") or notification.open_kfid).strip()
-                if not source_msgid or not external_userid or not open_kfid:
-                    continue
-                normalized = {**message, "open_kfid": open_kfid}
-                if coordinator:
-                    outcome = coordinator.handle(
-                        normalized,
-                        download_media=active_client.download_media,
-                        analyze=lambda prompt, attachments: call_processor(
-                            normalized, config, prompt, attachments
-                        ),
+                # 单条消息独立容错：一条失败只记日志并跳过，绝不中止整批，
+                # 否则游标无法推进，后续消息（含用户真正的指令）会被永久卡死。
+                try:
+                    _process_message(
+                        message,
+                        notification,
+                        config,
+                        active_client,
+                        active_store,
+                        coordinator,
                     )
-                    if outcome and outcome.handled:
-                        _send_task_outcome(active_client, active_store, outcome, normalized)
-                        continue
-                if message.get("msgtype") == "text":
-                    reply = build_reply(normalized, config)
-                    active_client.send_text(external_userid, open_kfid, reply, source_msgid)
+                except Exception:
+                    logger.exception("wecom kf single message processing failed")
             if active_store:
                 active_store.set_cursor(notification.open_kfid, next_cursor)
             else:
