@@ -324,6 +324,136 @@ def test_notification_persists_task_cursor_and_outbound_status() -> None:
     assert store.failed == [("old-reply", 2)]
 
 
+def test_send_text_treats_repeated_msgid_as_success(monkeypatch) -> None:
+    mod = _module()
+
+    def fake_http(method, url, payload, timeout, *, attempts=2):
+        if "/gettoken?" in url:
+            return {"errcode": 0, "access_token": "token", "expires_in": 7200}
+        return {"errcode": 95033, "errmsg": "repeated msgid"}
+
+    monkeypatch.setattr(mod, "_http_json", fake_http)
+    # 95033 表示该回复此前已成功下发，属幂等成功，send_text 不应抛异常。
+    result = mod.WeComKfClient("corp", "secret").send_text("wm", "wk", "hi", "m1")
+    assert int(result["errcode"]) == 95033
+
+
+def test_one_failed_message_does_not_block_later_messages() -> None:
+    mod = _module()
+    config = _config(mod)
+
+    class FakeStore:
+        def __init__(self):
+            self.cursor = "old"
+
+        def get_cursor(self, open_kfid):
+            return self.cursor
+
+        def set_cursor(self, open_kfid, cursor):
+            self.cursor = cursor
+
+        def active_task(self, open_kfid, external_userid):
+            return None
+
+        def outbound_already_sent(self, msgid):
+            return False
+
+        def record_outbound(self, *args):
+            pass
+
+        def mark_outbound_sent(self, msgid):
+            pass
+
+        def mark_outbound_failed(self, *args):
+            pass
+
+    class FakeClient:
+        def __init__(self):
+            self.sent = []
+
+        def sync_messages(self, open_kfid, sync_token, cursor=""):
+            return [
+                {"msgid": "m1", "open_kfid": open_kfid, "external_userid": "wm1",
+                 "origin": 3, "msgtype": "text", "text": {"content": "旧消息"}},
+                {"msgid": "m2", "open_kfid": open_kfid, "external_userid": "wm1",
+                 "origin": 3, "msgtype": "text", "text": {"content": "新消息"}},
+            ], "next"
+
+        def download_media(self, media_id):
+            raise AssertionError("not expected")
+
+        def send_text(self, external_userid, open_kfid, content, source_msgid, *, purpose="reply"):
+            if source_msgid == "m1":
+                raise mod.WeComKfError("boom")
+            self.sent.append(source_msgid)
+
+    store = FakeStore()
+    client = FakeClient()
+    mod.handle_notification(
+        mod.KfNotification("sync", "wk"), config, client=client, task_store=store
+    )
+
+    # 第一条硬失败被隔离，第二条仍处理，游标照常推进（否则整批永久卡死）。
+    assert client.sent == ["m2"]
+    assert store.cursor == "next"
+
+
+def test_text_reply_skipped_when_already_sent() -> None:
+    mod = _module()
+    config = _config(mod)
+
+    class FakeStore:
+        def __init__(self):
+            self.cursor = "old"
+
+        def get_cursor(self, open_kfid):
+            return self.cursor
+
+        def set_cursor(self, open_kfid, cursor):
+            self.cursor = cursor
+
+        def active_task(self, open_kfid, external_userid):
+            return None
+
+        def outbound_already_sent(self, msgid):
+            return True
+
+        def record_outbound(self, *args):
+            raise AssertionError("must not record an already-sent reply")
+
+        def mark_outbound_sent(self, msgid):
+            raise AssertionError("must not resend")
+
+        def mark_outbound_failed(self, *args):
+            pass
+
+    class FakeClient:
+        def __init__(self):
+            self.sent = []
+
+        def sync_messages(self, open_kfid, sync_token, cursor=""):
+            return [
+                {"msgid": "m1", "open_kfid": open_kfid, "external_userid": "wm1",
+                 "origin": 3, "msgtype": "text", "text": {"content": "旧消息"}},
+            ], "next"
+
+        def download_media(self, media_id):
+            raise AssertionError("not expected")
+
+        def send_text(self, *args, **kwargs):
+            self.sent.append(args)
+
+    store = FakeStore()
+    client = FakeClient()
+    mod.handle_notification(
+        mod.KfNotification("sync", "wk"), config, client=client, task_store=store
+    )
+
+    # 回放 backlog 时，已成功回复过的旧文本必须跳过，不重复调用处理器、不重复回复。
+    assert client.sent == []
+    assert store.cursor == "next"
+
+
 def test_processor_forwards_openai_compatible_payload(monkeypatch) -> None:
     mod = _module()
     captured = {}

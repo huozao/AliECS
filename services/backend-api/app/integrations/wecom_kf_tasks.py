@@ -388,6 +388,14 @@ class PostgresKfTaskStore:
                 (msgid, task_id, open_kfid, external_userid, purpose),
             )
 
+    def outbound_already_sent(self, msgid: str) -> bool:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM wecom_kf_outbound_messages WHERE msgid=%s AND status='sent'",
+                (msgid,),
+            )
+            return cur.fetchone() is not None
+
     def mark_outbound_sent(self, msgid: str) -> None:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
