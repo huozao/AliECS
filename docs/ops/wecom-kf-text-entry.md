@@ -60,6 +60,34 @@ echo，可显式把 `WECOM_KF_PROCESSOR_URL` 留空并直接启动 compose；正
 4. 微信返回分析结果和固定菜单：`确认处理`、`补充资料`、`取消任务`。
 5. 只有选择 `确认处理` 后，任务才标记完成，并在持久卷中生成 `manifest.json` 和 `analysis.md`。
 
+## 确认处理 → Paperless 归档 → ERPNext 建档（2026-07-21）
+
+`确认处理` 在写入本地 `manifest.json`/`analysis.md` 之后，额外把每个原件上传到
+Paperless-ngx，并在 ERPNext 建/更新一条 `Project` 记录：
+
+```text
+确认处理
+  -> write_archive（本地持久卷，主真源，永远先成功）
+  -> 逐个原件 POST /api/documents/post_document/（Paperless）
+     轮询 /api/tasks/?task_id=<uuid> 拿 document_id，回填 wecom_kf_material_items
+  -> ERPNext /api/resource/Project 建/更新记录，写 3 个自定义字段
+     custom_paperless_document_ids / _urls / custom_material_data_status=识别待确认
+  -> 回填 wecom_kf_material_tasks.erpnext_docname/url 与 external_archive_status
+```
+
+- **网络**：aliecs 不在 tailnet，经 webdock2 ProductCenter 反向隧道到达：Paperless
+  `host.docker.internal:18201`、ERPNext `:18200`（隧道 = infra
+  `roles/product-center/product-center-tunnel.service`）。人类可点链接用
+  `PRODUCT_CENTER_PAPERLESS_PUBLIC_BASE`(Tailscale) 与 `erp.hydwang.xyz`。
+- **doctype**：第一阶段固定 `Project`（轻量容器，不污染 Item 物料主数据）；
+  字段权威定义见 infra `roles/product-center/configure-erpnext.sh`。
+- **认证**：Paperless 走 `PRODUCT_CENTER_PAPERLESS_TOKEN`（或 USERNAME/PASSWORD 换
+  token）；ERPNext 走 `Authorization: token <api_key>:<api_secret>`。凭据一律 SOPS。
+- **开关**：两端凭据齐全才启用；缺任一则外部归档整段跳过，行为回退到仅本地归档。
+- **幂等/可观测/重试**：已带 `paperless_document_id` 的附件不重传；ERPNext 按已存
+  `erpnext_docname` 决定 PUT/POST；失败写 `external_archive_status`(partial/failed) +
+  `external_archive_error`，回复里明确告知，用户可发送 `重试归档` 只重跑外部步骤。
+
 `补充资料` 会恢复收集状态；分析失败时原件仍保留，可发送 `重试处理`。
 任务、附件元数据、发送状态和 `sync_msg` 游标保存在 PostgreSQL；原件和归档结果保存在
 `wecom_kf_materials` Docker 持久卷。单个下载附件上限 20MB；默认最多把 12 个、合计
@@ -92,7 +120,10 @@ echo，可显式把 `WECOM_KF_PROCESSOR_URL` 留空并直接启动 compose；正
 ## 当前边界
 
 - 不支持语音、视频作为资料输入，也不从客服端主动发送附件。
-- “确认处理”当前生成结构化归档清单和分析文件，不会按模型自由文本去移动其他业务目录或执行 Shell。
+- “确认处理”生成本地归档清单/分析文件，并把原件同步到 Paperless、在 ERPNext 建
+  `Project` 关联记录；不会按模型自由文本去移动其他业务目录或执行 Shell。
+- 外部归档为第一阶段最小闭环：只做“上传 + 建/更新记录 + 回填 ID/URL/状态”，
+  暂不做 OCR 校验、Item 物料/成品/研发项目全量关联、T+ 主数据对接（后续阶段）。
 - 已记录 `msg_send_fail` 发送失败状态，但还没有独立告警和运维查询界面。
 - 当前没有自动清理/外部备份策略，需结合磁盘容量另行制定保留策略。
 - 个人微信实发验收。
