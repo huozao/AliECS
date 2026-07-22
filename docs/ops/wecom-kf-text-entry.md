@@ -88,6 +88,24 @@ Paperless-ngx，并在 ERPNext 建/更新一条 `Project` 记录：
   `erpnext_docname` 决定 PUT/POST；失败写 `external_archive_status`(partial/failed) +
   `external_archive_error`，回复里明确告知，用户可发送 `重试归档` 只重跑外部步骤。
 
+## 兜底轮询与结构化日志（2026-07-23）
+
+微信回调是通知型投递，存在漏投风险（2026-07-23 实测：入口指向已删除客服账号时
+全程静默无回调）。backend 启动时会拉起 `wecom-kf-poller` 守护线程：
+
+- 每 `WECOM_KF_POLL_INTERVAL_SECONDS`（默认 300，`0` 关闭）秒调 `kf/account/list`
+  枚举现存客服账号，逐个按存量游标主动 `sync_msg` 一轮。
+- 主动轮询不带事件 Token（接口允许仅带游标拉取）；与回调路径共用同一把锁、
+  同一游标和 `outbound_already_sent` 幂等判断，重复拉取不会重复回复。
+- kf 配置缺失或间隔为 0 时不启动；本地 compose 默认无 kf 配置，自然关闭。
+
+日志（logger `aliecs.wecom_kf`，一律不记消息正文和 token）：
+
+- `wecom kf callback received: kfid=…`：回调解密成功。
+- `wecom kf synced: kfid=… messages=N cursor_advanced=…`：单轮拉取条数。
+- `wecom kf reply sent: kfid=… source_msgid=…`：文本回复已下发。
+- `wecom kf msg_send_fail: msgid=… fail_type=…`：微信侧下发失败（WARNING）。
+
 `补充资料` 会恢复收集状态；分析失败时原件仍保留，可发送 `重试处理`。
 任务、附件元数据、发送状态和 `sync_msg` 游标保存在 PostgreSQL；原件和归档结果保存在
 `wecom_kf_materials` Docker 持久卷。单个下载附件上限 20MB；默认最多把 12 个、合计
@@ -124,6 +142,6 @@ Paperless-ngx，并在 ERPNext 建/更新一条 `Project` 记录：
   `Project` 关联记录；不会按模型自由文本去移动其他业务目录或执行 Shell。
 - 外部归档为第一阶段最小闭环：只做“上传 + 建/更新记录 + 回填 ID/URL/状态”，
   暂不做 OCR 校验、Item 物料/成品/研发项目全量关联、T+ 主数据对接（后续阶段）。
-- 已记录 `msg_send_fail` 发送失败状态，但还没有独立告警和运维查询界面。
+- `msg_send_fail` 已记录状态并输出 WARNING 日志，但还没有独立告警和运维查询界面。
 - 当前没有自动清理/外部备份策略，需结合磁盘容量另行制定保留策略。
 - 个人微信实发验收。

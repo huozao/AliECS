@@ -69,6 +69,7 @@
 | `WECOM_KF_CALLBACK_TOKEN` | backend-api | Static callback signature token configured in the management console | Optional; deploy defaults to `WECOM_COMPANY_B_CALLBACK_TOKEN` |
 | `WECOM_KF_CALLBACK_AES_KEY` | backend-api | 43-character callback EncodingAESKey | Optional; deploy defaults to `WECOM_COMPANY_B_CALLBACK_AESKEY` |
 | `WECOM_KF_API_TIMEOUT_SECONDS` | backend-api | Timeout for WeCom API calls | Optional, default 10 |
+| `WECOM_KF_POLL_INTERVAL_SECONDS` | backend-api | Fallback poll interval for kf sync_msg when callbacks are not delivered; `0` disables | Optional, default 300 |
 | `WECOM_KF_PROCESSOR_URL` | backend-api | OpenAI-compatible local processor; empty means echo | Optional; production deploy defaults to local bridge |
 | `WECOM_KF_PROCESSOR_TIMEOUT_SECONDS` | backend-api | Timeout for the optional processor | Optional, default 1260 |
 | `WECOM_KF_TASK_STORAGE_DIR` | backend-api | Persistent root for original KF attachments and confirmed task manifests | Optional, default `/app/wecom-kf-materials` |
