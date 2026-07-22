@@ -112,6 +112,13 @@ def _number(value: float | None, digits: int = 3) -> str:
     return "-" if value is None else f"{value:.{digits}f}"
 
 
+def _human_time(value: datetime) -> str:
+    rendered = value.strftime("%Y-%m-%d %H:%M:%S")
+    if value.microsecond:
+        rendered += f".{value.microsecond // 1000:03d}"
+    return rendered
+
+
 def render_gold_spread_alert(alert: GoldSpreadAlert) -> str:
     if alert.kind in {"historical_complete", "historical_failed"}:
         icon = "✅" if alert.kind == "historical_complete" else "⛔"
@@ -119,18 +126,13 @@ def render_gold_spread_alert(alert: GoldSpreadAlert) -> str:
         return f"{icon} {title}\n时间：{alert.occurred_at.isoformat()}\n{alert.summary}".rstrip()
 
     if alert.kind == "wrong_price_detected":
-        contract_name = alert.contract_name or alert.symbol
-        contract_details = "｜".join(
-            item
-            for item in (alert.exchange_name, f"{alert.contract_month}合约" if alert.contract_month else "")
-            if item
-        )
+        contract_name = (alert.contract_name or alert.symbol).replace("【历史回放验证】", "").strip()
         market_names = {
-            "SHFE_AU_TRADE": "上海期货交易所 AU 行情快照最新价",
-            "SHFE_AU_1S_LOW": "上海期货交易所 AU 1秒K线最低价",
-            "SHFE_AU_1S_HIGH": "上海期货交易所 AU 1秒K线最高价",
-            "SHFE_AU_LOW_UPDATE": "上海期货交易所 AU 交易日最低价更新",
-            "SHFE_AU_HIGH_UPDATE": "上海期货交易所 AU 交易日最高价更新",
+            "SHFE_AU_TRADE": "AU行情快照最新价",
+            "SHFE_AU_1S_LOW": "AU 1秒K线最低价",
+            "SHFE_AU_1S_HIGH": "AU 1秒K线最高价",
+            "SHFE_AU_LOW_UPDATE": "AU交易日最低价更新",
+            "SHFE_AU_HIGH_UPDATE": "AU交易日最高价更新",
             "MT5_XAUUSD_TICK": "MT5 XAUUSD 逐笔报价",
         }
         price_labels = {
@@ -140,43 +142,71 @@ def render_gold_spread_alert(alert: GoldSpreadAlert) -> str:
             "SHFE_AU_HIGH_UPDATE": "交易日最高价",
         }
         market_name = market_names.get(alert.trigger_market, alert.trigger_market)
-        trigger_unit = "元/克" if alert.trigger_market.startswith("SHFE_AU_") else "美元/盎司"
+        is_au_trigger = alert.trigger_market.startswith("SHFE_AU_")
+        trigger_unit = "元/克" if is_au_trigger else "美元/盎司"
         price_label = price_labels.get(alert.trigger_market, "异常价格")
+        normal_au_price = (
+            alert.international_cny_per_g + alert.baseline_cny_per_g
+            if alert.international_cny_per_g is not None and alert.baseline_cny_per_g is not None
+            else None
+        )
+        normal_international = (
+            alert.au_mid - alert.baseline_cny_per_g
+            if alert.au_mid is not None and alert.baseline_cny_per_g is not None
+            else None
+        )
+        threshold_percent = (
+            alert.threshold_cny_per_g / alert.international_cny_per_g * 100
+            if alert.threshold_cny_per_g is not None and alert.international_cny_per_g
+            else None
+        )
+        direction = "异常高价" if alert.direction == "up" else "异常低价"
+        title = "🧪 历史回放验证" if alert.source == "historical" else "🔴 疑似错价成交预警"
+        exchange = "上期所" if alert.exchange_name == "上海期货交易所" else alert.exchange_name
+        contract_details = "｜".join(
+            item for item in (exchange, alert.contract_month, alert.symbol) if item
+        )
         lines = [
-            f"🔴 疑似单笔错价｜{contract_name}",
-            f"触发端：{market_name}",
-            f"时间：{alert.occurred_at.isoformat()}",
-            f"合约：{contract_name}{f'（{contract_details}）' if contract_details else ''}",
-            f"行情代码：{alert.symbol}",
-            f"{price_label}：{_number(alert.trigger_price)} {trigger_unit}",
+            f"{title}｜{contract_name}",
+            contract_details,
+            f"时间：{_human_time(alert.occurred_at)}",
+            "",
+            "【异常核心】",
+            f"{price_label}：{_number(alert.trigger_price, 2)} {trigger_unit}",
         ]
-        if alert.contract_expire_at is not None:
-            lines.append(f"到期时间：{alert.contract_expire_at.isoformat()}")
+        if is_au_trigger:
+            lines.append(f"正常估值：{_number(normal_au_price, 2)} 元/克")
+        else:
+            lines.append(f"异常折算：{_number(alert.international_cny_per_g, 2)} 元/克")
+            lines.append(f"正常折算：{_number(normal_international, 2)} 元/克")
+        lines.extend(
+            [
+                f"偏离：{_number(alert.deviation_cny_per_g, 2)} 元/克（{_number(alert.deviation_percent, 2)}%）",
+                f"触发阈值：{_number(alert.threshold_cny_per_g, 2)} 元/克（{_number(threshold_percent, 2)}%）",
+                f"方向：{direction}",
+                "",
+                "【市场快照】",
+                f"AU盘口：{_number(alert.au_bid, 2)} / {_number(alert.au_ask, 2)} 元/克",
+                f"XAUUSD：{_number(alert.xau_bid, 2)} / {_number(alert.xau_ask, 2)} 美元/盎司",
+                f"USD/CNH：{_number(alert.usdcnh, 5)}",
+                f"国际折算：{_number(alert.international_cny_per_g, 2)} 元/克",
+                f"近10分钟升贴水：{_number(alert.baseline_cny_per_g, 2)} 元/克",
+                "",
+                "【数据说明】",
+                f"触发来源：{market_name}",
+                f"跨市场时差：{_number(alert.clock_skew_ms, 0)} ms",
+            ]
+        )
         if alert.trigger_market.startswith("SHFE_AU_1S_") and alert.volume_delta is not None:
             lines.append(
-                f"该1秒总成交量：{_number(alert.volume_delta, 0)} 手（不代表全部在异常价成交）"
+                f"该秒成交：{_number(alert.volume_delta, 0)} 手（区间汇总，并非全部成交在异常价）"
             )
         elif alert.trigger_volume is not None:
             lines.append(
-                f"快照成交量：累计 {_number(alert.trigger_volume, 0)} 手｜区间增加 {_number(alert.volume_delta, 0)} 手"
+                f"快照成交：累计{_number(alert.trigger_volume, 0)}手，区间增加{_number(alert.volume_delta, 0)}手"
             )
-        lines.extend(
-            [
-                f"AU 买/卖/参照：{_number(alert.au_bid)} / {_number(alert.au_ask)} / {_number(alert.au_mid)} 元/克",
-                f"XAUUSD 买/卖/参照：{_number(alert.xau_bid)} / {_number(alert.xau_ask)} / {_number(alert.xauusd)} 美元/盎司",
-                f"USD/CNH：{_number(alert.usdcnh, 5)}",
-                f"国际折算：{_number(alert.international_cny_per_g)} 元/克",
-                f"本 tick 价差：{_number(alert.spread_cny_per_g)} 元/克",
-                f"异常前10分钟基线：{_number(alert.baseline_cny_per_g)} 元/克",
-                f"偏离/严格阈值：{_number(alert.deviation_cny_per_g)} / {_number(alert.threshold_cny_per_g)} 元/克",
-                f"偏离比例：{_number(alert.deviation_percent, 4)}%",
-                f"跨市场时钟差：{_number(alert.clock_skew_ms, 0)} ms",
-                f"Tick ID：{alert.trigger_tick_id}",
-            ]
-        )
-        if alert.summary:
-            lines.append(alert.summary)
-        lines.append(f"事件编号：{alert.event_id}")
+        if alert.source == "historical":
+            lines.append("⚠️ 这是历史回放，不是当前行情")
         return "\n".join(lines)
 
     titles = {
