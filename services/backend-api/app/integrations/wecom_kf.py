@@ -291,11 +291,13 @@ class WeComKfClient:
         current_cursor = cursor
         for _ in range(MAX_SYNC_PAGES):
             payload: dict[str, Any] = {
-                "token": sync_token,
                 "limit": 1000,
                 "voice_format": 0,
                 "open_kfid": open_kfid,
             }
+            # 主动轮询没有事件 Token，只带游标即可拉取；空 token 会被接口拒绝。
+            if sync_token:
+                payload["token"] = sync_token
             if current_cursor:
                 payload["cursor"] = current_cursor
             page = self._post("/kf/sync_msg", payload)
@@ -381,6 +383,15 @@ class WeComKfClient:
             },
             ok_codes=SEND_IDEMPOTENT_CODES,
         )
+
+    def list_account_ids(self) -> list[str]:
+        result = self._post("/kf/account/list", {"offset": 0, "limit": 100})
+        accounts = result.get("account_list") or []
+        return [
+            str(item.get("open_kfid") or "").strip()
+            for item in accounts
+            if isinstance(item, dict) and str(item.get("open_kfid") or "").strip()
+        ]
 
     def download_media(self, media_id: str) -> DownloadedMedia:
         if not media_id:
@@ -630,6 +641,11 @@ def _process_message(
         if active_store and event.get("event_type") == "msg_send_fail":
             failed_msgid = str(event.get("fail_msgid") or "").strip()
             if failed_msgid:
+                logger.warning(
+                    "wecom kf msg_send_fail: msgid=%s fail_type=%s",
+                    failed_msgid,
+                    event.get("fail_type"),
+                )
                 active_store.mark_outbound_failed(
                     failed_msgid, int(event.get("fail_type") or 0)
                 )
@@ -668,6 +684,10 @@ def _process_message(
         active_client.send_text(external_userid, open_kfid, reply, source_msgid)
         if active_store:
             active_store.mark_outbound_sent(outbound_msgid)
+        # 只记 ID 与账号，不记消息或回复正文。
+        logger.info(
+            "wecom kf reply sent: kfid=%s source_msgid=%s", open_kfid, source_msgid
+        )
 
 
 def handle_notification(
@@ -690,6 +710,15 @@ def handle_notification(
             messages, next_cursor = active_client.sync_messages(
                 notification.open_kfid, notification.sync_token, cursor
             )
+            if messages:
+                logger.info(
+                    "wecom kf synced: kfid=%s messages=%d cursor_advanced=%s",
+                    notification.open_kfid,
+                    len(messages),
+                    next_cursor != cursor,
+                )
+            else:
+                logger.debug("wecom kf synced empty: kfid=%s", notification.open_kfid)
             for message in messages:
                 # 单条消息独立容错：一条失败只记日志并跳过，绝不中止整批，
                 # 否则游标无法推进，后续消息（含用户真正的指令）会被永久卡死。
@@ -711,6 +740,29 @@ def handle_notification(
         except Exception:
             # 不记录消息正文、临时 sync token 或 access_token。
             logger.exception("wecom kf background processing failed")
+
+
+def poll_accounts_once(
+    config: WeComKfConfig,
+    *,
+    client: WeComKfClient | None = None,
+    task_store: PostgresKfTaskStore | None = None,
+) -> int:
+    """兜底轮询：按账号列表主动 sync_msg 一轮，补偿微信回调漏投递。
+
+    与回调路径共用 handle_notification 的锁、游标和幂等判断，重复拉取不会
+    重复回复。返回本轮轮询的账号数。
+    """
+    active_client = client or client_for_config(config)
+    open_kfids = active_client.list_account_ids()
+    for open_kfid in open_kfids:
+        handle_notification(
+            KfNotification(sync_token="", open_kfid=open_kfid),
+            config,
+            client=active_client,
+            task_store=task_store,
+        )
+    return len(open_kfids)
 
 
 def crypto_for_config(config: WeComKfConfig) -> WeComKfCrypto:

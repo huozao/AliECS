@@ -535,3 +535,114 @@ def test_callback_route_validates_before_scheduling(monkeypatch) -> None:
             )
         )
     assert exc_info.value.status_code == 400
+
+
+def test_sync_msg_omits_token_when_empty(monkeypatch) -> None:
+    mod = _module()
+    sync_payloads: list[dict] = []
+
+    def fake_http(method, url, payload, timeout, *, attempts=2):
+        if "/gettoken?" in url:
+            return {"errcode": 0, "access_token": "token", "expires_in": 7200}
+        sync_payloads.append(payload)
+        return {"errcode": 0, "has_more": 0, "next_cursor": "c1", "msg_list": []}
+
+    monkeypatch.setattr(mod, "_http_json", fake_http)
+    client = mod.WeComKfClient("corp", "secret")
+
+    # 主动轮询没有事件 Token：只带游标，不带 token 字段。
+    client.sync_messages("wk", "", "c0")
+    assert "token" not in sync_payloads[0]
+    assert sync_payloads[0]["cursor"] == "c0"
+
+    # 回调路径仍带事件 Token。
+    client.sync_messages("wk", "event-token", "c0")
+    assert sync_payloads[1]["token"] == "event-token"
+
+
+def test_list_account_ids_filters_malformed_entries(monkeypatch) -> None:
+    mod = _module()
+
+    def fake_http(method, url, payload, timeout, *, attempts=2):
+        if "/gettoken?" in url:
+            return {"errcode": 0, "access_token": "token", "expires_in": 7200}
+        return {
+            "errcode": 0,
+            "account_list": [
+                {"open_kfid": "wk-a", "name": "A"},
+                {"open_kfid": "  "},
+                "junk",
+                {"open_kfid": "wk-b"},
+            ],
+        }
+
+    monkeypatch.setattr(mod, "_http_json", fake_http)
+    assert mod.WeComKfClient("corp", "secret").list_account_ids() == ["wk-a", "wk-b"]
+
+
+def test_poll_accounts_once_syncs_each_account_without_sync_token() -> None:
+    mod = _module()
+    config = _config(mod)
+
+    class FakeClient:
+        def __init__(self):
+            self.synced = []
+            self.sent = []
+
+        def list_account_ids(self):
+            return ["wk-a", "wk-b"]
+
+        def sync_messages(self, open_kfid, sync_token, cursor=""):
+            # 轮询路径没有事件 Token。
+            assert sync_token == ""
+            self.synced.append((open_kfid, cursor))
+            if open_kfid == "wk-a":
+                return [
+                    {"msgid": "m1", "open_kfid": open_kfid, "external_userid": "wm1",
+                     "origin": 3, "msgtype": "text", "text": {"content": "漏投递的消息"}},
+                ], "next-a"
+            return [], "next-b"
+
+        def send_text(self, external_userid, open_kfid, content, source_msgid):
+            self.sent.append((external_userid, open_kfid, source_msgid))
+
+    fake = FakeClient()
+    mod._cursors.clear()
+    mod._cursors.update({"wk-a": "cur-a", "wk-b": "cur-b"})
+
+    polled = mod.poll_accounts_once(config, client=fake)
+
+    assert polled == 2
+    assert fake.synced == [("wk-a", "cur-a"), ("wk-b", "cur-b")]
+    assert fake.sent == [("wm1", "wk-a", "m1")]
+    assert mod._cursors == {"wk-a": "next-a", "wk-b": "next-b"}
+
+
+def test_poller_startup_disabled_by_zero_interval_or_missing_config(monkeypatch) -> None:
+    router_mod = importlib.import_module("app.routers.webhooks.wecom")
+    started: list[str] = []
+
+    class FakeThread:
+        def __init__(self, *args, **kwargs):
+            started.append(kwargs.get("name", ""))
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(router_mod.threading, "Thread", FakeThread)
+
+    monkeypatch.setenv("WECOM_KF_POLL_INTERVAL_SECONDS", "0")
+    router_mod._start_kf_poller()
+    assert started == []
+
+    # 间隔有效但缺少 kf 配置时同样不启动。
+    monkeypatch.setenv("WECOM_KF_POLL_INTERVAL_SECONDS", "300")
+    for name in (
+        "WECOM_KF_CORP_ID",
+        "WECOM_KF_APP_SECRET",
+        "WECOM_KF_CALLBACK_TOKEN",
+        "WECOM_KF_CALLBACK_AES_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    router_mod._start_kf_poller()
+    assert started == []
