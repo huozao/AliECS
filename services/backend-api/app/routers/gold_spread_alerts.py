@@ -25,6 +25,7 @@ class GoldSpreadAlert(BaseModel):
         "anomaly_started",
         "anomaly_escalated",
         "anomaly_recovered",
+        "wrong_price_detected",
         "historical_complete",
         "historical_failed",
     ]
@@ -37,10 +38,17 @@ class GoldSpreadAlert(BaseModel):
     contract_month: str = Field(default="", max_length=20)
     contract_expire_at: datetime | None = None
     direction: Literal["up", "down", ""] = ""
+    trigger_market: Literal["SHFE_AU_TRADE", "MT5_XAUUSD_TICK", ""] = ""
+    trigger_price: float | None = Field(default=None, gt=0)
+    trigger_volume: float | None = Field(default=None, ge=0)
+    volume_delta: float | None = Field(default=None, gt=0)
+    trigger_tick_id: str = Field(default="", max_length=200)
     au_bid: float | None = Field(default=None, gt=0)
     au_ask: float | None = Field(default=None, gt=0)
     au_mid: float | None = Field(default=None, gt=0)
     xauusd: float | None = Field(default=None, gt=0)
+    xau_bid: float | None = Field(default=None, gt=0)
+    xau_ask: float | None = Field(default=None, gt=0)
     usdcnh: float | None = Field(default=None, gt=0)
     international_cny_per_g: float | None = Field(default=None, gt=0)
     spread_cny_per_g: float | None = None
@@ -49,11 +57,13 @@ class GoldSpreadAlert(BaseModel):
     threshold_cny_per_g: float | None = Field(default=None, gt=0)
     peak_deviation_cny_per_g: float | None = None
     duration_seconds: float | None = Field(default=None, ge=0)
+    deviation_percent: float | None = None
+    clock_skew_ms: float | None = Field(default=None, ge=0)
     summary: str = Field(default="", max_length=2000)
 
     @model_validator(mode="after")
     def validate_kind_fields(self) -> "GoldSpreadAlert":
-        if self.kind.startswith("anomaly_"):
+        if self.kind.startswith("anomaly_") or self.kind == "wrong_price_detected":
             required = {
                 "symbol": self.symbol,
                 "direction": self.direction,
@@ -69,6 +79,17 @@ class GoldSpreadAlert(BaseModel):
             missing = [name for name, value in required.items() if value in (None, "")]
             if missing:
                 raise ValueError("anomaly alert missing fields: " + ", ".join(missing))
+        if self.kind == "wrong_price_detected":
+            required = {
+                "trigger_market": self.trigger_market,
+                "trigger_price": self.trigger_price,
+                "trigger_tick_id": self.trigger_tick_id,
+                "deviation_percent": self.deviation_percent,
+                "clock_skew_ms": self.clock_skew_ms,
+            }
+            missing = [name for name, value in required.items() if value in (None, "")]
+            if missing:
+                raise ValueError("wrong-price alert missing fields: " + ", ".join(missing))
         return self
 
 
@@ -88,6 +109,52 @@ def render_gold_spread_alert(alert: GoldSpreadAlert) -> str:
         icon = "✅" if alert.kind == "historical_complete" else "⛔"
         title = "历史价差回溯完成" if alert.kind == "historical_complete" else "历史价差回溯失败"
         return f"{icon} {title}\n时间：{alert.occurred_at.isoformat()}\n{alert.summary}".rstrip()
+
+    if alert.kind == "wrong_price_detected":
+        contract_name = alert.contract_name or alert.symbol
+        contract_details = "｜".join(
+            item
+            for item in (alert.exchange_name, f"{alert.contract_month}合约" if alert.contract_month else "")
+            if item
+        )
+        market_name = (
+            "上海期货交易所 AU 逐笔成交"
+            if alert.trigger_market == "SHFE_AU_TRADE"
+            else "MT5 XAUUSD 逐笔报价"
+        )
+        trigger_unit = "元/克" if alert.trigger_market == "SHFE_AU_TRADE" else "美元/盎司"
+        lines = [
+            f"🔴 疑似单笔错价｜{contract_name}",
+            f"触发端：{market_name}",
+            f"时间：{alert.occurred_at.isoformat()}",
+            f"合约：{contract_name}{f'（{contract_details}）' if contract_details else ''}",
+            f"行情代码：{alert.symbol}",
+            f"异常价格：{_number(alert.trigger_price)} {trigger_unit}",
+        ]
+        if alert.contract_expire_at is not None:
+            lines.append(f"到期时间：{alert.contract_expire_at.isoformat()}")
+        if alert.trigger_volume is not None:
+            lines.append(
+                f"成交量：累计 {_number(alert.trigger_volume, 0)} 手｜本 tick 增加 {_number(alert.volume_delta, 0)} 手"
+            )
+        lines.extend(
+            [
+                f"AU 买/卖/参照：{_number(alert.au_bid)} / {_number(alert.au_ask)} / {_number(alert.au_mid)} 元/克",
+                f"XAUUSD 买/卖/参照：{_number(alert.xau_bid)} / {_number(alert.xau_ask)} / {_number(alert.xauusd)} 美元/盎司",
+                f"USD/CNH：{_number(alert.usdcnh, 5)}",
+                f"国际折算：{_number(alert.international_cny_per_g)} 元/克",
+                f"本 tick 价差：{_number(alert.spread_cny_per_g)} 元/克",
+                f"异常前10分钟基线：{_number(alert.baseline_cny_per_g)} 元/克",
+                f"偏离/严格阈值：{_number(alert.deviation_cny_per_g)} / {_number(alert.threshold_cny_per_g)} 元/克",
+                f"偏离比例：{_number(alert.deviation_percent, 4)}%",
+                f"跨市场时钟差：{_number(alert.clock_skew_ms, 0)} ms",
+                f"Tick ID：{alert.trigger_tick_id}",
+            ]
+        )
+        if alert.summary:
+            lines.append(alert.summary)
+        lines.append(f"事件编号：{alert.event_id}")
+        return "\n".join(lines)
 
     titles = {
         "anomaly_started": "价差异常已确认",
