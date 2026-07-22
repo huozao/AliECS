@@ -148,8 +148,49 @@ def test_wrong_price_alert_contains_trade_evidence(monkeypatch) -> None:
     assert response.status_code == 200
     text = str(captured["text"])
     assert "疑似单笔错价｜沪金 AU2606" in text
-    assert "上海期货交易所 AU 逐笔成交" in text
+    assert "上海期货交易所 AU 行情快照最新价" in text
     assert "异常价格：982.000 元/克" in text
-    assert "本 tick 增加 1 手" in text
+    assert "区间增加 1 手" in text
     assert "异常前10分钟基线" in text
     assert "跨市场时钟差：125 ms" in text
+
+
+def test_wrong_price_alert_explains_one_second_low_volume(monkeypatch) -> None:
+    body = _payload()
+    body.update(
+        event_id="wrong:history:SHFE.au2606:1779195875000:8006011:SHFE_AU_1S_LOW",
+        kind="wrong_price_detected",
+        source="historical",
+        severity="critical",
+        trigger_market="SHFE_AU_1S_LOW",
+        trigger_price=830.52,
+        trigger_volume=None,
+        volume_delta=370,
+        trigger_tick_id="1779195875000:8006011:SHFE_AU_1S_LOW",
+        au_mid=830.52,
+        spread_cny_per_g=-160.615705,
+        baseline_cny_per_g=4.38709,
+        deviation_cny_per_g=-165.002795,
+        threshold_cny_per_g=1.0,
+        deviation_percent=-16.647851,
+        clock_skew_ms=1213.0,
+    )
+    captured: dict[str, object] = {}
+    client = _client(monkeypatch)
+
+    def fake_send(receive_id: str, text: str, **kwargs) -> bool:
+        captured.update(receive_id=receive_id, text=text, **kwargs)
+        return True
+
+    monkeypatch.setattr(alerts, "send_feishu_text", fake_send)
+    response = client.post(
+        "/v1/internal/gold-spread/alerts",
+        headers={"X-Gold-Spread-Token": "test-token"},
+        json=body,
+    )
+    assert response.status_code == 200
+    text = str(captured["text"])
+    assert "上海期货交易所 AU 1秒K线最低价" in text
+    assert "1秒最低价：830.520 元/克" in text
+    assert "该1秒总成交量：370 手（不代表全部在异常价成交）" in text
+    assert "偏离/严格阈值：-165.003 / 1.000 元/克" in text

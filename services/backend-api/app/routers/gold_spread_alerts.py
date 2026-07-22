@@ -38,7 +38,15 @@ class GoldSpreadAlert(BaseModel):
     contract_month: str = Field(default="", max_length=20)
     contract_expire_at: datetime | None = None
     direction: Literal["up", "down", ""] = ""
-    trigger_market: Literal["SHFE_AU_TRADE", "MT5_XAUUSD_TICK", ""] = ""
+    trigger_market: Literal[
+        "SHFE_AU_TRADE",
+        "SHFE_AU_1S_LOW",
+        "SHFE_AU_1S_HIGH",
+        "SHFE_AU_LOW_UPDATE",
+        "SHFE_AU_HIGH_UPDATE",
+        "MT5_XAUUSD_TICK",
+        "",
+    ] = ""
     trigger_price: float | None = Field(default=None, gt=0)
     trigger_volume: float | None = Field(default=None, ge=0)
     volume_delta: float | None = Field(default=None, gt=0)
@@ -117,25 +125,40 @@ def render_gold_spread_alert(alert: GoldSpreadAlert) -> str:
             for item in (alert.exchange_name, f"{alert.contract_month}合约" if alert.contract_month else "")
             if item
         )
-        market_name = (
-            "上海期货交易所 AU 逐笔成交"
-            if alert.trigger_market == "SHFE_AU_TRADE"
-            else "MT5 XAUUSD 逐笔报价"
-        )
-        trigger_unit = "元/克" if alert.trigger_market == "SHFE_AU_TRADE" else "美元/盎司"
+        market_names = {
+            "SHFE_AU_TRADE": "上海期货交易所 AU 行情快照最新价",
+            "SHFE_AU_1S_LOW": "上海期货交易所 AU 1秒K线最低价",
+            "SHFE_AU_1S_HIGH": "上海期货交易所 AU 1秒K线最高价",
+            "SHFE_AU_LOW_UPDATE": "上海期货交易所 AU 交易日最低价更新",
+            "SHFE_AU_HIGH_UPDATE": "上海期货交易所 AU 交易日最高价更新",
+            "MT5_XAUUSD_TICK": "MT5 XAUUSD 逐笔报价",
+        }
+        price_labels = {
+            "SHFE_AU_1S_LOW": "1秒最低价",
+            "SHFE_AU_1S_HIGH": "1秒最高价",
+            "SHFE_AU_LOW_UPDATE": "交易日最低价",
+            "SHFE_AU_HIGH_UPDATE": "交易日最高价",
+        }
+        market_name = market_names.get(alert.trigger_market, alert.trigger_market)
+        trigger_unit = "元/克" if alert.trigger_market.startswith("SHFE_AU_") else "美元/盎司"
+        price_label = price_labels.get(alert.trigger_market, "异常价格")
         lines = [
             f"🔴 疑似单笔错价｜{contract_name}",
             f"触发端：{market_name}",
             f"时间：{alert.occurred_at.isoformat()}",
             f"合约：{contract_name}{f'（{contract_details}）' if contract_details else ''}",
             f"行情代码：{alert.symbol}",
-            f"异常价格：{_number(alert.trigger_price)} {trigger_unit}",
+            f"{price_label}：{_number(alert.trigger_price)} {trigger_unit}",
         ]
         if alert.contract_expire_at is not None:
             lines.append(f"到期时间：{alert.contract_expire_at.isoformat()}")
-        if alert.trigger_volume is not None:
+        if alert.trigger_market.startswith("SHFE_AU_1S_") and alert.volume_delta is not None:
             lines.append(
-                f"成交量：累计 {_number(alert.trigger_volume, 0)} 手｜本 tick 增加 {_number(alert.volume_delta, 0)} 手"
+                f"该1秒总成交量：{_number(alert.volume_delta, 0)} 手（不代表全部在异常价成交）"
+            )
+        elif alert.trigger_volume is not None:
+            lines.append(
+                f"快照成交量：累计 {_number(alert.trigger_volume, 0)} 手｜区间增加 {_number(alert.volume_delta, 0)} 手"
             )
         lines.extend(
             [
