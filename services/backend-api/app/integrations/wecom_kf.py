@@ -6,7 +6,6 @@ import base64
 import hashlib
 import hmac
 import json
-import logging
 import os
 import re
 import struct
@@ -21,6 +20,7 @@ from urllib import error, parse, request
 from Crypto.Cipher import AES
 
 from app.integrations import product_center
+from app.logging_utils import configure_logging
 from app.integrations.wecom_kf_tasks import (
     DownloadedMedia,
     KfTaskCoordinator,
@@ -38,7 +38,8 @@ MAX_CALLBACK_BYTES = 1024 * 1024
 MAX_SYNC_PAGES = 100
 MAX_MEDIA_BYTES = 20 * 1024 * 1024
 
-logger = logging.getLogger("aliecs.wecom_kf")
+# 裸 getLogger 无 handler，INFO 会被 root 丢弃；必须走 configure_logging。
+logger = configure_logging("aliecs.wecom_kf")
 
 
 class WeComKfError(RuntimeError):
