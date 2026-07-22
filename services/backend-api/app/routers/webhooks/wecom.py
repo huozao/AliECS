@@ -82,6 +82,10 @@ async def receive_wecom_kf_callback(
     return PlainTextResponse("success")
 
 
+_poller_state_lock = threading.Lock()
+_poller_started = False
+
+
 def _kf_poll_loop(interval: float) -> None:
     while True:
         time.sleep(interval)
@@ -98,6 +102,7 @@ def _kf_poll_loop(interval: float) -> None:
 
 @router.on_event("startup")
 def _start_kf_poller() -> None:
+    global _poller_started
     raw = os.getenv("WECOM_KF_POLL_INTERVAL_SECONDS", "300").strip()
     try:
         interval = float(raw)
@@ -110,6 +115,13 @@ def _start_kf_poller() -> None:
         WeComKfConfig.from_env()
     except WeComKfError:
         return
+    # 幂等护栏：2026-07-23 生产观察到启动日志出现 3 次；无论触发源是什么，
+    # 单进程内只允许一个轮询线程（重复触发记日志以便定位）。
+    with _poller_state_lock:
+        if _poller_started:
+            logger.info("wecom kf poller duplicate startup ignored")
+            return
+        _poller_started = True
     threading.Thread(
         target=_kf_poll_loop, args=(interval,), name="wecom-kf-poller", daemon=True
     ).start()

@@ -646,3 +646,33 @@ def test_poller_startup_disabled_by_zero_interval_or_missing_config(monkeypatch)
         monkeypatch.delenv(name, raising=False)
     router_mod._start_kf_poller()
     assert started == []
+
+
+def test_poller_startup_is_idempotent(monkeypatch) -> None:
+    mod = _module()
+    router_mod = importlib.import_module("app.routers.webhooks.wecom")
+    started: list[str] = []
+
+    class FakeThread:
+        def __init__(self, *args, **kwargs):
+            started.append(kwargs.get("name", ""))
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(router_mod.threading, "Thread", FakeThread)
+    monkeypatch.setattr(router_mod, "_poller_started", False)
+    monkeypatch.setenv("WECOM_KF_POLL_INTERVAL_SECONDS", "300")
+    monkeypatch.setenv("WECOM_KF_CORP_ID", "corp")
+    monkeypatch.setenv("WECOM_KF_APP_SECRET", "secret")
+    monkeypatch.setenv("WECOM_KF_CALLBACK_TOKEN", "token")
+    monkeypatch.setenv(
+        "WECOM_KF_CALLBACK_AES_KEY",
+        _config(mod).callback_aes_key,
+    )
+
+    # startup 被重复触发时（2026-07-23 生产观察到 3 次），只允许一个轮询线程。
+    router_mod._start_kf_poller()
+    router_mod._start_kf_poller()
+    router_mod._start_kf_poller()
+    assert started == ["wecom-kf-poller"]
