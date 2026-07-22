@@ -147,12 +147,20 @@ def test_wrong_price_alert_contains_trade_evidence(monkeypatch) -> None:
     )
     assert response.status_code == 200
     text = str(captured["text"])
-    assert "疑似单笔错价｜沪金 AU2606" in text
-    assert "上海期货交易所 AU 行情快照最新价" in text
-    assert "异常价格：982.000 元/克" in text
-    assert "区间增加 1 手" in text
-    assert "异常前10分钟基线" in text
-    assert "跨市场时钟差：125 ms" in text
+    assert "🔴 疑似错价成交预警｜沪金 AU2606" in text
+    assert "上期所｜2026年06月｜SHFE.au2606" in text
+    assert "时间：2026-05-19 21:04:35.500" in text
+    assert "【异常核心】" in text
+    assert "异常价格：982.00 元/克" in text
+    assert "正常估值：995.49 元/克" in text
+    assert "偏离：-13.49 元/克（-1.36%）" in text
+    assert "【市场快照】" in text
+    assert "【数据说明】" in text
+    assert "触发来源：AU行情快照最新价" in text
+    assert "区间增加1手" in text
+    assert "跨市场时差：125 ms" in text
+    assert "Tick ID" not in text
+    assert "事件编号" not in text
 
 
 def test_wrong_price_alert_explains_one_second_low_volume(monkeypatch) -> None:
@@ -168,6 +176,10 @@ def test_wrong_price_alert_explains_one_second_low_volume(monkeypatch) -> None:
         volume_delta=370,
         trigger_tick_id="1779195875000:8006011:SHFE_AU_1S_LOW",
         au_mid=830.52,
+        xau_bid=4526.365,
+        xau_ask=4527.045,
+        xauusd=4526.705,
+        international_cny_per_g=991.135705,
         spread_cny_per_g=-160.615705,
         baseline_cny_per_g=4.38709,
         deviation_cny_per_g=-165.002795,
@@ -190,7 +202,10 @@ def test_wrong_price_alert_explains_one_second_low_volume(monkeypatch) -> None:
     )
     assert response.status_code == 200
     text = str(captured["text"])
-    assert "上海期货交易所 AU 1秒K线最低价" in text
-    assert "1秒最低价：830.520 元/克" in text
-    assert "该1秒总成交量：370 手（不代表全部在异常价成交）" in text
-    assert "偏离/严格阈值：-165.003 / 1.000 元/克" in text
+    assert "🧪 历史回放验证｜沪金 AU2606" in text
+    assert "1秒最低价：830.52 元/克" in text
+    assert "正常估值：995.52 元/克" in text
+    assert "偏离：-165.00 元/克（-16.65%）" in text
+    assert "该秒成交：370 手（区间汇总，并非全部成交在异常价）" in text
+    assert "⚠️ 这是历史回放，不是当前行情" in text
+    assert "【历史回放验证】" not in text
