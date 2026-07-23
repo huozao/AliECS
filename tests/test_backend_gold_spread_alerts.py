@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import os
 import sys
 from pathlib import Path
@@ -209,3 +210,85 @@ def test_wrong_price_alert_explains_one_second_low_volume(monkeypatch) -> None:
     assert "该秒成交：370 手（区间汇总，并非全部成交在异常价）" in text
     assert "⚠️ 这是历史回放，不是当前行情" in text
     assert "【历史回放验证】" not in text
+
+
+def test_historical_analysis_uses_interactive_card(monkeypatch) -> None:
+    body = {
+        "event_id": "history:AU:2026-04-01:2026-07-22:analysis:20260723T080000",
+        "kind": "historical_complete",
+        "occurred_at": "2026-07-23T08:00:00+08:00",
+        "source": "historical",
+        "severity": "info",
+        "symbol": "AU",
+        "summary": "分行后的文本兜底",
+        "historical_analysis": {
+            "schema_version": 1,
+            "product_code": "AU",
+            "product_name": "沪金 AU",
+            "period_start": "2026-04-01",
+            "period_end": "2026-07-22",
+            "contract_count": 1,
+            "event_count": 100,
+            "focus_event_count": 1,
+            "active_contract_days": 80,
+            "eligible_seconds": 100000,
+            "maximum_deviation_percent": 16.65,
+            "maximum_event": {
+                "symbol": "SHFE.au2606",
+                "occurred_at": "2026-05-19T21:04:35+08:00",
+                "deviation_percent": 16.65,
+                "direction": "down",
+            },
+            "overall_buckets": [
+                {"label": "<1%", "count": 99, "share_percent": 99.0},
+                {"label": "16%-17%", "count": 1, "share_percent": 1.0},
+            ],
+            "zoom_buckets": [],
+            "contracts": [
+                {
+                    "symbol": "SHFE.au2606",
+                    "total_events": 100,
+                    "active_days": 80,
+                    "eligible_seconds": 100000,
+                    "events_per_10000_seconds": 10.0,
+                    "active_days_per_event": 0.8,
+                    "maximum_deviation_percent": 16.65,
+                    "up_count": 45,
+                    "down_count": 55,
+                    "buckets": [],
+                }
+            ],
+            "charts": [
+                {
+                    "name": "distribution.png",
+                    "content_type": "image/png",
+                    "caption": "总体分布",
+                    "data_base64": base64.b64encode(b"\x89PNG\r\n\x1a\nimage").decode(),
+                }
+            ],
+            "report_files": ["wrong_price_analysis.html"],
+        },
+    }
+    captured: dict[str, object] = {}
+    client = _client(monkeypatch)
+
+    def fake_card(receive_id: str, alert, **kwargs) -> bool:
+        captured.update(receive_id=receive_id, alert=alert, **kwargs)
+        return True
+
+    monkeypatch.setattr(alerts, "send_feishu_historical_card", fake_card)
+    monkeypatch.setattr(alerts, "send_feishu_text", lambda *_, **__: False)
+    response = client.post(
+        "/v1/internal/gold-spread/alerts",
+        headers={"X-Gold-Spread-Token": "test-token"},
+        json=body,
+    )
+
+    assert response.status_code == 200
+    assert captured["receive_id"] == "oc_target"
+    card = alerts.build_historical_report_card(captured["alert"], ["img_key_1"])
+    assert card["header"]["title"]["content"] == "沪金 AU｜历史错价回溯完成"
+    assert any(element.get("tag") == "img" for element in card["elements"])
+    stored = alerts._stored_alert_payload(captured["alert"])
+    stored_chart = stored["historical_analysis"]["charts"][0]
+    assert "data_base64" not in stored_chart
