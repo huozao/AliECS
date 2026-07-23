@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 import hmac
+import json
+import logging
 import os
+import urllib.request
+import uuid
 from contextlib import closing
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -17,6 +22,60 @@ from app.routers.versions import send_feishu_text
 
 
 router = APIRouter()
+
+
+class HistoricalBucket(BaseModel):
+    label: str = Field(max_length=24)
+    count: int = Field(ge=0)
+    share_percent: float = Field(ge=0, le=100)
+
+
+class HistoricalContractSummary(BaseModel):
+    symbol: str = Field(max_length=40)
+    total_events: int = Field(ge=0)
+    active_days: int = Field(ge=0)
+    eligible_seconds: int = Field(ge=0)
+    events_per_10000_seconds: float | None = Field(default=None, ge=0)
+    active_days_per_event: float | None = Field(default=None, ge=0)
+    maximum_deviation_percent: float = Field(ge=0)
+    up_count: int = Field(ge=0)
+    down_count: int = Field(ge=0)
+    buckets: list[HistoricalBucket] = Field(default_factory=list, max_length=100)
+    zoom_buckets: list[HistoricalBucket] = Field(default_factory=list, max_length=20)
+
+
+class HistoricalChart(BaseModel):
+    name: str = Field(max_length=120)
+    content_type: Literal["image/png"] = "image/png"
+    caption: str = Field(max_length=120)
+    data_base64: str = Field(max_length=4_000_000)
+
+
+class HistoricalMaximumEvent(BaseModel):
+    symbol: str = Field(max_length=40)
+    occurred_at: datetime
+    deviation_percent: float = Field(ge=0)
+    direction: Literal["up", "down"]
+
+
+class HistoricalAnalysis(BaseModel):
+    schema_version: Literal[1]
+    product_code: str = Field(min_length=1, max_length=20)
+    product_name: str = Field(min_length=1, max_length=80)
+    period_start: date
+    period_end: date
+    contract_count: int = Field(ge=0)
+    event_count: int = Field(ge=0)
+    focus_event_count: int = Field(ge=0)
+    active_contract_days: int = Field(ge=0)
+    eligible_seconds: int = Field(ge=0)
+    maximum_deviation_percent: float = Field(ge=0)
+    maximum_event: HistoricalMaximumEvent | None = None
+    overall_buckets: list[HistoricalBucket] = Field(default_factory=list, max_length=100)
+    zoom_buckets: list[HistoricalBucket] = Field(default_factory=list, max_length=20)
+    contracts: list[HistoricalContractSummary] = Field(default_factory=list, max_length=100)
+    charts: list[HistoricalChart] = Field(default_factory=list, max_length=4)
+    report_files: list[str] = Field(default_factory=list, max_length=20)
 
 
 class GoldSpreadAlert(BaseModel):
@@ -67,7 +126,8 @@ class GoldSpreadAlert(BaseModel):
     duration_seconds: float | None = Field(default=None, ge=0)
     deviation_percent: float | None = None
     clock_skew_ms: float | None = Field(default=None, ge=0)
-    summary: str = Field(default="", max_length=2000)
+    summary: str = Field(default="", max_length=5000)
+    historical_analysis: HistoricalAnalysis | None = None
 
     @model_validator(mode="after")
     def validate_kind_fields(self) -> "GoldSpreadAlert":
@@ -98,6 +158,8 @@ class GoldSpreadAlert(BaseModel):
             missing = [name for name, value in required.items() if value in (None, "")]
             if missing:
                 raise ValueError("wrong-price alert missing fields: " + ", ".join(missing))
+        if self.historical_analysis is not None and self.kind != "historical_complete":
+            raise ValueError("historical_analysis is only valid for historical_complete")
         return self
 
 
@@ -245,6 +307,246 @@ def render_gold_spread_alert(alert: GoldSpreadAlert) -> str:
     return "\n".join(lines)
 
 
+def build_historical_report_card(
+    alert: GoldSpreadAlert,
+    image_keys: list[str],
+) -> dict[str, Any]:
+    report = alert.historical_analysis
+    if report is None:
+        raise ValueError("historical analysis is required")
+    elements: list[dict[str, Any]] = [
+        {
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": (
+                    f"**扫描范围**\n{report.period_start} 至 {report.period_end}\n\n"
+                    f"**核心指标**\n合约 **{report.contract_count}** 个　｜　"
+                    f"疑似事件 **{report.event_count}** 个　｜　"
+                    f"偏离 ≥1% **{report.focus_event_count}** 个\n"
+                    f"有效合约交易日 **{report.active_contract_days}**　｜　"
+                    f"可判定一秒区间 **{report.eligible_seconds}**"
+                ),
+            },
+        }
+    ]
+    nonzero_buckets = [bucket for bucket in report.overall_buckets if bucket.count]
+    distribution = "\n".join(
+        f"{bucket.label}：**{bucket.count}**（{bucket.share_percent:.2f}%）"
+        for bucket in nonzero_buckets
+    )
+    elements.append(
+        {
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": f"**总体分布**\n{distribution or '无疑似事件'}",
+            },
+        }
+    )
+    for index, image_key in enumerate(image_keys):
+        if index < len(report.charts):
+            elements.append(
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": f"**{report.charts[index].caption}**",
+                    },
+                }
+            )
+        elements.append(
+            {
+                "tag": "img",
+                "img_key": image_key,
+                "alt": {"tag": "plain_text", "content": "历史错价分布图"},
+                "mode": "fit_horizontal",
+                "preview": True,
+            }
+        )
+    contract_lines: list[str] = []
+    for item in report.contracts:
+        interval = (
+            "无事件"
+            if item.active_days_per_event is None
+            else f"{item.active_days_per_event:.2f}有效日/次"
+        )
+        rate = (
+            "-"
+            if item.events_per_10000_seconds is None
+            else f"{item.events_per_10000_seconds:.2f}/万秒"
+        )
+        contract_lines.append(
+            f"{item.symbol}：**{item.total_events}**｜{rate}｜{interval}"
+        )
+    elements.append(
+        {
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": "**逐合约摘要**\n" + ("\n".join(contract_lines) or "无合约数据"),
+            },
+        }
+    )
+    if report.maximum_event is not None:
+        maximum = report.maximum_event
+        direction = "异常高价" if maximum.direction == "up" else "异常低价"
+        elements.append(
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": (
+                        f"**最大偏离事件**\n{maximum.symbol}｜"
+                        f"{maximum.deviation_percent:.2f}%｜{direction}\n"
+                        f"{maximum.occurred_at.strftime('%Y-%m-%d %H:%M:%S')}"
+                    ),
+                },
+            }
+        )
+    files = "、".join(report.report_files)
+    elements.append(
+        {
+            "tag": "note",
+            "elements": [
+                {
+                    "tag": "plain_text",
+                    "content": (
+                        "统计单位为经5秒去重后的疑似事件，并非逐笔成交笔数。"
+                        + (f" 本地报告：{files}" if files else "")
+                    ),
+                }
+            ],
+        }
+    )
+    return {
+        "config": {"wide_screen_mode": True, "update_multi": True},
+        "header": {
+            "template": "orange" if report.focus_event_count else "blue",
+            "title": {
+                "tag": "plain_text",
+                "content": f"{report.product_name}｜历史错价回溯完成",
+            },
+        },
+        "elements": elements,
+    }
+
+
+def _feishu_tenant_token(
+    app_id: str,
+    app_secret: str,
+    *,
+    opener=urllib.request.urlopen,
+) -> str:
+    request = urllib.request.Request(
+        "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+        data=json.dumps({"app_id": app_id, "app_secret": app_secret}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with opener(request, timeout=15) as response:
+        result = json.loads(response.read().decode("utf-8"))
+    token = result.get("tenant_access_token")
+    if not token:
+        raise RuntimeError("Feishu token response did not include tenant_access_token")
+    return str(token)
+
+
+def _upload_feishu_image(
+    data: bytes,
+    auth_token: str,
+    *,
+    opener=urllib.request.urlopen,
+) -> str:
+    boundary = "----goldSpread" + uuid.uuid4().hex
+    crlf = b"\r\n"
+    parts = [
+        b"--" + boundary.encode(),
+        b'Content-Disposition: form-data; name="image_type"',
+        b"",
+        b"message",
+        b"--" + boundary.encode(),
+        b'Content-Disposition: form-data; name="image"; filename="report.png"',
+        b"Content-Type: image/png",
+        b"",
+    ]
+    body = crlf.join(parts) + crlf + data + crlf + b"--" + boundary.encode() + b"--" + crlf
+    request = urllib.request.Request(
+        "https://open.feishu.cn/open-apis/im/v1/images",
+        data=body,
+        headers={
+            "Authorization": "Bearer " + auth_token,
+            "Content-Type": "multipart/form-data; boundary=" + boundary,
+        },
+        method="POST",
+    )
+    with opener(request, timeout=30) as response:
+        result = json.loads(response.read().decode("utf-8"))
+    if result.get("code") not in (None, 0):
+        raise RuntimeError("Feishu image upload returned an error")
+    image_key = (result.get("data") or {}).get("image_key")
+    if not image_key:
+        raise RuntimeError("Feishu image upload did not include image_key")
+    return str(image_key)
+
+
+def send_feishu_historical_card(
+    receive_id: str,
+    alert: GoldSpreadAlert,
+    *,
+    app_id: str,
+    app_secret: str,
+    opener=urllib.request.urlopen,
+) -> bool:
+    report = alert.historical_analysis
+    if report is None or not (receive_id and app_id and app_secret):
+        return False
+    try:
+        token = _feishu_tenant_token(app_id, app_secret, opener=opener)
+        image_keys: list[str] = []
+        for chart in report.charts:
+            data = base64.b64decode(chart.data_base64, validate=True)
+            if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+                raise ValueError("historical chart is not a PNG image")
+            if len(data) > 2_000_000:
+                raise ValueError("historical chart exceeds 2 MB")
+            image_keys.append(_upload_feishu_image(data, token, opener=opener))
+        card = build_historical_report_card(alert, image_keys)
+        request = urllib.request.Request(
+            "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
+            data=json.dumps(
+                {
+                    "receive_id": receive_id,
+                    "msg_type": "interactive",
+                    "content": json.dumps(card, ensure_ascii=False),
+                },
+                ensure_ascii=False,
+            ).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + token,
+            },
+            method="POST",
+        )
+        with opener(request, timeout=15) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        return result.get("code") == 0
+    except Exception as exc:
+        logging.warning("Feishu historical card delivery failed: %s", type(exc).__name__)
+        return False
+
+
+def _stored_alert_payload(alert: GoldSpreadAlert) -> dict[str, Any]:
+    payload = alert.model_dump(mode="json")
+    analysis = payload.get("historical_analysis")
+    if isinstance(analysis, dict):
+        for chart in analysis.get("charts") or []:
+            if isinstance(chart, dict):
+                encoded = str(chart.pop("data_base64", ""))
+                chart["base64_characters"] = len(encoded)
+    return payload
+
+
 def _claim_alert(alert: GoldSpreadAlert, rendered_text: str, chat_id: str) -> bool:
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
@@ -277,7 +579,7 @@ def _claim_alert(alert: GoldSpreadAlert, rendered_text: str, chat_id: str) -> bo
                     alert.symbol,
                     alert.severity,
                     chat_id,
-                    Jsonb(alert.model_dump(mode="json")),
+                    Jsonb(_stored_alert_payload(alert)),
                     rendered_text,
                 ),
             )
@@ -312,12 +614,23 @@ def send_gold_spread_alert(
     text = render_gold_spread_alert(body)
     if not _claim_alert(body, text, chat_id):
         return {"ok": True, "sent": False, "duplicate": True, "event_id": body.event_id}
-    sent = send_feishu_text(
-        chat_id,
-        text,
-        app_id=os.getenv("VERSION_DIGEST_FEISHU_APP_ID", "").strip(),
-        app_secret=os.getenv("VERSION_DIGEST_FEISHU_APP_SECRET", "").strip(),
-    )
+    app_id = os.getenv("VERSION_DIGEST_FEISHU_APP_ID", "").strip()
+    app_secret = os.getenv("VERSION_DIGEST_FEISHU_APP_SECRET", "").strip()
+    sent = False
+    if body.historical_analysis is not None:
+        sent = send_feishu_historical_card(
+            chat_id,
+            body,
+            app_id=app_id,
+            app_secret=app_secret,
+        )
+    if not sent:
+        sent = send_feishu_text(
+            chat_id,
+            text,
+            app_id=app_id,
+            app_secret=app_secret,
+        )
     if not sent:
         _mark_alert(body.event_id, "failed", "Feishu API returned failure")
         raise HTTPException(status_code=502, detail="Feishu send failed")
