@@ -132,6 +132,7 @@ def test_wrong_price_alert_contains_trade_evidence(monkeypatch) -> None:
         threshold_cny_per_g=1.0,
         deviation_percent=-1.3607,
         clock_skew_ms=125.0,
+        book_breach_cny_per_g=12.84,
     )
     captured: dict[str, object] = {}
     client = _client(monkeypatch)
@@ -148,18 +149,20 @@ def test_wrong_price_alert_contains_trade_evidence(monkeypatch) -> None:
     )
     assert response.status_code == 200
     text = str(captured["text"])
-    assert "🔴 疑似错价成交预警｜沪金 AU2606" in text
+    assert "🔴 疑似错单成交｜沪金 AU2606" in text
     assert "上期所｜2026年06月｜SHFE.au2606" in text
     assert "时间：2026-05-19 21:04:35.500" in text
-    assert "【异常核心】" in text
-    assert "异常价格：982.00 元/克" in text
-    assert "正常估值：995.49 元/克" in text
-    assert "偏离：-13.49 元/克（-1.36%）" in text
-    assert "【市场快照】" in text
-    assert "【数据说明】" in text
-    assert "触发来源：AU行情快照最新价" in text
-    assert "区间增加1手" in text
-    assert "跨市场时差：125 ms" in text
+    assert "【偏离度】" in text
+    assert "极值成交价：982.00 元/克（成交价）" in text
+    assert "基准价格：995.49 元/克 = 国际折算 991.10 + 价差中枢 4.39" in text
+    assert "偏离：-13.49 元/克（-1.36%）｜阈值 1.00 元/克（0.10%）" in text
+    assert "【判定依据】" in text
+    assert "有效成交：快照区间成交 1 手（累计 8012 手）" in text
+    assert "扫穿盘口：越出事发时盘口 12.84 元" in text
+    assert "价格回归：等待复盘（回归窗口结束后追发）" in text
+    assert "【复盘要素】" in text
+    assert "价差中枢：+4.39 元/克（内盘升水）" in text
+    assert "触发来源：AU行情快照最新价｜跨市场时差：125 ms" in text
     assert "Tick ID" not in text
     assert "事件编号" not in text
 
@@ -187,6 +190,7 @@ def test_wrong_price_alert_explains_one_second_low_volume(monkeypatch) -> None:
         threshold_cny_per_g=1.0,
         deviation_percent=-16.647851,
         clock_skew_ms=1213.0,
+        book_breach_cny_per_g=165.08,
     )
     captured: dict[str, object] = {}
     client = _client(monkeypatch)
@@ -204,12 +208,86 @@ def test_wrong_price_alert_explains_one_second_low_volume(monkeypatch) -> None:
     assert response.status_code == 200
     text = str(captured["text"])
     assert "🧪 历史回放验证｜沪金 AU2606" in text
-    assert "1秒最低价：830.52 元/克" in text
-    assert "正常估值：995.52 元/克" in text
+    assert "极值成交价：830.52 元/克（该秒最低价）" in text
+    assert "基准价格：995.52 元/克 = 国际折算 991.14 + 价差中枢 4.39" in text
     assert "偏离：-165.00 元/克（-16.65%）" in text
-    assert "该秒成交：370 手（区间汇总，并非全部成交在异常价）" in text
+    assert "有效成交：该秒成交 370 手" in text
+    assert "扫穿盘口：越出事发时盘口 165.08 元" in text
+    assert "价格回归：回归用时见回溯报告 recovery_seconds 列" in text
     assert "⚠️ 这是历史回放，不是当前行情" in text
     assert "【历史回放验证】" not in text
+
+
+def test_wrong_price_review_recovered_confirms_fat_finger(monkeypatch) -> None:
+    body = _payload()
+    body.update(
+        event_id="wrong:au:SHFE.au2606:1779195875000:8006011:review",
+        kind="wrong_price_review",
+        severity="warning",
+        direction="down",
+        related_event_id="wrong:au:SHFE.au2606:1779195875000:8006011",
+        related_occurred_at="2026-05-19T21:04:35+08:00",
+        recovered=True,
+        recovery_seconds=0.5,
+        trigger_price=830.52,
+        volume_delta=370,
+        book_breach_cny_per_g=165.08,
+        deviation_cny_per_g=-165.002795,
+        threshold_cny_per_g=1.0,
+        deviation_percent=-16.647851,
+    )
+    captured: dict[str, object] = {}
+    client = _client(monkeypatch)
+
+    def fake_send(receive_id: str, text: str, **kwargs) -> bool:
+        captured.update(receive_id=receive_id, text=text, **kwargs)
+        return True
+
+    monkeypatch.setattr(alerts, "send_feishu_text", fake_send)
+    response = client.post(
+        "/v1/internal/gold-spread/alerts",
+        headers={"X-Gold-Spread-Token": "test-token"},
+        json=body,
+    )
+    assert response.status_code == 200
+    text = str(captured["text"])
+    assert "🟢 错单复盘｜沪金 AU2606｜判定成立" in text
+    assert "原事件：2026-05-19 21:04:35（异常低价，偏离 -165.00 元/克，-16.65%）" in text
+    assert "价格回归：0.5 秒回归价差中枢（±0.50 元内）" in text
+    assert "三条件齐备：有效成交 ✓ 扫穿盘口 ✓ 快速回归 ✓" in text
+
+
+def test_wrong_price_review_timeout_downgrades(monkeypatch) -> None:
+    body = _payload()
+    body.update(
+        event_id="wrong:au:SHFE.au2606:1779195875000:8006012:review",
+        kind="wrong_price_review",
+        severity="info",
+        direction="up",
+        related_event_id="wrong:au:SHFE.au2606:1779195875000:8006012",
+        related_occurred_at="2026-05-19T21:04:35+08:00",
+        recovered=False,
+        deviation_cny_per_g=1.2,
+        threshold_cny_per_g=1.0,
+        deviation_percent=0.12,
+    )
+    captured: dict[str, object] = {}
+    client = _client(monkeypatch)
+
+    def fake_send(receive_id: str, text: str, **kwargs) -> bool:
+        captured.update(receive_id=receive_id, text=text, **kwargs)
+        return True
+
+    monkeypatch.setattr(alerts, "send_feishu_text", fake_send)
+    response = client.post(
+        "/v1/internal/gold-spread/alerts",
+        headers={"X-Gold-Spread-Token": "test-token"},
+        json=body,
+    )
+    assert response.status_code == 200
+    text = str(captured["text"])
+    assert "⚪ 错单复盘｜沪金 AU2606｜降级" in text
+    assert "回归窗口内未回归价差中枢，更接近行情重定价，不计为错单" in text
 
 
 def test_historical_analysis_uses_interactive_card(monkeypatch) -> None:
