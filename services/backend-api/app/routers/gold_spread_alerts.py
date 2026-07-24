@@ -328,14 +328,34 @@ def _render_wrong_price(alert: GoldSpreadAlert) -> str:
         "",
         "【偏离度】",
         f"极值成交价：{_number(alert.trigger_price, 2)} {trigger_unit}（{price_label}）",
-        f"基准价格：{_number(benchmark_price, 2)} 元/克 = 国际折算 "
-        f"{_number(alert.international_cny_per_g, 2)} + 价差中枢 {_number(alert.baseline_cny_per_g, 2)}",
-        f"偏离：{_number(alert.deviation_cny_per_g, 2)} 元/克（{_number(alert.deviation_percent, 2)}%）"
-        f"｜阈值 {_number(alert.threshold_cny_per_g, 2)} 元/克（{_number(threshold_percent, 2)}%）",
-        f"方向：{direction}",
-        "",
-        "【判定依据】",
     ]
+    if is_au_trigger:
+        lines.append(
+            f"基准价格：{_number(benchmark_price, 2)} 元/克 = 国际折算 "
+            f"{_number(alert.international_cny_per_g, 2)} + 价差中枢 {_number(alert.baseline_cny_per_g, 2)}"
+        )
+    else:
+        # MT5 报价 tick 触发时，异常在国际侧：基准折算不能用异常 tick 自身，
+        # 应由 AU 中间价减去价差中枢反推。
+        normal_international = (
+            alert.au_mid - alert.baseline_cny_per_g
+            if alert.au_mid is not None and alert.baseline_cny_per_g is not None
+            else None
+        )
+        lines.append(f"异常折算：{_number(alert.international_cny_per_g, 2)} 元/克")
+        lines.append(
+            f"基准折算：{_number(normal_international, 2)} 元/克 = AU中间价 "
+            f"{_number(alert.au_mid, 2)} − 价差中枢 {_number(alert.baseline_cny_per_g, 2)}"
+        )
+    lines.extend(
+        [
+            f"偏离：{_number(alert.deviation_cny_per_g, 2)} 元/克（{_number(alert.deviation_percent, 2)}%）"
+            f"｜阈值 {_number(alert.threshold_cny_per_g, 2)} 元/克（{_number(threshold_percent, 2)}%）",
+            f"方向：{direction}",
+            "",
+            "【判定依据】",
+        ]
+    )
     if alert.trigger_market.startswith("SHFE_AU_1S_") and alert.volume_delta is not None:
         lines.append(f"有效成交：该秒成交 {_number(alert.volume_delta, 0)} 手")
     elif alert.volume_delta is not None:
