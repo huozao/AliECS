@@ -218,6 +218,51 @@ def test_wrong_price_alert_explains_one_second_low_volume(monkeypatch) -> None:
     assert "【历史回放验证】" not in text
 
 
+def test_wrong_price_mt5_trigger_uses_au_side_benchmark(monkeypatch) -> None:
+    body = _payload()
+    body.update(
+        event_id="wrong:xau:SHFE.au2702:1784241602385",
+        kind="wrong_price_detected",
+        severity="critical",
+        direction="up",
+        trigger_market="MT5_XAUUSD_TICK",
+        trigger_price=4048.45,
+        trigger_tick_id="1784241602385:4048.23:4048.68",
+        au_bid=891.84,
+        au_ask=892.88,
+        au_mid=892.36,
+        xauusd=4048.45,
+        usdcnh=6.77581,
+        international_cny_per_g=881.94,
+        spread_cny_per_g=10.42,
+        baseline_cny_per_g=9.39,
+        deviation_cny_per_g=1.03,
+        threshold_cny_per_g=1.0,
+        deviation_percent=0.12,
+        clock_skew_ms=885.0,
+    )
+    captured: dict[str, object] = {}
+    client = _client(monkeypatch)
+
+    def fake_send(receive_id: str, text: str, **kwargs) -> bool:
+        captured.update(receive_id=receive_id, text=text, **kwargs)
+        return True
+
+    monkeypatch.setattr(alerts, "send_feishu_text", fake_send)
+    response = client.post(
+        "/v1/internal/gold-spread/alerts",
+        headers={"X-Gold-Spread-Token": "test-token"},
+        json=body,
+    )
+    assert response.status_code == 200
+    text = str(captured["text"])
+    assert "极值成交价：4048.45 美元/盎司（触发价格）" in text
+    assert "异常折算：881.94 元/克" in text
+    # 基准折算须由 AU 中间价反推（892.36 − 9.39），不能用异常 tick 自身折算
+    assert "基准折算：882.97 元/克 = AU中间价 892.36 − 价差中枢 9.39" in text
+    assert "有效成交：无成交记录" in text
+
+
 def test_wrong_price_review_recovered_confirms_fat_finger(monkeypatch) -> None:
     body = _payload()
     body.update(
