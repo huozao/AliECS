@@ -1,0 +1,43 @@
+name: business-cn
+
+# Canonical service bodies remain in compose.prod.yml during the migration.
+# This role file selects only the mainland business/write plane.
+services:
+  public-web:
+    extends:
+      file: compose.prod.yml
+      service: public-web
+  admin-ui:
+    extends:
+      file: compose.prod.yml
+      service: admin-ui
+  backend-api:
+    extends:
+      file: compose.prod.yml
+      service: backend-api
+  doc-sync-worker:
+    extends:
+      file: compose.prod.yml
+      service: doc-sync-worker
+  tplus-sync-worker:
+    extends:
+      file: compose.prod.yml
+      service: tplus-sync-worker
+  tplus-write-worker:
+    extends:
+      file: compose.prod.yml
+      service: tplus-write-worker
+  postgres:
+    extends:
+      file: compose.prod.yml
+      service: postgres
+
+volumes:
+  pgdata:
+  tplus_sync_data:
+  tplus_sync_output:
+  recipe_active_bom:
+  tplus_sync_requests:
+  uploads:
+  wecom_group_media:
+  wecom_kf_materials:

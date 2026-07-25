@@ -1,0 +1,51 @@
+name: business-cold-recovery
+
+# Cold recovery is definition-only by default. No service is started unless
+# the operator explicitly enables the cold-recovery profile after restoring
+# current txecs state and enforcing the single-writer gate.
+services:
+  public-web:
+    extends:
+      file: compose.business-cn.yml
+      service: public-web
+    profiles: ["cold-recovery"]
+  admin-ui:
+    extends:
+      file: compose.business-cn.yml
+      service: admin-ui
+    profiles: ["cold-recovery"]
+  backend-api:
+    extends:
+      file: compose.business-cn.yml
+      service: backend-api
+    profiles: ["cold-recovery"]
+  doc-sync-worker:
+    extends:
+      file: compose.business-cn.yml
+      service: doc-sync-worker
+    profiles: ["cold-recovery"]
+  tplus-sync-worker:
+    extends:
+      file: compose.business-cn.yml
+      service: tplus-sync-worker
+    profiles: ["cold-recovery"]
+  tplus-write-worker:
+    extends:
+      file: compose.business-cn.yml
+      service: tplus-write-worker
+    profiles: ["cold-recovery"]
+  postgres:
+    extends:
+      file: compose.business-cn.yml
+      service: postgres
+    profiles: ["cold-recovery"]
+
+volumes:
+  pgdata:
+  tplus_sync_data:
+  tplus_sync_output:
+  recipe_active_bom:
+  tplus_sync_requests:
+  uploads:
+  wecom_group_media:
+  wecom_kf_materials:

@@ -14,7 +14,16 @@ if [[ ! "$IMAGE_TAG" =~ ^(sha-[0-9a-f]{12,40}|v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]
 fi
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
-META_FILE="$ROOT_DIR/release-meta.env"
+META_FILE="${RELEASE_META_FILE:-$ROOT_DIR/release-meta.env}"
+DEPLOY_ROLE="${DEPLOY_ROLE:-legacy-all}"
+
+case "$DEPLOY_ROLE" in
+  business-cn|legacy-all) ;;
+  *)
+    echo "[部署] deploy.sh 仅允许 business-cn/legacy-all；role=$DEPLOY_ROLE" >&2
+    exit 1
+    ;;
+esac
 
 if [[ ! -f "$META_FILE" ]]; then
   echo "[部署] 缺少配置文件：$META_FILE" >&2
@@ -27,7 +36,11 @@ set -a
 source "$META_FILE"
 set +a
 
-: "${GHCR_BASE:?请在 release-meta.env 设置 GHCR_BASE}"
+IMAGE_REGISTRY_BASE="${ROLE_IMAGE_REGISTRY_BASE:-${IMAGE_REGISTRY_BASE:-${GHCR_BASE:-}}}"
+COMPOSE_FILE="${ROLE_COMPOSE_FILE:-${COMPOSE_FILE:-}}"
+RUNTIME_ENV_FILE="${ROLE_RUNTIME_ENV_FILE:-${RUNTIME_ENV_FILE:-}}"
+METADATA_DIR="${ROLE_METADATA_DIR:-${METADATA_DIR:-}}"
+: "${IMAGE_REGISTRY_BASE:?请在 release-meta.env 设置 IMAGE_REGISTRY_BASE 或 GHCR_BASE}"
 : "${POSTGRES_USER:?请在 release-meta.env 设置 POSTGRES_USER}"
 : "${POSTGRES_PASSWORD:?请在 release-meta.env 设置 POSTGRES_PASSWORD}"
 : "${POSTGRES_DB:?请在 release-meta.env 设置 POSTGRES_DB}"
@@ -44,6 +57,20 @@ set +a
 if ! command -v python3 >/dev/null 2>&1; then
   echo "[部署] 缺少 python3，无法校验 DATABASE_URL。" >&2
   exit 1
+fi
+
+if [[ -n "${DEPLOY_COMMIT_SHA:-}" ]]; then
+  actual_commit=""
+  REPO_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
+  if git -C "$REPO_ROOT" rev-parse HEAD >/dev/null 2>&1; then
+    actual_commit="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+  elif [[ -f "$REPO_ROOT/.source-commit" ]]; then
+    actual_commit="$(tr -d '[:space:]' < "$REPO_ROOT/.source-commit")"
+  fi
+  if [[ "$actual_commit" != "$DEPLOY_COMMIT_SHA" ]]; then
+    echo "[部署] 源码 commit 不一致：expected=$DEPLOY_COMMIT_SHA actual=${actual_commit:-missing}" >&2
+    exit 1
+  fi
 fi
 
 db_parse_output="$(python3 - <<'PY'
@@ -262,12 +289,13 @@ fi
 echo "[部署] 服务镜像标签：public-web=${PUBLIC_WEB_TAG:-$IMAGE_TAG} admin-ui=${ADMIN_UI_TAG:-$IMAGE_TAG} backend-api=${BACKEND_API_TAG:-$IMAGE_TAG} doc-sync-worker=${DOC_SYNC_WORKER_TAG:-$IMAGE_TAG} tplus-sync-worker=${TPLUS_SYNC_WORKER_TAG:-$IMAGE_TAG} mcp-coding-server=${MCP_CODING_SERVER_TAG:-$IMAGE_TAG}"
 
 cat > "$CURRENT_ENV" <<ENV
-PUBLIC_WEB_IMAGE=${GHCR_BASE}/public-web:${PUBLIC_WEB_TAG:-$IMAGE_TAG}
-ADMIN_UI_IMAGE=${GHCR_BASE}/admin-ui:${ADMIN_UI_TAG:-$IMAGE_TAG}
-BACKEND_API_IMAGE=${GHCR_BASE}/backend-api:${BACKEND_API_TAG:-$IMAGE_TAG}
-DOC_SYNC_WORKER_IMAGE=${GHCR_BASE}/doc-sync-worker:${DOC_SYNC_WORKER_TAG:-$IMAGE_TAG}
-TPLUS_SYNC_WORKER_IMAGE=${GHCR_BASE}/tplus-sync-worker:${TPLUS_SYNC_WORKER_TAG:-$IMAGE_TAG}
-MCP_CODING_SERVER_IMAGE=${GHCR_BASE}/mcp-coding-server:${MCP_CODING_SERVER_TAG:-$IMAGE_TAG}
+PUBLIC_WEB_IMAGE=${IMAGE_REGISTRY_BASE}/public-web:${PUBLIC_WEB_TAG:-$IMAGE_TAG}
+ADMIN_UI_IMAGE=${IMAGE_REGISTRY_BASE}/admin-ui:${ADMIN_UI_TAG:-$IMAGE_TAG}
+BACKEND_API_IMAGE=${IMAGE_REGISTRY_BASE}/backend-api:${BACKEND_API_TAG:-$IMAGE_TAG}
+DOC_SYNC_WORKER_IMAGE=${IMAGE_REGISTRY_BASE}/doc-sync-worker:${DOC_SYNC_WORKER_TAG:-$IMAGE_TAG}
+TPLUS_SYNC_WORKER_IMAGE=${IMAGE_REGISTRY_BASE}/tplus-sync-worker:${TPLUS_SYNC_WORKER_TAG:-$IMAGE_TAG}
+MCP_CODING_SERVER_IMAGE=${IMAGE_REGISTRY_BASE}/mcp-coding-server:${MCP_CODING_SERVER_TAG:-$IMAGE_TAG}
+POSTGRES_IMAGE=${POSTGRES_IMAGE:-postgres:16}
 
 POSTGRES_USER=${POSTGRES_USER}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
@@ -418,9 +446,12 @@ if [[ "${IMMICH_TUNNEL_PROXY_ENABLED:-false}" == "true" ]]; then
   "$ROOT_DIR/install-immich-tunnel-proxy.sh"
 fi
 
-if [[ -n "${GHCR_USERNAME:-}" && -n "${GHCR_TOKEN:-}" ]]; then
-  echo "[部署] 登录 GHCR"
-  echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
+REGISTRY_USERNAME="${REGISTRY_USERNAME:-${GHCR_USERNAME:-}}"
+REGISTRY_TOKEN="${REGISTRY_TOKEN:-${GHCR_TOKEN:-}}"
+if [[ -n "$REGISTRY_USERNAME" && -n "$REGISTRY_TOKEN" ]]; then
+  registry_host="${IMAGE_REGISTRY_BASE%%/*}"
+  echo "[部署] 登录镜像仓库 $registry_host"
+  echo "$REGISTRY_TOKEN" | docker login "$registry_host" -u "$REGISTRY_USERNAME" --password-stdin
 fi
 
 echo "[部署] 拉取镜像（逐服务串行，避免并行解压打爆 2G 内存，见 2026-06-10 OOM 假死事故）"
@@ -436,7 +467,7 @@ if [[ "$pull_failed" -ne 0 ]]; then
   echo "[部署] 拉取镜像失败。若报 unauthorized，请检查：" >&2
   echo "[部署] 1) GHCR 包可见性（public/private）" >&2
   echo "[部署] 2) GHCR_USERNAME / GHCR_TOKEN 是否在 ECS 或 Actions 中正确提供" >&2
-  echo "[部署] 3) GHCR_BASE 与镜像命名是否一致（例如 ghcr.io/huozao/*）" >&2
+  echo "[部署] 3) IMAGE_REGISTRY_BASE/GHCR_BASE 与镜像命名是否一致" >&2
   exit 1
 fi
 

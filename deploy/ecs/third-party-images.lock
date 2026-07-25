@@ -1,0 +1,6 @@
+# destination-name|source immutable reference|destination tag
+# Digests were captured from the verified AliECS runtime on 2026-07-25.
+postgres|docker.io/library/postgres@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20|16-runtime-20260725
+openclaw|ghcr.io/openclaw/openclaw@sha256:037f49ba1595be9502fb345138d727cd0cfaecf1392cbe0cfe053fb4681386cd|2026.6.5-runtime-20260725
+authelia|docker.io/authelia/authelia@sha256:1b363e9279e742397966333f364e0876ae02bf5c876de73e83af6d48c57ff51b|4.39-runtime-20260725
+lldap|docker.io/lldap/lldap@sha256:2a8454b668c1aba7157e832eab0e242e1e7eb5fb7591d7e7774ba05286511ca8|v0.6-runtime-20260725

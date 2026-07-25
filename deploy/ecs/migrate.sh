@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+DEPLOY_ROLE="${DEPLOY_ROLE:-legacy-all}"
+case "$DEPLOY_ROLE" in
+  business-cn|legacy-all) ;;
+  *)
+    echo "[迁移] role=$DEPLOY_ROLE 无权执行数据库迁移" >&2
+    exit 1
+    ;;
+esac
+
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 META_FILE="$ROOT_DIR/release-meta.env"
 if [[ ! -f "$META_FILE" ]]; then

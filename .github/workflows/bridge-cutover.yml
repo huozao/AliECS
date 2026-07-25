@@ -1,11 +1,16 @@
 name: bridge-cutover
 
-# 一键切换 ECS 上 openclaw-bridge 的运行镜像（构建仍由 release-deploy 完成）。
+# 一键切换 txecs 上 openclaw-bridge 的运行镜像（构建仍由 release-deploy 完成）。
 # 人工只负责扣一次扳机；workflow 从所选 Git ref 自动解析内容标签和 OCI digest。
 # 失败自动回滚。bridge 是微信/飞书链路咽喉，不随每次 main push 自动切换。
 
 on:
   workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "P1 才可输入 CUTOVER_TXECS"
+        required: true
+        type: string
 
 concurrency:
   group: bridge-cutover
@@ -13,6 +18,7 @@ concurrency:
 
 jobs:
   cutover:
+    if: ${{ inputs.confirmation == 'CUTOVER_TXECS' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,51 +27,49 @@ jobs:
         id: image
         run: |
           CONTENT_TAG="t-$(git rev-parse 'HEAD:deploy/openclaw-bridge' | cut -c1-12)"
-          echo "source_ref=ghcr.io/${GITHUB_REPOSITORY_OWNER}/openclaw-bridge:${CONTENT_TAG}" >> "$GITHUB_OUTPUT"
+          echo "source_ref=${{ vars.TCR_BASE }}/openclaw-bridge:${CONTENT_TAG}" >> "$GITHUB_OUTPUT"
           echo "version=sha-${GITHUB_SHA:0:12}@${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
-      - name: Cut over openclaw-bridge on ECS
+      - name: Cut over openclaw-bridge on txecs
         uses: appleboy/ssh-action@v1.2.0
         env:
           BRIDGE_SOURCE_REF: ${{ steps.image.outputs.source_ref }}
           BRIDGE_VERSION: ${{ steps.image.outputs.version }}
         with:
-          host: ${{ secrets.ECS_HOST }}
-          username: ${{ secrets.ECS_USER }}
-          key: ${{ secrets.ECS_SSH_KEY }}
+          host: ${{ secrets.TENCENT_HOST }}
+          username: ${{ secrets.TENCENT_USER }}
+          key: ${{ secrets.TENCENT_SSH_KEY }}
           command_timeout: 15m
           envs: BRIDGE_SOURCE_REF,BRIDGE_VERSION
           script: |
             set -euo pipefail
-            STATE_FILE=/root/infra/server/release.env
-            STATE_BACKUP=/root/infra/server/release.env.bak.cutover
-            COMPOSE=/root/infra/server/compose.bridge.yml
+            : "${BRIDGE_SOURCE_REF:?missing TCR bridge image}"
+            STATE_FILE=/srv/business-cn/state/bridge-release.env
+            STATE_BACKUP=/srv/business-cn/state/bridge-release.env.bak.cutover
+            COMPOSE=/home/ubuntu/infra/server/compose.bridge.yml
 
             # Pull and resolve the immutable digest before touching the live service.
-            docker pull "$BRIDGE_SOURCE_REF"
-            BRIDGE_IMAGE="$(docker image inspect --format '{{index .RepoDigests 0}}' "$BRIDGE_SOURCE_REF")"
-            if [[ "$BRIDGE_IMAGE" != ghcr.io/huozao/openclaw-bridge@sha256:* ]]; then
+            sudo docker pull "$BRIDGE_SOURCE_REF"
+            BRIDGE_IMAGE="$(sudo docker image inspect --format '{{index .RepoDigests 0}}' "$BRIDGE_SOURCE_REF")"
+            if [[ "$BRIDGE_IMAGE" != *@sha256:* ]]; then
               echo "[cutover] invalid resolved digest: $BRIDGE_IMAGE" >&2
               exit 1
             fi
 
-            if [[ -f "$STATE_FILE" ]]; then
-              cp -a "$STATE_FILE" "$STATE_BACKUP"
-            else
-              CURRENT_REF="$(docker inspect -f '{{.Config.Image}}' openclaw-bridge)"
-              CURRENT_IMAGE="$(docker image inspect --format '{{index .RepoDigests 0}}' "$CURRENT_REF")"
-              CURRENT_VERSION="$(docker exec openclaw-bridge sh -c 'printf %s "${OPENCLAW_BRIDGE_TAG:-legacy}"' 2>/dev/null || printf legacy)"
-              printf 'OPENCLAW_BRIDGE_IMAGE=%s\nOPENCLAW_BRIDGE_VERSION=%s\n' "$CURRENT_IMAGE" "$CURRENT_VERSION" > "$STATE_BACKUP"
-            fi
-            PREV="$(sed -n 's/^OPENCLAW_BRIDGE_IMAGE=//p' "$STATE_BACKUP")"
+            sudo test -f "$STATE_FILE" || {
+              echo "[cutover] missing P0 bridge release state: $STATE_FILE" >&2
+              exit 1
+            }
+            sudo cp -a "$STATE_FILE" "$STATE_BACKUP"
+            PREV="$(sudo sed -n 's/^OPENCLAW_BRIDGE_IMAGE=//p' "$STATE_BACKUP")"
             echo "[cutover] ${PREV} -> ${BRIDGE_IMAGE} (${BRIDGE_VERSION})"
 
             STATE_TMP="${STATE_FILE}.tmp"
-            printf 'OPENCLAW_BRIDGE_IMAGE=%s\nOPENCLAW_BRIDGE_VERSION=%s\n' "$BRIDGE_IMAGE" "$BRIDGE_VERSION" > "$STATE_TMP"
-            chmod 600 "$STATE_TMP"
-            mv -f "$STATE_TMP" "$STATE_FILE"
-            docker rm -f openclaw-bridge >/dev/null 2>&1 || true
-            docker compose -f "$COMPOSE" --env-file "$STATE_FILE" up -d
+            sudo sh -c 'printf "OPENCLAW_BRIDGE_IMAGE=%s\nOPENCLAW_BRIDGE_VERSION=%s\n" "$1" "$2" > "$3"' sh "$BRIDGE_IMAGE" "$BRIDGE_VERSION" "$STATE_TMP"
+            sudo chmod 600 "$STATE_TMP"
+            sudo mv -f "$STATE_TMP" "$STATE_FILE"
+            sudo docker rm -f openclaw-bridge >/dev/null 2>&1 || true
+            sudo docker compose -f "$COMPOSE" --env-file "$STATE_FILE" up -d
 
             ok=0
             for i in $(seq 1 12); do
@@ -76,11 +80,11 @@ jobs:
             done
             if [ "$ok" = "1" ]; then
               echo "[cutover] bridge :18080 healthy on ${BRIDGE_IMAGE}"
-              docker ps --format '{{.Names}}|{{.Image}}|{{.Status}}' | grep openclaw-bridge
+              sudo docker ps --format '{{.Names}}|{{.Image}}|{{.Status}}' | grep openclaw-bridge
             else
               echo "[cutover] HEALTH FAILED — rolling back to ${PREV}"
-              cp -a "$STATE_BACKUP" "$STATE_FILE"
-              docker rm -f openclaw-bridge >/dev/null 2>&1 || true
-              docker compose -f "$COMPOSE" --env-file "$STATE_FILE" up -d
+              sudo cp -a "$STATE_BACKUP" "$STATE_FILE"
+              sudo docker rm -f openclaw-bridge >/dev/null 2>&1 || true
+              sudo docker compose -f "$COMPOSE" --env-file "$STATE_FILE" up -d
               exit 1
             fi
