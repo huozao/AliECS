@@ -42,6 +42,7 @@ DEFAULT_FEATURES: list[dict[str, Any]] = [
     {"id": 12, "code": "admin_ui", "title": "Admin UI", "description": "管理后台入口", "url": "/admin/", "category": "系统", "required_permission": "admin.access", "status": "active", "sort_order": 120},
     {"id": 13, "code": "ash_calculator", "title": "分段灰分/填料计算器", "description": "分段灼烧灰分与炭黑/填料半定量计算，支持导出PDF报告", "url": "/tools/ash-calc/", "category": "工具", "required_permission": None, "status": "active", "sort_order": 130},
     {"id": 14, "code": "ai_file_transfer", "title": "AI 文件中转", "description": "上传临时文件，生成公开下载链接。", "url": "https://files.hydwang.xyz", "category": "工具", "required_permission": None, "status": "active", "sort_order": 140},
+    {"id": 15, "code": "density_buoyancy_calc", "title": "浮力法密度计算器", "description": "按空气中与液体中重量计算样品密度，支持水/乙醇/自定义介质与导出PDF报告", "url": "/tools/density-calc/", "category": "工具", "required_permission": None, "status": "active", "sort_order": 135},
 ]
 
 
