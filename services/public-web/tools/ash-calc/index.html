@@ -249,7 +249,7 @@ th,td{white-space:nowrap}
 @media(max-width:760px){.rpt-meta-box .rgrid{grid-template-columns:1fr 1fr}}
 @media screen{.report-root{display:none}}
 @media print{
-  header,main,.float-tip,.tools,.tabs{display:none !important}
+  header,main,#mApp,.float-tip,.tools,.tabs{display:none !important}
   .report-root{display:block !important}
   @page{size:A4;margin:14mm}
   body{background:#fff !important;margin:0;color:#111;font-size:12px}
@@ -280,12 +280,112 @@ th,td{white-space:nowrap}
 /* v14: 示例（未编辑）输入显示为灰色占位风格，点击聚焦后恢复正常色 */
 input.ex{color:#9ca3af}
 input.ex:focus{color:var(--text)}
+
+/* ===== v15 移动端：阶段步进录入 + 结果卡（<=760px 生效） ===== */
+#mApp{display:none}
+@media(max-width:760px){
+ #desktopMain{display:none !important}
+ #mApp{display:block;max-width:640px;margin:0 auto;padding:10px 12px 92px}
+ header .header h1{font-size:16px}
+ .m-tabs{display:flex;gap:8px;margin:6px 0 12px}
+ .m-tab{flex:1;padding:11px;border-radius:12px;background:#eef2f7;color:#475569;font-weight:800;border:1px solid var(--line)}
+ .m-tab.on{background:#111827;color:#fff;border-color:#111827}
+ .m-dots{display:flex;gap:6px;margin-bottom:10px}
+ .m-dot{position:relative;flex:1;min-width:0;padding:8px 2px;border-radius:10px;background:#fff;border:1px solid var(--line2);color:#64748b;font-weight:800;font-size:13px}
+ .m-dot.on{background:var(--blue);color:#fff;border-color:var(--blue)}
+ .m-dot.done{border-color:#34d399}
+ .m-dot i{display:block;font-style:normal;font-size:10px;font-weight:700;opacity:.85;margin-top:1px}
+ .m-steptitle{font-size:15px;font-weight:900;margin:4px 2px 6px;color:#111827}
+ .m-steptip{font-size:12.5px;color:#64748b;line-height:1.5;margin:0 2px 12px}
+ .m-steptip:empty{display:none}
+ .m-dot{overflow:hidden;white-space:nowrap}
+ .m-review .rv-cond{font-size:12px;color:#1d4ed8;font-weight:700;margin:-4px 0 8px}
+ .rv-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+ .rv-tbl{width:100%;border-collapse:collapse;font-size:12px}
+ .rv-tbl th,.rv-tbl td{border-bottom:1px solid var(--line);padding:7px 6px;text-align:right;white-space:nowrap}
+ .rv-tbl th{color:#64748b;font-weight:800;font-size:11px;background:#f8fafc}
+ .rv-tbl th:first-child,.rv-tbl td:first-child{text-align:left}
+ .rv-tbl th i{display:block;font-style:normal;color:#1d4ed8;font-weight:700;font-size:10px}
+ .rv-name{font-weight:700;color:#374151}
+ .rv-num{font-variant-numeric:tabular-nums;font-weight:700}
+ .rv-num.empty{color:#cbd5e1;font-weight:400}
+ .rv-tbl tr.rv-calc td{background:#f8fafc}
+ .rv-tbl tr.rv-calc .rv-name{color:#0f766e}
+ .rv-tbl tr.rv-raw td{padding-top:5px;padding-bottom:5px;background:#fcfcfd}
+ .rv-tbl tr.rv-raw .rv-name{color:#aeb6c2;font-weight:400;font-size:11px}
+ .rv-tbl tr.rv-raw .rv-num{color:#aeb6c2;font-weight:400;font-size:11px}
+ .rv-tbl tr.cur td{background:#dbeafe}
+ .rv-tbl tr.cur td:first-child{box-shadow:inset 4px 0 0 var(--blue)}
+ .rv-tbl tr.cur .rv-name{color:#1d4ed8;font-weight:800;font-size:12px}
+ .rv-tbl tr.cur .rv-num{color:#1e40af;font-weight:800;font-size:12px}
+ .m-card{background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:14px;margin-bottom:12px}
+ .m-card-h{font-size:14px;font-weight:800;margin-bottom:10px}
+ .m-field{margin-bottom:12px}.m-field:last-child{margin-bottom:0}
+ .m-field label{display:block;font-size:12px;font-weight:700;color:#374151;margin-bottom:5px}
+ #mBody input,#mBody select,.m-input{width:100%;height:48px;padding:0 12px;border:1px solid var(--line2);border-radius:12px;font:inherit;font-size:16px;background:#fff;color:var(--text)}
+ .m-grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}.m-grid2 .m-field{margin-bottom:0}
+ .m-note{margin-top:10px;font-size:12px;color:#64748b;background:#f8fafc;border:1px dashed var(--line2);border-radius:10px;padding:8px 10px}
+ .m-scard-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+ .m-del{padding:6px 12px;height:auto}
+ .m-add{width:100%;height:46px;border:1px dashed var(--blue);border-radius:12px;background:#eff6ff;color:var(--blue);font-weight:800;margin-bottom:12px}
+ .m-wgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+ .m-wgrid .m-wcard{margin-bottom:0;padding:10px 12px}
+ .m-wcard{padding:12px 14px}
+ .m-wtop{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:8px}
+ .m-wname{font-weight:800;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ .m-wrole{flex:0 0 auto;font-size:11px;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:999px;padding:1px 8px;font-weight:800}
+ .m-inwrap{position:relative}
+ .m-inwrap input{height:50px;font-size:19px;font-weight:700;padding-right:30px}
+ .m-unit{font-size:13px}
+ .m-unit{position:absolute;right:14px;top:50%;transform:translateY(-50%);color:#94a3b8;font-weight:700}
+ .m-rsub{font-size:12px;color:#64748b;margin:2px 2px 12px}
+ .m-rcard{padding:14px}
+ .m-rhead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+ .m-rname{font-weight:900;font-size:16px}
+ .m-rtype{font-size:12px;color:#64748b}
+ .m-mrow{display:flex;justify-content:space-between;align-items:baseline;padding:6px 0;border-bottom:1px dashed #eef2f7}
+ .m-mrow:last-child{border-bottom:0}
+ .m-mk{font-size:13px;color:#475569}
+ .m-mv{font-size:15px;font-weight:800;font-variant-numeric:tabular-nums}
+ .m-diff{margin-left:8px;font-size:12px;font-weight:800}
+ .m-diff.plus{color:var(--red)}.m-diff.minus{color:var(--blue)}
+ #mResult .warns{display:grid;gap:8px}
+ .m-nav,.m-actions{position:fixed;left:0;right:0;bottom:0;display:flex;gap:8px;padding:10px 14px calc(10px + env(safe-area-inset-bottom));background:rgba(255,255,255,.96);border-top:1px solid var(--line);backdrop-filter:blur(6px);z-index:30}
+ .m-nav-btn{flex:1;height:48px;border-radius:12px;font-size:15px}
+ .m-nav-btn.ghost{background:#f1f5f9;color:#334155}
+ .m-nav-btn.primary{background:var(--blue);color:#fff}
+ .m-nav>span{flex:1}
+ .m-abtn{flex:1;height:48px;border-radius:12px;font-size:14px;background:#f1f5f9;color:#334155}
+ .m-abtn.primary{background:var(--blue);color:#fff}
+ .m-abtn.ghost{background:#eef2ff;color:#3730a3;flex:0 0 80px}
+ .m-menu{position:fixed;right:14px;bottom:70px;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:8px;display:flex;flex-direction:column;gap:6px;z-index:31}
+ .m-menu button{height:42px;padding:0 18px;border-radius:10px;background:#f8fafc;color:#334155;font-weight:700;white-space:nowrap}
+}
+/* 历史记录面板（桌面/手机通用） */
+.hist-panel{position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:100;display:flex;align-items:center;justify-content:center;padding:16px}
+.hist-box{background:#fff;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.3);width:100%;max-width:560px;max-height:82vh;display:flex;flex-direction:column;overflow:hidden}
+.hist-head{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--line)}
+.hist-head b{font-size:16px}
+.hist-head button{background:#f1f5f9;color:#334155;font-size:13px}
+.hist-list{overflow-y:auto;padding:6px 16px;flex:1}
+.hist-empty{color:#64748b;font-size:13px;padding:26px 8px;text-align:center;line-height:1.7}
+.hist-item{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}
+.hist-item:last-child{border-bottom:0}
+.hist-meta{min-width:0}
+.hist-title{font-weight:800;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hist-sub{font-size:12px;color:#64748b;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hist-btns{display:flex;gap:6px;flex:0 0 auto}
+.hist-btns button{padding:7px 12px;font-size:13px;border-radius:9px}
+.hist-load{background:#eff6ff;color:#1d4ed8}
+.hist-del{background:#fef2f2;color:#dc2626}
+.hist-foot{padding:12px 16px;border-top:1px solid var(--line);display:flex;justify-content:flex-end}
+.hist-foot .primary{background:var(--blue);color:#fff}
 </style>
 </head>
 <body>
 <header><div class="header"><h1>分段灰分 / 填料半定量计算器</h1></div></header>
-<main><div class="grid">
-<section class="card"><div class="head"><h2>一、样品录入</h2><div class="tools"><button class="small secondary" id="addSample">增加目标样品</button><button class="small ghost" id="calc">重新计算</button><button class="small ghost" id="copy">复制报告</button><button class="small ghost" id="csv">导出CSV</button><button class="small primary" id="pdf">打印/导出PDF报告</button><button class="small danger" id="reset">恢复示例</button></div></div><div class="body">
+<main id="desktopMain"><div class="grid">
+<section class="card"><div class="head"><h2>一、样品录入</h2><div class="tools"><button class="small secondary" id="addSample">增加目标样品</button><button class="small ghost" id="calc">重新计算</button><button class="small ghost" id="copy">复制报告</button><button class="small ghost" id="csv">导出CSV</button><button class="small primary" id="pdf">打印/导出PDF报告</button><button class="small ghost" id="histBtn">历史记录</button><button class="small danger" id="reset">恢复示例</button></div></div><div class="body">
 <div class="tabs"><button class="tab active" data-tab="input">称重数据</button><button class="tab" data-tab="logic">计算逻辑</button><button class="tab" data-tab="library">填料库</button></div>
 
 <div id="input" class="section active">
@@ -306,6 +406,32 @@ input.ex:focus{color:var(--text)}
 
 <section class="card resultcard"><div class="head"><h2>二、自动计算结果</h2><span class="hint">差值方向：目标 - 基准</span></div><div class="body"><div class="stack"><div class="box"><h3>1）基础称重与残留率</h3><div class="sub">表格较宽时可左右拖动查看。</div><div id="process"></div></div><div class="box"><h3>2）成分估算结果</h3><div class="sub">表格较宽时可左右拖动查看。3个及以上样品：最大值粗体，最小值斜体，中间值正常。2个样品：较大值粗体，较小值正常。</div><div id="compare"></div></div><div class="box"><h3>3）校验与风险提示</h3><div id="warnings" class="warns"></div></div></div></div></section>
 </div></main>
+
+<div id="mApp">
+ <div class="m-tabs"><button id="mTabEntry" class="m-tab on">录入</button><button id="mTabResult" class="m-tab">结果</button></div>
+ <div id="mEntry">
+  <div id="mDots" class="m-dots"></div>
+  <div id="mStepTitle" class="m-steptitle"></div>
+  <div id="mStepTip" class="m-steptip"></div>
+  <div id="mBody"></div>
+ </div>
+ <div id="mResult" style="display:none"></div>
+ <div id="mNav" class="m-nav"></div>
+ <div id="mActions" class="m-actions" style="display:none">
+  <button id="mPdf" class="m-abtn primary">导出PDF</button>
+  <button id="mCopy" class="m-abtn">复制报告</button>
+  <button id="mMore" class="m-abtn ghost">更多</button>
+  <div id="mMenu" class="m-menu" style="display:none"><button id="mHist">历史记录</button><button id="mCsv">导出CSV</button><button id="mReset">恢复示例</button></div>
+ </div>
+</div>
+
+<div id="histPanel" class="hist-panel" style="display:none">
+ <div class="hist-box">
+  <div class="hist-head"><b>历史记录</b><button id="histClose">关闭</button></div>
+  <div id="histList" class="hist-list"></div>
+  <div class="hist-foot"><button id="histSaveNow" class="primary">保存当前为记录</button></div>
+ </div>
+</div>
 
 <div id="reportRoot" class="report-root"></div>
 
@@ -347,9 +473,9 @@ function globalCond(){return {lowTemp:n($('lowTemp').value),lowTime:n($('lowTime
 function nextTarget(){let used=new Set(samples.map(s=>s.role));for(let i=1;i<=20;i++){if(!used.has('target'+i))return 'target'+i}return 'target'+(samples.length+1)}
 function ensureBase(changed){let bases=samples.filter(s=>s.role==='base');if(!bases.length&&samples[0])samples[0].role='base';if(bases.length>1)samples.forEach(s=>{if(s.sid!==changed&&s.role==='base')s.role=nextTarget()})}
 function typeDefaultFiller(t,cur){if(t==='white')return 'TiO2';return cur||'CaCO3'}
-function addSample(){samples.push({sid:id(),name:'目标样品'+samples.length,type:samples[0]?.type||'black',mode:defaultMode(samples[0]?.type||'black'),role:nextTarget(),filler:'CaCO3',w0:'',w1:'',wlow:'',whigh:'',constant:true,blackResidue:false});renderSamples();calc()}
-function removeSample(sid){if(samples.length<=2){alert('至少保留1个基准和1个目标样品。');return}samples=samples.filter(s=>s.sid!==sid);ensureBase();renderSamples();calc()}
-function updateSample(sid,key,val){let s=samples.find(x=>x.sid===sid);if(!s)return;if(['name','w0','w1','wlow','whigh'].indexOf(key)>=0)userEdited.add(sid+'|'+key);if(key==='role'){s.role=val;ensureBase(sid)}else if(key==='type'){s.type=val;s.mode=defaultMode(val);s.filler=typeDefaultFiller(val,s.filler)}else s[key]=val;renderSamples();calc()}
+function addSample(){samples.push({sid:id(),name:'目标样品'+samples.length,type:samples[0]?.type||'black',mode:defaultMode(samples[0]?.type||'black'),role:nextTarget(),filler:'CaCO3',w0:'',w1:'',wlow:'',whigh:'',constant:true,blackResidue:false});renderSamples();calc();mSync()}
+function removeSample(sid){if(samples.length<=2){alert('至少保留1个基准和1个目标样品。');return}samples=samples.filter(s=>s.sid!==sid);ensureBase();renderSamples();calc();mSync()}
+function updateSample(sid,key,val){let s=samples.find(x=>x.sid===sid);if(!s)return;if(['name','w0','w1','wlow','whigh'].indexOf(key)>=0)userEdited.add(sid+'|'+key);if(key==='role'){s.role=val;ensureBase(sid)}else if(key==='type'){s.type=val;s.mode=defaultMode(val);s.filler=typeDefaultFiller(val,s.filler)}else s[key]=val;renderSamples();calc();mSync()}
 function roleOpts(s){let a=['<option value="base" '+(s.role==='base'?'selected':'')+'>基准</option>'];for(let i=1;i<=Math.max(6,samples.length+3);i++){let v='target'+i;a.push('<option value="'+v+'" '+(s.role===v?'selected':'')+'>目标'+i+'</option>')}return a.join('')}
 function typeOpts(s){return [['black','黑色母'],['white','白色母'],['otherColor','其他色母'],['compound','改性料']].map(([v,t])=>'<option value="'+v+'" '+(s.type===v?'selected':'')+'>'+t+'</option>').join('')}
 function fillerOpts(s){return fillers.map(x=>'<option value="'+x.id+'" '+(s.filler===x.id?'selected':'')+'>'+x.name+' / k='+f(x.residue,3)+'</option>').join('')}
@@ -374,7 +500,7 @@ document.querySelectorAll('.del').forEach(b=>b.onclick=()=>removeSample(b.datase
 function renderFillers(){let used=new Set(samples.map(s=>s.filler));$('fillerTable').innerHTML='<tr><th>填料ID</th><th>填料名称</th><th>高温主要残留物</th><th class="num">系数k</th><th>说明</th><th>引用状态</th></tr>'+fillers.map((x,i)=>'<tr><td><input data-i="'+i+'" data-k="id" value="'+esc(x.id)+'"></td><td><input data-i="'+i+'" data-k="name" value="'+esc(x.name)+'"></td><td><input data-i="'+i+'" data-k="high" value="'+esc(x.high)+'"></td><td><input data-i="'+i+'" data-k="residue" type="number" step="0.001" value="'+x.residue+'"></td><td><input data-i="'+i+'" data-k="note" value="'+esc(x.note)+'"></td><td>'+(used.has(x.id)?'<span class="used">已被引用</span>':'<span class="hint">未引用</span>')+'</td></tr>').join('');
 document.querySelectorAll('#fillerTable input').forEach(el=>el.onchange=e=>{let i=+e.target.dataset.i,k=e.target.dataset.k;if(!fillers[i])return;fillers[i][k]=k==='residue'?Number(e.target.value):e.target.value;renderFillers();renderSamples();calc()})
 }
-function addFiller(){fillers.push({id:'NewFiller'+(fillers.length+1),name:'新填料',residue:1,high:'—',note:'请填写'});renderFillers();renderSamples();calc()}
+function addFiller(){fillers.push({id:'NewFiller'+(fillers.length+1),name:'新填料',residue:1,high:'—',note:'请填写'});renderFillers();renderSamples();calc();mSync()}
 function calcOne(s,g){let fl=filler(s.filler),warn=[],w0=n(s.w0),w1=n(s.w1),wl=n(s.wlow),wh=n(s.whigh),m0=w1-w0,ml=wl-w0,mh=wh-w0,lp=ml/m0*100,hp=mh/m0*100;
 if(![w0,w1,wl,wh].every(Number.isFinite))warn.push(['bad','存在未填写或非数字称重数据。']);if(m0<=0)warn.push(['bad','原样净重≤0。']);if(ml<0||mh<0)warn.push(['bad','残留净重为负。']);if(ml>m0)warn.push(['bad','低温残留大于原样净重。']);if(mh>ml)warn.push(['risk','高温残留大于低温残留，可能称重异常或吸湿/增重。']);if((s.mode||defaultMode(s.type))==='singleCarbon'&&g.lowTemp>=450)warn.push(['risk','黑色母低温阶段≥450℃，炭黑可能部分氧化。']);if((s.mode||defaultMode(s.type))!=='singleCarbon'&&g.lowTemp<450)warn.push(['info','非黑色母可考虑450℃以更充分去有机。']);if((s.mode||defaultMode(s.type))==='singleCarbon'&&m0>3)warn.push(['risk','黑色母称样量偏大，建议1–2g并摊薄。']);if(s.blackResidue)warn.push(['bad','高温后仍有黑色残留，填料可能被高估。']);if(!s.constant)warn.push(['risk','未确认恒重，结果仅为半定量估算。']);
 let r={...s,fillerObj:fl,m0,mLow:ml,mHigh:mh,lowPct:lp,highPct:hp,warnings:warn,organicPct:NaN,pigmentPct:NaN,fillerPct:NaN,powderPct:NaN,closure:NaN};if(!Number.isFinite(m0)||m0<=0)return r;
@@ -430,7 +556,7 @@ function buildReport(){
     +'<div class="sign"><div><div class="line"></div>检测员：'+esc(gv('rptOperator')||'')+'</div><div><div class="line"></div>审核：'+esc(gv('rptReviewer')||'')+'</div><div><div class="line"></div>日期：'+esc(date)+'</div></div>'
     +'<div class="rpt-foot">本报告由「分段灰分 / 填料半定量计算器」自动生成 · 生成时间 '+new Date().toLocaleString()+'</div>';
 }
-function printReport(){$('reportRoot').innerHTML=buildReport();window.print();}
+function printReport(){$('reportRoot').innerHTML=buildReport();histSaveCurrent(false);window.print();}
 function cellText(el){
   if(!el)return '';
   let txt=el.getAttribute('data-full')||el.innerText||el.textContent||'';
@@ -475,7 +601,56 @@ function scrollProcessToData(){
 function bind(){
 document.addEventListener('focusin',e=>{const t=e.target;if(t&&t.tagName==='INPUT'&&t.type!=='checkbox'&&t.type!=='date'){t._sel=true;setTimeout(()=>{if(t._sel){try{t.select()}catch(_){}}},0)}});
 document.addEventListener('mouseup',e=>{const t=e.target;if(t&&t.tagName==='INPUT'&&t._sel){e.preventDefault();t._sel=false;try{t.select()}catch(_){}}});
-document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.section').forEach(x=>x.classList.remove('active'));b.classList.add('active');$(b.dataset.tab).classList.add('active')});['lowTemp','lowTime','highTemp','highTime'].forEach(x=>$(x).onchange=calc);$('addSample').onclick=addSample;$('addFiller').onclick=addFiller;$('calc').onclick=calc;$('reset').onclick=()=>{initState();renderSamples();renderFillers();calc()};$('csv').onclick=exportCSV;$('pdf').onclick=printReport;if($('rptDate')&&!$('rptDate').value)$('rptDate').value=new Date().toISOString().slice(0,10);$('copy').onclick=async()=>{let t=report();try{await navigator.clipboard.writeText(t);alert('报告文本已复制')}catch(e){alert(t)}};document.addEventListener('click',e=>{if(!e.target.closest('#sampleTable .rowhead,#compare th,#compare td,#process th,#process td'))hideTip()})}
-document.addEventListener('DOMContentLoaded',()=>{initState();renderSamples();renderFillers();bind();calc()});
+document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.section').forEach(x=>x.classList.remove('active'));b.classList.add('active');$(b.dataset.tab).classList.add('active')});['lowTemp','lowTime','highTemp','highTime'].forEach(x=>$(x).onchange=calc);$('addSample').onclick=addSample;$('addFiller').onclick=addFiller;$('calc').onclick=calc;$('reset').onclick=()=>{initState();renderSamples();renderFillers();calc();mStep=0;mSync()};$('csv').onclick=exportCSV;$('pdf').onclick=printReport;if($('rptDate')&&!$('rptDate').value)$('rptDate').value=new Date().toISOString().slice(0,10);$('copy').onclick=async()=>{let t=report();histSaveCurrent(false);try{await navigator.clipboard.writeText(t);alert('报告文本已复制')}catch(e){alert(t)}};document.addEventListener('click',e=>{if(!e.target.closest('#sampleTable .rowhead,#compare th,#compare td,#process th,#process td'))hideTip()})}
+document.addEventListener('DOMContentLoaded',()=>{initState();renderSamples();renderFillers();bind();calc();mInit();initHist()});
+
+/* ===== v15 移动端：阶段步进录入 + 结果卡 ===== */
+const mMQ=window.matchMedia('(max-width:760px)');
+let mTab='entry',mStep=0;
+const M_STEPS=[
+ {k:'cond',short:'条件',label:'测试条件',tip:'设定这批样品统一的低温/高温灼烧条件（温度与时间）。'},
+ {k:'setup',short:'样品',label:'样品设置',tip:'添加参与对比的样品，指定基准/目标、材料类型与主要填料。'},
+ {k:'w0',key:'w0',short:'W₀',label:'称 W₀ 空坩埚',tip:'依次称量每个空坩埚的重量，填入对应样品。'},
+ {k:'w1',key:'w1',short:'W₁',label:'称 W₁ 坩埚+原样',tip:'装入原样后，称量「坩埚+原样」的总重。'},
+ {k:'wlow',key:'wlow',short:'W低',label:'称 W低 低温后',tip:'低温灼烧（去有机）冷却后，称量总重。'},
+ {k:'whigh',key:'whigh',short:'W高',label:'称 W高 高温后',tip:'高温灰化冷却恒重后，称量总重。'}
+];
+function mFilled(key){return samples.filter(s=>Number.isFinite(n(s[key]))).length}
+function mCondHTML(){const rows=[['lowTemp','低温 / ℃'],['lowTime','低温时间 / h'],['highTemp','高温 / ℃'],['highTime','高温时间 / h']];return '<div class="m-card"><div class="m-card-h">统一测试条件</div><div class="m-grid2">'+rows.map(([id,l])=>'<div class="m-field"><label>'+l+'</label><input class="m-input" inputmode="decimal" data-gk="'+id+'" value="'+esc($(id)?$(id).value:'')+'"></div>').join('')+'</div><div class="m-note">同批样品共用这组低温/高温分段条件，无需逐样品选择。</div></div>'}
+function mBindCond(){document.querySelectorAll('#mBody [data-gk]').forEach(el=>el.onchange=()=>{const t=$(el.dataset.gk);if(t)t.value=el.value;calc();mRenderDots();if(mTab==='result')mRenderResult()})}
+function mSetupHTML(){return samples.map((s,i)=>'<div class="m-card m-scard"><div class="m-scard-h"><span class="badge">样品 '+(i+1)+'</span><button class="small danger m-del" data-sid="'+s.sid+'">删</button></div><div class="m-field"><label>名称</label>'+inp(s,'name')+'</div><div class="m-grid2"><div class="m-field"><label>角色</label>'+sel(s,'role',roleOpts(s))+'</div><div class="m-field"><label>材料类型</label>'+sel(s,'type',typeOpts(s))+'</div></div><div class="m-field"><label>主要填料</label>'+sel(s,'filler',fillerOpts(s))+'</div><div class="m-field"><label>自动计算模式</label>'+sel(s,'mode',modeOpts(s))+'</div></div>').join('')+'<button class="m-add" id="mAddSample">+ 增加样品</button>'}
+function mBindSetup(){document.querySelectorAll('#mBody input[data-sid],#mBody select[data-sid]').forEach(el=>el.onchange=e=>{const sid=e.target.dataset.sid,key=e.target.dataset.key;if(!sid||!key)return;const val=e.target.type==='checkbox'?e.target.checked:(e.target.type==='number'?(e.target.value===''?'':Number(e.target.value)):e.target.value);updateSample(sid,key,val)});document.querySelectorAll('#mBody .m-del').forEach(b=>b.onclick=()=>removeSample(b.dataset.sid));const add=$('mAddSample');if(add)add.onclick=addSample}
+function mWeighHTML(key){const list=[...samples].sort((a,b)=>roleOrder(a.role)-roleOrder(b.role));return '<div class="m-wgrid">'+list.map(s=>'<div class="m-card m-wcard" data-sid="'+s.sid+'"><div class="m-wtop"><span class="m-wname">'+esc(s.name)+'</span><span class="m-wrole">'+roleLabel(s.role)+'</span></div><div class="m-inwrap">'+inp(s,key,'number','inputmode="decimal" step="0.0001"')+'<span class="m-unit">g</span></div></div>').join('')+'</div>'+mReviewHTML(key)}
+function mReviewHTML(curKey){const list=[...samples].sort((a,b)=>roleOrder(a.role)-roleOrder(b.role));const g=globalCond();
+ const D=list.map(s=>{const w0=n(s.w0),w1=n(s.w1),wl=n(s.wlow),wh=n(s.whigh),m0=w1-w0,mLow=wl-w0,mHigh=wh-w0;return {w0,w1,wlow:wl,whigh:wh,m0,mLow,mHigh,lowPct:(m0>0?mLow/m0*100:NaN),highPct:(m0>0?mHigh/m0*100:NaN)}});
+ const rowsDef=[['w0','raw','W₀ 空坩埚'],['w1','raw','W₁ 坩埚+原样'],['m0','g','m₀ 原样净重'],['wlow','raw','W低 坩埚+低温残留'],['mLow','g','m低 低温残留净重'],['lowPct','p','低温残留率'],['whigh','raw','W高 坩埚+高温残留'],['mHigh','g','m高 灰分净重'],['highPct','p','高温灰分率']];
+ const hlByKey={w0:['w0'],w1:['w1','m0'],wlow:['wlow','mLow','lowPct'],whigh:['whigh','mHigh','highPct']},hl=new Set(hlByKey[curKey]||[]);
+ const head='<tr><th>项目</th>'+list.map(s=>'<th>'+esc(s.name)+'<i>'+roleLabel(s.role)+'</i></th>').join('')+'</tr>';
+ const body=rowsDef.map(([k,typ,l])=>{const cells=D.map(d=>{const v=d[k];let t=typ==='raw'?(Number.isFinite(v)?(''+v):'—'):typ==='g'?(Number.isFinite(v)?f(v,4):'—'):(Number.isFinite(v)?p(v,1):'—');return '<td class="rv-num'+(Number.isFinite(v)?'':' empty')+'">'+t+'</td>'}).join('');return '<tr class="'+(hl.has(k)?'cur ':'')+(typ!=='raw'?'rv-calc':'rv-raw')+'"><td class="rv-name">'+l+'</td>'+cells+'</tr>'}).join('');
+ return '<div class="m-card m-review" id="mReview"><div class="m-card-h">已填数据速览（可复查）</div><div class="rv-cond">条件 '+f(g.lowTemp,0)+'℃/'+f(g.lowTime,1)+'h → '+f(g.highTemp,0)+'℃/'+f(g.highTime,1)+'h</div><div class="rv-wrap"><table class="rv-tbl">'+head+body+'</table></div><div class="m-note">毛重（坩埚+残留）供输入核对；净重为扣坩埚后的物料质量，m₀→m低→m高 即物料实际减重，m高 为灰分净重；同一指标可横向对比各样品，当前阶段行高亮。</div></div>'}
+function mBindWeigh(){document.querySelectorAll('#mBody .m-wcard input[data-sid]').forEach(el=>el.onchange=e=>{el.classList.remove('ex');const val=e.target.value===''?'':Number(e.target.value);mSetWeight(e.target.dataset.sid,e.target.dataset.key,val)})}
+function mSetWeight(sid,key,val){const s=samples.find(x=>x.sid===sid);if(!s)return;userEdited.add(sid+'|'+key);s[key]=val;renderSamples();calc();const rv=$('mReview');if(rv)rv.outerHTML=mReviewHTML(key);mRenderDots();mSetStepTitle()}
+function mSetStepTitle(){const st=M_STEPS[mStep],el=$('mStepTitle');if(el)el.textContent=(mStep+1)+'. '+st.label+(st.key?'（已填 '+mFilled(st.key)+'/'+samples.length+'）':'')}
+function mRenderDots(){const el=$('mDots');if(!el)return;el.innerHTML=M_STEPS.map((st,i)=>{const sub=st.key?mFilled(st.key)+'/'+samples.length:'';const done=st.key&&samples.length&&mFilled(st.key)===samples.length;return '<button class="m-dot'+(i===mStep?' on':'')+(done?' done':'')+'" data-i="'+i+'">'+(st.short||(i+1))+(sub?'<i>'+sub+'</i>':'')+'</button>'}).join('');el.querySelectorAll('.m-dot').forEach(b=>b.onclick=()=>{mStep=+b.dataset.i;mRenderStep()})}
+function mRenderNav(){const el=$('mNav');if(!el)return;const isLast=mStep===M_STEPS.length-1;el.innerHTML=(mStep>0?'<button class="m-nav-btn ghost" id="mPrev">上一步</button>':'<span></span>')+'<button class="m-nav-btn primary" id="mNext">'+(isLast?'查看结果':'下一步')+'</button>';if($('mPrev'))$('mPrev').onclick=()=>{mStep--;mRenderStep()};$('mNext').onclick=()=>{if(isLast)mSwitch('result');else{mStep++;mRenderStep()}}}
+function mRenderStep(){const st=M_STEPS[mStep],body=$('mBody');if(!body)return;if(st.k==='cond'){body.innerHTML=mCondHTML();mBindCond()}else if(st.k==='setup'){body.innerHTML=mSetupHTML();mBindSetup()}else{body.innerHTML=mWeighHTML(st.key);mBindWeigh()}const tp=$('mStepTip');if(tp)tp.textContent=st.tip||'';mSetStepTitle();mRenderDots();mRenderNav()}
+function mRenderResult(){const host=$('mResult');if(!host)return;if(!last.length)calc();const o=ordered(last),base=o.base,all=o.all;const cards=all.map(r=>{const isBase=r===base,defs=[['organicPct','有机组分'],['pigmentPct',pigmentLabel(r)],['fillerPct','填料折算'],['powderPct','粉体合计'],['lowPct','低温残留率'],['highPct','高温灰分'],['closure','闭合率']];const lines=defs.map(([k,l])=>{const v=r[k];let vt=Number.isFinite(v)?f(v,1)+'%':'—',diff='';if(!isBase&&Number.isFinite(v)&&Number.isFinite(base[k])){const d=v-base[k];diff='<span class="m-diff '+(d>=0?'plus':'minus')+'">'+(d>=0?'+':'')+f(d,1)+'</span>'}return '<div class="m-mrow"><span class="m-mk">'+l+'</span><span class="m-mv">'+vt+diff+'</span></div>'}).join('');return '<div class="m-card m-rcard"><div class="m-rhead"><span class="m-rname">'+esc(r.name)+'</span><span class="badge">'+roleLabel(r.role)+'</span><span class="m-rtype">'+typeLabel(r.type)+'</span></div>'+lines+'</div>'}).join('');let wl=[];last.forEach(r=>r.warnings.forEach(w=>wl.push('<div class="warn '+w[0]+'"><strong>'+(w[0]==='bad'?'风险':w[0]==='risk'?'提示':w[0]==='good'?'通过':'说明')+'</strong><span>'+esc(r.name)+'：'+w[1]+'</span></div>')));if(!wl.length)wl.push('<div class="warn good"><strong>通过</strong><span>基础校验未发现明显异常。</span></div>');host.innerHTML='<div class="m-rsub">差值方向：目标 − 基准（百分点）</div>'+cards+'<div class="m-card"><div class="m-card-h">校验与风险提示</div><div class="warns">'+wl.join('')+'</div></div>'}
+function mSwitch(tab){mTab=tab;const e=$('mEntry'),r=$('mResult'),nav=$('mNav'),act=$('mActions'),te=$('mTabEntry'),tr=$('mTabResult');if(e)e.style.display=tab==='entry'?'block':'none';if(r)r.style.display=tab==='result'?'block':'none';if(nav)nav.style.display=tab==='entry'?'flex':'none';if(act)act.style.display=tab==='result'?'flex':'none';if(te)te.classList.toggle('on',tab==='entry');if(tr)tr.classList.toggle('on',tab==='result');if(tab==='entry')mRenderStep();else mRenderResult()}
+function mSync(){if(!$('mApp'))return;mRenderDots();if(mTab==='result'){mRenderResult();return}const st=M_STEPS[mStep];if(st&&st.k==='setup')mRenderStep();else mSetStepTitle()}
+function mInit(){if(!$('mApp'))return;const te=$('mTabEntry');if(!te)return;te.onclick=()=>mSwitch('entry');$('mTabResult').onclick=()=>mSwitch('result');$('mPdf').onclick=()=>printReport();$('mCopy').onclick=async()=>{const t=report();histSaveCurrent(false);try{await navigator.clipboard.writeText(t);alert('报告文本已复制')}catch(e){alert(t)}};$('mMore').onclick=()=>{const m=$('mMenu');m.style.display=m.style.display==='none'?'block':'none'};$('mCsv').onclick=()=>{exportCSV();$('mMenu').style.display='none'};$('mReset').onclick=()=>{initState();renderSamples();renderFillers();calc();mStep=0;$('mMenu').style.display='none';mSwitch('entry')};if($('mHist'))$('mHist').onclick=()=>{$('mMenu').style.display='none';histToggle(true)};mSwitch('entry')}
+
+/* ===== v15 历史记录缓存（localStorage，纯前端） ===== */
+const HKEY='ashCalcHistory_v1';
+function histLoad(){try{return JSON.parse(localStorage.getItem(HKEY)||'[]')||[]}catch(e){return[]}}
+function histStore(a){try{localStorage.setItem(HKEY,JSON.stringify(a.slice(0,50)))}catch(e){}}
+function metaSnap(){return ['rptTitle','rptNo','rptClient','rptProject','rptOperator','rptReviewer','rptDate','rptRemark'].reduce((o,k)=>{o[k]=$(k)?$(k).value:'';return o},{})}
+function snapshot(){return {id:'h'+Date.now()+Math.random().toString(36).slice(2,6),savedAt:new Date().toISOString(),title:(($('rptTitle')&&$('rptTitle').value.trim())||samples.map(s=>s.name).join(' / '))||'未命名',cond:globalCond(),samples:clone(samples),fillers:clone(fillers),meta:metaSnap()}}
+function histSaveCurrent(force){try{const a=histLoad(),snap=snapshot(),sig=JSON.stringify([snap.cond,snap.samples]);if(!force&&a[0]&&JSON.stringify([a[0].cond,a[0].samples])===sig)return;a.unshift(snap);histStore(a);if($('histPanel')&&$('histPanel').style.display!=='none')histRenderList()}catch(e){}}
+function histDelete(hid){histStore(histLoad().filter(r=>r.id!==hid))}
+function histRestore(rid){const r=histLoad().find(x=>x.id===rid);if(!r)return;if(r.cond){$('lowTemp').value=r.cond.lowTemp;$('lowTime').value=r.cond.lowTime;$('highTemp').value=r.cond.highTemp;$('highTime').value=r.cond.highTime}if(r.fillers&&r.fillers.length)fillers=r.fillers.map(x=>({...x}));seq=0;userEdited=new Set();samples=(r.samples||[]).map(x=>{const sid=id();['name','w0','w1','wlow','whigh'].forEach(k=>userEdited.add(sid+'|'+k));return Object.assign(clone(x),{sid})});if(r.meta)Object.keys(r.meta).forEach(k=>{if($(k))$(k).value=r.meta[k]});renderSamples();renderFillers();calc();mStep=0;mSync()}
+function histFmt(iso){const d=new Date(iso),z=x=>String(x).padStart(2,'0');return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate())+' '+z(d.getHours())+':'+z(d.getMinutes())}
+function histRenderList(){const el=$('histList');if(!el)return;const a=histLoad();if(!a.length){el.innerHTML='<div class="hist-empty">暂无历史记录。<br>导出PDF或复制报告时会自动保存，也可点下方「保存当前为记录」。</div>';return}el.innerHTML=a.map(r=>'<div class="hist-item"><div class="hist-meta"><div class="hist-title">'+esc(r.title||'未命名')+'</div><div class="hist-sub">'+esc((r.samples||[]).map(s=>s.name).join(' / '))+' · '+histFmt(r.savedAt)+'</div></div><div class="hist-btns"><button class="hist-load" data-id="'+r.id+'">载入</button><button class="hist-del" data-id="'+r.id+'">删除</button></div></div>').join('');el.querySelectorAll('.hist-load').forEach(b=>b.onclick=()=>{if(confirm('载入将覆盖当前录入，确定？')){histRestore(b.dataset.id);histToggle(false)}});el.querySelectorAll('.hist-del').forEach(b=>b.onclick=()=>{histDelete(b.dataset.id);histRenderList()})}
+function histToggle(show){const p=$('histPanel');if(!p)return;p.style.display=show?'flex':'none';if(show)histRenderList()}
+function initHist(){const p=$('histPanel');if(!p)return;if($('histClose'))$('histClose').onclick=()=>histToggle(false);if($('histSaveNow'))$('histSaveNow').onclick=()=>{histSaveCurrent(true);histRenderList()};if($('histBtn'))$('histBtn').onclick=()=>histToggle(true);p.onclick=e=>{if(e.target===p)histToggle(false)}}
 </script>
 </body></html>
