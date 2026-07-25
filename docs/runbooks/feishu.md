@@ -35,6 +35,8 @@
 | 回复图片变成链接 | bridge 环境变量 FEISHU_APP_ID/SECRET 是否在 | 缺凭据静默退 fallback；补后必须 force-recreate（restart 不重读 env_file） |
 | 图改图只回"Edit"/文件名 | imagegen_pending 窗口、预览层兜底、copy 按钮信号 | 07-18 已修（webdock 6550a70+c1bd76a+c9bf9a5） |
 | 串频道/消息进错项目 | bridge channel 识别、`feishu_projects.json`、Sender 信封剥离 | 06-15 已修（PR#118/#119）；真实 metadata 是 `peer_id:"user:ou_…"` 无 channel 字段 |
+| 全链路每条都失败、bridge `chain_result` 全是 `http_500` 且十几秒就返回 | WebDock `api.log` 是否 `TargetClosedError`；容器内 Chrome 启动时间是否晚于 api 进程（`ps -eo pid,lstart,args`） | Chrome 被重启后 api 仍抓着死句柄，`started` 只判 `_page is not None` 导致永不重连；07-25 已修（webdock `29c163c`，`started` 加 `is_connected()` 校验）。应急：容器内 `POST /browser/detach` 再 `/browser/attach`，CDP 模式不会关 Chrome、不碰登录态 |
+| supervisord 报 `exited: chrome (exit status 0; expected)`，Chrome 无故重启 | 前一条请求是否卡满 310s 硬顶触发车道重建（`api.log` 找 `RESPONSE_TIMEOUT ... lane reset`） | 车道重建先关旧 tab 再开新 tab，关掉的是最后一个窗口 → Chrome 干净自退，随后 `new_page` 报 `Failed to open a new tab`；07-25 已修（webdock `08c4550` 改为先开新 tab） |
 | 多图消息后全线卡死 | WebDock 单 worker 被重请求堵死；healthz 是假绿（只探 /healthz） | 13 图请求 142-153s 堵死单 worker（06-23） |
 | 开机后收不到回复 | webdock 设备 Chrome 是否卡「恢复页面」提示 | 人工关浏览器→自动重开干净 Chrome 即自愈（勿自动登录） |
 | 卡片格式乱/表格丢失 | lark_md 不认 GFM 表格/`##`/引用 | 表格必须截图、标题转粗体、引用转 `▎`（卡片合成在 bridge） |
