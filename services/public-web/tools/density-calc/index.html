@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>浮力法密度计算器</title>
+<style>
+:root{--bg:#f6f7fb;--card:#fff;--text:#111827;--muted:#6b7280;--line:#e5e7eb;--line2:#cfd6e0;--blue:#2563eb;--red:#dc2626;--green:#059669;--amber:#d97706;--shadow:0 10px 30px rgba(15,23,42,.08);--r:16px;--hh:45px}
+*{box-sizing:border-box}
+body{margin:0;background:linear-gradient(180deg,#f8fafc,#eef3f8);color:var(--text);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans SC","Microsoft YaHei",Arial,sans-serif}
+header{position:sticky;top:0;z-index:30;background:rgba(255,255,255,.96);border-bottom:1px solid var(--line);backdrop-filter:saturate(180%) blur(8px)}
+.header{max-width:820px;margin:auto;padding:11px 16px;display:flex;align-items:baseline;gap:12px}
+.header h1{margin:0;font-size:17px;line-height:1.25;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.header a{margin-left:auto;font-size:12px;color:var(--muted);text-decoration:none;white-space:nowrap}
+main{max-width:820px;margin:auto;padding:12px 16px 20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);margin-bottom:10px}
+.body{padding:13px 14px}
+label{display:block;margin-bottom:4px;color:#374151;font-size:12px;font-weight:700}
+label i{font-style:normal;font-weight:600;color:var(--blue);margin-left:4px}
+input,select{width:100%;height:44px;padding:0 10px;border:1px solid var(--line2);border-radius:11px;background:#fff;color:var(--text);font:inherit;font-size:16px;outline:none}
+input:focus,select:focus{border-color:#93c5fd;box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+input.ex{color:#9ca3af}
+input.ex:focus{color:var(--text)}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.g2 .full{grid-column:1/-1}
+
+/* 结果条：手机上吸顶常驻 */
+.result{position:sticky;top:var(--hh);z-index:20;padding:12px 14px;background:linear-gradient(180deg,#ffffff,#f8fbff)}
+.rho{display:flex;align-items:baseline;justify-content:center;gap:6px}
+.rho b{font-size:40px;font-weight:900;line-height:1.05;font-variant-numeric:tabular-nums;letter-spacing:-.5px;color:#0f172a}
+.rho b.wait{font-size:20px;color:#94a3b8;letter-spacing:0}
+.rho small{font-size:12px;color:var(--muted);font-weight:700}
+.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+.kpis div{text-align:center;background:#f4f7fb;border-radius:10px;padding:6px 2px}
+.kpis b{display:block;font-size:14px;font-variant-numeric:tabular-nums;font-weight:800;color:#1e293b}
+.kpis i{display:block;font-style:normal;font-size:10.5px;color:var(--muted);font-weight:700;margin-top:1px}
+
+/* 介质密度行 */
+.rholine{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;font-size:12.5px;color:#475569}
+.rholine b{font-variant-numeric:tabular-nums;color:#1e293b}
+.rholine .tog{display:inline-flex;align-items:center;gap:5px;margin:0;font-size:12px;font-weight:700;color:#374151;white-space:nowrap}
+.rholine .tog input{width:auto;height:auto;transform:scale(1.1);margin:0}
+.rholine #rhoInput{flex:1 1 130px;height:38px;font-size:15px}
+.tip{margin:8px 0 0;font-size:11.5px;color:var(--muted);line-height:1.5}
+
+/* 校验提示：只在有问题时出现 */
+.warns{display:grid;gap:6px;margin-top:10px}
+.warns:empty{display:none}
+.warn{padding:7px 10px;border-radius:9px;border:1px solid;font-size:12.5px;line-height:1.45}
+.info{background:#eff6ff;border-color:#bfdbfe;color:#1e40af}
+.risk{background:#fff7ed;border-color:#fed7aa;color:#9a3412}
+.bad{background:#fef2f2;border-color:#fecaca;color:#991b1b}
+
+/* 折叠区 */
+details.card>summary{list-style:none;cursor:pointer;padding:13px 14px;font-size:13.5px;font-weight:800;color:#334155;display:flex;align-items:center;justify-content:space-between}
+details.card>summary::-webkit-details-marker{display:none}
+details.card>summary::after{content:'展开';font-size:11.5px;font-weight:700;color:var(--blue)}
+details.card[open]>summary::after{content:'收起'}
+details.card[open]>summary{border-bottom:1px solid var(--line)}
+.check{display:flex;align-items:center;gap:8px;font-size:12.5px;color:#374151;font-weight:700}
+.check input{width:auto;height:auto;transform:scale(1.15);margin:0}
+.check label{margin:0}
+.sub{margin:0 0 8px;font-size:12px;font-weight:800;color:#475569}
+.formula{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:#f3f4f6;border-radius:8px;padding:7px 9px;margin:6px 0;font-size:12px;overflow-x:auto;white-space:nowrap}
+.hint{font-size:11.5px;color:var(--muted);line-height:1.55;margin:6px 0 0}
+hr{border:0;border-top:1px solid var(--line);margin:14px 0}
+
+/* 操作条 */
+.actions{display:flex;gap:8px}
+.actions button{flex:1;height:44px;border:0;border-radius:11px;font:inherit;font-weight:800;font-size:14px;cursor:pointer}
+.primary{background:var(--blue);color:#fff}
+.secondary{background:#eef2ff;color:#3730a3}
+.ghost{background:#f1f5f9;color:#475569}
+
+@media(max-width:760px){
+ main{padding:10px 12px calc(70px + env(safe-area-inset-bottom))}
+ .header h1{font-size:16px}
+ .rho b{font-size:36px}
+ .actions{position:fixed;left:0;right:0;bottom:0;z-index:40;padding:8px 12px calc(8px + env(safe-area-inset-bottom));background:rgba(255,255,255,.97);border-top:1px solid var(--line);backdrop-filter:saturate(180%) blur(8px)}
+ .card{margin-bottom:9px}
+}
+@media(min-width:761px){
+ .result{position:static}
+ .actions{margin-top:2px}
+}
+
+/* 打印 / 导出 PDF 报告 */
+.report-root{display:none}
+@media screen{.report-root{display:none}}
+@media print{
+ header,main,.actions{display:none !important}
+ .report-root{display:block !important}
+ @page{size:A4;margin:14mm}
+ body{background:#fff !important;margin:0;color:#111;font-size:12px}
+ .report-root *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+}
+.report-root{color:#111;font:12px/1.5 -apple-system,"Segoe UI","Noto Sans SC","Microsoft YaHei",Arial,sans-serif;padding:0 2mm}
+.report-root .rpt-title{text-align:center;font-size:20px;font-weight:900;margin:0 0 2px}
+.report-root .rpt-sub{text-align:center;color:#555;font-size:11px;margin:0 0 12px}
+.report-root h4{font-size:13px;margin:16px 0 6px;border-left:4px solid #111;padding-left:8px}
+.report-root table{width:100%;border-collapse:collapse;margin:4px 0;table-layout:auto}
+.report-root th,.report-root td{border:1px solid #999;padding:5px 6px;font-size:11px;vertical-align:middle;text-align:left;background:#fff}
+.report-root th{background:#f0f0f0;font-weight:800}
+.report-root td.num{text-align:right;font-variant-numeric:tabular-nums}
+.report-root .meta-tbl td.k{background:#f6f6f6;font-weight:800;width:22%;white-space:nowrap}
+.report-root .rpt-note{font-size:10.5px;color:#444;line-height:1.6;margin:6px 0}
+.report-root .rpt-note ol{margin:4px 0;padding-left:18px}
+.report-root .rpt-warn{font-size:10.5px;margin:3px 0;padding:5px 8px;border:1px solid #ccc;border-radius:4px}
+.report-root .rpt-warn.bad{background:#fdeceb;border-color:#f3b4ad}
+.report-root .rpt-warn.risk{background:#fdf3e7;border-color:#f0cd9a}
+.report-root .rpt-warn.info{background:#eef3fb;border-color:#bcd0ee}
+.report-root .rpt-warn.good{background:#eef7f0;border-color:#bcdcc5}
+.report-root .sign{display:flex;justify-content:space-between;margin-top:26px;font-size:11px}
+.report-root .sign div{width:30%}
+.report-root .sign .line{border-bottom:1px solid #333;height:26px;margin-bottom:4px}
+.report-root .rpt-foot{margin-top:18px;border-top:1px solid #ccc;padding-top:6px;font-size:10px;color:#777;text-align:center}
+</style>
+</head>
+<body>
+<header><div class="header"><h1>浮力法密度计算器</h1><a href="/">← 首页</a></div></header>
+
+<main>
+
+<section class="card result">
+ <div class="rho"><b id="bigV">—</b><small>g/cm³</small></div>
+ <div class="kpis">
+  <div><b id="rVol">—</b><i>体积 cm³</i></div>
+  <div><b id="rRel">—</b><i>相对密度</i></div>
+  <div><b id="rRho">—</b><i>ρ液 g/cm³</i></div>
+ </div>
+ <div id="warnings" class="warns"></div>
+</section>
+
+<section class="card"><div class="body">
+ <div class="g2">
+  <div><label for="medium">测试介质</label>
+   <select id="medium">
+    <option value="water" selected>水</option>
+    <option value="ethanol">无水乙醇</option>
+    <option value="custom">自定义</option>
+   </select></div>
+  <div><label for="tempC">温度 ℃</label>
+   <input id="tempC" type="number" step="0.1" value="23.0" inputmode="decimal"></div>
+  <div><label for="mAir">空气中重量 (g)</label>
+   <input id="mAir" class="ex" type="number" step="0.0001" value="5.0000" inputmode="decimal"></div>
+  <div><label for="mLiq">液体中重量 (g)<i>上浮为负</i></label>
+   <input id="mLiq" class="ex" type="number" step="0.0001" value="0.7500" inputmode="decimal"></div>
+ </div>
+ <div class="rholine">
+  <span>介质密度 <b id="rhoShow">—</b> g/cm³</span>
+  <label class="tog"><input id="rhoManual" type="checkbox">手动</label>
+  <input id="rhoInput" type="number" step="0.00001" inputmode="decimal" style="display:none" placeholder="实测介质密度">
+ </div>
+ <p id="mediumNote" class="tip"></p>
+</div></section>
+
+<details class="card"><summary>样品信息与报告栏</summary><div class="body">
+ <div class="g2">
+  <div class="full"><label for="sampleName">样品名称 / 编号</label>
+   <input id="sampleName" class="ex" type="text" value="示例样品"></div>
+  <div><label for="rptOperator">检测员</label><input id="rptOperator" type="text" placeholder="可留空"></div>
+  <div><label for="rptReviewer">审核</label><input id="rptReviewer" type="text" placeholder="可留空"></div>
+  <div class="full"><label for="rptDate">检测日期</label><input id="rptDate" type="date"></div>
+ </div>
+ <hr>
+ <div class="check"><input id="airCorr" type="checkbox"><label for="airCorr">启用空气浮力修正（ρ空气 = 0.0012 g/cm³）</label></div>
+ <p class="hint">默认关闭。国标基础式不含空气浮力项。该修正对结果的影响通常在 0.02%–0.15% 量级：样品密度高于介质时结果略降，低于介质时略升。</p>
+</div></details>
+
+<details class="card"><summary>公式与计算依据</summary><div class="body">
+ <p class="sub">本次代入</p>
+ <div id="formulaBox"></div>
+ <p class="hint">质量差 m空 − m液 = <b id="rDelta">—</b> g，即样品排开介质的质量。</p>
+ <hr>
+ <p class="sub">主公式（GB/T 1033.1 / ISO 1183-1 浸渍法 A 法）</p>
+ <div class="formula">ρ = m空 ÷ (m空 − m液) × ρ液</div>
+ <div class="formula">V = (m空 − m液) ÷ ρ液</div>
+ <p class="hint">样品密度小于介质时会上浮，用夹具固定在液面下即可，此时天平读数为负值，直接照填，公式已正确处理。</p>
+ <hr>
+ <p class="sub">介质密度随温度</p>
+ <div class="formula">水：Kell 公式，适用 0–40 ℃（20 ℃ → 0.998207）</div>
+ <div class="formula">乙醇：ρ = 0.78934 − 0.00085 × (T − 20)，适用 10–35 ℃</div>
+ <p class="hint">介质实测密度比公式值更可靠。乙醇易挥发吸水，浓度漂移会直接改变密度，建议实测后勾「手动」填入。相对密度以同温度纯水为基准。</p>
+</div></details>
+
+<div class="actions">
+ <button id="btnPrint" class="primary">导出 PDF</button>
+ <button id="btnCopy" class="secondary">复制</button>
+ <button id="btnReset" class="ghost">重置</button>
+</div>
+
+</main>
+
+<div id="reportRoot" class="report-root"></div>
+
+<script>
+var RHO_AIR=0.0012;
+var EX_IDS=['mAir','mLiq','sampleName'];
+var EX_DEFAULTS={mAir:'5.0000',mLiq:'0.7500',sampleName:'示例样品'};
+var last=null;
+
+function $(id){return document.getElementById(id);}
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function num(id){var v=parseFloat($(id).value);return isFinite(v)?v:NaN;}
+function fmt(v,d){return isFinite(v)?v.toFixed(d):'—';}
+
+/* 水密度 Kell 公式，返回 g/cm³ */
+function waterRho(T){
+  var n=999.83952+16.945176*T-7.9870401e-3*T*T-46.170461e-6*T*T*T+105.56302e-9*T*T*T*T-280.54253e-12*T*T*T*T*T;
+  return n/(1+16.879850e-3*T)/1000;
+}
+/* 无水乙醇线性式，返回 g/cm³ */
+function ethanolRho(T){return 0.78934-0.00085*(T-20);}
+
+function mediumLabel(m){return m==='water'?'水':(m==='ethanol'?'无水乙醇':'自定义介质');}
+
+function autoRho(m,T){
+  if(!isFinite(T))return NaN;
+  if(m==='water')return waterRho(T);
+  if(m==='ethanol')return ethanolRho(T);
+  return NaN;
+}
+
+/* 自定义介质会强制切到手动填密度；离开自定义时把这次强制撤回，不留粘滞状态 */
+var forcedManual=false;
+function onMediumChange(){
+  var custom=($('medium').value==='custom');
+  if(custom&&!$('rhoManual').checked){forcedManual=true;$('rhoManual').checked=true;$('rhoInput').value='';}
+  else if(!custom&&forcedManual){forcedManual=false;$('rhoManual').checked=false;$('rhoInput').value='';}
+  calc();
+}
+/* 只在「自动 → 手动」这一刻把算出来的值填进去，之后不再覆盖用户输入 */
+function onManualToggle(){
+  if($('rhoManual').checked){
+    forcedManual=false;
+    var auto=autoRho($('medium').value,num('tempC'));
+    if($('rhoInput').value===''&&isFinite(auto))$('rhoInput').value=auto.toFixed(5);
+  }
+  calc();
+}
+
+function syncMediumUI(){
+  var m=$('medium').value,T=num('tempC'),auto=autoRho(m,T);
+  $('rhoManual').disabled=(m==='custom');
+  var manual=$('rhoManual').checked;
+  $('rhoShow').parentNode.style.display=manual?'none':'';
+  $('rhoInput').style.display=manual?'':'none';
+  $('rhoShow').textContent=isFinite(auto)?auto.toFixed(5):'—';
+  var note='';
+  if(m==='water')note='水密度按 Kell 公式随温度计算，适用 0–40 ℃。';
+  else if(m==='ethanol')note='无水乙醇密度按线性式随温度计算，适用 10–35 ℃；实测值更可靠。';
+  else note='自定义介质请填写实测密度，建议用比重瓶测定。';
+  $('mediumNote').textContent=note;
+}
+
+function collect(){
+  var m=$('medium').value,T=num('tempC');
+  var auto=autoRho(m,T),manual=$('rhoManual').checked;
+  var rhoLiq=manual?num('rhoInput'):auto;
+  var mAir=num('mAir'),mLiq=num('mLiq'),corr=$('airCorr').checked;
+  var delta=(isFinite(mAir)&&isFinite(mLiq))?(mAir-mLiq):NaN;
+  var rho=NaN,vol=NaN,rel=NaN;
+  if(isFinite(rhoLiq)&&isFinite(delta)&&delta>0&&isFinite(mAir)&&mAir>0){
+    rho=corr?(mAir*(rhoLiq-RHO_AIR)/delta+RHO_AIR):(mAir/delta*rhoLiq);
+    vol=delta/rhoLiq;
+    var rw=waterRho(T);
+    if(isFinite(rw)&&rw>0)rel=rho/rw;
+  }
+  return {medium:m,mediumName:mediumLabel(m),T:T,rhoAuto:auto,rhoLiq:rhoLiq,manual:manual,
+          mAir:mAir,mLiq:mLiq,delta:delta,corr:corr,rho:rho,vol:vol,rel:rel,
+          name:$('sampleName').value.trim()};
+}
+
+function warnings(d){
+  var w=[];
+  if(d.manual&&!isFinite(d.rhoLiq))w.push(['bad',d.medium==='custom'?'自定义介质必须填写介质密度。':'已勾选手动指定介质密度，请填写数值或取消勾选。']);
+  if(!isFinite(d.T))w.push(['bad','请填写温度。']);
+  if(!isFinite(d.mAir)||!isFinite(d.mLiq)){w.push(['info','请填写空气中重量与液体中重量，结果会实时计算。']);}
+  else{
+    if(d.mAir<=0)w.push(['bad','空气中重量必须为正数。']);
+    if(isFinite(d.delta)&&d.delta<=0)w.push(['bad','液体中重量不应大于等于空气中重量，请检查两个读数是否写反。']);
+    if(d.mLiq<0)w.push(['info','液体中读数为负，按上浮样品固定法处理，负值已正确纳入计算。']);
+  }
+  if(d.medium==='water'&&isFinite(d.T)&&(d.T<0||d.T>40))w.push(['risk','温度超出水密度公式适用范围（0–40 ℃），介质密度可能失真。']);
+  if(d.medium==='ethanol'&&isFinite(d.T)&&(d.T<10||d.T>35))w.push(['risk','温度超出无水乙醇线性式适用范围（10–35 ℃），建议实测介质密度。']);
+  if(d.medium==='ethanol')w.push(['info','乙醇易挥发且吸水，浓度漂移会直接改变密度，建议现测现用或实测后手动指定介质密度。']);
+  if(isFinite(d.rho)&&(d.rho<0.3||d.rho>25))w.push(['risk','结果超出常见材料密度范围，请复核称重读数与介质密度。']);
+  if(isFinite(d.rho)&&isFinite(d.rhoLiq)&&d.rhoLiq>0&&Math.abs(d.rho-d.rhoLiq)/d.rhoLiq<0.02)
+    w.push(['risk','样品密度接近介质密度，浮力差很小，相对误差被放大，建议更换介质。']);
+  if(isFinite(d.rho)&&!w.some(function(x){return x[0]==='bad';}))w.push(['good','输入完整，计算有效。']);
+  return w;
+}
+
+function formulaHtml(d){
+  if(!isFinite(d.rho))return '<p class="hint">输入完整后显示公式代入过程。</p>';
+  var h='';
+  if(d.corr){
+    h+='<div class="formula">ρ = '+fmt(d.mAir,4)+' × ('+fmt(d.rhoLiq,5)+' − '+RHO_AIR+') ÷ '+fmt(d.delta,4)+' + '+RHO_AIR+' = '+fmt(d.rho,4)+'</div>';
+  }else{
+    h+='<div class="formula">ρ = '+fmt(d.mAir,4)+' ÷ '+fmt(d.delta,4)+' × '+fmt(d.rhoLiq,5)+' = '+fmt(d.rho,4)+'</div>';
+  }
+  h+='<div class="formula">V = '+fmt(d.delta,4)+' ÷ '+fmt(d.rhoLiq,5)+' = '+fmt(d.vol,4)+'</div>';
+  return h;
+}
+
+function calc(){
+  syncMediumUI();
+  var d=collect();last=d;
+  var ok=isFinite(d.rho);
+  $('bigV').className=ok?'':'wait';
+  $('bigV').textContent=ok?d.rho.toFixed(4):'待输入';
+  $('rVol').textContent=fmt(d.vol,4);
+  $('rRel').textContent=fmt(d.rel,4);
+  $('rRho').textContent=fmt(d.rhoLiq,5);
+  $('rDelta').textContent=fmt(d.delta,4);
+  $('formulaBox').innerHTML=formulaHtml(d);
+  /* 屏幕上只显示需要处理的提示，正常态不占版面 */
+  $('warnings').innerHTML=warnings(d).filter(function(x){return x[0]!=='good';})
+    .map(function(x){return '<div class="warn '+x[0]+'">'+esc(x[1])+'</div>';}).join('');
+}
+
+function reportDate(){var v=$('rptDate').value;return v||new Date().toISOString().slice(0,10);}
+
+function buildReport(){
+  var d=last||collect(),w=warnings(d);
+  var src=d.manual?'手动指定':(d.medium==='water'?'Kell 公式按温度计算':'线性式按温度计算');
+  var h='<div class="rpt-title">浮力法密度检测报告</div>'
+   +'<div class="rpt-sub">依据 GB/T 1033.1 / ISO 1183-1 浸渍法（A 法）原理</div>'
+   +'<h4>一、样品与测试条件</h4>'
+   +'<table class="meta-tbl">'
+   +'<tr><td class="k">样品名称 / 编号</td><td>'+esc(d.name||'—')+'</td><td class="k">检测日期</td><td>'+esc(reportDate())+'</td></tr>'
+   +'<tr><td class="k">测试介质</td><td>'+esc(d.mediumName)+'</td><td class="k">温度</td><td>'+fmt(d.T,1)+' ℃</td></tr>'
+   +'<tr><td class="k">介质密度</td><td>'+fmt(d.rhoLiq,5)+' g/cm³</td><td class="k">介质密度来源</td><td>'+esc(src)+'</td></tr>'
+   +'<tr><td class="k">空气浮力修正</td><td colspan="3">'+(d.corr?'已启用（ρ空气 = '+RHO_AIR+' g/cm³）':'未启用')+'</td></tr>'
+   +'</table>'
+   +'<h4>二、称重与计算结果</h4>'
+   +'<table>'
+   +'<tr><th>项目</th><th>数值</th><th>单位</th></tr>'
+   +'<tr><td>空气中重量 m空</td><td class="num">'+fmt(d.mAir,4)+'</td><td>g</td></tr>'
+   +'<tr><td>液体中重量 m液</td><td class="num">'+fmt(d.mLiq,4)+'</td><td>g</td></tr>'
+   +'<tr><td>质量差 m空 − m液</td><td class="num">'+fmt(d.delta,4)+'</td><td>g</td></tr>'
+   +'<tr><td>体积 V</td><td class="num">'+fmt(d.vol,4)+'</td><td>cm³</td></tr>'
+   +'<tr><td><b>样品密度 ρ</b></td><td class="num"><b>'+fmt(d.rho,4)+'</b></td><td>g/cm³</td></tr>'
+   +'<tr><td>相对密度（对同温水）</td><td class="num">'+fmt(d.rel,4)+'</td><td>—</td></tr>'
+   +'</table>'
+   +'<h4>三、计算公式</h4>'
+   +'<div class="rpt-note">'
+   +(d.corr
+     ?'<div>ρ = m空 × (ρ液 − ρ空气) ÷ (m空 − m液) + ρ空气 = '+fmt(d.mAir,4)+' × ('+fmt(d.rhoLiq,5)+' − '+RHO_AIR+') ÷ '+fmt(d.delta,4)+' + '+RHO_AIR+' = '+fmt(d.rho,4)+'</div>'
+     :'<div>ρ = m空 ÷ (m空 − m液) × ρ液 = '+fmt(d.mAir,4)+' ÷ '+fmt(d.delta,4)+' × '+fmt(d.rhoLiq,5)+' = '+fmt(d.rho,4)+'</div>')
+   +'<div>V = (m空 − m液) ÷ ρ液 = '+fmt(d.delta,4)+' ÷ '+fmt(d.rhoLiq,5)+' = '+fmt(d.vol,4)+'</div>'
+   +'<ol><li>m空 − m液 为样品排开介质的质量；样品上浮并被固定时 m液 为负值，公式同样成立。</li>'
+   +'<li>相对密度以同温度纯水密度为基准。</li></ol></div>'
+   +'<h4>四、校验与提示</h4>'
+   +w.map(function(x){return '<div class="rpt-warn '+x[0]+'">'+esc(x[1])+'</div>';}).join('')
+   +'<div class="sign"><div><div class="line"></div>检测员：'+esc($('rptOperator').value)+'</div>'
+   +'<div><div class="line"></div>审核：'+esc($('rptReviewer').value)+'</div>'
+   +'<div><div class="line"></div>日期：'+esc(reportDate())+'</div></div>'
+   +'<div class="rpt-foot">本报告由「浮力法密度计算器」自动生成 · 生成时间 '+esc(new Date().toLocaleString())+'</div>';
+  return h;
+}
+
+function reportText(){
+  var d=last||collect(),w=warnings(d);
+  var L=[];
+  L.push('浮力法密度检测报告');
+  L.push('样品：'+(d.name||'—')+'    日期：'+reportDate());
+  L.push('介质：'+d.mediumName+'    温度：'+fmt(d.T,1)+' ℃    介质密度：'+fmt(d.rhoLiq,5)+' g/cm³'+(d.manual?'（手动指定）':''));
+  L.push('空气浮力修正：'+(d.corr?'已启用':'未启用'));
+  L.push('');
+  L.push('空气中重量 m空：'+fmt(d.mAir,4)+' g');
+  L.push('液体中重量 m液：'+fmt(d.mLiq,4)+' g');
+  L.push('质量差：'+fmt(d.delta,4)+' g');
+  L.push('体积 V：'+fmt(d.vol,4)+' cm³');
+  L.push('密度 ρ：'+fmt(d.rho,4)+' g/cm³');
+  L.push('相对密度：'+fmt(d.rel,4));
+  L.push('');
+  L.push(d.corr?'ρ = m空 × (ρ液 − ρ空气) ÷ (m空 − m液) + ρ空气':'ρ = m空 ÷ (m空 − m液) × ρ液');
+  if(w.length){L.push('');L.push('提示：');w.forEach(function(x){L.push('- '+x[1]);});}
+  return L.join('\n');
+}
+
+function copyText(){
+  var t=reportText();
+  function done(ok){$('btnCopy').textContent=ok?'已复制':'复制失败';setTimeout(function(){$('btnCopy').textContent='复制';},1600);}
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(t).then(function(){done(true);},function(){done(false);});
+  }else{
+    var ta=document.createElement('textarea');ta.value=t;ta.style.position='fixed';ta.style.opacity='0';
+    document.body.appendChild(ta);ta.select();
+    var ok=false;try{ok=document.execCommand('copy');}catch(e){ok=false;}
+    document.body.removeChild(ta);done(ok);
+  }
+}
+
+function resetExample(){
+  $('medium').value='water';$('tempC').value='23.0';
+  forcedManual=false;
+  $('rhoManual').checked=false;$('rhoManual').disabled=false;$('rhoInput').value='';
+  $('airCorr').checked=false;
+  EX_IDS.forEach(function(id){$(id).value=EX_DEFAULTS[id];$(id).classList.add('ex');});
+  calc();
+}
+
+function bind(){
+  ['tempC','rhoInput','airCorr','mAir','mLiq','sampleName'].forEach(function(id){
+    $(id).addEventListener('input',calc);
+    $(id).addEventListener('change',calc);
+  });
+  $('medium').addEventListener('change',onMediumChange);
+  $('rhoManual').addEventListener('change',onManualToggle);
+  EX_IDS.forEach(function(id){
+    var el=$(id);
+    el.addEventListener('focus',function(){if(el.classList.contains('ex'))el.select();});
+    el.addEventListener('input',function(){el.classList.remove('ex');});
+  });
+  $('btnPrint').addEventListener('click',function(){$('reportRoot').innerHTML=buildReport();window.print();});
+  $('btnCopy').addEventListener('click',copyText);
+  $('btnReset').addEventListener('click',resetExample);
+  $('rptDate').value=new Date().toISOString().slice(0,10);
+  calc();
+}
+bind();
+</script>
+</body>
+</html>
