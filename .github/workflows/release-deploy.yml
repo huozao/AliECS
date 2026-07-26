@@ -11,6 +11,16 @@ on:
     tags:
       - "V*"
   workflow_dispatch:
+    inputs:
+      deploy_target:
+        description: "Build only, or deploy one explicit v4 role"
+        required: true
+        default: build-only
+        type: choice
+        options:
+          - build-only
+          - business-cn
+          - edge-us
 
 concurrency:
   group: release-deploy
@@ -115,145 +125,220 @@ jobs:
             -t "ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ needs.resolve-release.outputs.release_id }}" \
             "ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.tree.outputs.tag }}"
 
-  deploy:
+      - name: Install skopeo for optional TCR sync
+        if: ${{ vars.TCR_BASE != '' }}
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq skopeo
+
+      - name: Sync the same immutable manifest to TCR
+        env:
+          DEPLOY_TARGET: ${{ inputs.deploy_target }}
+          TCR_BASE: ${{ vars.TCR_BASE }}
+          TCR_USERNAME: ${{ secrets.TCR_USERNAME }}
+          TCR_PASSWORD: ${{ secrets.TCR_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$TCR_BASE" || -z "$TCR_USERNAME" || -z "$TCR_PASSWORD" ]]; then
+            if [[ "$DEPLOY_TARGET" == "business-cn" ]]; then
+              echo "[registry] business-cn requires TCR_BASE and TCR push credentials" >&2
+              exit 1
+            fi
+            echo "[registry] TCR is not configured; GHCR build remains authoritative"
+            exit 0
+          fi
+
+          auth_file="$(mktemp)"
+          trap 'rm -f "$auth_file"' EXIT
+          printf '%s' "${{ secrets.GITHUB_TOKEN }}" \
+            | skopeo login --authfile "$auth_file" --username "${{ github.actor }}" --password-stdin ghcr.io
+          printf '%s' "$TCR_PASSWORD" \
+            | skopeo login --authfile "$auth_file" --username "$TCR_USERNAME" --password-stdin "${TCR_BASE%%/*}"
+
+          source="docker://ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.tree.outputs.tag }}"
+          target="docker://${TCR_BASE}/${{ matrix.image }}:${{ steps.tree.outputs.tag }}"
+          skopeo copy --all --preserve-digests --authfile "$auth_file" "$source" "$target"
+
+          source_digest="$(skopeo inspect --authfile "$auth_file" "$source" | jq -r .Digest)"
+          target_digest="$(skopeo inspect --authfile "$auth_file" "$target" | jq -r .Digest)"
+          [[ "$source_digest" == "$target_digest" ]] || {
+            echo "[registry] digest mismatch: source=$source_digest target=$target_digest" >&2
+            exit 1
+          }
+          echo "[registry] ${{ matrix.image }} synced at $source_digest"
+
+  mirror-third-party:
+    needs: build-push
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_target == 'business-cn' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install skopeo
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq skopeo
+      - name: Mirror digest-pinned third-party images to TCR
+        env:
+          TCR_BASE: ${{ vars.TCR_BASE }}
+          TCR_USERNAME: ${{ secrets.TCR_USERNAME }}
+          TCR_PASSWORD: ${{ secrets.TCR_PASSWORD }}
+        run: bash deploy/ecs/mirror-images-to-tcr.sh
+
+  deploy-business-cn:
     needs:
       - resolve-release
       - build-push
+      - mirror-third-party
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_target == 'business-cn' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy on ECS
+      - uses: actions/checkout@v4
+
+      - name: Package the exact source commit
+        run: |
+          set -euo pipefail
+          mkdir release
+          git archive "$GITHUB_SHA" | tar -x -C release
+          printf '%s\n' "$GITHUB_SHA" > release/.source-commit
+          content_tag() { echo "t-$(git rev-parse "HEAD:$1" | cut -c1-12)"; }
+          {
+            echo "PUBLIC_WEB_TAG=$(content_tag services/public-web)"
+            echo "ADMIN_UI_TAG=$(content_tag services/admin-ui)"
+            echo "BACKEND_API_TAG=$(content_tag services/backend-api)"
+            echo "DOC_SYNC_WORKER_TAG=$(content_tag services/doc-sync-worker)"
+            echo "TPLUS_SYNC_WORKER_TAG=$(content_tag services/tplus-sync-worker)"
+            echo "MCP_CODING_SERVER_TAG=$(content_tag services/mcp-coding-server)"
+          } > release/.content-tags.env
+          tar -C release -czf aliecs-release.tgz .
+          sha256sum aliecs-release.tgz > aliecs-release.tgz.sha256
+
+      - name: Upload source artifact to txecs
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.TENCENT_HOST }}
+          username: ${{ secrets.TENCENT_USER }}
+          key: ${{ secrets.TENCENT_SSH_KEY }}
+          source: "aliecs-release.tgz,aliecs-release.tgz.sha256"
+          target: "/tmp/business-cn-${{ github.sha }}"
+
+      - name: Deploy Tencent business role
         uses: appleboy/ssh-action@v1.2.0
         env:
-          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
-          ALIYUN_KMS_SECRET_NAME: ${{ secrets.ALIYUN_KMS_SECRET_NAME }}
-          ALIYUN_REGION_ID: ${{ secrets.ALIYUN_REGION_ID }}
+          TCR_BASE: ${{ vars.TCR_BASE }}
+          TCR_USERNAME: ${{ secrets.TCR_USERNAME }}
+          TCR_PASSWORD: ${{ secrets.TCR_PASSWORD }}
           DEPLOY_COMMIT_SHA: ${{ github.sha }}
           DEPLOY_RUN_ID: ${{ github.run_id }}
           DEPLOY_RUN_ATTEMPT: ${{ github.run_attempt }}
         with:
-          host: ${{ secrets.ECS_HOST }}
-          username: ${{ secrets.ECS_USER }}
-          key: ${{ secrets.ECS_SSH_KEY }}
+          host: ${{ secrets.TENCENT_HOST }}
+          username: ${{ secrets.TENCENT_USER }}
+          key: ${{ secrets.TENCENT_SSH_KEY }}
           command_timeout: 40m
-          envs: GHCR_USERNAME,GHCR_TOKEN,ALIYUN_KMS_SECRET_NAME,ALIYUN_REGION_ID,DEPLOY_COMMIT_SHA,DEPLOY_RUN_ID,DEPLOY_RUN_ATTEMPT
+          envs: TCR_BASE,TCR_USERNAME,TCR_PASSWORD,DEPLOY_COMMIT_SHA,DEPLOY_RUN_ID,DEPLOY_RUN_ATTEMPT
           script: |
             set -euo pipefail
+            : "${TCR_BASE:?missing TCR_BASE}"
+            : "${TCR_USERNAME:?missing TCR username}"
+            : "${TCR_PASSWORD:?missing TCR password}"
 
-            export GHCR_USERNAME="${GHCR_USERNAME:-}"
-            export GHCR_TOKEN="${GHCR_TOKEN:-}"
-            export ALIYUN_KMS_SECRET_NAME="${ALIYUN_KMS_SECRET_NAME:-}"
-            export ALIYUN_REGION_ID="${ALIYUN_REGION_ID:-cn-hangzhou}"
-
-            APP_ROOT="/root/AliECS"
-            BACKUP_DIR="/root/AliECS-private-backup/github-actions"
+            INCOMING="/tmp/business-cn-${DEPLOY_COMMIT_SHA}"
+            RELEASE_ROOT="/srv/business-cn/releases"
+            RELEASE_DIR="${RELEASE_ROOT}/${DEPLOY_COMMIT_SHA}"
+            CURRENT_LINK="/srv/business-cn/current"
             RELEASE_ID="${{ needs.resolve-release.outputs.release_id }}"
-            TS="$(date +%Y%m%d-%H%M%S)"
 
-            if [[ ! -d "${APP_ROOT}/.git" ]]; then
-              echo "[deploy] Git repository not found at ${APP_ROOT}. Confirm ECS project path is /root/AliECS." >&2
-              exit 1
-            fi
+            cd "$INCOMING"
+            sha256sum -c aliecs-release.tgz.sha256
+            sudo install -d -m 0750 -o root -g root "$RELEASE_ROOT"
+            sudo rm -rf -- "$RELEASE_DIR"
+            sudo install -d -m 0750 -o root -g root "$RELEASE_DIR"
+            sudo tar -xzf aliecs-release.tgz -C "$RELEASE_DIR"
+            actual_commit="$(sudo cat "$RELEASE_DIR/.source-commit" | tr -d '[:space:]')"
+            [[ "$actual_commit" == "$DEPLOY_COMMIT_SHA" ]]
+            sudo ln -sfnT "$RELEASE_DIR" "$CURRENT_LINK"
 
-            mkdir -p "${BACKUP_DIR}"
-            cd "${APP_ROOT}"
+            sudo env SOPS_AGE_KEY_FILE=/home/ubuntu/.config/sops/age/keys.txt \
+              /home/ubuntu/infra/scripts/render.sh txecs
 
-            echo "[deploy] Backing up ECS private env files"
-            if [[ -f "deploy/ecs/release-meta.env" ]]; then
-              cp -a "deploy/ecs/release-meta.env" "${BACKUP_DIR}/release-meta.env.${TS}"
-            fi
-            if [[ -f "deploy/ecs/runtime.env" ]]; then
-              cp -a "deploy/ecs/runtime.env" "${BACKUP_DIR}/runtime.env.${TS}"
-            fi
-
-            echo "[deploy] Syncing ECS checkout to origin/main"
-            git fetch origin main --tags
-            git checkout main
-
-            # release-meta.env used to be tracked in older checkouts. It is now
-            # an ECS-private file, so restore tracked copies before fast-forward
-            # pull to keep local secret edits from blocking code sync.
-            for env_file in deploy/ecs/release-meta.env deploy/ecs/runtime.env; do
-              if git ls-files --error-unmatch "${env_file}" >/dev/null 2>&1; then
-                git restore --source=HEAD -- "${env_file}"
-              fi
-            done
-
-            git pull --ff-only origin main
-
-            echo "[deploy] Restoring ECS private env files"
-            if [[ -f "${BACKUP_DIR}/release-meta.env.${TS}" ]]; then
-              cp -a "${BACKUP_DIR}/release-meta.env.${TS}" "deploy/ecs/release-meta.env"
-              chmod 600 "deploy/ecs/release-meta.env"
-            fi
-            if [[ -f "${BACKUP_DIR}/runtime.env.${TS}" ]]; then
-              cp -a "${BACKUP_DIR}/runtime.env.${TS}" "deploy/ecs/runtime.env"
-              chmod 600 "deploy/ecs/runtime.env"
-            fi
-
-            FETCH_ENV_SCRIPT="${APP_ROOT}/deploy/ecs/fetch-release-env.sh"
-            if [[ ! -f "${FETCH_ENV_SCRIPT}" ]]; then
-              echo "[deploy] Env sync script is missing: ${FETCH_ENV_SCRIPT}" >&2
-              exit 1
-            fi
-
-            echo "[deploy] Syncing ECS private env from Alibaba Cloud KMS"
-            bash "${FETCH_ENV_SCRIPT}"
-
-            DEPLOY_SCRIPT="${APP_ROOT}/deploy/ecs/deploy.sh"
-            if [[ ! -x "${DEPLOY_SCRIPT}" ]]; then
-              echo "[deploy] Deploy script is missing or not executable: ${DEPLOY_SCRIPT}" >&2
-              exit 1
-            fi
-
-            # 按服务导出内容寻址标签（与 build-push 的算法一致：目录 tree hash 前 12 位）。
-            # 内容没变的服务标签不变 → compose 不重建对应容器。
-            echo "[deploy] Resolving per-service content tags"
-            content_tag() { echo "t-$(git rev-parse "HEAD:$1" | cut -c1-12)"; }
-            export PUBLIC_WEB_TAG="$(content_tag services/public-web)"
-            export ADMIN_UI_TAG="$(content_tag services/admin-ui)"
-            export BACKEND_API_TAG="$(content_tag services/backend-api)"
-            export DOC_SYNC_WORKER_TAG="$(content_tag services/doc-sync-worker)"
-            export TPLUS_SYNC_WORKER_TAG="$(content_tag services/tplus-sync-worker)"
-            export MCP_CODING_SERVER_TAG="$(content_tag services/mcp-coding-server)"
-
-            echo "[deploy] Running latest deploy script: ${DEPLOY_SCRIPT}"
+            export DEPLOY_ROLE=business-cn
+            export RELEASE_META_FILE=/srv/business-cn/config/runtime.env
+            export ROLE_COMPOSE_FILE="$CURRENT_LINK/deploy/ecs/compose.business-cn.yml"
+            export ROLE_RUNTIME_ENV_FILE=/srv/business-cn/config/compose.env
+            export ROLE_METADATA_DIR=/srv/business-cn/state/release-meta
+            export ROLE_IMAGE_REGISTRY_BASE="$TCR_BASE"
+            export REGISTRY_USERNAME="$TCR_USERNAME"
+            export REGISTRY_TOKEN="$TCR_PASSWORD"
+            set -a
+            source <(sudo cat "$CURRENT_LINK/.content-tags.env")
+            set +a
+            export POSTGRES_IMAGE="$TCR_BASE/third-party-postgres:16-runtime-20260725"
             export DEPLOY_COMMIT_SHA DEPLOY_RUN_ID DEPLOY_RUN_ATTEMPT
-            "${DEPLOY_SCRIPT}" "${RELEASE_ID}"
+            sudo -E bash "$CURRENT_LINK/deploy/ecs/deploy-role.sh" business-cn "$RELEASE_ID"
 
-            POST_DEPLOY_SMOKE="${APP_ROOT}/deploy/ecs/post-deploy-smoke.sh"
-            if [[ ! -x "${POST_DEPLOY_SMOKE}" ]]; then
-              echo "[deploy] Post-deploy smoke script is missing or not executable: ${POST_DEPLOY_SMOKE}" >&2
-              exit 1
-            fi
+  deploy-edge-us:
+    needs:
+      - resolve-release
+      - build-push
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_target == 'edge-us' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-            echo "[deploy] Running post-deploy smoke checks: ${POST_DEPLOY_SMOKE}"
-            "${POST_DEPLOY_SMOKE}"
+      - name: Package the exact source commit
+        run: |
+          set -euo pipefail
+          mkdir release
+          git archive "$GITHUB_SHA" | tar -x -C release
+          printf '%s\n' "$GITHUB_SHA" > release/.source-commit
+          content_tag() { echo "t-$(git rev-parse "HEAD:$1" | cut -c1-12)"; }
+          echo "MCP_CODING_SERVER_TAG=$(content_tag services/mcp-coding-server)" > release/.content-tags.env
+          tar -C release -czf aliecs-release.tgz .
+          sha256sum aliecs-release.tgz > aliecs-release.tgz.sha256
 
-      - name: Collect ECS diagnostics on failure
-        if: ${{ failure() }}
-        uses: appleboy/ssh-action@v1.2.0
+      - name: Upload source artifact to AliECS
+        uses: appleboy/scp-action@v1
         with:
           host: ${{ secrets.ECS_HOST }}
           username: ${{ secrets.ECS_USER }}
           key: ${{ secrets.ECS_SSH_KEY }}
+          source: "aliecs-release.tgz,aliecs-release.tgz.sha256"
+          target: "/tmp/edge-us-${{ github.sha }}"
+
+      - name: Deploy AliECS edge role
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          DEPLOY_COMMIT_SHA: ${{ github.sha }}
+        with:
+          host: ${{ secrets.ECS_HOST }}
+          username: ${{ secrets.ECS_USER }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          command_timeout: 20m
+          envs: GHCR_USERNAME,GHCR_TOKEN,DEPLOY_COMMIT_SHA
           script: |
-            set -uo pipefail
-            APP_ROOT="/root/AliECS"
-            DIAG_SCRIPT="${APP_ROOT}/deploy/ecs/collect-diagnostics.sh"
+            set -euo pipefail
+            INCOMING="/tmp/edge-us-${DEPLOY_COMMIT_SHA}"
+            RELEASE_DIR="/root/AliECS-edge-releases/${DEPLOY_COMMIT_SHA}"
+            CURRENT_LINK="/root/AliECS-edge-current"
+            RELEASE_ID="${{ needs.resolve-release.outputs.release_id }}"
 
-            if [[ -x "${DIAG_SCRIPT}" ]]; then
-              "${DIAG_SCRIPT}"
-              exit 0
-            fi
+            cd "$INCOMING"
+            sha256sum -c aliecs-release.tgz.sha256
+            rm -rf -- "$RELEASE_DIR"
+            install -d -m 0750 "$RELEASE_DIR"
+            tar -xzf aliecs-release.tgz -C "$RELEASE_DIR"
+            [[ "$(tr -d '[:space:]' < "$RELEASE_DIR/.source-commit")" == "$DEPLOY_COMMIT_SHA" ]]
+            ln -sfnT "$RELEASE_DIR" "$CURRENT_LINK"
 
-            echo "[diagnostics] collect-diagnostics.sh is not available yet; running fallback checks"
-            cd "${APP_ROOT}" 2>/dev/null || {
-              echo "[diagnostics] missing app root: ${APP_ROOT}"
-              exit 0
-            }
-            git status -sb 2>&1 || true
-            git log -1 --oneline 2>&1 || true
-            docker compose --env-file /root/AliECS/deploy/ecs/runtime.env -f /root/AliECS/deploy/ecs/compose.prod.yml ps 2>&1 || true
-            docker compose --env-file /root/AliECS/deploy/ecs/runtime.env -f /root/AliECS/deploy/ecs/compose.prod.yml logs --tail=80 backend-api doc-sync-worker postgres 2>&1 \
-              | sed -E 's#(postgres(ql)?://)[^:@/]+:[^@/]+@#\1***:***@#g; s#([Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|ACCESS_KEY|APP_SECRET|CORP_ID)=([^[:space:]]+)#\1=***#g' || true
+            set -a
+            source "$CURRENT_LINK/.content-tags.env"
+            set +a
+            export DEPLOY_ROLE=edge-us
+            export RELEASE_META_FILE=/root/AliECS/deploy/ecs/release-meta.env
+            export ROLE_COMPOSE_FILE="$CURRENT_LINK/deploy/ecs/compose.edge-us.yml"
+            export ROLE_RUNTIME_ENV_FILE=/root/AliECS-edge-runtime.env
+            export ROLE_METADATA_DIR=/root/AliECS-edge-release-meta
+            export ROLE_IMAGE_REGISTRY_BASE=ghcr.io/${{ github.repository_owner }}
+            export REGISTRY_USERNAME="$GHCR_USERNAME"
+            export REGISTRY_TOKEN="$GHCR_TOKEN"
+            bash "$CURRENT_LINK/deploy/ecs/deploy-role.sh" edge-us "$RELEASE_ID"

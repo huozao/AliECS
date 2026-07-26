@@ -284,7 +284,7 @@ services:
       retries: 5
 
   postgres:
-    image: postgres:16
+    image: ${POSTGRES_IMAGE:-postgres:16}
     restart: always
     environment:
       POSTGRES_USER: ${POSTGRES_USER}

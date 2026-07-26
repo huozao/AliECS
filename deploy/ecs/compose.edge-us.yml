@@ -1,0 +1,12 @@
+name: edge-us
+
+# AliECS application-repository edge scope. sing-box, codex, console and
+# overseas nginx remain host-level services managed by infra.
+services:
+  mcp-coding-server:
+    extends:
+      file: compose.prod.yml
+      service: mcp-coding-server
+
+volumes:
+  mcp_oauth_data:

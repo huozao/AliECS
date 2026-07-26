@@ -17,12 +17,12 @@ assert_contains() {
 }
 
 for svc_var in \
-  'PUBLIC_WEB_IMAGE=${GHCR_BASE}/public-web:${PUBLIC_WEB_TAG:-$IMAGE_TAG}' \
-  'ADMIN_UI_IMAGE=${GHCR_BASE}/admin-ui:${ADMIN_UI_TAG:-$IMAGE_TAG}' \
-  'BACKEND_API_IMAGE=${GHCR_BASE}/backend-api:${BACKEND_API_TAG:-$IMAGE_TAG}' \
-  'DOC_SYNC_WORKER_IMAGE=${GHCR_BASE}/doc-sync-worker:${DOC_SYNC_WORKER_TAG:-$IMAGE_TAG}' \
-  'TPLUS_SYNC_WORKER_IMAGE=${GHCR_BASE}/tplus-sync-worker:${TPLUS_SYNC_WORKER_TAG:-$IMAGE_TAG}' \
-  'MCP_CODING_SERVER_IMAGE=${GHCR_BASE}/mcp-coding-server:${MCP_CODING_SERVER_TAG:-$IMAGE_TAG}'; do
+  'PUBLIC_WEB_IMAGE=${IMAGE_REGISTRY_BASE}/public-web:${PUBLIC_WEB_TAG:-$IMAGE_TAG}' \
+  'ADMIN_UI_IMAGE=${IMAGE_REGISTRY_BASE}/admin-ui:${ADMIN_UI_TAG:-$IMAGE_TAG}' \
+  'BACKEND_API_IMAGE=${IMAGE_REGISTRY_BASE}/backend-api:${BACKEND_API_TAG:-$IMAGE_TAG}' \
+  'DOC_SYNC_WORKER_IMAGE=${IMAGE_REGISTRY_BASE}/doc-sync-worker:${DOC_SYNC_WORKER_TAG:-$IMAGE_TAG}' \
+  'TPLUS_SYNC_WORKER_IMAGE=${IMAGE_REGISTRY_BASE}/tplus-sync-worker:${TPLUS_SYNC_WORKER_TAG:-$IMAGE_TAG}' \
+  'MCP_CODING_SERVER_IMAGE=${IMAGE_REGISTRY_BASE}/mcp-coding-server:${MCP_CODING_SERVER_TAG:-$IMAGE_TAG}'; do
   assert_contains "$DEPLOY_SH" "$svc_var"
 done
 
@@ -31,14 +31,14 @@ assert_contains "$DEPLOY_SH" 'LAST_SUCCESS_COMMIT_FILE="$METADATA_DIR/last-succe
 assert_contains "$DEPLOY_SH" 'FORCE_MIGRATIONS'
 assert_contains "$DEPLOY_SH" 'diff --quiet "$last_success" HEAD -- db deploy/ecs/migrate.sh'
 
-# workflow 侧：内容标签计算、存在即跳过、commit 别名、deploy 导出 *_TAG
+# workflow 侧：内容标签计算、存在即跳过、commit 别名、角色包携带 *_TAG
 assert_contains "$WORKFLOW" 'tag=t-$(git rev-parse "HEAD:${{ matrix.context }}" | cut -c1-12)'
 assert_contains "$WORKFLOW" 'docker manifest inspect'
 assert_contains "$WORKFLOW" 'docker buildx imagetools create'
 assert_contains "$WORKFLOW" 'release_id: ${{ steps.vars.outputs.release_id }}'
 assert_contains "$WORKFLOW" 'DEPLOY_RUN_ATTEMPT: ${{ github.run_attempt }}'
-assert_contains "$WORKFLOW" 'export PUBLIC_WEB_TAG="$(content_tag services/public-web)"'
-assert_contains "$WORKFLOW" 'export MCP_CODING_SERVER_TAG="$(content_tag services/mcp-coding-server)"'
+assert_contains "$WORKFLOW" 'echo "PUBLIC_WEB_TAG=$(content_tag services/public-web)"'
+assert_contains "$WORKFLOW" 'echo "MCP_CODING_SERVER_TAG=$(content_tag services/mcp-coding-server)"'
 
 bash -n "$DEPLOY_SH"
 
