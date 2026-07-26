@@ -2,8 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+META_FILE="${RELEASE_META_FILE:-$ROOT_DIR/release-meta.env}"
 # shellcheck disable=SC1091
-source "$ROOT_DIR/release-meta.env"
+source "$META_FILE"
 
 : "${METADATA_DIR:?missing METADATA_DIR}"
 : "${RUNTIME_ENV_FILE:?missing RUNTIME_ENV_FILE}"

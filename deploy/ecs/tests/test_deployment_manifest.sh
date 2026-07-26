@@ -7,7 +7,7 @@ trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/bin" "$T/meta" "$T/run"
 cp "$ROOT_DIR/write-deployment-manifest.sh" "$T/run/"
 
-cat > "$T/run/release-meta.env" <<EOF
+cat > "$T/custom-meta.env" <<EOF
 METADATA_DIR=$T/meta
 RUNTIME_ENV_FILE=$T/runtime.env
 EOF
@@ -29,6 +29,7 @@ EOF
 chmod +x "$T/bin/docker" "$T/run/write-deployment-manifest.sh"
 
 PATH="$T/bin:$PATH" \
+RELEASE_META_FILE="$T/custom-meta.env" \
 DEPLOY_COMMIT_SHA=0123456789abcdef0123456789abcdef01234567 \
 DEPLOY_RUN_ID=12345 \
 DEPLOY_RUN_ATTEMPT=2 \
