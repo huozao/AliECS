@@ -455,8 +455,18 @@ fi
 
 REGISTRY_USERNAME="${REGISTRY_USERNAME:-${GHCR_USERNAME:-}}"
 REGISTRY_TOKEN="${REGISTRY_TOKEN:-${GHCR_TOKEN:-}}"
+REGISTRY_AUTH_DIR=""
+cleanup_registry_auth() {
+  if [[ -n "$REGISTRY_AUTH_DIR" ]]; then
+    rm -rf -- "$REGISTRY_AUTH_DIR"
+  fi
+}
+trap cleanup_registry_auth EXIT
 if [[ -n "$REGISTRY_USERNAME" && -n "$REGISTRY_TOKEN" ]]; then
   registry_host="${IMAGE_REGISTRY_BASE%%/*}"
+  REGISTRY_AUTH_DIR="$(mktemp -d)"
+  chmod 700 "$REGISTRY_AUTH_DIR"
+  export DOCKER_CONFIG="$REGISTRY_AUTH_DIR"
   echo "[部署] 登录镜像仓库 $registry_host"
   echo "$REGISTRY_TOKEN" | docker login "$registry_host" -u "$REGISTRY_USERNAME" --password-stdin
 fi
@@ -487,12 +497,23 @@ fi
 # 判定不了就保守执行；FORCE_MIGRATIONS=1 强制执行。
 REPO_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
 LAST_SUCCESS_COMMIT_FILE="$METADATA_DIR/last-success-commit"
+CURRENT_SOURCE_COMMIT="${DEPLOY_COMMIT_SHA:-}"
+if [[ -z "$CURRENT_SOURCE_COMMIT" ]]; then
+  if git -C "$REPO_ROOT" rev-parse HEAD >/dev/null 2>&1; then
+    CURRENT_SOURCE_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+  elif [[ -f "$REPO_ROOT/.source-commit" ]]; then
+    CURRENT_SOURCE_COMMIT="$(tr -d '[:space:]' < "$REPO_ROOT/.source-commit")"
+  fi
+fi
 RUN_MIGRATIONS="${FORCE_MIGRATIONS:-}"
 if [[ -z "$RUN_MIGRATIONS" ]]; then
   RUN_MIGRATIONS=1
-  if [[ -f "$LAST_SUCCESS_COMMIT_FILE" ]] && git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if [[ -f "$LAST_SUCCESS_COMMIT_FILE" ]]; then
     last_success="$(cat "$LAST_SUCCESS_COMMIT_FILE")"
-    if git -C "$REPO_ROOT" cat-file -e "${last_success}^{commit}" 2>/dev/null \
+    if [[ -n "$CURRENT_SOURCE_COMMIT" && "$last_success" == "$CURRENT_SOURCE_COMMIT" ]]; then
+      RUN_MIGRATIONS=0
+    elif git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+      && git -C "$REPO_ROOT" cat-file -e "${last_success}^{commit}" 2>/dev/null \
       && git -C "$REPO_ROOT" diff --quiet "$last_success" HEAD -- db deploy/ecs/migrate.sh; then
       RUN_MIGRATIONS=0
     fi
@@ -513,8 +534,8 @@ fi
 docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" up -d "${DEPLOY_SERVICES[@]}"
 
 if "$ROOT_DIR/healthcheck.sh"; then
-  if git -C "$REPO_ROOT" rev-parse HEAD >/dev/null 2>&1; then
-    git -C "$REPO_ROOT" rev-parse HEAD > "$LAST_SUCCESS_COMMIT_FILE"
+  if [[ -n "$CURRENT_SOURCE_COMMIT" ]]; then
+    printf '%s\n' "$CURRENT_SOURCE_COMMIT" > "$LAST_SUCCESS_COMMIT_FILE"
   fi
   "$ROOT_DIR/write-deployment-manifest.sh"
   echo "[部署] 成功"

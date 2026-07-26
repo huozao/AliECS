@@ -10,6 +10,7 @@ EDGE_DEPLOY="$ROOT_DIR/deploy-edge.sh"
 MIGRATE="$ROOT_DIR/migrate.sh"
 DEPLOY="$ROOT_DIR/deploy.sh"
 HEALTHCHECK="$ROOT_DIR/healthcheck.sh"
+MANIFEST="$ROOT_DIR/write-deployment-manifest.sh"
 RELEASE_WORKFLOW="$ROOT_DIR/../../.github/workflows/release-deploy.yml"
 BRIDGE_WORKFLOW="$ROOT_DIR/../../.github/workflows/bridge-cutover.yml"
 MIRROR_IMAGES="$ROOT_DIR/mirror-images-to-tcr.sh"
@@ -47,8 +48,11 @@ assert_contains "$MIGRATE" 'ROLE_MIGRATIONS_DIR'
 assert_contains "$MIGRATE" 'ROLE_POSTGRES_CONTAINER_NAME'
 assert_contains "$HEALTHCHECK" 'META_FILE="${RELEASE_META_FILE:-$ROOT_DIR/release-meta.env}"'
 assert_contains "$HEALTHCHECK" 'ROLE_HEALTHCHECK_URL'
+assert_contains "$MANIFEST" 'META_FILE="${RELEASE_META_FILE:-$ROOT_DIR/release-meta.env}"'
 assert_contains "$DEPLOY" 'DEPLOY_SERVICES=(postgres backend-api public-web admin-ui)'
 assert_contains "$DEPLOY" 'stop doc-sync-worker tplus-sync-worker tplus-write-worker'
+assert_contains "$DEPLOY" 'export DOCKER_CONFIG="$REGISTRY_AUTH_DIR"'
+assert_contains "$DEPLOY" 'CURRENT_SOURCE_COMMIT="${DEPLOY_COMMIT_SHA:-}"'
 
 assert_contains "$COLD" 'profiles: ["cold-recovery"]'
 if ENABLE_COLD_RECOVERY=false bash "$ROLE_DEPLOY" business-cold-recovery sha-0123456789ab >/dev/null 2>&1; then
