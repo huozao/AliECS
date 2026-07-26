@@ -12,6 +12,7 @@ Restart=always
 RestartSec=5
 StateDirectory=webdock-failover-proxy
 StateDirectoryMode=0750
+UMask=0027
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true

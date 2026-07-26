@@ -1,6 +1,7 @@
 import importlib.util
 import pathlib
 import sqlite3
+import stat
 import sys
 import tempfile
 import unittest
@@ -98,6 +99,8 @@ class RequestLedgerFailoverTests(unittest.TestCase):
             }
         )
         self.ledger = self.proxy.RequestLedger(self.ledger_path, 604800)
+        if sys.platform != "win32":
+            self.assertEqual(stat.S_IMODE(pathlib.Path(self.ledger_path).stat().st_mode), 0o640)
         self.headers = {"X-Request-ID": "req-001", "Content-Type": "application/json"}
         self.body = b'{"messages":[{"role":"user","content":"hello"}]}'
         self.proxy._primary_down_until = 0.0
