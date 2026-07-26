@@ -127,6 +127,63 @@ def test_bridge_sends_clean_prompt_to_webdock(monkeypatch):
     assert "large OpenClaw runtime context" not in outbound["messages"][0]["content"]
 
 
+def test_bridge_request_id_is_stable_and_forwarded_in_metadata():
+    bridge = load_bridge()
+    body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Conversation info (untrusted metadata):\n"
+                    '```json\n{"message_id":"msg-stable-1","peer_id":"user-1"}\n```\n\n'
+                    "hello"
+                ),
+            }
+        ]
+    }
+
+    replay_body = json.loads(json.dumps(body))
+    first = bridge.build_webdock_body(body)
+    second = bridge.build_webdock_body(body)
+    replay = bridge.build_webdock_body(replay_body)
+
+    assert first["metadata"]["request_id"] == second["metadata"]["request_id"]
+    assert first["metadata"]["request_id"] == replay["metadata"]["request_id"]
+    assert len(first["metadata"]["request_id"]) == 24
+
+
+def test_bridge_sends_request_id_header(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
+    captured = {}
+
+    class FakeResponse:
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"choices":[{"message":{"content":"ok"}}]}'
+
+    def fake_urlopen(request, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", fake_urlopen)
+    body = {"messages": [{"role": "user", "content": "hello"}]}
+
+    bridge.call_webdock(body)
+
+    outbound = json.loads(captured["request"].data.decode("utf-8"))
+    assert captured["request"].get_header("X-request-id") == outbound["metadata"]["request_id"]
+
+
 def test_bridge_forwards_openclaw_metadata_to_webdock_lane(monkeypatch):
     bridge = load_bridge()
     monkeypatch.setenv("WEB_DOCK_MODEL", "browser-chatgpt")
@@ -149,6 +206,7 @@ def test_bridge_forwards_openclaw_metadata_to_webdock_lane(monkeypatch):
     )
 
     assert outbound["messages"] == [{"role": "user", "content": "真实微信消息"}]
+    assert len(outbound["metadata"].pop("request_id")) == 24
     assert outbound["metadata"] == {
         "wechat_account": "A",
         "chat_type": "private",
@@ -183,6 +241,7 @@ def test_bridge_forwards_unfenced_openclaw_metadata_to_webdock_lane(monkeypatch)
     )
 
     assert outbound["messages"] == [{"role": "user", "content": "/新对话 现在几点了？"}]
+    assert len(outbound["metadata"].pop("request_id")) == 24
     assert outbound["metadata"] == {
         "chat_type": "private",
         "peer_id": "o9cq80whD47YZs0xR1Y9Ih8rdVnc@im.wechat",
@@ -212,6 +271,7 @@ def test_bridge_forwards_feishu_open_id_as_isolated_lane(monkeypatch):
     )
 
     assert outbound["messages"] == [{"role": "user", "content": "飞书私聊消息"}]
+    assert len(outbound["metadata"].pop("request_id")) == 24
     assert outbound["metadata"] == {
         "channel": "feishu",
         "chat_type": "private",
@@ -246,6 +306,7 @@ def test_bridge_forwards_wecom_as_isolated_lane(monkeypatch):
     )
 
     assert outbound["messages"] == [{"role": "user", "content": "企微群消息"}]
+    assert len(outbound["metadata"].pop("request_id")) == 24
     assert outbound["metadata"] == {
         "channel": "wecom",
         "wechat_account": "company-b",
@@ -684,8 +745,8 @@ def test_bridge_batches_text_then_followup_media_into_one_webdock_call(tmp_path,
     bridge = load_bridge()
     monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
     monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
-    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "0.3")
-    monkeypatch.setenv("OPENCLAW_BRIDGE_MEDIA_INTENT_BATCH_SECONDS", "0.3")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "1.0")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_MEDIA_INTENT_BATCH_SECONDS", "1.0")
     media_file = tmp_path / "image-a.jpg"
     media_file.write_bytes(b"\xff\xd8\xffimage-a")
     monkeypatch.setenv("OPENCLAW_INBOUND_MEDIA_DIR", str(tmp_path))
@@ -719,7 +780,7 @@ def test_bridge_batches_text_then_followup_media_into_one_webdock_call(tmp_path,
     time.sleep(0.05)
 
     media_reply = bridge.build_reply(media_body)
-    worker.join(timeout=2)
+    worker.join(timeout=3)
 
     assert media_reply == bridge.NO_REPLY
     assert text_reply["value"] == "已按图片完成修改"

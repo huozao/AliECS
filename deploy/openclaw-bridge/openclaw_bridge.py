@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import hmac
 import json
 import base64
@@ -167,6 +168,7 @@ class PendingBatch:
         self.images = list(details["images"])
         self.metadata = dict(details["metadata"])
         self.raw_metadata = dict(details.get("raw_metadata") or {})
+        self.request_id = str(details["request_id"])
         self.expected_images = expected_image_count(details)
         self.created = time.monotonic()
         self.deadline = self.created + wait_seconds
@@ -194,6 +196,7 @@ class PendingBatch:
 
     def to_body(self) -> dict[str, Any]:
         body = dict(self.body)
+        body["_bridge_request_id"] = self.request_id
         body["messages"] = [{"role": "user", "content": build_outbound_content(self.user_text, self.images)}]
         metadata = dict(self.raw_metadata)
         metadata.update(self.metadata)
@@ -532,8 +535,16 @@ def request_details(body: dict[str, Any]) -> dict[str, Any]:
         if inherited_metadata:
             inherited_metadata.update(metadata)
             metadata = inherited_metadata
+    request_id = str(body.get("_bridge_request_id") or "").strip()
+    if not request_id:
+        message_id = _first_metadata_value(raw_metadata, "message_id", "messageId", "msgid")
+        if message_id:
+            request_id = hashlib.sha256(f"openclaw:{message_id}".encode("utf-8")).hexdigest()[:24]
+        else:
+            request_id = uuid.uuid4().hex[:24]
+        body["_bridge_request_id"] = request_id
     return {
-        "request_id": uuid.uuid4().hex[:12],
+        "request_id": request_id,
         "user_text": user_text,
         "images": images,
         "metadata": metadata,
@@ -548,10 +559,11 @@ def build_webdock_body(body: dict[str, Any]) -> dict[str, Any]:
         "messages": [{"role": "user", "content": build_outbound_content(details["user_text"], details["images"])}],
         "stream": False,
     }
-    metadata = details["metadata"]
+    metadata = dict(details["metadata"])
+    metadata["request_id"] = details["request_id"]
     if metadata:
         outbound["metadata"] = metadata
-        remember_lane_metadata(metadata)
+        remember_lane_metadata(details["metadata"])
     return outbound
 
 
@@ -3379,6 +3391,7 @@ def parse_http_error_message(exc: urllib.error.HTTPError) -> str:
 
 def call_webdock(body: dict[str, Any]) -> WebDockResult:
     outbound = build_webdock_body(body)
+    request_id = str((outbound.get("metadata") or {}).get("request_id") or "").strip()
     data = json.dumps(outbound, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         webdock_url(),
@@ -3386,6 +3399,7 @@ def call_webdock(body: dict[str, Any]) -> WebDockResult:
         headers={
             "Content-Type": "application/json",
             "Authorization": "Bearer " + os.getenv("WEB_DOCK_API_TOKEN", ""),
+            "X-Request-ID": request_id,
         },
         method="POST",
     )
