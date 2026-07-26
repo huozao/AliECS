@@ -54,6 +54,13 @@ METADATA_DIR="${ROLE_METADATA_DIR:-${METADATA_DIR:-}}"
 : "${ADMIN_BOOTSTRAP_PASSWORD:?请在 release-meta.env 设置 ADMIN_BOOTSTRAP_PASSWORD}"
 : "${ADMIN_BOOTSTRAP_DISPLAY_NAME:?请在 release-meta.env 设置 ADMIN_BOOTSTRAP_DISPLAY_NAME}"
 
+DEPLOY_SERVICES=()
+if [[ "$DEPLOY_ROLE" == "business-cn" && "${P0_MODE:-false}" == "true" ]]; then
+  DEPLOY_SERVICES=(postgres backend-api public-web admin-ui)
+  TPLUS_BOM_WRITE_ENABLED=false
+  echo "[部署] P0 隔离模式：仅启动 ${DEPLOY_SERVICES[*]}，外部副作用 worker 保持停止"
+fi
+
 if ! command -v python3 >/dev/null 2>&1; then
   echo "[部署] 缺少 python3，无法校验 DATABASE_URL。" >&2
   exit 1
@@ -456,7 +463,12 @@ fi
 
 echo "[部署] 拉取镜像（逐服务串行，避免并行解压打爆 2G 内存，见 2026-06-10 OOM 假死事故）"
 pull_failed=0
-for service in $(docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" config --services); do
+if (( ${#DEPLOY_SERVICES[@]} )); then
+  services=("${DEPLOY_SERVICES[@]}")
+else
+  mapfile -t services < <(docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" config --services)
+fi
+for service in "${services[@]}"; do
   echo "[部署] 拉取 $service"
   if ! docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" pull "$service"; then
     pull_failed=1
@@ -494,7 +506,11 @@ else
 fi
 
 echo "[部署] 再切换服务"
-docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" up -d
+if (( ${#DEPLOY_SERVICES[@]} )); then
+  docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" \
+    stop doc-sync-worker tplus-sync-worker tplus-write-worker >/dev/null 2>&1 || true
+fi
+docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" up -d "${DEPLOY_SERVICES[@]}"
 
 if "$ROOT_DIR/healthcheck.sh"; then
   if git -C "$REPO_ROOT" rev-parse HEAD >/dev/null 2>&1; then
