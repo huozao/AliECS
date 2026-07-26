@@ -184,6 +184,8 @@ class RequestLedger:
         if path != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
+        if path != ":memory:":
+            Path(path).chmod(0o640)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
