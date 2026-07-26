@@ -1,7 +1,8 @@
 # 设备清单（Fleet）
 
 > 单一事实源：设备 ↔ 职责 ↔ 仓库 ↔ 部署链路的权威映射。
-> 所有事实于 2026-07-04 经 SSH 实测核实。发现与本文不符时，以实测为准并更新本文。
+> 基础事实于 2026-07-04 经 SSH 实测核实；腾讯云并行迁移状态于
+> 2026-07-26 复核。发现与本文不符时，以实测为准并更新本文。
 
 ## 命名规则
 
@@ -15,7 +16,8 @@
 | 逻辑名 | 角色 | 硬件/OS | 网络入口 | 运行代码来源 |
 |---|---|---|---|---|
 | `devbox` | 开发机 | 本地 Windows 11 | 本机 | 3 个仓库克隆（不运行生产） |
-| `aliecs` | 生产服务器 | 阿里云 ECS us-west-1 / Ubuntu，2G 内存 | `ssh aliecs`（root@47.77.176.62） | AliECS 全部镜像 + bridge 镜像 + infra 主机配置 |
+| `aliecs` | 当前生产写端 + 海外边界 | 阿里云 ECS 美国 / Ubuntu 24.04，2G 内存 | `ssh aliecs`（root@47.77.176.62） | 当前业务全栈；P1 后只保留 edge-us |
+| `txecs` | P0 隔离 business-cn 候选主栈 | 腾讯云轻量 / Ubuntu 24.04，4C4G | `ssh txecs`（ubuntu@106.52.51.67） | business-cn 隔离栈 + txecs 主机角色 |
 | `webdock1` | webdock 算力节点（**当前备用**） | 旧 Ubuntu 笔记本 | `ssh webdock1`（Tailscale 100.97.176.57） | webdock 镜像 + 第三方自托管服务 |
 | `webdock2` | webdock 算力节点（**当前主力**） | 新台式机 Windows 11 + WSL2 | `ssh webdock2`（Tailscale 100.67.38.52） | webdock 镜像 |
 
@@ -35,6 +37,26 @@ bridge/openclaw 容器
 - 切换主备 = 改该环境文件里的 `PRIMARY_*` / `STANDBY_*`（尤其是 `*_NAME` 与对应 host/port 绑定）后 `systemctl restart webdock-failover-proxy`，不改代码。
 - 判定某条消息由哪台处理：查各机 `/var/log/webdock/archive/<UTC日期>.jsonl`（权威记录）。
 
+### 腾讯云 P0 并行路径（尚未切生产）
+
+```
+webdock2 WSL
+  ├─ 原生产业务隧道 → aliecs 127.0.0.1:11810
+  ├─ console 隧道   → aliecs 127.0.0.1:16090/16091
+  └─ 新业务隧道     → txecs 127.0.0.1:11810
+
+txecs 127.0.0.1:11800 failover-proxy
+  ├─ 主 127.0.0.1:11810 ← webdock2（已验证）
+  └─ 备 127.0.0.1:11811 ← webdock1（设备离线，待验证）
+```
+
+- 当前生产 bridge 仍指 AliECS 11800；txecs 11800 只做 P0 回环健康验证。
+- 两个落点的 11810 是不同主机上的回环端口，不冲突。
+- txecs 主备权威由 txecs `/etc/default/webdock-failover-proxy` 和
+  `11800/healthz` 响应头共同确认；不得拿 AliECS 的环境文件判断 txecs。
+- P1 只切 bridge 目标，不迁移 WebDock browser_data，也不改变 console
+  隧道落点。
+
 ## 设备档案
 
 ### aliecs（生产服务器）
@@ -47,6 +69,26 @@ bridge/openclaw 容器
 - 远程控制台（2026-07-04，`https://hydwang.xyz/console/`）：nginx `/console/*` 七路 location（认证=Authelia `two_factor` + lldap `console_admins` 组，成对 deny 兜底；**VNC 层免密设计**，2FA 是唯一闸门）；本机组件 ttyd 7681（unit `ttyd-console`，⚠️ apt 自带 `ttyd.service` 抢端口须 disable）、webtop 3000 按需启停（`/opt/aliecs/aliecs-temp-desktop.sh`，2G 内存用完必须 stop）；ECS `authorized_keys` permitlisten 新增四条 160xx（16080/16081←webdock1、16090/16091←webdock2，与生产 118xx 隔离）。详见 infra `console/README.md`。
 - 部署：push AliECS main → release-deploy 自动构建部署业务镜像；bridge 镜像同流程构建，但运行切换需在 Actions 手工触发一次 `bridge-cutover`（无需填 tag，自动解析 digest、验证并失败回滚）。
 - 排障：`docker ps`、bridge 日志 `docker logs openclaw-bridge`、部署尖峰时 health 告警多为瞬时（2G 内存超卖）。
+
+### txecs（腾讯云 business-cn 候选主栈）
+
+- 入口：`ssh txecs`（`ubuntu@106.52.51.67`）；系统 Ubuntu 24.04，
+  4 vCPU、约 3.6 GiB 可用内存。
+- 当前是 P0 隔离栈，不是生产写端；备案通过和 Stage I 授权前，生产域名、
+  webhook、worker、OpenClaw、bridge 均不得切入。
+- 主机重建入口：infra
+  `roles/server/{common,tencent}`；age 私钥和 GitHub infra 只读 deploy
+  key 是最小人工输入。
+- 应用部署：AliECS `release-deploy` 的独立 `business-cn` job；
+  `/srv/business-cn/current` 记录当前源码提交，镜像从 TCR 按 digest 拉取。
+- WebDock P0：`127.0.0.1:11800` 为 failover 入口，
+  `11810←webdock2` 已验证，`11811←webdock1` 待设备上线。
+- 公网边界：UFW P0 不开放 80/443，nginx 默认站点返回 444；无 sing-box、
+  mihomo 或任何第三方出海转发能力。
+- 排障：
+  `sudo systemctl status webdock-failover-proxy`、
+  `curl -i http://127.0.0.1:11800/healthz`、
+  `readlink -f /srv/business-cn/current`。
 
 ### webdock1（旧笔记本，当前备用）
 
@@ -64,7 +106,9 @@ bridge/openclaw 容器
 - 别名：新电脑、desktop；ssh alias `desktop` / `webdock2` / `WebDock02`；Windows 主机名 `DESKTOP-D0LV1TN`；用户 `Admin`。
 - 结构：**SSH 登录进的是 Windows（PowerShell）**，WebDock 跑在 WSL2 发行版 `Ubuntu-24.04-WebDock` 内的 docker 里。Linux 命令一律 `ssh webdock2 "wsl -d Ubuntu-24.04-WebDock -- <cmd>"`。
 - 运行：仅 `webdock` 容器（与 webdock1 同镜像同 tag）。Immich / AdventureLog / Gokapi 暂不部署（按需再拉）。
-- 反向隧道：WSL 内 `-R 127.0.0.1:11810:127.0.0.1:18000`（主）。
+- 反向隧道：WSL 内两条独立业务隧道均将 WebDock 18000 映射到远端
+  11810：原 `webdock-ecs-tunnel` 落 AliECS（当前生产），新
+  `webdock-business-tunnel` 落 txecs（P0 并行）；console 仍单独落 AliECS。
 - 远程控制台：Windows TightVNC :5900 服务模式（`UseVncAuthentication=0` 免密，防火墙只放行 172.16.0.0/12+100.64.0.0/10，MSI 自建全放行规则已 Disable）+ WSL noVNC 6091（`novnc-desktop`，启动时动态解析 WSL 网关）+ WSL `console-ecs-tunnel`（`-R 16090`←容器 noVNC 6080、`-R 16091`←桌面 6091）。
 - noVNC：`http://100.67.38.52:6080/` 可用。⚠️ 已知怪癖：Tailscale 直连 `100.67.38.52:18000` 返回 502（Windows→WSL 端口转发问题），**生产链路不受影响**（隧道从 WSL 内 localhost 拉出）；从 ECS 探 `127.0.0.1:11810/healthz` 才是有效健康检查。
 - 日志：WSL 内 `/var/log/webdock/archive/`。
@@ -79,9 +123,9 @@ bridge/openclaw 容器
 
 | GitHub 仓库 | 部署到 | 部署链路 |
 |---|---|---|
-| `huozao/AliECS` | aliecs | push main → release-deploy 自动构建部署；**bridge 镜像源码在 `deploy/openclaw-bridge/`，构建后手动 cutover**；改动走 PR |
+| `huozao/AliECS` | aliecs + txecs | push main → 构建并同步 GHCR/TCR；aliecs `edge-us` 与 txecs `business-cn` 为独立 deploy job；**bridge 运行切换仍需手动 cutover 且 P1 才允许改目标**；改动走 PR |
 | `huozao/webdock` | webdock1 + webdock2 | CI 构建 sha-tag 镜像 → 各机手动拉取重启；两机应保持同 tag；小改可直推 main |
-| `huozao/infra`（私有） | aliecs 主机层 | 手动同步，无 CI；nginx、bridge compose、chain-logger |
+| `huozao/infra`（私有） | aliecs + txecs + webdock1/2 主机层 | 角色、SOPS、nginx、隧道、bridge/edge 配置；在线设备按各自 remote/deploy key 同步 |
 
 不属于任何仓库：openclaw 网关（上游镜像 + `/root/.openclaw` 主机配置）。
 ⚠️ `huozao/CatGPT-Gateway` 是废弃旧 fork，**不是** bridge 源码，勿混淆。
