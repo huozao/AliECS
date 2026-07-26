@@ -146,8 +146,9 @@ jobs:
             exit 0
           fi
 
-          auth_file="$(mktemp)"
-          trap 'rm -f "$auth_file"' EXIT
+          auth_dir="$(mktemp -d)"
+          auth_file="$auth_dir/auth.json"
+          trap 'rm -rf "$auth_dir"' EXIT
           printf '%s' "${{ secrets.GITHUB_TOKEN }}" \
             | skopeo login --authfile "$auth_file" --username "${{ github.actor }}" --password-stdin ghcr.io
           printf '%s' "$TCR_PASSWORD" \
