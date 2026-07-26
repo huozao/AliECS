@@ -13,8 +13,9 @@ command -v skopeo >/dev/null || {
 }
 
 registry_host="${TCR_BASE%%/*}"
-auth_file="$(mktemp)"
-trap 'rm -f "$auth_file"' EXIT
+auth_dir="$(mktemp -d)"
+auth_file="$auth_dir/auth.json"
+trap 'rm -rf "$auth_dir"' EXIT
 skopeo login --authfile "$auth_file" --username "$TCR_USERNAME" --password-stdin \
   "$registry_host" <<<"$TCR_PASSWORD"
 

@@ -10,6 +10,7 @@ EDGE_DEPLOY="$ROOT_DIR/deploy-edge.sh"
 MIGRATE="$ROOT_DIR/migrate.sh"
 RELEASE_WORKFLOW="$ROOT_DIR/../../.github/workflows/release-deploy.yml"
 BRIDGE_WORKFLOW="$ROOT_DIR/../../.github/workflows/bridge-cutover.yml"
+MIRROR_IMAGES="$ROOT_DIR/mirror-images-to-tcr.sh"
 
 assert_contains() {
   local file="$1" pattern="$2"
@@ -57,6 +58,12 @@ assert_not_contains "$RELEASE_WORKFLOW" "TCR_PUSH_USERNAME"
 assert_not_contains "$RELEASE_WORKFLOW" "TCR_PULL_USERNAME"
 assert_not_contains "$RELEASE_WORKFLOW" "ALIYUN_KMS"
 assert_not_contains "$RELEASE_WORKFLOW" "git pull"
+assert_contains "$RELEASE_WORKFLOW" 'auth_dir="$(mktemp -d)"'
+assert_contains "$RELEASE_WORKFLOW" 'auth_file="$auth_dir/auth.json"'
+assert_not_contains "$RELEASE_WORKFLOW" 'auth_file="$(mktemp)"'
+assert_contains "$MIRROR_IMAGES" 'auth_dir="$(mktemp -d)"'
+assert_contains "$MIRROR_IMAGES" 'auth_file="$auth_dir/auth.json"'
+assert_not_contains "$MIRROR_IMAGES" 'auth_file="$(mktemp)"'
 assert_contains "$BRIDGE_WORKFLOW" 'host: ${{ secrets.TENCENT_HOST }}'
 assert_contains "$BRIDGE_WORKFLOW" "inputs.confirmation == 'CUTOVER_TXECS'"
 
