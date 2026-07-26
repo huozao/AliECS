@@ -11,7 +11,7 @@ case "$DEPLOY_ROLE" in
 esac
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
-META_FILE="$ROOT_DIR/release-meta.env"
+META_FILE="${RELEASE_META_FILE:-$ROOT_DIR/release-meta.env}"
 if [[ ! -f "$META_FILE" ]]; then
   echo "[迁移] 找不到配置文件：$META_FILE" >&2
   exit 1
@@ -20,15 +20,17 @@ fi
 # shellcheck disable=SC1090
 source "$META_FILE"
 
+COMPOSE_FILE="${ROLE_COMPOSE_FILE:-${COMPOSE_FILE:-}}"
+RUNTIME_ENV_FILE="${ROLE_RUNTIME_ENV_FILE:-${RUNTIME_ENV_FILE:-}}"
 : "${COMPOSE_FILE:?请在 release-meta.env 设置 COMPOSE_FILE}"
 : "${RUNTIME_ENV_FILE:?请在 release-meta.env 设置 RUNTIME_ENV_FILE}"
 : "${POSTGRES_USER:?请在 release-meta.env 设置 POSTGRES_USER}"
 : "${POSTGRES_PASSWORD:?请在 release-meta.env 设置 POSTGRES_PASSWORD}"
 : "${POSTGRES_DB:?请在 release-meta.env 设置 POSTGRES_DB}"
 
-MIGRATIONS_DIR="${MIGRATIONS_DIR:-/root/AliECS/db/migrations}"
+MIGRATIONS_DIR="${ROLE_MIGRATIONS_DIR:-${MIGRATIONS_DIR:-/root/AliECS/db/migrations}}"
 PSQL_TIMEOUT_SECONDS="${PSQL_TIMEOUT_SECONDS:-30}"
-POSTGRES_CONTAINER_NAME="${POSTGRES_CONTAINER_NAME:-ecs-postgres-1}"
+POSTGRES_CONTAINER_NAME="${ROLE_POSTGRES_CONTAINER_NAME:-${POSTGRES_CONTAINER_NAME:-ecs-postgres-1}}"
 
 if [[ ! -f "$RUNTIME_ENV_FILE" ]]; then
   echo "[迁移] 找不到运行时环境文件：$RUNTIME_ENV_FILE" >&2
