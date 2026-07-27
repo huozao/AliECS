@@ -72,12 +72,25 @@ jobs:
             PREV="$(sudo sed -n 's/^OPENCLAW_BRIDGE_IMAGE=//p' "$STATE_BACKUP")"
             echo "[cutover] ${PREV} -> ${BRIDGE_IMAGE} (${BRIDGE_VERSION})"
 
+            rollback() {
+              echo "[cutover] rolling back to ${PREV}"
+              sudo cp -a "$STATE_BACKUP" "$STATE_FILE"
+              sudo docker rm -f openclaw-bridge >/dev/null 2>&1 || true
+              sudo docker compose -f "$COMPOSE" --env-file "$STATE_FILE" up -d
+            }
+
             STATE_TMP="${STATE_FILE}.tmp"
             sudo sh -c 'printf "OPENCLAW_BRIDGE_IMAGE=%s\nOPENCLAW_BRIDGE_VERSION=%s\n" "$1" "$2" > "$3"' sh "$BRIDGE_IMAGE" "$BRIDGE_VERSION" "$STATE_TMP"
             sudo chmod 600 "$STATE_TMP"
+            # Validate the exact next state while the current bridge is still live.
+            # This catches missing env files and compose drift before removal.
+            sudo docker compose -f "$COMPOSE" --env-file "$STATE_TMP" config >/dev/null
             sudo mv -f "$STATE_TMP" "$STATE_FILE"
             sudo docker rm -f openclaw-bridge >/dev/null 2>&1 || true
-            sudo docker compose -f "$COMPOSE" --env-file "$STATE_FILE" up -d
+            if ! sudo docker compose -f "$COMPOSE" --env-file "$STATE_FILE" up -d; then
+              rollback
+              exit 1
+            fi
 
             ok=0
             for i in $(seq 1 12); do
@@ -91,8 +104,6 @@ jobs:
               sudo docker ps --format '{{.Names}}|{{.Image}}|{{.Status}}' | grep openclaw-bridge
             else
               echo "[cutover] HEALTH FAILED — rolling back to ${PREV}"
-              sudo cp -a "$STATE_BACKUP" "$STATE_FILE"
-              sudo docker rm -f openclaw-bridge >/dev/null 2>&1 || true
-              sudo docker compose -f "$COMPOSE" --env-file "$STATE_FILE" up -d
+              rollback
               exit 1
             fi
