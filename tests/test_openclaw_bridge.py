@@ -482,6 +482,41 @@ def test_bridge_detects_real_feishu_group_conversation_info():
     assert "Sender (untrusted metadata)" not in outbound["messages"][0]["content"]
 
 
+def test_bridge_detects_real_feishu_group_with_gmt_timestamp_prefix():
+    bridge = load_bridge()
+
+    text = (
+        "[Mon 2026-07-27 21:58 GMT+8] Conversation info (untrusted metadata):\n"
+        "```json\n"
+        "{\n"
+        '  "chat_id": "chat:oc_b39807445ba47156b05666ce457e78bf",\n'
+        '  "message_id": "om_x100b6942716de0acb299e425c37c57e",\n'
+        '  "sender_id": "ou_28d4f058cbd2a13f3fcc6fd575023e8e",\n'
+        '  "conversation_label": "HAO",\n'
+        '  "sender": "hao",\n'
+        '  "timestamp": "Mon 2026-07-27 21:58:18 GMT+8",\n'
+        '  "group_subject": "HAO",\n'
+        '  "inbound_event_kind": "user_request",\n'
+        '  "is_group_chat": true\n'
+        "}\n"
+        "```\n\n"
+        "Sender (untrusted metadata):\n"
+        "```json\n"
+        '{"label":"hao (ou_28d4f058cbd2a13f3fcc6fd575023e8e)",'
+        '"id":"ou_28d4f058cbd2a13f3fcc6fd575023e8e","name":"hao"}\n'
+        "```\n\n"
+        "hao: /新对话 帮我看看吉隆坡明天天气"
+    )
+
+    outbound = bridge.build_webdock_body({"messages": [{"role": "user", "content": text}]})
+
+    assert outbound["metadata"]["channel"] == "feishu"
+    assert outbound["metadata"]["chat_type"] == "group"
+    assert outbound["metadata"]["peer_id"] == "group:oc_b39807445ba47156b05666ce457e78bf"
+    assert outbound["metadata"]["message_id"] == "om_x100b6942716de0acb299e425c37c57e"
+    assert outbound["messages"][0]["content"] == "/新对话 帮我看看吉隆坡明天天气"
+
+
 def test_bridge_uses_one_feishu_group_lane_for_all_group_members():
     bridge = load_bridge()
 

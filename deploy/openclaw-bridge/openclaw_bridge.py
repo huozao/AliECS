@@ -35,7 +35,8 @@ def log_line(message: str) -> None:
 FALLBACK_MESSAGE = os.getenv("WEB_DOCK_FALLBACK_MESSAGE", "ChatGPT 浏览器暂不可用，请稍后再试。")
 NO_REPLY = "__OPENCLAW_BRIDGE_NO_REPLY__"
 OPENCLAW_METADATA_PREFIX_RE = re.compile(
-    r"^(?:\[[^\]\n]*UTC\]\s*)?(?:Conversation info|Sender) \(untrusted metadata\):\s*",
+    r"^(?:\[[^\]\n]*(?:UTC|GMT(?:[+-]\d{1,2}(?::\d{2})?)?)[^\]\n]*\]\s*)?"
+    r"(?:Conversation info|Sender) \(untrusted metadata\):\s*",
     flags=re.DOTALL,
 )
 OPENCLAW_MESSAGE_ID_LINE_RE = re.compile(r"^[ \t]*\[message_id:[^\]\n]*\][ \t]*\n?", re.IGNORECASE | re.MULTILINE)
