@@ -60,6 +60,24 @@ if [[ "$DEPLOY_ROLE" == "business-cn" && "${P0_MODE:-false}" == "true" ]]; then
   TPLUS_BOM_WRITE_ENABLED=false
   echo "[部署] P0 隔离模式：仅启动 ${DEPLOY_SERVICES[*]}，外部副作用 worker 保持停止"
 fi
+if [[ -n "${DEPLOY_START_SERVICES:-}" ]]; then
+  read -r -a requested_services <<< "$DEPLOY_START_SERVICES"
+  (( ${#requested_services[@]} > 0 )) || {
+    echo "[部署] DEPLOY_START_SERVICES 不能为空" >&2
+    exit 1
+  }
+  for service in "${requested_services[@]}"; do
+    case "$service" in
+      postgres|backend-api|public-web|admin-ui|doc-sync-worker|tplus-sync-worker|tplus-write-worker) ;;
+      *)
+        echo "[部署] DEPLOY_START_SERVICES 含非法服务：$service" >&2
+        exit 1
+        ;;
+    esac
+  done
+  DEPLOY_SERVICES=("${requested_services[@]}")
+  echo "[部署] 显式启动服务：${DEPLOY_SERVICES[*]}"
+fi
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "[部署] 缺少 python3，无法校验 DATABASE_URL。" >&2
