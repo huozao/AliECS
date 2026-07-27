@@ -471,26 +471,46 @@ if [[ -n "$REGISTRY_USERNAME" && -n "$REGISTRY_TOKEN" ]]; then
   echo "$REGISTRY_TOKEN" | docker login "$registry_host" -u "$REGISTRY_USERNAME" --password-stdin
 fi
 
-echo "[部署] 拉取镜像（逐服务串行，避免并行解压打爆 2G 内存，见 2026-06-10 OOM 假死事故）"
-pull_failed=0
 if (( ${#DEPLOY_SERVICES[@]} )); then
   services=("${DEPLOY_SERVICES[@]}")
 else
   mapfile -t services < <(docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" config --services)
 fi
-for service in "${services[@]}"; do
-  echo "[部署] 拉取 $service"
-  if ! docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" pull "$service"; then
-    pull_failed=1
-    break
+
+if [[ "${ALLOW_OFFLINE_CACHED_IMAGES:-false}" == "true" ]]; then
+  echo "[部署] 离线缓存门已显式开启；逐项验证 compose 镜像均已存在"
+  mapfile -t cached_images < <(
+    docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" \
+      config --images | sort -u
+  )
+  (( ${#cached_images[@]} > 0 )) || {
+    echo "[部署] 离线缓存门未解析到任何镜像" >&2
+    exit 1
+  }
+  for image in "${cached_images[@]}"; do
+    docker image inspect "$image" >/dev/null 2>&1 || {
+      echo "[部署] 离线缓存缺镜像：$image" >&2
+      exit 1
+    }
+    echo "[部署] 离线缓存已验证：$image"
+  done
+else
+  echo "[部署] 拉取镜像（逐服务串行，避免并行解压打爆 2G 内存，见 2026-06-10 OOM 假死事故）"
+  pull_failed=0
+  for service in "${services[@]}"; do
+    echo "[部署] 拉取 $service"
+    if ! docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" pull "$service"; then
+      pull_failed=1
+      break
+    fi
+  done
+  if [[ "$pull_failed" -ne 0 ]]; then
+    echo "[部署] 拉取镜像失败。若报 unauthorized，请检查：" >&2
+    echo "[部署] 1) GHCR 包可见性（public/private）" >&2
+    echo "[部署] 2) GHCR_USERNAME / GHCR_TOKEN 是否在 ECS 或 Actions 中正确提供" >&2
+    echo "[部署] 3) IMAGE_REGISTRY_BASE/GHCR_BASE 与镜像命名是否一致" >&2
+    exit 1
   fi
-done
-if [[ "$pull_failed" -ne 0 ]]; then
-  echo "[部署] 拉取镜像失败。若报 unauthorized，请检查：" >&2
-  echo "[部署] 1) GHCR 包可见性（public/private）" >&2
-  echo "[部署] 2) GHCR_USERNAME / GHCR_TOKEN 是否在 ECS 或 Actions 中正确提供" >&2
-  echo "[部署] 3) IMAGE_REGISTRY_BASE/GHCR_BASE 与镜像命名是否一致" >&2
-  exit 1
 fi
 
 # 迁移条件化：db/ 与 migrate.sh 自上次成功部署未变更时跳过（省 2G 小机上的数分钟）。

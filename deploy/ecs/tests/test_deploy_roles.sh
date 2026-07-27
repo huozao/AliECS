@@ -52,6 +52,10 @@ assert_contains "$MANIFEST" 'META_FILE="${RELEASE_META_FILE:-$ROOT_DIR/release-m
 assert_contains "$DEPLOY" 'DEPLOY_SERVICES=(postgres backend-api public-web admin-ui)'
 assert_contains "$DEPLOY" 'stop doc-sync-worker tplus-sync-worker tplus-write-worker'
 assert_contains "$DEPLOY" 'export DOCKER_CONFIG="$REGISTRY_AUTH_DIR"'
+assert_contains "$DEPLOY" 'ALLOW_OFFLINE_CACHED_IMAGES'
+assert_contains "$DEPLOY" 'config --images | sort -u'
+assert_contains "$DEPLOY" 'docker image inspect "$image"'
+assert_contains "$DEPLOY" '离线缓存缺镜像'
 assert_contains "$DEPLOY" 'CURRENT_SOURCE_COMMIT="${DEPLOY_COMMIT_SHA:-}"'
 
 assert_contains "$COLD" 'profiles: ["cold-recovery"]'
