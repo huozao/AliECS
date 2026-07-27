@@ -16,8 +16,8 @@
 | 逻辑名 | 角色 | 硬件/OS | 网络入口 | 运行代码来源 |
 |---|---|---|---|---|
 | `devbox` | 开发机 | 本地 Windows 11 | 本机 | 3 个仓库克隆（不运行生产） |
-| `aliecs` | 当前生产写端 + 海外边界 | 阿里云 ECS 美国 / Ubuntu 24.04，2G 内存 | `ssh aliecs`（root@47.77.176.62） | 当前业务全栈；P1 后只保留 edge-us |
-| `txecs` | P0 隔离 business-cn 候选主栈 | 腾讯云轻量 / Ubuntu 24.04，4C4G | `ssh txecs`（ubuntu@106.52.51.67） | business-cn 隔离栈 + txecs 主机角色 |
+| `aliecs` | 海外边界 + 冷恢复 | 阿里云 ECS 美国 / Ubuntu 24.04，2G 内存 | `ssh aliecs`（root@47.77.176.62） | 原业务写端已冻结；保留 edge-us 与回滚数据 |
+| `txecs` | 当前生产唯一写端 / business-cn 主栈 | 腾讯云轻量 / Ubuntu 24.04，4C4G | `ssh txecs`（ubuntu@106.52.51.67） | 备案期内部全栈；公网 nginx 关闭 |
 | `webdock1` | webdock 算力节点（**当前备用**） | 旧 Ubuntu 笔记本 | `ssh webdock1`（Tailscale 100.97.176.57） | webdock 镜像 + 第三方自托管服务 |
 | `webdock2` | webdock 算力节点（**当前主力**） | 新台式机 Windows 11 + WSL2 | `ssh webdock2`（Tailscale 100.67.38.52） | webdock 镜像 |
 
@@ -50,7 +50,8 @@ txecs 127.0.0.1:11800 failover-proxy
   └─ 备 127.0.0.1:11811 ← webdock1（设备离线，待验证）
 ```
 
-- 当前生产 bridge 仍指 AliECS 11800；txecs 11800 只做 P0 回环健康验证。
+- 当前生产 bridge 已迁 txecs，并经 txecs `127.0.0.1:11800` 访问
+  webdock2 主力；AliECS 原 bridge/gateway 保持停止。
 - 两个落点的 11810 是不同主机上的回环端口，不冲突。
 - txecs 主备权威由 txecs `/etc/default/webdock-failover-proxy` 和
   `11800/healthz` 响应头共同确认；不得拿 AliECS 的环境文件判断 txecs。
