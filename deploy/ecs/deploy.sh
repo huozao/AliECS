@@ -60,6 +60,24 @@ if [[ "$DEPLOY_ROLE" == "business-cn" && "${P0_MODE:-false}" == "true" ]]; then
   TPLUS_BOM_WRITE_ENABLED=false
   echo "[部署] P0 隔离模式：仅启动 ${DEPLOY_SERVICES[*]}，外部副作用 worker 保持停止"
 fi
+if [[ -n "${DEPLOY_START_SERVICES:-}" ]]; then
+  read -r -a requested_services <<< "$DEPLOY_START_SERVICES"
+  (( ${#requested_services[@]} > 0 )) || {
+    echo "[部署] DEPLOY_START_SERVICES 不能为空" >&2
+    exit 1
+  }
+  for service in "${requested_services[@]}"; do
+    case "$service" in
+      postgres|backend-api|public-web|admin-ui|doc-sync-worker|tplus-sync-worker|tplus-write-worker) ;;
+      *)
+        echo "[部署] DEPLOY_START_SERVICES 含非法服务：$service" >&2
+        exit 1
+        ;;
+    esac
+  done
+  DEPLOY_SERVICES=("${requested_services[@]}")
+  echo "[部署] 显式启动服务：${DEPLOY_SERVICES[*]}"
+fi
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "[部署] 缺少 python3，无法校验 DATABASE_URL。" >&2
@@ -471,26 +489,48 @@ if [[ -n "$REGISTRY_USERNAME" && -n "$REGISTRY_TOKEN" ]]; then
   echo "$REGISTRY_TOKEN" | docker login "$registry_host" -u "$REGISTRY_USERNAME" --password-stdin
 fi
 
-echo "[部署] 拉取镜像（逐服务串行，避免并行解压打爆 2G 内存，见 2026-06-10 OOM 假死事故）"
-pull_failed=0
-if (( ${#DEPLOY_SERVICES[@]} )); then
-  services=("${DEPLOY_SERVICES[@]}")
+# P0 只限制“启动哪些服务”，不限制预拉镜像。维护窗口必须能够在没有
+# 持久 registry 凭据时启动 worker，因此 business-cn 预部署总是缓存角色
+# compose 的全部镜像。
+mapfile -t services < <(
+  docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" \
+    config --services
+)
+
+if [[ "${ALLOW_OFFLINE_CACHED_IMAGES:-false}" == "true" ]]; then
+  echo "[部署] 离线缓存门已显式开启；逐项验证 compose 镜像均已存在"
+  mapfile -t cached_images < <(
+    docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" \
+      config --images | sort -u
+  )
+  (( ${#cached_images[@]} > 0 )) || {
+    echo "[部署] 离线缓存门未解析到任何镜像" >&2
+    exit 1
+  }
+  for image in "${cached_images[@]}"; do
+    docker image inspect "$image" >/dev/null 2>&1 || {
+      echo "[部署] 离线缓存缺镜像：$image" >&2
+      exit 1
+    }
+    echo "[部署] 离线缓存已验证：$image"
+  done
 else
-  mapfile -t services < <(docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" config --services)
-fi
-for service in "${services[@]}"; do
-  echo "[部署] 拉取 $service"
-  if ! docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" pull "$service"; then
-    pull_failed=1
-    break
+  echo "[部署] 拉取镜像（逐服务串行，避免并行解压打爆 2G 内存，见 2026-06-10 OOM 假死事故）"
+  pull_failed=0
+  for service in "${services[@]}"; do
+    echo "[部署] 拉取 $service"
+    if ! docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" pull "$service"; then
+      pull_failed=1
+      break
+    fi
+  done
+  if [[ "$pull_failed" -ne 0 ]]; then
+    echo "[部署] 拉取镜像失败。若报 unauthorized，请检查：" >&2
+    echo "[部署] 1) GHCR 包可见性（public/private）" >&2
+    echo "[部署] 2) GHCR_USERNAME / GHCR_TOKEN 是否在 ECS 或 Actions 中正确提供" >&2
+    echo "[部署] 3) IMAGE_REGISTRY_BASE/GHCR_BASE 与镜像命名是否一致" >&2
+    exit 1
   fi
-done
-if [[ "$pull_failed" -ne 0 ]]; then
-  echo "[部署] 拉取镜像失败。若报 unauthorized，请检查：" >&2
-  echo "[部署] 1) GHCR 包可见性（public/private）" >&2
-  echo "[部署] 2) GHCR_USERNAME / GHCR_TOKEN 是否在 ECS 或 Actions 中正确提供" >&2
-  echo "[部署] 3) IMAGE_REGISTRY_BASE/GHCR_BASE 与镜像命名是否一致" >&2
-  exit 1
 fi
 
 # 迁移条件化：db/ 与 migrate.sh 自上次成功部署未变更时跳过（省 2G 小机上的数分钟）。
