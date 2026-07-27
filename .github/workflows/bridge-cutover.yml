@@ -35,20 +35,28 @@ jobs:
         env:
           BRIDGE_SOURCE_REF: ${{ steps.image.outputs.source_ref }}
           BRIDGE_VERSION: ${{ steps.image.outputs.version }}
+          TCR_USERNAME: ${{ secrets.TCR_USERNAME }}
+          TCR_PASSWORD: ${{ secrets.TCR_PASSWORD }}
         with:
           host: ${{ secrets.TENCENT_HOST }}
           username: ${{ secrets.TENCENT_USER }}
           key: ${{ secrets.TENCENT_SSH_KEY }}
           command_timeout: 15m
-          envs: BRIDGE_SOURCE_REF,BRIDGE_VERSION
+          envs: BRIDGE_SOURCE_REF,BRIDGE_VERSION,TCR_USERNAME,TCR_PASSWORD
           script: |
             set -euo pipefail
             : "${BRIDGE_SOURCE_REF:?missing TCR bridge image}"
+            : "${TCR_USERNAME:?missing TCR pull username}"
+            : "${TCR_PASSWORD:?missing TCR pull password}"
             STATE_FILE=/srv/business-cn/state/bridge-release.env
             STATE_BACKUP=/srv/business-cn/state/bridge-release.env.bak.cutover
             COMPOSE=/home/ubuntu/infra/server/compose.bridge.yml
 
             # Pull and resolve the immutable digest before touching the live service.
+            TCR_REGISTRY="${BRIDGE_SOURCE_REF%%/*}"
+            printf '%s' "$TCR_PASSWORD" \
+              | sudo docker login "$TCR_REGISTRY" --username "$TCR_USERNAME" --password-stdin
+            trap 'sudo docker logout "$TCR_REGISTRY" >/dev/null 2>&1 || true' EXIT
             sudo docker pull "$BRIDGE_SOURCE_REF"
             BRIDGE_IMAGE="$(sudo docker image inspect --format '{{index .RepoDigests 0}}' "$BRIDGE_SOURCE_REF")"
             if [[ "$BRIDGE_IMAGE" != *@sha256:* ]]; then
