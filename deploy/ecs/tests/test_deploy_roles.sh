@@ -50,6 +50,7 @@ assert_contains "$HEALTHCHECK" 'META_FILE="${RELEASE_META_FILE:-$ROOT_DIR/releas
 assert_contains "$HEALTHCHECK" 'ROLE_HEALTHCHECK_URL'
 assert_contains "$MANIFEST" 'META_FILE="${RELEASE_META_FILE:-$ROOT_DIR/release-meta.env}"'
 assert_contains "$DEPLOY" 'DEPLOY_SERVICES=(postgres backend-api public-web admin-ui)'
+assert_contains "$DEPLOY" 'P0 只限制“启动哪些服务”，不限制预拉镜像'
 assert_contains "$DEPLOY" 'stop doc-sync-worker tplus-sync-worker tplus-write-worker'
 assert_contains "$DEPLOY" 'export DOCKER_CONFIG="$REGISTRY_AUTH_DIR"'
 assert_contains "$DEPLOY" 'ALLOW_OFFLINE_CACHED_IMAGES'

@@ -471,11 +471,13 @@ if [[ -n "$REGISTRY_USERNAME" && -n "$REGISTRY_TOKEN" ]]; then
   echo "$REGISTRY_TOKEN" | docker login "$registry_host" -u "$REGISTRY_USERNAME" --password-stdin
 fi
 
-if (( ${#DEPLOY_SERVICES[@]} )); then
-  services=("${DEPLOY_SERVICES[@]}")
-else
-  mapfile -t services < <(docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" config --services)
-fi
+# P0 只限制“启动哪些服务”，不限制预拉镜像。维护窗口必须能够在没有
+# 持久 registry 凭据时启动 worker，因此 business-cn 预部署总是缓存角色
+# compose 的全部镜像。
+mapfile -t services < <(
+  docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" \
+    config --services
+)
 
 if [[ "${ALLOW_OFFLINE_CACHED_IMAGES:-false}" == "true" ]]; then
   echo "[部署] 离线缓存门已显式开启；逐项验证 compose 镜像均已存在"
