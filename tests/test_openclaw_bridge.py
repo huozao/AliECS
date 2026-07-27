@@ -2034,7 +2034,9 @@ def test_deliver_feishu_files_falls_back_without_credentials(monkeypatch):
         "见附件\nFILE: http://h/media/abc name=report.pdf mime=application/pdf", details
     )
 
-    assert out == "见附件\n附件下载：http://h/media/abc"
+    # The marker URL is WebDock-internal, so the fallback names the file instead
+    # of handing the user a dead link.
+    assert out == "见附件\n📎 report.pdf（发送失败，请重试）"
 
 
 def test_parse_media_marker():
@@ -2160,7 +2162,7 @@ def test_deliver_feishu_media_image_only_sends_card(monkeypatch):
     assert [e["tag"] for e in cards[0][1]["elements"]] == ["img"]
 
 
-def test_deliver_feishu_media_partial_failure_keeps_link_in_card(monkeypatch):
+def test_deliver_feishu_media_partial_failure_keeps_notice_in_card(monkeypatch):
     bridge = load_bridge()
     cards = []
 
@@ -2177,10 +2179,11 @@ def test_deliver_feishu_media_partial_failure_keeps_link_in_card(monkeypatch):
     assert out == bridge.NO_REPLY
     els = cards[0][1]["elements"]
     assert [e["tag"] for e in els] == ["div", "img", "div"]
-    assert "图片链接：http://h/media/bad" in els[2]["text"]["content"]
+    assert "🖼️ 图片发送失败，请重试" in els[2]["text"]["content"]
+    assert "http://h/media/bad" not in els[2]["text"]["content"]
 
 
-def test_deliver_feishu_media_all_images_fail_falls_back_to_link(monkeypatch):
+def test_deliver_feishu_media_all_images_fail_falls_back_to_notice(monkeypatch):
     bridge = load_bridge()
     cards = []
 
@@ -2192,10 +2195,10 @@ def test_deliver_feishu_media_all_images_fail_falls_back_to_link(monkeypatch):
     out = bridge.deliver_feishu_media("说明\nMEDIA: http://h/media/x", details)
 
     assert cards == []
-    assert out == "说明\n图片链接：http://h/media/x"
+    assert out == "说明\n🖼️ 图片发送失败，请重试"
 
 
-def test_deliver_feishu_media_falls_back_to_visible_link(monkeypatch):
+def test_deliver_feishu_media_falls_back_to_visible_notice(monkeypatch):
     bridge = load_bridge()
     monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("", ""))
 
@@ -2204,7 +2207,7 @@ def test_deliver_feishu_media_falls_back_to_visible_link(monkeypatch):
         "图片已生成\nMEDIA: http://h/media/image-1", details
     )
 
-    assert out == "图片已生成\n图片链接：http://h/media/image-1"
+    assert out == "图片已生成\n🖼️ 图片发送失败，请重试"
 
 
 def test_media_proxy_headers_keep_filename():

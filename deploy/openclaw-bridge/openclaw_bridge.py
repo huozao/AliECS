@@ -3058,8 +3058,12 @@ def rewrite_file_markers_as_media(text: str) -> str:
 
 
 def visible_file_fallback(body: str, files: list[dict[str, str]]) -> str:
+    """Native Feishu delivery failed. The marker URL is WebDock's internal address
+    (reachable from this host only, see fetch_outbound_file_bytes), so handing it
+    to the user would be a dead link and an internal-address leak — name the file
+    and say it failed instead."""
     parts = [body] if body else []
-    parts.extend(f"附件下载：{item['url']}" for item in files)
+    parts.extend(f"📎 {item.get('name') or 'file'}（发送失败，请重试）" for item in files)
     return "\n".join(parts).strip()
 
 
@@ -3153,8 +3157,10 @@ def _lark_md(text: str) -> str:
 
 
 def visible_media_fallback(body: str, urls: list[str]) -> str:
+    """Same rationale as visible_file_fallback — the MEDIA URL is internal-only,
+    so report the failure rather than leaking a dead address."""
     parts = [body] if body else []
-    parts.extend(f"图片链接：{url}" for url in urls)
+    parts.extend("🖼️ 图片发送失败，请重试" for _ in urls)
     return "\n".join(parts).strip()
 
 
@@ -3299,7 +3305,7 @@ def deliver_feishu_media(reply: str, details: dict[str, Any]) -> str:
             delivered += 1
         except Exception as exc:
             log_line(f"feishu image upload failed for {value}: {exc}")
-            resolved.append(("text", f"图片链接：{value}"))
+            resolved.append(("text", "🖼️ 图片发送失败，请重试"))
     if not delivered:
         return visible_media_fallback(body, urls)
     try:
