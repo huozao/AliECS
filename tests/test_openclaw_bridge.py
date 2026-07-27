@@ -3708,3 +3708,56 @@ def test_find_feishu_bitable_record_uses_custom_app_token(monkeypatch):
 
     assert record["fields"]["对话模式默认"] == "均衡"
     assert calls == [("tblMode", "sysApp")]
+
+
+def test_media_document_placeholder_keeps_the_real_filename():
+    # OpenClaw's newer inline placeholder reached ChatGPT verbatim, showing a stray
+    # "<media:document>" tag next to the attachment pill. It must be rewritten
+    # rather than dropped: WebDock uploads under a generated temp name, so the
+    # parenthesised name is the only surviving mention of the real filename.
+    bridge = load_bridge()
+
+    cleaned = bridge.clean_user_text(
+        "帮我转成 word\n<media:document> (房屋租赁合同_简易版.pdf)"
+    )
+
+    assert "<media:document>" not in cleaned
+    assert "（已上传文件：房屋租赁合同_简易版.pdf）" in cleaned
+    assert "帮我转成 word" in cleaned
+
+
+def test_media_tag_without_a_name_still_collapses():
+    bridge = load_bridge()
+
+    assert bridge.clean_user_text("看图\n<media:image>") == "看图\n（已上传文件）"
+
+
+def test_diagnostic_message_carries_enough_to_locate_the_turn():
+    # The card is what users screenshot when something breaks; the forensics line
+    # has to be sufficient on its own to find the turn in the logs.
+    bridge = load_bridge()
+
+    card = bridge.diagnostic_message(
+        "bridge -> WebDock 已联通；WebDock 返回 HTTP 500: boom",
+        "WebDock API",
+        error_code="RESPONSE_TIMEOUT",
+        debug_dir="logs/debug/2026-07-27_085149",
+        elapsed_seconds=191.4,
+        details={"webdock_footer": {"device": "webdock2"}, "request_id": "936ff6306e41"},
+    )
+
+    assert "错误码 RESPONSE_TIMEOUT" in card
+    assert "耗时 191s" in card
+    assert "快照 logs/debug/2026-07-27_085149" in card
+    assert "设备 webdock2" in card
+    assert "请求 936ff630" in card  # truncated, full id is noise on a card
+
+
+def test_diagnostic_message_omits_unknown_fields():
+    bridge = load_bridge()
+
+    card = bridge.diagnostic_message("reason", "stop point")
+
+    assert "错误码" not in card
+    assert "快照" not in card
+    assert card.startswith(bridge.FALLBACK_MESSAGE)
