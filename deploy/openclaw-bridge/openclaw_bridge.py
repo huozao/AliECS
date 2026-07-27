@@ -14,7 +14,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Condition, Lock, Thread
 from typing import Any
@@ -98,6 +98,15 @@ OPENCLAW_MEDIA_NO_CAPTION_RE = re.compile(r"^\s*\[User sent media without captio
 # e.g. "![image]" or "![image](media://…)". The real image is forwarded as an
 # image_url part, so the placeholder is noise in the ChatGPT prompt.
 OPENCLAW_IMAGE_PLACEHOLDER_RE = re.compile(r"!\[[^\]\n]*\](\([^)\n]*\))?")
+# OpenClaw's newer inline placeholder for a forwarded attachment, e.g.
+# "<media:document> (房屋租赁合同_简易版.pdf)". Unmatched until now, so it reached
+# ChatGPT verbatim and showed up beside the attachment pill as a stray tag
+# (observed 2026-07-27). The parenthesised name is the ONLY place the original
+# filename survives — WebDock uploads under a generated temp name — so it is
+# rewritten, not dropped.
+OPENCLAW_MEDIA_TAG_RE = re.compile(
+    r"<media:[a-z_]+>[ \t]*(?:\((?P<name>[^)\n]*)\))?", re.IGNORECASE
+)
 FILE_MARKER_RE = re.compile(
     r"^[ \t]*FILE:\s+(?P<url>\S+)\s+name=(?P<name>\S+)\s+mime=(?P<mime>\S+)[ \t]*$",
     re.MULTILINE,
@@ -229,9 +238,19 @@ def replace_binary_file_blocks(text: str) -> str:
     return OPENCLAW_FILE_BLOCK_RE.sub(_repl, text)
 
 
+def replace_media_tag_placeholders(text: str) -> str:
+    """Rewrite ``<media:document> (name.pdf)`` into the same note a binary <file>
+    block gets, keeping the real filename that would otherwise be lost."""
+    def _repl(match: "re.Match[str]") -> str:
+        name = (match.group("name") or "").strip()
+        return f"（已上传文件：{name}）" if name else "（已上传文件）"
+    return OPENCLAW_MEDIA_TAG_RE.sub(_repl, text)
+
+
 def strip_openclaw_media_helper_text(text: str) -> str:
     text = OPENCLAW_MEDIA_ATTACHED_LINE_RE.sub("", text)
     text = OPENCLAW_MEDIA_NO_CAPTION_RE.sub("", text)
+    text = replace_media_tag_placeholders(text)
     text = OPENCLAW_IMAGE_PLACEHOLDER_RE.sub("", text)
     lines = []
     for line in text.splitlines():
@@ -3058,8 +3077,12 @@ def rewrite_file_markers_as_media(text: str) -> str:
 
 
 def visible_file_fallback(body: str, files: list[dict[str, str]]) -> str:
+    """Native Feishu delivery failed. The marker URL is WebDock's internal address
+    (reachable from this host only, see fetch_outbound_file_bytes), so handing it
+    to the user would be a dead link and an internal-address leak — name the file
+    and say it failed instead."""
     parts = [body] if body else []
-    parts.extend(f"附件下载：{item['url']}" for item in files)
+    parts.extend(f"📎 {item.get('name') or 'file'}（发送失败，请重试）" for item in files)
     return "\n".join(parts).strip()
 
 
@@ -3153,8 +3176,10 @@ def _lark_md(text: str) -> str:
 
 
 def visible_media_fallback(body: str, urls: list[str]) -> str:
+    """Same rationale as visible_file_fallback — the MEDIA URL is internal-only,
+    so report the failure rather than leaking a dead address."""
     parts = [body] if body else []
-    parts.extend(f"图片链接：{url}" for url in urls)
+    parts.extend("🖼️ 图片发送失败，请重试" for _ in urls)
     return "\n".join(parts).strip()
 
 
@@ -3299,7 +3324,7 @@ def deliver_feishu_media(reply: str, details: dict[str, Any]) -> str:
             delivered += 1
         except Exception as exc:
             log_line(f"feishu image upload failed for {value}: {exc}")
-            resolved.append(("text", f"图片链接：{value}"))
+            resolved.append(("text", "🖼️ 图片发送失败，请重试"))
     if not delivered:
         return visible_media_fallback(body, urls)
     try:
@@ -3370,23 +3395,64 @@ def media_proxy_headers(headers: Any) -> dict[str, str]:
     return out
 
 
-def diagnostic_message(reason: str, stop_at: str) -> str:
-    return (
-        f"{FALLBACK_MESSAGE}\n"
-        f"诊断：OpenClaw -> openclaw-bridge 已联通；{reason}\n"
-        f"停止点：{stop_at}。"
-    )
+def diagnostic_message(
+    reason: str,
+    stop_at: str,
+    *,
+    error_code: str | None = None,
+    debug_dir: str | None = None,
+    elapsed_seconds: float | None = None,
+    details: dict[str, Any] | None = None,
+) -> str:
+    """The card shown when a turn fails.
+
+    Lines 2-3 route the problem to a component. The forensics line exists so a
+    screenshot of the card is enough to find the failing turn — error code names
+    the failure mode, elapsed says whether it hit a cap, the snapshot path points
+    straight at the page dump, and device/time narrow the log search. Without it
+    every report starts with a round of "which message, when, on which box".
+    """
+    lines = [
+        FALLBACK_MESSAGE,
+        f"诊断：OpenClaw -> openclaw-bridge 已联通；{reason}",
+        f"停止点：{stop_at}。",
+    ]
+    forensics: list[str] = []
+    if error_code:
+        forensics.append(f"错误码 {error_code}")
+    if elapsed_seconds is not None:
+        forensics.append(f"耗时 {int(elapsed_seconds)}s")
+    if debug_dir:
+        forensics.append(f"快照 {debug_dir}")
+    info = (details or {}).get("webdock_footer") or {}
+    device = str(info.get("device") or "").strip()
+    if device:
+        forensics.append(f"设备 {device}")
+    request_id = str((details or {}).get("request_id") or "").strip()
+    if request_id:
+        forensics.append(f"请求 {request_id[:8]}")
+    forensics.append(datetime.now(timezone(timedelta(hours=8))).strftime("%m-%d %H:%M:%S"))
+    lines.append(" ｜ ".join(forensics))
+    return "\n".join(lines)
 
 
-def parse_http_error_message(exc: urllib.error.HTTPError) -> str:
+def parse_http_error_detail(exc: urllib.error.HTTPError) -> dict[str, Any]:
+    """WebDock's error body — ``{ok, error_code, message, debug_dir}``. The body can
+    only be read once, so callers take the dict and derive the message from it
+    rather than calling a second parser."""
     try:
         payload = json.loads(exc.read().decode("utf-8", errors="replace"))
     except Exception:
-        return str(exc)
+        return {}
     detail = payload.get("detail") if isinstance(payload, dict) else None
     if isinstance(detail, dict):
-        return str(detail.get("message") or detail.get("error_code") or exc)
-    return str(detail or payload or exc)
+        return detail
+    return {"message": str(detail)} if detail else {}
+
+
+def parse_http_error_message(exc: urllib.error.HTTPError) -> str:
+    detail = parse_http_error_detail(exc)
+    return str(detail.get("message") or detail.get("error_code") or exc)
 
 
 def call_webdock(body: dict[str, Any]) -> WebDockResult:
@@ -3515,20 +3581,33 @@ def build_reply(body: dict[str, Any]) -> str:
         finally:
             _exit_inflight(lane_key)
     except urllib.error.HTTPError as exc:
+        elapsed = time.monotonic() - started
         if exc.code == 429:
             reply = diagnostic_message(
                 "bridge -> WebDock 已联通；WebDock 返回 429 BUSY，浏览器正在处理另一条请求。",
                 "WebDock browser lock",
+                elapsed_seconds=elapsed,
+                details=details,
             )
         elif exc.code in {401, 403}:
             reply = diagnostic_message(
                 f"bridge -> WebDock 已联通；WebDock 拒绝鉴权（HTTP {exc.code}）。",
                 "WebDock API token",
+                elapsed_seconds=elapsed,
+                details=details,
             )
         else:
+            # One read of the body serves both the human sentence and the
+            # forensics line — HTTPError bodies cannot be read twice.
+            error_detail = parse_http_error_detail(exc)
+            message = str(error_detail.get("message") or error_detail.get("error_code") or exc)
             reply = diagnostic_message(
-                f"bridge -> WebDock 已联通；WebDock 返回 HTTP {exc.code}: {parse_http_error_message(exc)}",
+                f"bridge -> WebDock 已联通；WebDock 返回 HTTP {exc.code}: {message}",
                 "WebDock API",
+                error_code=str(error_detail.get("error_code") or "") or None,
+                debug_dir=str(error_detail.get("debug_dir") or "") or None,
+                elapsed_seconds=elapsed,
+                details=details,
             )
         reply = finalize_placeholder(reply, write_details)
         trace_chain_result(details, started, http_code=exc.code)
