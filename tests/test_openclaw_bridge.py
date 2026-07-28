@@ -1118,6 +1118,46 @@ def test_bridge_emits_chain_result_for_feishu_roundtrip(monkeypatch, capsys):
     assert ev["reply_len"] == len("已完成")
 
 
+def test_bridge_brackets_the_webdock_call_with_stage_traces(monkeypatch, capsys):
+    """Everything between batch_flush and chain_result used to be one opaque block,
+    so a slow turn could not be blamed on the bridge or on WebDock (2026-07-28).
+    The call boundaries and the real HTTP round trip are now on the record."""
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_TRACE", "1")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "0")
+    monkeypatch.setattr(bridge, "call_webdock", lambda body: "已完成")
+
+    body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Sender (untrusted metadata):\n```json\n"
+                    '{"name":"hao","open_id":"ou_abc","peer_id":"ou_abc"}\n```\n\n好的'
+                ),
+            }
+        ],
+        "metadata": {"channel": "feishu"},
+    }
+
+    assert bridge.build_reply(body) == "已完成"
+
+    traces = [json.loads(l.split(" ", 1)[1]) for l in capsys.readouterr().out.splitlines() if "bridge_request_trace" in l]
+    events = [e.get("event") for e in traces]
+    assert "webdock_call_start" in events
+    assert events.index("webdock_call_start") < events.index("webdock_call_end")
+    start = next(e for e in traces if e["event"] == "webdock_call_start")
+    assert start["channel"] == "feishu"
+    assert start["since_start_ms"] >= 0
+    end = next(e for e in traces if e["event"] == "webdock_call_end")
+    assert end["webdock_call_ms"] >= 0
+    chain = [e for e in traces if e.get("event") == "chain_result"][-1]
+    # chain_result keeps the whole-span webdock_ms AND now carries the real hop.
+    assert chain["webdock_call_ms"] <= chain["webdock_ms"]
+
+
 def test_bridge_writes_feishu_session_console_after_reply(monkeypatch):
     bridge = load_bridge()
     writes = []

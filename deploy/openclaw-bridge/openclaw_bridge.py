@@ -2498,6 +2498,7 @@ def trace_chain_result(
     reply: str | None = None,
     http_code: int | None = None,
     error: BaseException | None = None,
+    webdock_call_ms: int | None = None,
 ) -> None:
     """Emit the WebDock/ChatGPT round-trip result so chain-logger can show 'did the
     downstream answer, how slow, and where it broke' — the scope-B hop that was
@@ -2515,9 +2516,35 @@ def trace_chain_result(
         "peer_id": metadata.get("peer_id"),
         "message_id": metadata.get("message_id"),
         "result": chain_result_kind(reply, http_code=http_code, error=error),
+        # NOTE: webdock_ms is the whole build_reply span (group policy, batching,
+        # placeholder card, WebDock call, media/card delivery) — NOT the WebDock
+        # hop, despite the name. Kept for chain-logger compatibility; the actual
+        # HTTP round trip is webdock_call_ms.
         "webdock_ms": int((time.monotonic() - started) * 1000),
         "reply_len": len(reply or ""),
     }
+    if webdock_call_ms is not None:
+        payload["webdock_call_ms"] = webdock_call_ms
+    print("bridge_request_trace " + json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
+
+
+def trace_stage(details: dict[str, Any], event: str, started: float, **fields: Any) -> None:
+    """Timestamp a boundary inside build_reply. Without these, everything between
+    batch_flush and chain_result was one opaque block and the 2026-07-28 latency
+    report could not be attributed to the bridge or to WebDock."""
+    if not trace_enabled():
+        return
+    metadata = details.get("metadata") or {}
+    payload = {
+        "ts": utc_now_iso(),
+        "event": event,
+        "request_id": details.get("request_id"),
+        "channel": metadata.get("channel") or "wechat",
+        "peer_id": metadata.get("peer_id"),
+        "message_id": metadata.get("message_id"),
+        "since_start_ms": int((time.monotonic() - started) * 1000),
+    }
+    payload.update(fields)
     print("bridge_request_trace " + json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
 
 
@@ -3555,7 +3582,11 @@ def build_reply(body: dict[str, Any]) -> str:
                 if placeholder_id:
                     write_details["feishu_placeholder_msg_id"] = placeholder_id
                     start_placeholder_rotation(placeholder_id, text)
+            trace_stage(write_details, "webdock_call_start", started)
+            call_started = time.monotonic()
             result = call_webdock(batched_body)
+            webdock_call_ms = int((time.monotonic() - call_started) * 1000)
+            trace_stage(write_details, "webdock_call_end", started, webdock_call_ms=webdock_call_ms)
             reply, response_metadata = unpack_webdock_result(result)
             if wecom_action.get("action") == "ai_draft":
                 if reply == FALLBACK_MESSAGE or reply.startswith(FALLBACK_MESSAGE + "\n"):
@@ -3576,7 +3607,7 @@ def build_reply(body: dict[str, Any]) -> str:
             reply = finalize_placeholder(reply, write_details)
             if (write_details.get("metadata") or {}).get("channel") == "feishu" and reply == NO_REPLY:
                 reply = build_feishu_trailer(write_details)
-            trace_chain_result(details, started, reply=reply)
+            trace_chain_result(details, started, reply=reply, webdock_call_ms=webdock_call_ms)
             append_feishu_session_console_records_async(write_details, reply, "已回复")
             return reply
         finally:
