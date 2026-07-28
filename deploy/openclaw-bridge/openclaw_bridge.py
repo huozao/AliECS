@@ -1327,30 +1327,65 @@ def create_feishu_bitable_record(table_id: str, fields: dict[str, Any]) -> dict[
     app_token = feishu_session_console_app_token()
     if not app_token or not table_id:
         return {}
-    return feishu_post_json(
-        f"/bitable/v1/apps/{urllib.parse.quote(app_token)}/tables/{urllib.parse.quote(table_id)}/records",
-        {"fields": fields},
-    )
+    try:
+        return feishu_post_json(
+            f"/bitable/v1/apps/{urllib.parse.quote(app_token)}/tables/{urllib.parse.quote(table_id)}/records",
+            {"fields": fields},
+        )
+    finally:
+        invalidate_feishu_bitable_list_cache(table_id)
 
 
 def update_feishu_bitable_record(table_id: str, record_id: str, fields: dict[str, Any]) -> dict[str, Any]:
     app_token = feishu_session_console_app_token()
     if not app_token or not table_id or not record_id:
         return {}
-    return feishu_post_json(
-        (
-            f"/bitable/v1/apps/{urllib.parse.quote(app_token)}/tables/"
-            f"{urllib.parse.quote(table_id)}/records/{urllib.parse.quote(record_id)}"
-        ),
-        {"fields": fields},
-        method="PUT",
-    )
+    try:
+        return feishu_post_json(
+            (
+                f"/bitable/v1/apps/{urllib.parse.quote(app_token)}/tables/"
+                f"{urllib.parse.quote(table_id)}/records/{urllib.parse.quote(record_id)}"
+            ),
+            {"fields": fields},
+            method="PUT",
+        )
+    finally:
+        invalidate_feishu_bitable_list_cache(table_id)
+
+
+# Every bitable lookup is a full paginated table scan filtered in memory, and one
+# inbound message runs several of them back to back (session record, peer project
+# config, chat mode) — twice over, because request_details is computed again inside
+# build_webdock_body. Measured 2026-07-28: those serial scans were ~7s of the delay
+# between a Feishu message and ChatGPT starting to type. The window only has to
+# cover one message's processing; writes invalidate their own table immediately, so
+# a manual edit still takes effect on the next message.
+FEISHU_BITABLE_LIST_CACHE_SECONDS = float(os.getenv("FEISHU_BITABLE_LIST_CACHE_SECONDS", "5"))
+_feishu_bitable_list_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_feishu_bitable_list_cache_lock = Lock()
+
+
+def invalidate_feishu_bitable_list_cache(table_id: str = "") -> None:
+    """Drop cached scans. Called after every write so a record this bridge just
+    created or updated is never read back stale within the cache window."""
+    with _feishu_bitable_list_cache_lock:
+        if not table_id:
+            _feishu_bitable_list_cache.clear()
+            return
+        for key in [k for k in _feishu_bitable_list_cache if k.endswith("\t" + table_id)]:
+            _feishu_bitable_list_cache.pop(key, None)
 
 
 def list_feishu_bitable_records(table_id: str, app_token: str | None = None) -> list[dict[str, Any]]:
     app_token = app_token or feishu_session_console_app_token()
     if not app_token or not table_id:
         return []
+    cache_key = f"{app_token}\t{table_id}"
+    now = time.monotonic()
+    with _feishu_bitable_list_cache_lock:
+        cached = _feishu_bitable_list_cache.get(cache_key)
+        if cached and now - cached[0] < FEISHU_BITABLE_LIST_CACHE_SECONDS:
+            return list(cached[1])
     records: list[dict[str, Any]] = []
     page_token = ""
     seen_tokens: set[str] = set()
@@ -1374,6 +1409,8 @@ def list_feishu_bitable_records(table_id: str, app_token: str | None = None) -> 
             break
         seen_tokens.add(next_token)
         page_token = next_token
+    with _feishu_bitable_list_cache_lock:
+        _feishu_bitable_list_cache[cache_key] = (now, list(records))
     return records
 
 
@@ -3541,12 +3578,17 @@ def maybe_feishu_mode_command_reply(details: dict[str, Any]) -> str | None:
 
 
 def build_reply(body: dict[str, Any]) -> str:
+    # started must precede request_details: for Feishu that call scans bitable for
+    # the session record, the peer project config and the chat mode, which was the
+    # single largest segment of the 2026-07-28 latency report and sat entirely
+    # outside the measured span.
+    started = time.monotonic()
     user_text = get_last_user_message(body.get("messages"))
     if not webdock_configured():
         return f"已收到你的微信消息：{user_text}" if user_text else "已收到你的微信消息。"
     details = request_details(body)  # peer_id/channel for chain_result tracing
+    trace_stage(details, "request_details_done", started)
     write_details = details  # defensive: except branches reference it before reassignment
-    started = time.monotonic()
     try:
         if details.get("metadata", {}).get("channel") == "feishu" and not feishu_should_send_chatgpt(details):
             trace_chain_result(details, started, reply="")
