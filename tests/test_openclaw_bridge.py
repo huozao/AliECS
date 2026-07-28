@@ -1758,6 +1758,61 @@ def test_bridge_uses_env_project_name_when_explicitly_configured(monkeypatch):
     assert outbound["metadata"]["chatgpt_project"] == "显式默认项目"
 
 
+def test_bitable_scan_is_reused_within_the_cache_window(monkeypatch):
+    """One inbound message scans the same tables several times over (session record,
+    peer config, chat mode — then all of it again inside build_webdock_body). Each
+    scan is a full paginated fetch, and 2026-07-28 they added up to ~7s before
+    ChatGPT even started typing."""
+    bridge = load_bridge()
+    bridge.invalidate_feishu_bitable_list_cache()
+    fetches: list[str] = []
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_APP_TOKEN", "app_token")
+
+    def fake_get(path: str):
+        fetches.append(path)
+        return {"data": {"items": [{"record_id": "rec1", "fields": {"open_id": "ou_a"}}], "has_more": False}}
+
+    monkeypatch.setattr(bridge, "feishu_get_json", fake_get)
+
+    first = bridge.list_feishu_bitable_records("tbl_user")
+    second = bridge.list_feishu_bitable_records("tbl_user")
+
+    assert first == second
+    assert len(fetches) == 1, "second scan of the same table must come from cache"
+
+    # A different table is not served from the first table's entry.
+    bridge.list_feishu_bitable_records("tbl_session")
+    assert len(fetches) == 2
+
+
+def test_bitable_write_invalidates_its_own_table_cache(monkeypatch):
+    """A record this bridge just wrote must never be read back stale — otherwise a
+    /新对话 could resume the conversation it just archived."""
+    bridge = load_bridge()
+    bridge.invalidate_feishu_bitable_list_cache()
+    fetches: list[str] = []
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_APP_TOKEN", "app_token")
+
+    def fake_get(path: str):
+        fetches.append(path)
+        return {"data": {"items": [], "has_more": False}}
+
+    monkeypatch.setattr(bridge, "feishu_get_json", fake_get)
+    monkeypatch.setattr(bridge, "feishu_post_json", lambda *a, **k: {"data": {}})
+
+    bridge.list_feishu_bitable_records("tbl_session")
+    bridge.update_feishu_bitable_record("tbl_session", "rec1", {"会话状态": "已归档"})
+    bridge.list_feishu_bitable_records("tbl_session")
+
+    assert len(fetches) == 2, "the write must have dropped the cached scan"
+
+    # An unrelated table keeps its cache across that write.
+    bridge.list_feishu_bitable_records("tbl_user")
+    bridge.create_feishu_bitable_record("tbl_session", {"session_key": "k"})
+    bridge.list_feishu_bitable_records("tbl_user")
+    assert len(fetches) == 3
+
+
 def test_feishu_session_index_archives_old_current_and_creates_new_version(monkeypatch):
     bridge = load_bridge()
     calls: list[tuple[str, str, dict]] = []
