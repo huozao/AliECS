@@ -57,7 +57,10 @@ ssh webdock2 "wsl -d Ubuntu-24.04-WebDock -- docker ps"  # WebDock 容器状态
 - 多维表格**不在消息路径上读**。bridge 后台线程按 `FEISHU_BITABLE_SNAPSHOT_REFRESH_SECONDS`（默认 60s）把用到的表全量刷进内存快照，消息只读内存；这个周期是唯一一个「飞书 API 调用量 ↔ 配置生效速度」的旋钮，轮询 N 张表周期 T 秒 = 每天 `86400/T*N` 次请求，60s/4 张表 ≈ 每分钟 4 次。调小只增调用量，不改消息延迟。快照落盘 `/srv/openclaw-bridge/state/bitable-snapshot.json`，容器重启后直接载入。改表生效延迟 = 刷新周期。要立刻生效就 POST `/admin/invalidate-feishu-group-policy`（带 `X-Admin-Secret`），它会清缓存并同步重拉快照。
   - `FEISHU_BITABLE_LIST_CACHE_SECONDS`（默认 900s）不是新鲜度目标，是「刷新线程死了」的兜底岁数，超过就退回同步扫表让真实错误浮出来。
   - 每天 `FEISHU_BITABLE_RECONCILE_AT`（默认 04:00 容器本地时间）全量核对一次，异常告警到飞书群 `oc_84d1130542509e374f7ea20c13d11ca4`。日志关键字 `bitable_reconcile`、`bitable_snapshot_worker_start`。
+  - 每轮刷新后 diff 配置表并把改动播到同一个群（`✎ 规则表「x」字段：旧 → 新` + 「已完成全量同步」）。日志关键字 `bitable_config_changed`。**只盯 rule/group/user 三张配置表**：会话表每条消息都在写，纳进来就是每分钟刷屏；用户表/群表里 bridge 自己写回的运行字段（`最近消息时间`/`已用次数`/`@机器人次数`/`关联*`/`上下文摘要`…）同样被 `FEISHU_CONFIG_RUNTIME_FIELDS` 排除。改这个白名单前先想清楚"这个字段是人改的还是流量改的"。
+  - 播报静默的两种正常情况：进程刚起第一轮只建基线（磁盘快照过期被丢弃时，否则整表算新增）；单轮改动超过 20 条只列前 20 条 + 报总数。
   - ⚠️ 2026-07-28 实测：改之前群消息扫表 2-3s、私聊 6-9s，是 15s 端到端里最大的一段。改错这里会直接把延迟加回去。
+- **端到端延迟分账**（2026-07-28 实测，稳态、纯文本、不含 ChatGPT 生成时间）：飞书→OpenClaw→bridge 约 2s ｜ bridge 内部 1.2s（batch 0.5s + 发占位卡 0.67s）｜ 隧道 RTT 0.09s ｜ WebDock 收请求→文字进输入框 2.4s。合计约 7s。再有人报"慢"，先按这张账对齐是哪一段变了，别凭感觉猜；bridge 段看 `bridge_request_trace`，WebDock 段看 `send_stages`（webdock `docs/runbooks/browser.md`）。
 - bitable **写**早就在后台线程里（`bitable-writer`），不在主路径；不要为了"提速"再去动写路径。
 - 改 bridge env 后 `restart` 无效，必须 force-recreate。
 - 新 webdock 节点必须复制 `runtime.json`，否则飞书图/表全丢。
