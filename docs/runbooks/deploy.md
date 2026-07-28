@@ -27,6 +27,7 @@ push main（PR 合并）
 | ECS 整机假死（CPU100%+磁盘纯读+ssh banner 超时） | OOM thrashing 特征 | 根因已修（swappiness=20 + deploy.sh 串行 pull）；卡死>10min 且 TCP 通应用层死 → 阿里云控制台强制重启是安全的（容器 restart:always） |
 | backend unhealthy | healthcheck `start_period: 300s` 内属正常；healthz 对可选探测必须容错（惰性目录事故 PR#106） | 等 start_period；真不健康看 `docker logs` |
 | 部署后页面没变 | 内容寻址：内容没变的服务标签不变、容器不重建 | 确认改动落在对应构建上下文目录内 |
+| 8 个 build-push 全 success，只有 `cutover-bridge / cutover` 失败，日志是 `ssh: handshake failed: EOF` | 不是凭据问题——本机 `ssh txecs` 同时也会间歇 `Connection closed`。查 `sudo journalctl -u ssh` 是否刷 `kex_exchange_identification: read: Connection reset by peer` | txecs 常年被腾讯云自有网段扫描（2026-07-28 实测 ~830 次/小时，`139.155.108.221`/`43.143.124.247`/`49.232.244.156` 等），并发未认证连接打满 `MaxStartups 10:30:100` 后合法连接被随机丢弃。**直接 `gh run rerun <id> --failed` 重跑即可**（当天重跑一次就过）。攻不进来（`passwordauthentication no` + `permitrootlogin no`），这是可用性问题不是入侵；根治要 fail2ban 或放宽 MaxStartups |
 
 ## 验证命令
 
