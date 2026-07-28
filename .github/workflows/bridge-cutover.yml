@@ -1,14 +1,25 @@
 name: bridge-cutover
 
 # 一键切换 txecs 上 openclaw-bridge 的运行镜像（构建仍由 release-deploy 完成）。
-# 人工只负责扣一次扳机；workflow 从所选 Git ref 自动解析内容标签和 OCI digest。
-# 失败自动回滚。bridge 是微信/飞书链路咽喉，不随每次 main push 自动切换。
+# workflow 从所选 Git ref 自动解析内容标签和 OCI digest，失败自动回滚。
+#
+# 两个入口：
+#   - workflow_call：release-deploy 在 `deploy/openclaw-bridge/**` 真的变了时自动调用。
+#     bridge 是微信/飞书链路咽喉，所以仍不随每次 main push 切换——只有 bridge 自己的
+#     内容树 hash 变了才切，其余合并完全不碰它。
+#   - workflow_dispatch：回滚、重切、或切到非 main 的 ref 时人工扣扳机。
 
 on:
   workflow_dispatch:
     inputs:
       confirmation:
         description: "P1 才可输入 CUTOVER_TXECS"
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      confirmation:
+        description: "调用方必须显式传 CUTOVER_TXECS，与人工入口共用同一道闸"
         required: true
         type: string
 
@@ -20,6 +31,8 @@ jobs:
   cutover:
     if: ${{ inputs.confirmation == 'CUTOVER_TXECS' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 

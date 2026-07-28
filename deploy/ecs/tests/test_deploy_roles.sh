@@ -90,5 +90,15 @@ assert_contains "$MIRROR_IMAGES" 'auth_file="$auth_dir/auth.json"'
 assert_not_contains "$MIRROR_IMAGES" 'auth_file="$(mktemp)"'
 assert_contains "$BRIDGE_WORKFLOW" 'host: ${{ secrets.TENCENT_HOST }}'
 assert_contains "$BRIDGE_WORKFLOW" "inputs.confirmation == 'CUTOVER_TXECS'"
+# 手工入口必须保留：自动 cutover 之外还要能回滚、重切、切非 main 的 ref。
+assert_contains "$BRIDGE_WORKFLOW" "  workflow_dispatch:"
+assert_contains "$BRIDGE_WORKFLOW" "  workflow_call:"
+
+# bridge 自动 cutover 只在 bridge 构建上下文的 tree hash 变了的 main push 上发生。
+assert_contains "$RELEASE_WORKFLOW" "  cutover-bridge:"
+assert_contains "$RELEASE_WORKFLOW" "uses: ./.github/workflows/bridge-cutover.yml"
+assert_contains "$RELEASE_WORKFLOW" "confirmation: CUTOVER_TXECS"
+assert_contains "$RELEASE_WORKFLOW" "needs.resolve-release.outputs.bridge_changed == 'true'"
+assert_contains "$RELEASE_WORKFLOW" 'CURRENT="$(git rev-parse "HEAD:deploy/openclaw-bridge")"'
 
 echo "deploy role boundary tests passed"
