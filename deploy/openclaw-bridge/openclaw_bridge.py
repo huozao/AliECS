@@ -2741,6 +2741,7 @@ DEFAULT_DONE_MARKER = "🌿 回复完毕"
 # 占位卡轮播提示：一行一条，与基础占位文案轮换显示。
 DEFAULT_PLACEHOLDER_TIPS = (
     "💡 提示：/新对话 开启新会话，/模式 极速｜均衡｜高级 切换速度\n"
+    "🔀 刚用 /模式 切换过？设置在下一次提问时才到页面生效，首次约多等 20 秒\n"
     "⏳ 长回复生成中，请勿重复提问，答案会更新到这张卡片"
 )
 
@@ -3716,7 +3717,13 @@ def maybe_feishu_mode_command_reply(details: dict[str, Any]) -> str | None:
         return f"当前对话模式：{current_name}\n用法：/模式 极速｜均衡｜高级"
     if not set_feishu_chat_mode(details, mode):
         return "无法识别当前会话，模式未修改。"
-    return f"已切换为{CHATGPT_MODE_NAMES[mode]}模式，本会话后续回复将使用该模式。"
+    # 模式只是写进配置表的设置项：页面上的真正切换发生在下一条消息发送前
+    # （chatgpt_page.ensure_mode），所以切完立刻发的那条会慢，必须说清楚。
+    return (
+        f"已切换为{CHATGPT_MODE_NAMES[mode]}模式，本会话后续回复将使用该模式。\n"
+        "⚠️ 这一步只改设置项，系统会在你下一次提问时才到 ChatGPT 页面实际切换，"
+        "首次生效那条回复约需多等 20 秒，请耐心等待；之后恢复正常速度。"
+    )
 
 
 def build_reply(body: dict[str, Any]) -> str:
@@ -4137,6 +4144,127 @@ def _seconds_until(hhmm: str) -> float:
     return max(1.0, (target - now).total_seconds())
 
 
+# --- 配置变更播报：每轮刷新后对比配置表，把人改了什么播到运维群 ----------------
+
+# 只盯人工会改的配置表。会话表(session)/消息表每条消息都在写，纳入必然刷屏。
+FEISHU_CONFIG_WATCH_KINDS: dict[str, str] = {"rule": "规则表", "group": "群表", "user": "用户表"}
+# bridge 自己写回的运行字段：它们的变化来自消息流量而不是有人改配置，必须跳过，
+# 否则每分钟都会播报一次"最近消息时间变了"。
+FEISHU_CONFIG_RUNTIME_FIELDS = frozenset({
+    "最近互动时间", "最近消息时间", "最近 @ 机器人时间", "最近活跃时间", "最近名称解析时间",
+    "已用次数", "@机器人次数", "消息数量", "上下文摘要",
+    "ChatGPT 对话标题", "ChatGPT 对话链接",
+    "关联会话", "关联会话记录", "关联用户", "关联用户记录", "关联群", "关联群记录",
+    "默认会话", "默认会话记录", "默认私聊会话", "默认私聊会话记录",
+})
+# 单条播报的行数上限与单个值的字符上限——批量编辑时只报摘要，不刷屏。
+FEISHU_CONFIG_CHANGE_MAX_LINES = 20
+FEISHU_CONFIG_VALUE_MAX_CHARS = 60
+# 每条记录用哪个字段当人类可读名，按优先级取第一个非空的。
+FEISHU_CONFIG_RECORD_NAME_FIELDS = (
+    "规则名称", "群名称", "飞书用户名", "规则编号", "群编号", "用户编号", "chat_id", "open_id",
+)
+
+
+def feishu_config_watch_tables() -> dict[str, str]:
+    """table_id -> 人类表名。未配置的表不出现，也就不会被 diff。"""
+    tables: dict[str, str] = {}
+    for kind, label in FEISHU_CONFIG_WATCH_KINDS.items():
+        table_id = feishu_session_console_table_id(kind)
+        if table_id:
+            tables[table_id] = label
+    return tables
+
+
+def feishu_config_snapshot() -> dict[str, dict[str, dict[str, Any]]]:
+    """当前内存快照里配置表的 {table_id: {record_id: fields}}，运行字段已剔除。"""
+    watched = feishu_config_watch_tables()
+    if not watched:
+        return {}
+    with _feishu_bitable_list_cache_lock:
+        entries = [(key.partition("\t")[2], entry[1]) for key, entry in _feishu_bitable_list_cache.items()]
+    result: dict[str, dict[str, dict[str, Any]]] = {}
+    for table_id, records in entries:
+        if table_id not in watched:
+            continue
+        result[table_id] = {
+            str(record.get("record_id")): {
+                name: value
+                for name, value in (record.get("fields") or {}).items()
+                if name not in FEISHU_CONFIG_RUNTIME_FIELDS
+            }
+            for record in records
+            if record.get("record_id")
+        }
+    return result
+
+
+def _config_value_text(value: Any) -> str:
+    if isinstance(value, bool):
+        return "是" if value else "否"
+    if isinstance(value, list):
+        text = "、".join(_config_value_text(item) for item in value)
+    else:
+        text = bitable_field_text(value)
+    text = " ".join(text.split())
+    if not text:
+        return "（空）"
+    if len(text) > FEISHU_CONFIG_VALUE_MAX_CHARS:
+        text = text[:FEISHU_CONFIG_VALUE_MAX_CHARS] + "…"
+    return text
+
+
+def _config_record_label(fields: dict[str, Any]) -> str:
+    for name in FEISHU_CONFIG_RECORD_NAME_FIELDS:
+        if fields.get(name) not in (None, "", [], {}):
+            return _config_value_text(fields[name])
+    return "未命名记录"
+
+
+def diff_feishu_config_snapshots(
+    before: dict[str, dict[str, dict[str, Any]]],
+    after: dict[str, dict[str, dict[str, Any]]],
+) -> list[str]:
+    """人类可读的配置改动行；空列表 = 这一轮没人改配置。"""
+    watched = feishu_config_watch_tables()
+    lines: list[str] = []
+    for table_id in sorted(set(before) | set(after)):
+        table_label = watched.get(table_id, table_id)
+        old_records = before.get(table_id) or {}
+        new_records = after.get(table_id) or {}
+        for record_id in sorted(set(old_records) | set(new_records)):
+            old_fields = old_records.get(record_id)
+            new_fields = new_records.get(record_id)
+            if old_fields is None:
+                lines.append(f"＋ {table_label} 新增「{_config_record_label(new_fields or {})}」")
+                continue
+            if new_fields is None:
+                lines.append(f"－ {table_label} 删除「{_config_record_label(old_fields)}」")
+                continue
+            label = _config_record_label(new_fields)
+            for name in sorted(set(old_fields) | set(new_fields)):
+                if old_fields.get(name) == new_fields.get(name):
+                    continue
+                lines.append(
+                    f"✎ {table_label}「{label}」{name}："
+                    f"{_config_value_text(old_fields.get(name))} → {_config_value_text(new_fields.get(name))}"
+                )
+    return lines
+
+
+def announce_feishu_config_changes(lines: list[str]) -> None:
+    """把这一轮的配置改动播到运维群。播报发生在刷新之后，所以"已生效"是事实
+    而不是承诺：内存快照此刻已是新值，下一条消息就按新配置走。"""
+    if not lines:
+        return
+    shown = lines[:FEISHU_CONFIG_CHANGE_MAX_LINES]
+    body = [f"[bridge] 多维表格配置已更新（{utc_now_iso()}）", *shown]
+    if len(lines) > len(shown):
+        body.append(f"…另有 {len(lines) - len(shown)} 处改动未列出")
+    body.append(f"✅ 已完成全量同步，共 {len(lines)} 处改动，后续消息按新配置执行")
+    send_feishu_alert("\n".join(body))
+
+
 def reconcile_feishu_bitable_snapshot() -> dict[str, Any]:
     """Full re-scan compared against what the snapshot was already serving.
 
@@ -4169,6 +4297,9 @@ def _bitable_snapshot_worker() -> None:
     """Keep every tracked table warm so no message ever waits on a bitable scan,
     and run the daily reconcile when its local time comes round."""
     next_reconcile = time.monotonic() + _seconds_until(FEISHU_BITABLE_RECONCILE_AT)
+    # 配置播报的基线。进程刚起时若快照是空的（磁盘快照过期被丢弃），第一轮会把
+    # 每条记录都算成新增——所以基线为空时只建基线、不播报。
+    config_baseline = feishu_config_snapshot()
     while True:
         try:
             if time.monotonic() >= next_reconcile:
@@ -4181,6 +4312,15 @@ def _bitable_snapshot_worker() -> None:
                         "bitable_snapshot_refresh_partial "
                         + json.dumps({"ok": ok, "errors": errors}, ensure_ascii=False, sort_keys=True)
                     )
+            config_after = feishu_config_snapshot()
+            changes = diff_feishu_config_snapshots(config_baseline, config_after) if config_baseline else []
+            config_baseline = config_after
+            if changes:
+                log_line(
+                    "bitable_config_changed "
+                    + json.dumps({"count": len(changes), "changes": changes}, ensure_ascii=False)
+                )
+                announce_feishu_config_changes(changes)
             save_feishu_bitable_snapshot()
         except Exception as exc:
             log_line(f"bitable_snapshot_worker_error {exc}")

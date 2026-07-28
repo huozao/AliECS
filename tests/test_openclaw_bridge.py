@@ -3600,6 +3600,8 @@ def test_feishu_mode_command_switch_reply(monkeypatch):
     reply = bridge.maybe_feishu_mode_command_reply(details)
     assert recorded == ["fast"]
     assert "极速" in reply
+    # 切换只写配置项，页面切换发生在下一条消息发送前——回复必须说明首次会慢。
+    assert "20" in reply and "设置" in reply
 
 
 def test_feishu_mode_command_usage_reply(monkeypatch):
@@ -4056,3 +4058,109 @@ def test_refresh_cycle_defaults_to_a_minute():
     bridge = load_bridge()
 
     assert bridge.FEISHU_BITABLE_SNAPSHOT_REFRESH_SECONDS == 60
+
+
+def _config_bridge(monkeypatch):
+    """Bridge with the three config tables wired and nothing else tracked."""
+    bridge = load_bridge()
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_RULE_TABLE_ID", "tbl_rule")
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_GROUP_TABLE_ID", "tbl_group")
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_USER_TABLE_ID", "tbl_user")
+    monkeypatch.setenv("FEISHU_SESSION_CONSOLE_SESSION_TABLE_ID", "tbl_session")
+    return bridge
+
+
+def _store(bridge, table_id, records):
+    bridge._store_feishu_bitable_records(bridge._bitable_cache_key("app", table_id), records)
+
+
+def test_config_snapshot_skips_the_session_table(monkeypatch):
+    # The session table is written on every single message; diffing it would page
+    # the ops group once a minute forever.
+    bridge = _config_bridge(monkeypatch)
+    _store(bridge, "tbl_rule", [{"record_id": "r1", "fields": {"规则名称": "全局"}}])
+    _store(bridge, "tbl_session", [{"record_id": "s1", "fields": {"会话名称": "闲聊"}}])
+
+    snapshot = bridge.feishu_config_snapshot()
+
+    assert set(snapshot) == {"tbl_rule"}
+
+
+def test_config_diff_reports_a_field_edit(monkeypatch):
+    bridge = _config_bridge(monkeypatch)
+    _store(bridge, "tbl_rule", [{"record_id": "r1", "fields": {"规则名称": "全局", "对话模式默认": "高级"}}])
+    before = bridge.feishu_config_snapshot()
+    _store(bridge, "tbl_rule", [{"record_id": "r1", "fields": {"规则名称": "全局", "对话模式默认": "极速"}}])
+
+    lines = bridge.diff_feishu_config_snapshots(before, bridge.feishu_config_snapshot())
+
+    assert lines == ["✎ 规则表「全局」对话模式默认：高级 → 极速"]
+
+
+def test_config_diff_ignores_fields_the_bridge_writes_itself(monkeypatch):
+    # 最近消息时间/已用次数 change with traffic, not with configuration.
+    bridge = _config_bridge(monkeypatch)
+    _store(bridge, "tbl_group", [
+        {"record_id": "g1", "fields": {"群名称": "HAO", "最近消息时间": "10:00", "已用次数": 3}},
+    ])
+    before = bridge.feishu_config_snapshot()
+    _store(bridge, "tbl_group", [
+        {"record_id": "g1", "fields": {"群名称": "HAO", "最近消息时间": "10:01", "已用次数": 4}},
+    ])
+
+    assert bridge.diff_feishu_config_snapshots(before, bridge.feishu_config_snapshot()) == []
+
+
+def test_config_diff_reports_added_and_removed_records(monkeypatch):
+    bridge = _config_bridge(monkeypatch)
+    _store(bridge, "tbl_user", [{"record_id": "u1", "fields": {"飞书用户名": "hao"}}])
+    before = bridge.feishu_config_snapshot()
+    _store(bridge, "tbl_user", [{"record_id": "u2", "fields": {"飞书用户名": "lin"}}])
+
+    lines = bridge.diff_feishu_config_snapshots(before, bridge.feishu_config_snapshot())
+
+    assert lines == ["－ 用户表 删除「hao」", "＋ 用户表 新增「lin」"]
+
+
+def test_config_diff_renders_booleans_and_empties_readably(monkeypatch):
+    bridge = _config_bridge(monkeypatch)
+    _store(bridge, "tbl_rule", [{"record_id": "r1", "fields": {"规则名称": "全局", "占位轮播": True}}])
+    before = bridge.feishu_config_snapshot()
+    _store(bridge, "tbl_rule", [{"record_id": "r1", "fields": {"规则名称": "全局"}}])
+
+    lines = bridge.diff_feishu_config_snapshots(before, bridge.feishu_config_snapshot())
+
+    assert lines == ["✎ 规则表「全局」占位轮播：是 → （空）"]
+
+
+def test_config_announcement_states_the_sync_is_already_done(monkeypatch):
+    bridge = load_bridge()
+    sent: list[str] = []
+    monkeypatch.setattr(bridge, "send_feishu_alert", sent.append)
+
+    bridge.announce_feishu_config_changes(["✎ 规则表「全局」对话模式默认：高级 → 极速"])
+
+    assert len(sent) == 1
+    assert "对话模式默认：高级 → 极速" in sent[0]
+    assert "已完成全量同步" in sent[0]
+
+
+def test_config_announcement_truncates_a_bulk_edit(monkeypatch):
+    bridge = load_bridge()
+    sent: list[str] = []
+    monkeypatch.setattr(bridge, "send_feishu_alert", sent.append)
+
+    bridge.announce_feishu_config_changes([f"✎ 行{i}" for i in range(50)])
+
+    assert "另有 30 处改动未列出" in sent[0]
+    assert "共 50 处改动" in sent[0]
+
+
+def test_config_announcement_stays_quiet_without_changes(monkeypatch):
+    bridge = load_bridge()
+    sent: list[str] = []
+    monkeypatch.setattr(bridge, "send_feishu_alert", sent.append)
+
+    bridge.announce_feishu_config_changes([])
+
+    assert sent == []
