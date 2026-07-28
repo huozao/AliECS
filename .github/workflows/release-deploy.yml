@@ -34,6 +34,7 @@ jobs:
       contents: read
     outputs:
       release_id: ${{ steps.vars.outputs.release_id }}
+      bridge_changed: ${{ steps.bridge.outputs.changed }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,6 +55,37 @@ jobs:
             echo "| Actions run | ${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT} |"
             echo "| Release alias | ${RELEASE_ID} |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # 比的是 bridge 构建上下文的 git tree hash，不是文件名列表——这与 build-push 的
+      # 内容寻址标签和 bridge-cutover 解析镜像用的是同一个量。tree hash 没变 → 镜像标签
+      # 就是同一个 → cutover 只是白重启一次咽喉服务，所以不触发。
+      - name: Did the bridge build context actually change
+        id: bridge
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          CURRENT="$(git rev-parse "HEAD:deploy/openclaw-bridge")"
+          PREVIOUS=""
+          if [ -n "${BEFORE:-}" ] && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            PREVIOUS="$(git rev-parse "${BEFORE}:deploy/openclaw-bridge" 2>/dev/null || echo "")"
+          fi
+
+          if [ -z "$PREVIOUS" ]; then
+            # 首推、force push、tag 推送等拿不到可比的前一个状态。bridge 是咽喉服务，
+            # 拿不准时宁可不动，人工用 workflow_dispatch 补切。
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "- bridge: 无法与 \`${BEFORE:-<none>}\` 比对，跳过自动 cutover（需要时手工触发 bridge-cutover）" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [ "$CURRENT" = "$PREVIOUS" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "- bridge: 构建上下文未变（\`${CURRENT:0:12}\`），不触发 cutover" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "- bridge: \`${PREVIOUS:0:12}\` → \`${CURRENT:0:12}\`，构建完成后自动 cutover" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   build-push:
     needs: resolve-release
@@ -166,6 +198,18 @@ jobs:
             exit 1
           }
           echo "[registry] ${{ matrix.image }} synced at $source_digest"
+
+  # 合并即上线，但只限 bridge 自己变了的那次合并；其余 main push 一概不碰咽喉服务。
+  # 回滚/重切仍走 bridge-cutover 的 workflow_dispatch 手工入口。
+  cutover-bridge:
+    needs:
+      - resolve-release
+      - build-push
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.resolve-release.outputs.bridge_changed == 'true' && vars.TCR_BASE != '' }}
+    uses: ./.github/workflows/bridge-cutover.yml
+    with:
+      confirmation: CUTOVER_TXECS
+    secrets: inherit
 
   mirror-third-party:
     needs: build-push

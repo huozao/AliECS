@@ -53,7 +53,7 @@ ssh webdock2 "wsl -d Ubuntu-24.04-WebDock -- docker ps"  # WebDock 容器状态
 
 ## 已知坑（改代码前必读）
 
-- bridge 换码：在 GitHub Actions 手工触发 `bridge-cutover`，无需填写 tag。workflow 按所选 Git ref 自动解析内容镜像与 OCI digest，原子切换、健康检查、失败回滚。禁止登机手改 `.env`；并发由 workflow concurrency 串行化。
+- bridge 换码：合并到 main 即自动 cutover——release-deploy 发现 `deploy/openclaw-bridge/**` 的内容树 hash 变了，构建完调用 `bridge-cutover`。tree hash 没变则完全不触发（同一镜像标签，切了也只是白重启咽喉服务）。workflow 按所选 Git ref 自动解析内容镜像与 OCI digest，原子切换、健康检查、失败回滚。回滚/重切/切非 main ref 用 `bridge-cutover` 的手工 `workflow_dispatch`（confirmation 填 `CUTOVER_TXECS`）。禁止登机手改 `.env`；并发由 workflow concurrency 串行化。
 - 改 bridge env 后 `restart` 无效，必须 force-recreate。
 - 新 webdock 节点必须复制 `runtime.json`，否则飞书图/表全丢。
 - OpenClaw 的 dispatch→bridge 延迟 0.9-2.4s 属正常（处理中占位卡即为此设计）。
