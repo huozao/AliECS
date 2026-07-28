@@ -17,7 +17,7 @@
 |---|---|---|---|---|
 | `devbox` | 开发机 | 本地 Windows 11 | 本机 | 3 个仓库克隆（不运行生产） |
 | `aliecs` | 海外边界 + 冷恢复 | 阿里云 ECS 美国 / Ubuntu 24.04，2G 内存 | `ssh aliecs`（root@47.77.176.62） | 原业务写端已冻结；保留 edge-us 与回滚数据 |
-| `txecs` | 当前生产唯一写端 / business-cn 主栈 | 腾讯云轻量 / Ubuntu 24.04，4C4G | `ssh txecs`（ubuntu@106.52.51.67） | 备案期内部全栈；公网 nginx 关闭 |
+| `txecs` | 当前生产唯一写端 / business-cn 主栈 / 公网中心边界 | 腾讯云轻量 / Ubuntu 24.04，4C4G | `ssh txecs`（ubuntu@106.52.51.67） | 业务镜像 + 主站入口 + SSO 反向代理 |
 | `webdock1` | webdock 算力节点（**当前备用**） | 旧 Ubuntu 笔记本 | `ssh webdock1`（Tailscale 100.97.176.57） | webdock 镜像 + 第三方自托管服务 |
 | `webdock2` | webdock 算力节点（**当前主力**） | 新台式机 Windows 11 + WSL2 | `ssh webdock2`（Tailscale 100.67.38.52） | webdock 镜像 |
 
@@ -60,32 +60,37 @@ txecs 127.0.0.1:11800 failover-proxy
 
 ## 设备档案
 
-### aliecs（生产服务器）
+### aliecs（海外边界、SSO 源站与冷恢复）
 
 - 别名：服务器。
 - 入口：`ssh aliecs`（root@47.77.176.62）。ECS **不在 tailnet**。
-- 运行容器：backend-api / public-web / admin-ui / doc-sync-worker / tplus-sync-worker / mcp-coding-server（同一 V-tag，来自 AliECS release）、postgres:16、`openclaw-bridge`（独立 V-tag，手动 cutover）、openclaw 网关（上游官方镜像，配置在主机 `/root/.openclaw`，不进 git，restic 备份）、sing-box。
-- 主机层：nginx（配置入 infra 仓库；**MCP OAuth 的 `/.well-known/*` 路由是手工加的，重建会丢**）、三个隧道代理 systemd 服务（webdock-failover-proxy、webdock-tunnel-proxy、immich-tunnel-proxy，脚本在 `/opt/aliecs/`）。
+- 当前运行容器：旧 public-web/admin-ui/postgres（只作回滚）、mcp-coding-server、
+  `sso-authelia`、`sso-lldap`、sing-box；业务写端、worker、OpenClaw 和 bridge
+  已迁到 txecs。
+- 公网 Nginx 只启用 `auth.hydwang.xyz` / `lldap.hydwang.xyz` 和默认拒绝；
+  其他历史 server 块隔离在 `/etc/nginx/conf.inactive.d/`。公网客户端先进入
+  txecs，再由 txecs 以校验证书的 HTTPS 回源 AliECS。
 - 隧道端口（127.0.0.1）：11800 为 webdock failover 入口；当前 11810←webdock2 主、11811←webdock1 备（以 `/etc/default/webdock-failover-proxy` 的 NAME 绑定为准）；12283←webdock1 Immich、18015/18016←webdock1 AdventureLog，另有 Gokapi/Authentik 隧道（端口见 webdock1 各 unit 的 env）。
 - 远程控制台（2026-07-04，`https://hydwang.xyz/console/`）：nginx `/console/*` 七路 location（认证=Authelia `two_factor` + lldap `console_admins` 组，成对 deny 兜底；**VNC 层免密设计**，2FA 是唯一闸门）；本机组件 ttyd 7681（unit `ttyd-console`，⚠️ apt 自带 `ttyd.service` 抢端口须 disable）、webtop 3000 按需启停（`/opt/aliecs/aliecs-temp-desktop.sh`，2G 内存用完必须 stop）；ECS `authorized_keys` permitlisten 新增四条 160xx（16080/16081←webdock1、16090/16091←webdock2，与生产 118xx 隔离）。详见 infra `console/README.md`。
 - 部署：push AliECS main → release-deploy 自动构建部署业务镜像；bridge 镜像同流程构建，且当 `deploy/openclaw-bridge/**` 的内容树 hash 变了时，release-deploy 构建完自动调用 `bridge-cutover`（自动解析 digest、验证并失败回滚）。bridge 没变的合并完全不碰它；回滚/重切/切非 main ref 仍走 `bridge-cutover` 的手工 `workflow_dispatch`（填 `CUTOVER_TXECS`）。
 - 排障：`docker ps`、bridge 日志 `docker logs openclaw-bridge`、部署尖峰时 health 告警多为瞬时（2G 内存超卖）。
 
-### txecs（腾讯云 business-cn 候选主栈）
+### txecs（腾讯云 business-cn 生产主栈）
 
 - 入口：`ssh txecs`（`ubuntu@106.52.51.67`）；系统 Ubuntu 24.04，
   4 vCPU、约 3.6 GiB 可用内存。
-- 当前是 P0 隔离栈，不是生产写端；备案通过和 Stage I 授权前，生产域名、
-  webhook、worker、OpenClaw、bridge 均不得切入。
+- 当前是生产唯一写端；主站、backend、OpenClaw、bridge 和已启用 worker
+  均从本机运行。
 - 主机重建入口：infra
   `roles/server/{common,tencent}`；age 私钥和 GitHub infra 只读 deploy
   key 是最小人工输入。
 - 应用部署：AliECS `release-deploy` 的独立 `business-cn` job；
   `/srv/business-cn/current` 记录当前源码提交，镜像从 TCR 按 digest 拉取。
-- WebDock P0：`127.0.0.1:11800` 为 failover 入口，
+- WebDock：`127.0.0.1:11800` 为 failover 入口，
   `11810←webdock2` 已验证，`11811←webdock1` 待设备上线。
-- 公网边界：UFW P0 不开放 80/443，nginx 默认站点返回 444；无 sing-box、
-  mihomo 或任何第三方出海转发能力。
+- 公网边界：UFW 开放 80/443；Nginx 默认站点仍返回 444。`@`/`www`
+  在本机终止 TLS；`auth`/`lldap` 也在本机终止 TLS，再 HTTPS 回源
+  AliECS SSO。无 sing-box、mihomo 或任何第三方出海转发能力。
 - 排障：
   `sudo systemctl status webdock-failover-proxy`、
   `curl -i http://127.0.0.1:11800/healthz`、
