@@ -2615,7 +2615,9 @@ def test_invalidate_endpoint_clears_named_chat_id(monkeypatch):
     handler._handle_invalidate_feishu_group_policy()
 
     assert captured["status"] == 200
-    assert captured["obj"] == {"ok": True, "cleared": ["oc_drop"]}
+    # The push also re-pulls the table snapshot, and reports how much it managed to
+    # refresh so the calling automation can tell a no-op push from a working one.
+    assert captured["obj"] == {"ok": True, "cleared": ["oc_drop"], "refreshed": 0, "errors": []}
     assert "oc_keep" in bridge._feishu_group_policy_cache
     assert "oc_drop" not in bridge._feishu_group_policy_cache
 
@@ -3891,3 +3893,166 @@ def test_diagnostic_message_omits_unknown_fields():
     assert "错误码" not in card
     assert "快照" not in card
     assert card.startswith(bridge.FALLBACK_MESSAGE)
+
+
+# --- 多维表格常驻快照（读路径彻底离开消息主路径） -------------------------------
+
+
+def _snapshot_bridge(monkeypatch, tmp_path, scans):
+    """Bridge module with the console app token configured and every bitable page
+    fetch counted, so a test can prove whether a read hit the network at all."""
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_app_token", lambda: "app_tok")
+    monkeypatch.setattr(bridge, "FEISHU_BITABLE_SNAPSHOT_PATH", str(tmp_path / "snap.json"))
+
+    def _fetch(table_id, app_token):
+        scans.append(table_id)
+        return [{"record_id": f"rec-{table_id}-{len(scans)}", "fields": {}}]
+
+    monkeypatch.setattr(bridge, "_fetch_feishu_bitable_records", _fetch)
+    return bridge
+
+
+def test_reads_after_the_first_never_scan_again(monkeypatch, tmp_path):
+    scans: list[str] = []
+    bridge = _snapshot_bridge(monkeypatch, tmp_path, scans)
+
+    for _ in range(5):
+        bridge.list_feishu_bitable_records("tblA")
+
+    # One cold scan, then the snapshot answers — this is the whole latency fix:
+    # a message must never wait on a bitable HTTP round trip.
+    assert scans == ["tblA"]
+
+
+def test_background_refresh_keeps_the_snapshot_current_without_a_read(monkeypatch, tmp_path):
+    scans: list[str] = []
+    bridge = _snapshot_bridge(monkeypatch, tmp_path, scans)
+    bridge.list_feishu_bitable_records("tblA")
+    first = bridge.list_feishu_bitable_records("tblA")
+
+    ok, errors = bridge.refresh_feishu_bitable_snapshot()
+
+    assert (ok, errors) == (1, [])
+    # The refresher replaced the records, and the next read still costs no scan.
+    assert bridge.list_feishu_bitable_records("tblA") != first
+    assert scans == ["tblA", "tblA"]
+
+
+def test_one_unreadable_table_does_not_stop_the_others(monkeypatch, tmp_path):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_app_token", lambda: "app_tok")
+    monkeypatch.setattr(bridge, "FEISHU_BITABLE_SNAPSHOT_PATH", str(tmp_path / "snap.json"))
+
+    def _fetch(table_id, app_token):
+        if table_id == "tblBad":
+            raise RuntimeError("permission denied")
+        return [{"record_id": "ok", "fields": {}}]
+
+    monkeypatch.setattr(bridge, "_fetch_feishu_bitable_records", _fetch)
+    bridge.list_feishu_bitable_records("tblGood")
+    bridge._feishu_bitable_tracked_tables.add("app_tok\ttblBad")
+
+    ok, errors = bridge.refresh_feishu_bitable_snapshot()
+
+    assert ok == 1
+    assert len(errors) == 1 and "tblBad" in errors[0]
+    # tblGood stays served; a single broken table must not blank the snapshot.
+    assert bridge.list_feishu_bitable_records("tblGood")
+
+
+def test_snapshot_survives_a_restart_through_disk(monkeypatch, tmp_path):
+    scans: list[str] = []
+    bridge = _snapshot_bridge(monkeypatch, tmp_path, scans)
+    bridge.list_feishu_bitable_records("tblA")
+    bridge.save_feishu_bitable_snapshot()
+
+    # A cutover restarts the container; that first message is exactly when the cold
+    # scan used to hurt most.
+    restarted: list[str] = []
+    fresh = _snapshot_bridge(monkeypatch, tmp_path, restarted)
+    loaded = fresh.load_feishu_bitable_snapshot()
+    fresh.list_feishu_bitable_records("tblA")
+
+    assert loaded == 1
+    assert restarted == []
+
+
+def test_a_snapshot_older_than_the_staleness_ceiling_is_not_served(monkeypatch, tmp_path):
+    scans: list[str] = []
+    bridge = _snapshot_bridge(monkeypatch, tmp_path, scans)
+    bridge.list_feishu_bitable_records("tblA")
+    bridge.save_feishu_bitable_snapshot()
+
+    path = tmp_path / "snap.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["saved_at"] = time.time() - bridge.FEISHU_BITABLE_LIST_CACHE_SECONDS - 60
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    restarted: list[str] = []
+    fresh = _snapshot_bridge(monkeypatch, tmp_path, restarted)
+
+    assert fresh.load_feishu_bitable_snapshot() == 0
+    fresh.list_feishu_bitable_records("tblA")
+    assert restarted == ["tblA"]  # fell back to a real scan rather than serving ancient data
+
+
+def test_a_write_is_still_read_back_immediately(monkeypatch, tmp_path):
+    scans: list[str] = []
+    bridge = _snapshot_bridge(monkeypatch, tmp_path, scans)
+    bridge.list_feishu_bitable_records("tblA")
+
+    bridge.invalidate_feishu_bitable_list_cache("tblA")
+    bridge.list_feishu_bitable_records("tblA")
+
+    assert scans == ["tblA", "tblA"]
+
+
+def test_reconcile_alerts_the_ops_group_when_a_table_cannot_be_read(monkeypatch, tmp_path):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_session_console_app_token", lambda: "app_tok")
+    monkeypatch.setattr(bridge, "FEISHU_BITABLE_SNAPSHOT_PATH", str(tmp_path / "snap.json"))
+    monkeypatch.setattr(
+        bridge, "_fetch_feishu_bitable_records",
+        lambda table_id, app_token: (_ for _ in ()).throw(RuntimeError("table not found")),
+    )
+    bridge._feishu_bitable_tracked_tables.add("app_tok\ttblGone")
+    alerts: list[str] = []
+    monkeypatch.setattr(bridge, "send_feishu_alert", alerts.append)
+
+    report = bridge.reconcile_feishu_bitable_snapshot()
+
+    assert report["tables_ok"] == 0
+    assert any("tblGone" in err for err in report["errors"])
+    assert len(alerts) == 1 and "tblGone" in alerts[0]
+
+
+def test_reconcile_stays_quiet_when_everything_agrees(monkeypatch, tmp_path):
+    scans: list[str] = []
+    bridge = _snapshot_bridge(monkeypatch, tmp_path, scans)
+    monkeypatch.setattr(
+        bridge, "_fetch_feishu_bitable_records",
+        lambda table_id, app_token: [{"record_id": "stable", "fields": {}}],
+    )
+    bridge.list_feishu_bitable_records("tblA")
+    alerts: list[str] = []
+    monkeypatch.setattr(bridge, "send_feishu_alert", alerts.append)
+
+    report = bridge.reconcile_feishu_bitable_snapshot()
+
+    assert report == {"tables_ok": 1, "errors": [], "drifted": {}}
+    assert alerts == []  # a healthy day must not page anyone
+
+
+def test_reconcile_defaults_to_the_ops_group_chat_id():
+    bridge = load_bridge()
+
+    assert bridge.FEISHU_ALERT_CHAT_ID == "oc_84d1130542509e374f7ea20c13d11ca4"
+
+
+def test_refresh_cycle_defaults_to_a_minute():
+    # The only knob trading Feishu API volume for config-apply speed. Tightening it
+    # buys nothing on the message path (which reads memory) and doubles the bill.
+    bridge = load_bridge()
+
+    assert bridge.FEISHU_BITABLE_SNAPSHOT_REFRESH_SECONDS == 60

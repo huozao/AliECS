@@ -1356,18 +1356,48 @@ def update_feishu_bitable_record(table_id: str, record_id: str, fields: dict[str
 # Every bitable lookup is a full paginated table scan filtered in memory, and one
 # inbound message runs several of them back to back (session record, peer project
 # config, chat mode) — twice over, because request_details is computed again inside
-# build_webdock_body. Measured 2026-07-28: those serial scans were ~7s of the delay
-# between a Feishu message and ChatGPT starting to type. The window only has to
-# cover one message's processing; writes invalidate their own table immediately, so
-# a manual edit still takes effect on the next message.
-FEISHU_BITABLE_LIST_CACHE_SECONDS = float(os.getenv("FEISHU_BITABLE_LIST_CACHE_SECONDS", "5"))
+# build_webdock_body. Measured 2026-07-28: those serial scans were 2-3s of a group
+# message's pre-work and 6-9s of a private one, i.e. the single largest remaining
+# segment between a Feishu message and ChatGPT starting to type.
+#
+# So bitable is no longer read on the message path at all. A background thread keeps
+# a snapshot of every table this process has touched, refreshed on a short cycle;
+# reads serve from that snapshot. The TTL below is therefore not the freshness
+# target any more — the refresh cycle is — it is only the age at which a snapshot is
+# considered too stale to trust (refresher wedged/dead), where we fall back to a
+# synchronous scan rather than answer from something ancient.
+FEISHU_BITABLE_LIST_CACHE_SECONDS = float(os.getenv("FEISHU_BITABLE_LIST_CACHE_SECONDS", "900"))
+# 60s, not tighter: this is the ONE knob that trades Feishu API volume for how fast
+# a table edit applies. Polling N tables every T seconds costs 86400/T * N requests
+# a day flat, whether or not anything changed — at 60s / 4 tables that is ~4
+# requests a minute, far under any tenant limit, and the operator tolerance for an
+# edit taking effect is a minute. Halving T doubles the bill for no latency win on
+# the message path, which reads memory either way.
+FEISHU_BITABLE_SNAPSHOT_REFRESH_SECONDS = float(
+    os.getenv("FEISHU_BITABLE_SNAPSHOT_REFRESH_SECONDS", "60")
+)
+# Surviving a container restart matters because a cutover is exactly when the first
+# message would otherwise pay the full cold scan again.
+FEISHU_BITABLE_SNAPSHOT_PATH = os.getenv(
+    "FEISHU_BITABLE_SNAPSHOT_PATH", "/var/lib/openclaw-bridge/bitable-snapshot.json"
+)
 _feishu_bitable_list_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _feishu_bitable_list_cache_lock = Lock()
+# Which (app_token, table_id) pairs the refresher should keep warm. Seeded from the
+# configured console tables at startup so even the very first message is warm, and
+# extended by any table an actual lookup asks for.
+_feishu_bitable_tracked_tables: set[str] = set()
+
+
+def _bitable_cache_key(app_token: str, table_id: str) -> str:
+    return f"{app_token}\t{table_id}"
 
 
 def invalidate_feishu_bitable_list_cache(table_id: str = "") -> None:
     """Drop cached scans. Called after every write so a record this bridge just
-    created or updated is never read back stale within the cache window."""
+    created or updated is never read back stale, and by the admin invalidate
+    endpoint so an external push (bitable automation / event subscription) can make
+    a manual edit apply immediately instead of waiting out the refresh cycle."""
     with _feishu_bitable_list_cache_lock:
         if not table_id:
             _feishu_bitable_list_cache.clear()
@@ -1376,16 +1406,7 @@ def invalidate_feishu_bitable_list_cache(table_id: str = "") -> None:
             _feishu_bitable_list_cache.pop(key, None)
 
 
-def list_feishu_bitable_records(table_id: str, app_token: str | None = None) -> list[dict[str, Any]]:
-    app_token = app_token or feishu_session_console_app_token()
-    if not app_token or not table_id:
-        return []
-    cache_key = f"{app_token}\t{table_id}"
-    now = time.monotonic()
-    with _feishu_bitable_list_cache_lock:
-        cached = _feishu_bitable_list_cache.get(cache_key)
-        if cached and now - cached[0] < FEISHU_BITABLE_LIST_CACHE_SECONDS:
-            return list(cached[1])
+def _fetch_feishu_bitable_records(table_id: str, app_token: str) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     page_token = ""
     seen_tokens: set[str] = set()
@@ -1409,9 +1430,130 @@ def list_feishu_bitable_records(table_id: str, app_token: str | None = None) -> 
             break
         seen_tokens.add(next_token)
         page_token = next_token
-    with _feishu_bitable_list_cache_lock:
-        _feishu_bitable_list_cache[cache_key] = (now, list(records))
     return records
+
+
+def _store_feishu_bitable_records(cache_key: str, records: list[dict[str, Any]]) -> None:
+    with _feishu_bitable_list_cache_lock:
+        _feishu_bitable_list_cache[cache_key] = (time.monotonic(), list(records))
+
+
+def list_feishu_bitable_records(table_id: str, app_token: str | None = None) -> list[dict[str, Any]]:
+    """Read a table. Normally answered from the background snapshot in ~0ms; the
+    synchronous scan below only runs on a genuine cold miss (first touch of a table,
+    or a snapshot so old the refresher must be broken)."""
+    app_token = app_token or feishu_session_console_app_token()
+    if not app_token or not table_id:
+        return []
+    cache_key = _bitable_cache_key(app_token, table_id)
+    with _feishu_bitable_list_cache_lock:
+        _feishu_bitable_tracked_tables.add(cache_key)
+        cached = _feishu_bitable_list_cache.get(cache_key)
+        if cached and time.monotonic() - cached[0] < FEISHU_BITABLE_LIST_CACHE_SECONDS:
+            return list(cached[1])
+    records = _fetch_feishu_bitable_records(table_id, app_token)
+    _store_feishu_bitable_records(cache_key, records)
+    return records
+
+
+def feishu_bitable_tracked_tables() -> list[tuple[str, str]]:
+    """(app_token, table_id) pairs the refresher keeps warm: every console table we
+    know about from config, plus anything a lookup has actually asked for."""
+    app_token = feishu_session_console_app_token()
+    keys: set[str] = set()
+    if app_token:
+        for kind in ("session", "user", "group", "rule"):
+            table_id = feishu_session_console_table_id(kind)
+            if table_id:
+                keys.add(_bitable_cache_key(app_token, table_id))
+    with _feishu_bitable_list_cache_lock:
+        keys.update(_feishu_bitable_tracked_tables)
+    pairs = []
+    for key in sorted(keys):
+        token, _, table = key.partition("\t")
+        if token and table:
+            pairs.append((token, table))
+    return pairs
+
+
+def refresh_feishu_bitable_snapshot() -> tuple[int, list[str]]:
+    """Re-scan every tracked table into the snapshot. Returns (ok_count, errors).
+
+    Deliberately not transactional: one unreadable table must not stop the others
+    from staying warm, and a failed table simply keeps its previous records until
+    it either succeeds again or ages past FEISHU_BITABLE_LIST_CACHE_SECONDS, at
+    which point reads fall back to a synchronous scan and surface the real error.
+    """
+    ok = 0
+    errors: list[str] = []
+    for app_token, table_id in feishu_bitable_tracked_tables():
+        try:
+            records = _fetch_feishu_bitable_records(table_id, app_token)
+        except Exception as exc:
+            errors.append(f"{table_id}: {exc}")
+            continue
+        _store_feishu_bitable_records(_bitable_cache_key(app_token, table_id), records)
+        ok += 1
+    return ok, errors
+
+
+def feishu_bitable_snapshot_counts() -> dict[str, int]:
+    """table_id -> record count, for the daily reconcile report."""
+    with _feishu_bitable_list_cache_lock:
+        return {
+            key.partition("\t")[2]: len(entry[1])
+            for key, entry in _feishu_bitable_list_cache.items()
+        }
+
+
+def save_feishu_bitable_snapshot() -> None:
+    path = FEISHU_BITABLE_SNAPSHOT_PATH
+    if not path:
+        return
+    with _feishu_bitable_list_cache_lock:
+        # Stored against wall clock: monotonic is meaningless to the next process.
+        payload = {
+            "saved_at": time.time(),
+            "tables": {key: entry[1] for key, entry in _feishu_bitable_list_cache.items()},
+        }
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False)
+        os.replace(tmp, path)
+    except Exception as exc:
+        log_line(f"bitable_snapshot_save_failed {exc}")
+
+
+def load_feishu_bitable_snapshot() -> int:
+    """Warm the cache from disk at startup so the first message after a cutover
+    does not pay the cold scan. A snapshot older than the staleness ceiling is
+    ignored rather than served."""
+    path = FEISHU_BITABLE_SNAPSHOT_PATH
+    if not path or not os.path.exists(path):
+        return 0
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception as exc:
+        log_line(f"bitable_snapshot_load_failed {exc}")
+        return 0
+    age = time.time() - float(payload.get("saved_at") or 0)
+    if age < 0 or age > FEISHU_BITABLE_LIST_CACHE_SECONDS:
+        log_line(f"bitable_snapshot_ignored stale_age_s={int(age)}")
+        return 0
+    tables = payload.get("tables")
+    if not isinstance(tables, dict):
+        return 0
+    # Age the loaded entries so they expire on the same schedule they would have.
+    loaded_at = time.monotonic() - age
+    with _feishu_bitable_list_cache_lock:
+        for key, records in tables.items():
+            if isinstance(key, str) and isinstance(records, list) and "\t" in key:
+                _feishu_bitable_list_cache[key] = (loaded_at, records)
+                _feishu_bitable_tracked_tables.add(key)
+    return len(tables)
 
 
 FEISHU_BITABLE_FIELD_TYPE_TEXT = 1
@@ -3864,7 +4006,15 @@ class Handler(BaseHTTPRequestHandler):
             + json.dumps({"cleared": cleared}, ensure_ascii=False, sort_keys=True)
         )
         invalidate_global_rule_cache()
-        return self._json(200, {"ok": True, "cleared": cleared})
+        # Also re-pull the table snapshot, so a push from bitable (automation HTTP
+        # request, or an event-subscription relay) makes an edit apply on the very
+        # next message instead of waiting out the refresh cycle. Done inline: the
+        # caller is an automation, not a user waiting on a reply.
+        refreshed, refresh_errors = refresh_feishu_bitable_snapshot()
+        return self._json(
+            200,
+            {"ok": True, "cleared": cleared, "refreshed": refreshed, "errors": refresh_errors},
+        )
 
     def do_GET(self) -> None:
         if self.path.startswith("/media/"):
@@ -3941,10 +4091,128 @@ def get_bridge_hosts() -> list[str]:
     return [host.strip() for host in hosts.split(",") if host.strip()]
 
 
+# Where the daily reconcile reports drift. Defaults to the ops group so the check
+# is never silently unrouted; override per deployment.
+FEISHU_ALERT_CHAT_ID = os.getenv("FEISHU_ALERT_CHAT_ID", "oc_84d1130542509e374f7ea20c13d11ca4")
+# Local wall-clock time (container TZ) for the daily full reconcile — an idle hour,
+# because it re-scans every table back to back.
+FEISHU_BITABLE_RECONCILE_AT = os.getenv("FEISHU_BITABLE_RECONCILE_AT", "04:00")
+
+
+def send_feishu_alert(text: str) -> None:
+    """Post a plain-text alert to the ops group. Best effort: an alert that fails
+    to send must never take down the thread that noticed the problem."""
+    chat_id = FEISHU_ALERT_CHAT_ID
+    if not chat_id:
+        return
+    try:
+        token = feishu_tenant_access_token()
+        if not token:
+            log_line("feishu_alert_skipped no_tenant_token")
+            return
+        feishu_post_json(
+            "/im/v1/messages?receive_id_type=chat_id",
+            {
+                "receive_id": chat_id,
+                "msg_type": "text",
+                "content": json.dumps({"text": text}, ensure_ascii=False),
+            },
+            auth_token=token,
+        )
+    except Exception as exc:
+        log_line(f"feishu_alert_failed {exc}")
+
+
+def _seconds_until(hhmm: str) -> float:
+    """Seconds from now to the next local occurrence of HH:MM."""
+    try:
+        hour, _, minute = hhmm.partition(":")
+        target_h, target_m = int(hour), int(minute or 0)
+    except Exception:
+        target_h, target_m = 4, 0
+    now = datetime.now()
+    target = now.replace(hour=target_h, minute=target_m, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return max(1.0, (target - now).total_seconds())
+
+
+def reconcile_feishu_bitable_snapshot() -> dict[str, Any]:
+    """Full re-scan compared against what the snapshot was already serving.
+
+    The refresher already polls everything, so this is not catch-up for missed
+    increments — it is a health check on the refresh path itself. It catches the
+    failures that a short poll cycle hides: a table renamed or unshared, tenant
+    token permissions revoked, a wedged refresher whose entries quietly aged out.
+    """
+    before = feishu_bitable_snapshot_counts()
+    ok, errors = refresh_feishu_bitable_snapshot()
+    after = feishu_bitable_snapshot_counts()
+    drifted = {
+        table: [before.get(table), after.get(table)]
+        for table in sorted(set(before) | set(after))
+        if before.get(table) != after.get(table)
+    }
+    report = {"tables_ok": ok, "errors": errors, "drifted": drifted}
+    log_line("bitable_reconcile " + json.dumps(report, ensure_ascii=False, sort_keys=True))
+    if errors or drifted:
+        lines = [f"[bridge] 多维表格每日核对发现异常（{utc_now_iso()}）"]
+        for message in errors:
+            lines.append(f"✗ 拉取失败 {message}")
+        for table, (old, new) in drifted.items():
+            lines.append(f"⚠ {table} 记录数 {old} → {new}（增量刷新可能有遗漏）")
+        send_feishu_alert("\n".join(lines))
+    return report
+
+
+def _bitable_snapshot_worker() -> None:
+    """Keep every tracked table warm so no message ever waits on a bitable scan,
+    and run the daily reconcile when its local time comes round."""
+    next_reconcile = time.monotonic() + _seconds_until(FEISHU_BITABLE_RECONCILE_AT)
+    while True:
+        try:
+            if time.monotonic() >= next_reconcile:
+                reconcile_feishu_bitable_snapshot()
+                next_reconcile = time.monotonic() + _seconds_until(FEISHU_BITABLE_RECONCILE_AT)
+            else:
+                ok, errors = refresh_feishu_bitable_snapshot()
+                if errors:
+                    log_line(
+                        "bitable_snapshot_refresh_partial "
+                        + json.dumps({"ok": ok, "errors": errors}, ensure_ascii=False, sort_keys=True)
+                    )
+            save_feishu_bitable_snapshot()
+        except Exception as exc:
+            log_line(f"bitable_snapshot_worker_error {exc}")
+        time.sleep(max(5.0, FEISHU_BITABLE_SNAPSHOT_REFRESH_SECONDS))
+
+
+def start_bitable_snapshot_worker() -> None:
+    if not feishu_session_console_app_token():
+        log_line("bitable_snapshot_worker_disabled no_app_token")
+        return
+    loaded = load_feishu_bitable_snapshot()
+    log_line(
+        "bitable_snapshot_worker_start "
+        + json.dumps(
+            {
+                "loaded_tables": loaded,
+                "refresh_seconds": FEISHU_BITABLE_SNAPSHOT_REFRESH_SECONDS,
+                "reconcile_at": FEISHU_BITABLE_RECONCILE_AT,
+                "alert_chat_id": FEISHU_ALERT_CHAT_ID,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+    Thread(target=_bitable_snapshot_worker, daemon=True, name="bitable-snapshot").start()
+
+
 if __name__ == "__main__":
     bridge_hosts = get_bridge_hosts()
     bridge_port = int(os.getenv("OPENCLAW_BRIDGE_PORT", "18080"))
     servers = [ThreadingHTTPServer((host, bridge_port), Handler) for host in bridge_hosts]
+    start_bitable_snapshot_worker()
     for server in servers[1:]:
         Thread(target=server.serve_forever, daemon=True).start()
     log_line("OpenClaw bridge listening on " + ", ".join(f"http://{host}:{bridge_port}/v1" for host in bridge_hosts))
