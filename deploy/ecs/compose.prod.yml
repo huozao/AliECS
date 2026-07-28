@@ -107,6 +107,7 @@ services:
       ENV: prod
     extra_hosts:
       - "host.docker.internal:host-gateway"
+      - "auth.hydwang.xyz:host-gateway"
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
