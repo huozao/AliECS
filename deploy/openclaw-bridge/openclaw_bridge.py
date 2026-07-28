@@ -1367,8 +1367,14 @@ def update_feishu_bitable_record(table_id: str, record_id: str, fields: dict[str
 # considered too stale to trust (refresher wedged/dead), where we fall back to a
 # synchronous scan rather than answer from something ancient.
 FEISHU_BITABLE_LIST_CACHE_SECONDS = float(os.getenv("FEISHU_BITABLE_LIST_CACHE_SECONDS", "900"))
+# 60s, not tighter: this is the ONE knob that trades Feishu API volume for how fast
+# a table edit applies. Polling N tables every T seconds costs 86400/T * N requests
+# a day flat, whether or not anything changed — at 60s / 4 tables that is ~4
+# requests a minute, far under any tenant limit, and the operator tolerance for an
+# edit taking effect is a minute. Halving T doubles the bill for no latency win on
+# the message path, which reads memory either way.
 FEISHU_BITABLE_SNAPSHOT_REFRESH_SECONDS = float(
-    os.getenv("FEISHU_BITABLE_SNAPSHOT_REFRESH_SECONDS", "30")
+    os.getenv("FEISHU_BITABLE_SNAPSHOT_REFRESH_SECONDS", "60")
 )
 # Surviving a container restart matters because a cutover is exactly when the first
 # message would otherwise pay the full cold scan again.

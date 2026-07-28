@@ -54,7 +54,7 @@ ssh webdock2 "wsl -d Ubuntu-24.04-WebDock -- docker ps"  # WebDock 容器状态
 ## 已知坑（改代码前必读）
 
 - bridge 换码：合并到 main 即自动 cutover——release-deploy 发现 `deploy/openclaw-bridge/**` 的内容树 hash 变了，构建完调用 `bridge-cutover`。tree hash 没变则完全不触发（同一镜像标签，切了也只是白重启咽喉服务）。workflow 按所选 Git ref 自动解析内容镜像与 OCI digest，原子切换、健康检查、失败回滚。回滚/重切/切非 main ref 用 `bridge-cutover` 的手工 `workflow_dispatch`（confirmation 填 `CUTOVER_TXECS`）。禁止登机手改 `.env`；并发由 workflow concurrency 串行化。
-- 多维表格**不在消息路径上读**。bridge 后台线程按 `FEISHU_BITABLE_SNAPSHOT_REFRESH_SECONDS`（默认 30s）把用到的表全量刷进内存快照，消息只读内存；快照落盘 `/srv/openclaw-bridge/state/bitable-snapshot.json`，容器重启后直接载入。改表生效延迟 = 刷新周期。要立刻生效就 POST `/admin/invalidate-feishu-group-policy`（带 `X-Admin-Secret`），它会清缓存并同步重拉快照。
+- 多维表格**不在消息路径上读**。bridge 后台线程按 `FEISHU_BITABLE_SNAPSHOT_REFRESH_SECONDS`（默认 60s）把用到的表全量刷进内存快照，消息只读内存；这个周期是唯一一个「飞书 API 调用量 ↔ 配置生效速度」的旋钮，轮询 N 张表周期 T 秒 = 每天 `86400/T*N` 次请求，60s/4 张表 ≈ 每分钟 4 次。调小只增调用量，不改消息延迟。快照落盘 `/srv/openclaw-bridge/state/bitable-snapshot.json`，容器重启后直接载入。改表生效延迟 = 刷新周期。要立刻生效就 POST `/admin/invalidate-feishu-group-policy`（带 `X-Admin-Secret`），它会清缓存并同步重拉快照。
   - `FEISHU_BITABLE_LIST_CACHE_SECONDS`（默认 900s）不是新鲜度目标，是「刷新线程死了」的兜底岁数，超过就退回同步扫表让真实错误浮出来。
   - 每天 `FEISHU_BITABLE_RECONCILE_AT`（默认 04:00 容器本地时间）全量核对一次，异常告警到飞书群 `oc_84d1130542509e374f7ea20c13d11ca4`。日志关键字 `bitable_reconcile`、`bitable_snapshot_worker_start`。
   - ⚠️ 2026-07-28 实测：改之前群消息扫表 2-3s、私聊 6-9s，是 15s 端到端里最大的一段。改错这里会直接把延迟加回去。

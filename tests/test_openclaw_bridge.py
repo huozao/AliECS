@@ -4048,3 +4048,11 @@ def test_reconcile_defaults_to_the_ops_group_chat_id():
     bridge = load_bridge()
 
     assert bridge.FEISHU_ALERT_CHAT_ID == "oc_84d1130542509e374f7ea20c13d11ca4"
+
+
+def test_refresh_cycle_defaults_to_a_minute():
+    # The only knob trading Feishu API volume for config-apply speed. Tightening it
+    # buys nothing on the message path (which reads memory) and doubles the bill.
+    bridge = load_bridge()
+
+    assert bridge.FEISHU_BITABLE_SNAPSHOT_REFRESH_SECONDS == 60
