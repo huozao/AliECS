@@ -68,6 +68,10 @@ if ENABLE_COLD_RECOVERY=false bash "$ROLE_DEPLOY" business-cold-recovery sha-012
 fi
 
 assert_contains "$RELEASE_WORKFLOW" "  deploy-business-cn:"
+assert_contains "$RELEASE_WORKFLOW" "  preload-sso-candidate:"
+assert_contains "$RELEASE_WORKFLOW" "inputs.deploy_target == 'sso-candidate'"
+assert_contains "$RELEASE_WORKFLOW" 'third-party-authelia:4.39-runtime-20260725'
+assert_contains "$RELEASE_WORKFLOW" 'third-party-lldap:v0.6-runtime-20260725'
 assert_contains "$RELEASE_WORKFLOW" "  deploy-edge-us:"
 assert_contains "$RELEASE_WORKFLOW" 'host: ${{ secrets.TENCENT_HOST }}'
 assert_contains "$RELEASE_WORKFLOW" "inputs.deploy_target == 'business-cn'"
