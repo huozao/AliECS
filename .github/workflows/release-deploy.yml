@@ -20,6 +20,7 @@ on:
         options:
           - build-only
           - mirror-only
+          - sso-candidate
           - business-cn
           - edge-us
 
@@ -213,7 +214,7 @@ jobs:
 
   mirror-third-party:
     needs: build-push
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.deploy_target == 'mirror-only' || inputs.deploy_target == 'business-cn') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.deploy_target == 'mirror-only' || inputs.deploy_target == 'sso-candidate' || inputs.deploy_target == 'business-cn') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -227,6 +228,42 @@ jobs:
           TCR_USERNAME: ${{ secrets.TCR_USERNAME }}
           TCR_PASSWORD: ${{ secrets.TCR_PASSWORD }}
         run: bash deploy/ecs/mirror-images-to-tcr.sh
+
+  preload-sso-candidate:
+    needs:
+      - mirror-third-party
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_target == 'sso-candidate' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Preload pinned SSO images on txecs
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          TCR_BASE: ${{ vars.TCR_BASE }}
+          TCR_USERNAME: ${{ secrets.TCR_USERNAME }}
+          TCR_PASSWORD: ${{ secrets.TCR_PASSWORD }}
+        with:
+          host: ${{ secrets.TENCENT_HOST }}
+          username: ${{ secrets.TENCENT_USER }}
+          key: ${{ secrets.TENCENT_SSH_KEY }}
+          command_timeout: 15m
+          envs: TCR_BASE,TCR_USERNAME,TCR_PASSWORD
+          script: |
+            set -euo pipefail
+            : "${TCR_BASE:?missing TCR_BASE}"
+            : "${TCR_USERNAME:?missing TCR username}"
+            : "${TCR_PASSWORD:?missing TCR password}"
+            registry="${TCR_BASE%%/*}"
+            printf '%s' "$TCR_PASSWORD" \
+              | sudo docker login "$registry" \
+                  --username "$TCR_USERNAME" --password-stdin
+            trap 'sudo docker logout "$registry" >/dev/null 2>&1 || true' EXIT
+            for image in \
+              "$TCR_BASE/third-party-authelia:4.39-runtime-20260725" \
+              "$TCR_BASE/third-party-lldap:v0.6-runtime-20260725"; do
+              sudo docker pull "$image"
+              sudo docker image inspect "$image" >/dev/null
+              echo "preloaded: $image"
+            done
 
   deploy-business-cn:
     needs:

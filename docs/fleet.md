@@ -37,13 +37,13 @@ bridge/openclaw 容器
 - 切换主备 = 改该环境文件里的 `PRIMARY_*` / `STANDBY_*`（尤其是 `*_NAME` 与对应 host/port 绑定）后 `systemctl restart webdock-failover-proxy`，不改代码。
 - 判定某条消息由哪台处理：查各机 `/var/log/webdock/archive/<UTC日期>.jsonl`（权威记录）。
 
-### 腾讯云 P0 并行路径（尚未切生产）
+### 腾讯云当前生产路径
 
 ```
 webdock2 WSL
-  ├─ 原生产业务隧道 → aliecs 127.0.0.1:11810
+  ├─ 已停旧业务隧道 → aliecs 127.0.0.1:11810
   ├─ console 隧道   → aliecs 127.0.0.1:16090/16091
-  └─ 新业务隧道     → txecs 127.0.0.1:11810
+  └─ 生产业务隧道   → txecs 127.0.0.1:11810
 
 txecs 127.0.0.1:11800 failover-proxy
   ├─ 主 127.0.0.1:11810 ← webdock2（已验证）
@@ -55,8 +55,7 @@ txecs 127.0.0.1:11800 failover-proxy
 - 两个落点的 11810 是不同主机上的回环端口，不冲突。
 - txecs 主备权威由 txecs `/etc/default/webdock-failover-proxy` 和
   `11800/healthz` 响应头共同确认；不得拿 AliECS 的环境文件判断 txecs。
-- P1 只切 bridge 目标，不迁移 WebDock browser_data，也不改变 console
-  隧道落点。
+- WebDock browser_data 不随业务服务器迁移；console 隧道仍落 AliECS。
 
 ## 设备档案
 
@@ -112,9 +111,9 @@ txecs 127.0.0.1:11800 failover-proxy
 - 别名：新电脑、desktop；ssh alias `desktop` / `webdock2` / `WebDock02`；Windows 主机名 `DESKTOP-D0LV1TN`；用户 `Admin`。
 - 结构：**SSH 登录进的是 Windows（PowerShell）**，WebDock 跑在 WSL2 发行版 `Ubuntu-24.04-WebDock` 内的 docker 里。Linux 命令一律 `ssh webdock2 "wsl -d Ubuntu-24.04-WebDock -- <cmd>"`。
 - 运行：仅 `webdock` 容器（与 webdock1 同镜像同 tag）。Immich / AdventureLog / Gokapi 暂不部署（按需再拉）。
-- 反向隧道：WSL 内两条独立业务隧道均将 WebDock 18000 映射到远端
-  11810：原 `webdock-ecs-tunnel` 落 AliECS（当前生产），新
-  `webdock-business-tunnel` 落 txecs（P0 并行）；console 仍单独落 AliECS。
+- 反向隧道：WSL 内 `webdock-business-tunnel` 将 WebDock 18000 映射到
+  txecs 11810（当前生产）；旧 `webdock-ecs-tunnel` 已停，console 仍单独
+  落 AliECS。
 - 远程控制台：Windows TightVNC :5900 服务模式（`UseVncAuthentication=0` 免密，防火墙只放行 172.16.0.0/12+100.64.0.0/10，MSI 自建全放行规则已 Disable）+ WSL noVNC 6091（`novnc-desktop`，启动时动态解析 WSL 网关）+ WSL `console-ecs-tunnel`（`-R 16090`←容器 noVNC 6080、`-R 16091`←桌面 6091）。
 - noVNC：`http://100.67.38.52:6080/` 可用。⚠️ 已知怪癖：Tailscale 直连 `100.67.38.52:18000` 返回 502（Windows→WSL 端口转发问题），**生产链路不受影响**（隧道从 WSL 内 localhost 拉出）；从 ECS 探 `127.0.0.1:11810/healthz` 才是有效健康检查。
 - 日志：WSL 内 `/var/log/webdock/archive/`。
@@ -129,7 +128,7 @@ txecs 127.0.0.1:11800 failover-proxy
 
 | GitHub 仓库 | 部署到 | 部署链路 |
 |---|---|---|
-| `huozao/AliECS` | aliecs + txecs | push main → 构建并同步 GHCR/TCR；aliecs `edge-us` 与 txecs `business-cn` 为独立 deploy job；**bridge 运行切换仍需手动 cutover 且 P1 才允许改目标**；改动走 PR |
+| `huozao/AliECS` | aliecs + txecs | push main → 构建并同步 GHCR/TCR；aliecs `edge-us` 与 txecs `business-cn` 为独立 deploy job；bridge 已运行在 txecs；改动走 PR |
 | `huozao/webdock` | webdock1 + webdock2 | CI 构建 sha-tag 镜像 → 各机手动拉取重启；两机应保持同 tag；小改可直推 main |
 | `huozao/infra`（私有） | aliecs + txecs + webdock1/2 主机层 | 角色、SOPS、nginx、隧道、bridge/edge 配置；在线设备按各自 remote/deploy key 同步 |
 
