@@ -16,8 +16,8 @@
 | 逻辑名 | 角色 | 硬件/OS | 网络入口 | 运行代码来源 |
 |---|---|---|---|---|
 | `devbox` | 开发机 | 本地 Windows 11 | 本机 | 3 个仓库克隆（不运行生产） |
-| `aliecs` | 海外边界 + 冷恢复 | 阿里云 ECS 美国 / Ubuntu 24.04，2G 内存 | `ssh aliecs`（root@47.77.176.62） | 原业务写端已冻结；保留 edge-us 与回滚数据 |
-| `txecs` | 当前生产唯一写端 / business-cn 主栈 / 公网中心边界 | 腾讯云轻量 / Ubuntu 24.04，4C4G | `ssh txecs`（ubuntu@106.52.51.67） | 业务镜像 + 主站入口 + SSO 反向代理 |
+| `aliecs` | 海外边界 + business-cn 隔离候选 | 阿里云 ECS 美国 / Ubuntu 24.04，2G 内存 | `ssh aliecs`（root@47.77.176.62） | console/ERP；旧写端冻结；可作反向迁移候选 |
+| `txecs` | 当前生产唯一写端 / business-cn 主栈 / 公网中心边界 | 腾讯云轻量 / Ubuntu 24.04，4C4G | `ssh txecs`（ubuntu@106.52.51.67） | 主站、PostgreSQL、SSO、OpenClaw、bridge、worker、nginx |
 | `webdock1` | webdock 算力节点（**当前备用**） | 旧 Ubuntu 笔记本 | `ssh webdock1`（Tailscale 100.97.176.57） | webdock 镜像 + 第三方自托管服务 |
 | `webdock2` | webdock 算力节点（**当前主力**） | 新台式机 Windows 11 + WSL2 | `ssh webdock2`（Tailscale 100.67.38.52） | webdock 镜像 |
 
@@ -31,7 +31,7 @@ bridge/openclaw 容器
       └─ 备 127.0.0.1:11811 ← webdock1 反向隧道
 ```
 
-- **主备关系的唯一权威来源是 aliecs 上 `/etc/default/webdock-failover-proxy` 的 `WEBDOCK_FAILOVER_PRIMARY_NAME` / `WEBDOCK_FAILOVER_STANDBY_NAME`**（当前 primary=webdock2，standby=webdock1；2026-07-04 实测 `127.0.0.1:11800/healthz` 返回 `X-Webdock-Route: primary`、`X-Webdock-Device: webdock2`）。⚠️ 端口只是当前实现细节：当前 primary 端口为 11810、standby 端口为 11811，但切换时可能改端口或改名称绑定，勿只凭端口号或代码默认值判断主备。
+- **主备关系的唯一权威来源是当前 business-cn 主机（现为 txecs）上的 `/etc/default/webdock-failover-proxy` 与 `127.0.0.1:11800/healthz` 响应头**。当前 primary=webdock2、standby=webdock1。⚠️ 端口只是实现细节：当前 primary 端口为 11810、standby 端口为 11811；切换服务器或主备时不得只凭端口号判断。
 - 主上游失败自动切备（标记 60s），并给回复加"已自动切换备用服务器"前缀。
 - 代理在响应头标注实际来源：`X-Webdock-Device`（设备名，来自环境文件 `WEBDOCK_FAILOVER_PRIMARY_NAME`/`STANDBY_NAME`）和 `X-Webdock-Route`（primary/standby）；bridge 用它渲染飞书卡片灰色脚注（例如 `设备: webdock2(主) | 项目: xx | 耗时: Ns`，以实际响应头为准）。
 - 切换主备 = 改该环境文件里的 `PRIMARY_*` / `STANDBY_*`（尤其是 `*_NAME` 与对应 host/port 绑定）后 `systemctl restart webdock-failover-proxy`，不改代码。
@@ -59,16 +59,17 @@ txecs 127.0.0.1:11800 failover-proxy
 
 ## 设备档案
 
-### aliecs（海外边界、SSO 源站与冷恢复）
+### aliecs（海外边界与 business-cn 隔离候选）
 
 - 别名：服务器。
 - 入口：`ssh aliecs`（root@47.77.176.62）。ECS **不在 tailnet**。
-- 当前运行容器：旧 public-web/admin-ui/postgres（只作回滚）、mcp-coding-server、
-  `sso-authelia`、`sso-lldap`、sing-box；业务写端、worker、OpenClaw 和 bridge
-  已迁到 txecs。
-- 公网 Nginx 只启用 `auth.hydwang.xyz` / `lldap.hydwang.xyz` 和默认拒绝；
-  其他历史 server 块隔离在 `/etc/nginx/conf.inactive.d/`。公网客户端先进入
-  txecs，再由 txecs 以校验证书的 HTTPS 回源 AliECS。
+- 当前运行容器包括旧 public-web/admin-ui/postgres（只作回滚）和
+  mcp-coding-server；旧 SSO、业务写端、worker、OpenClaw 和 bridge 均停止。
+- 公网 Nginx 只启用 console、ERP 和默认拒绝；其他历史 server 块隔离在
+  `/etc/nginx/conf.inactive.d/`。console 的 forward-auth 在 txecs 完成，
+  AliECS 源站只允许 txecs 访问。
+- 反向迁移候选使用独立 `/srv/business-cn` 和 `business-cn-*` 容器。
+  在线准备阶段只允许空 PostgreSQL，不启动业务/worker，不覆盖 console/ERP。
 - 隧道端口（127.0.0.1）：11800 为 webdock failover 入口；当前 11810←webdock2 主、11811←webdock1 备（以 `/etc/default/webdock-failover-proxy` 的 NAME 绑定为准）；12283←webdock1 Immich、18015/18016←webdock1 AdventureLog，另有 Gokapi/Authentik 隧道（端口见 webdock1 各 unit 的 env）。
 - 远程控制台（2026-07-04，`https://hydwang.xyz/console/`）：nginx `/console/*` 七路 location（认证=Authelia `two_factor` + lldap `console_admins` 组，成对 deny 兜底；**VNC 层免密设计**，2FA 是唯一闸门）；本机组件 ttyd 7681（unit `ttyd-console`，⚠️ apt 自带 `ttyd.service` 抢端口须 disable）、webtop 3000 按需启停（`/opt/aliecs/aliecs-temp-desktop.sh`，2G 内存用完必须 stop）；ECS `authorized_keys` permitlisten 新增四条 160xx（16080/16081←webdock1、16090/16091←webdock2，与生产 118xx 隔离）。详见 infra `console/README.md`。
 - 部署：push AliECS main → release-deploy 自动构建部署业务镜像；bridge 镜像同流程构建，且当 `deploy/openclaw-bridge/**` 的内容树 hash 变了时，release-deploy 构建完自动调用 `bridge-cutover`（自动解析 digest、验证并失败回滚）。bridge 没变的合并完全不碰它；回滚/重切/切非 main ref 仍走 `bridge-cutover` 的手工 `workflow_dispatch`（填 `CUTOVER_TXECS`）。
@@ -87,9 +88,9 @@ txecs 127.0.0.1:11800 failover-proxy
   `/srv/business-cn/current` 记录当前源码提交，镜像从 TCR 按 digest 拉取。
 - WebDock：`127.0.0.1:11800` 为 failover 入口，
   `11810←webdock2` 已验证，`11811←webdock1` 待设备上线。
-- 公网边界：UFW 开放 80/443；Nginx 默认站点仍返回 444。`@`/`www`
-  在本机终止 TLS；`auth`/`lldap` 也在本机终止 TLS，再 HTTPS 回源
-  AliECS SSO。无 sing-box、mihomo 或任何第三方出海转发能力。
+- 公网边界：UFW 开放 80/443；Nginx 默认站点仍返回 444。`@`/`www`、
+  `auth`/`lldap` 均在本机终止 TLS，Authelia/LLDAP 也在本机运行。无
+  sing-box、mihomo 或任何第三方出海转发能力。
 - 排障：
   `sudo systemctl status webdock-failover-proxy`、
   `curl -i http://127.0.0.1:11800/healthz`、
@@ -128,7 +129,7 @@ txecs 127.0.0.1:11800 failover-proxy
 
 | GitHub 仓库 | 部署到 | 部署链路 |
 |---|---|---|
-| `huozao/AliECS` | aliecs + txecs | push main → 构建并同步 GHCR/TCR；aliecs `edge-us` 与 txecs `business-cn` 为独立 deploy job；bridge 已运行在 txecs；改动走 PR |
+| `huozao/AliECS` | aliecs + txecs | push main → 构建并同步 GHCR/TCR；txecs `business-cn` 为生产 job，AliECS `business-candidate` 只预拉同一镜像并启动空 PostgreSQL；bridge 已运行在 txecs；改动走 PR |
 | `huozao/webdock` | webdock1 + webdock2 | CI 构建 sha-tag 镜像 → 各机手动拉取重启；两机应保持同 tag；小改可直推 main |
 | `huozao/infra`（私有） | aliecs + txecs + webdock1/2 主机层 | 角色、SOPS、nginx、隧道、bridge/edge 配置；在线设备按各自 remote/deploy key 同步 |
 
