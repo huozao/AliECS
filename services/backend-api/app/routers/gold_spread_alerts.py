@@ -88,9 +88,12 @@ class GoldSpreadAlert(BaseModel):
         "wrong_price_review",
         "historical_complete",
         "historical_failed",
+        "data_silence",
+        "data_silence_recovered",
+        "replay_summary",
     ]
     occurred_at: datetime
-    source: Literal["live", "historical"]
+    source: Literal["live", "historical", "replay"]
     severity: Literal["info", "warning", "critical"] = "warning"
     symbol: str = Field(default="", max_length=40)
     contract_name: str = Field(default="", max_length=80)
@@ -210,6 +213,15 @@ def render_gold_spread_alert(alert: GoldSpreadAlert) -> str:
 
     if alert.kind in {"wrong_price_detected", "wrong_price_review"}:
         return _render_wrong_price(alert)
+
+    if alert.kind in {"data_silence", "data_silence_recovered", "replay_summary"}:
+        # 这三类只带 summary，没有行情字段：链路健康类通知，不做价差排版。
+        headers = {
+            "data_silence": "🔴 行情断流｜价差与错单判定失效",
+            "data_silence_recovered": "🟢 行情已恢复",
+            "replay_summary": "🧾 收盘复盘",
+        }
+        return f"{headers[alert.kind]}\n时间：{_human_time(alert.occurred_at)}\n{alert.summary}".rstrip()
 
     titles = {
         "anomaly_started": "价差异常已确认",

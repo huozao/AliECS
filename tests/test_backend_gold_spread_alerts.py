@@ -415,3 +415,98 @@ def test_historical_analysis_uses_interactive_card(monkeypatch) -> None:
     stored = alerts._stored_alert_payload(captured["alert"])
     stored_chart = stored["historical_analysis"]["charts"][0]
     assert "data_base64" not in stored_chart
+
+
+def test_data_silence_alert_is_accepted(monkeypatch) -> None:
+    """监控端 2026-07-30 14:22 实际发出、被 422 退回的报文原样重放。"""
+    captured: dict[str, object] = {}
+    client = _client(monkeypatch)
+    monkeypatch.setattr(
+        alerts,
+        "send_feishu_text",
+        lambda receive_id, text, **kwargs: captured.update(text=text) or True,
+    )
+    body = {
+        "event_id": "mt5:data_silence:20260730T141432",
+        "kind": "data_silence",
+        "occurred_at": "2026-07-30T14:22:04+08:00",
+        "source": "live",
+        "severity": "critical",
+        "summary": "MT5 XAUUSD/USDCNH 已静默约 370 秒（自 07-30 14:14:32），价差与异常判定当前失效。",
+    }
+    response = client.post(
+        "/v1/internal/gold-spread/alerts",
+        headers={"X-Gold-Spread-Token": "test-token"},
+        json=body,
+    )
+    assert response.status_code == 200
+    assert "行情断流" in str(captured["text"])
+    assert "已静默约 370 秒" in str(captured["text"])
+
+
+def test_data_silence_recovered_alert_is_accepted(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    client = _client(monkeypatch)
+    monkeypatch.setattr(
+        alerts,
+        "send_feishu_text",
+        lambda receive_id, text, **kwargs: captured.update(text=text) or True,
+    )
+    body = {
+        "event_id": "mt5:data_silence_recovered:20260730T141432",
+        "kind": "data_silence_recovered",
+        "occurred_at": "2026-07-30T17:03:38+08:00",
+        "source": "live",
+        "severity": "warning",
+        "summary": "MT5 行情已恢复，静默自 07-30 14:14:32 起，持续约 10146 秒。",
+    }
+    response = client.post(
+        "/v1/internal/gold-spread/alerts",
+        headers={"X-Gold-Spread-Token": "test-token"},
+        json=body,
+    )
+    assert response.status_code == 200
+    assert "行情已恢复" in str(captured["text"])
+
+
+def test_replay_summary_accepts_replay_source(monkeypatch) -> None:
+    """replay 链路的 kind 和 source 都在旧白名单外，两处都要放开。"""
+    captured: dict[str, object] = {}
+    client = _client(monkeypatch)
+    monkeypatch.setattr(
+        alerts,
+        "send_feishu_text",
+        lambda receive_id, text, **kwargs: captured.update(text=text) or True,
+    )
+    body = {
+        "event_id": "replay:20260730T023815",
+        "kind": "replay_summary",
+        "occurred_at": "2026-07-30T02:38:15+08:00",
+        "source": "replay",
+        "severity": "critical",
+        "summary": "收盘复盘完成。2026-07-27 复盘失败：HTTPError: HTTP Error 429: Too Many Requests",
+    }
+    response = client.post(
+        "/v1/internal/gold-spread/alerts",
+        headers={"X-Gold-Spread-Token": "test-token"},
+        json=body,
+    )
+    assert response.status_code == 200
+    assert "收盘复盘" in str(captured["text"])
+
+
+def test_unknown_kind_still_rejected(monkeypatch) -> None:
+    body = {
+        "event_id": "mt5:bogus_kind:20260730T141432",
+        "kind": "bogus_kind",
+        "occurred_at": "2026-07-30T14:22:04+08:00",
+        "source": "live",
+        "severity": "critical",
+        "summary": "x",
+    }
+    response = _client(monkeypatch).post(
+        "/v1/internal/gold-spread/alerts",
+        headers={"X-Gold-Spread-Token": "test-token"},
+        json=body,
+    )
+    assert response.status_code == 422
