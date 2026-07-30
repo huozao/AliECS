@@ -104,5 +104,15 @@ assert_contains "$RELEASE_WORKFLOW" "uses: ./.github/workflows/bridge-cutover.ym
 assert_contains "$RELEASE_WORKFLOW" "confirmation: CUTOVER_TXECS"
 assert_contains "$RELEASE_WORKFLOW" "needs.resolve-release.outputs.bridge_changed == 'true'"
 assert_contains "$RELEASE_WORKFLOW" 'CURRENT="$(git rev-parse "HEAD:deploy/openclaw-bridge")"'
+assert_contains "$BRIDGE_WORKFLOW" \
+  'STATE_FILE=/srv/internal-stack/release.env'
+assert_contains "$BRIDGE_WORKFLOW" \
+  'COMPOSE=/srv/openclaw-bridge/docker-compose.yml'
+assert_contains "$BRIDGE_WORKFLOW" \
+  'sudo systemctl restart "$SERVICE"'
+assert_not_contains "$BRIDGE_WORKFLOW" \
+  '/srv/business-cn/state/bridge-release.env'
+assert_not_contains "$BRIDGE_WORKFLOW" \
+  '/home/ubuntu/infra/server/compose.bridge.yml'
 
 echo "deploy role boundary tests passed"

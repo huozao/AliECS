@@ -61,9 +61,10 @@ jobs:
             : "${BRIDGE_SOURCE_REF:?missing TCR bridge image}"
             : "${TCR_USERNAME:?missing TCR pull username}"
             : "${TCR_PASSWORD:?missing TCR pull password}"
-            STATE_FILE=/srv/business-cn/state/bridge-release.env
-            STATE_BACKUP=/srv/business-cn/state/bridge-release.env.bak.cutover
-            COMPOSE=/home/ubuntu/infra/server/compose.bridge.yml
+            STATE_FILE=/srv/internal-stack/release.env
+            STATE_BACKUP=/srv/internal-stack/release.env.bak.cutover
+            COMPOSE=/srv/openclaw-bridge/docker-compose.yml
+            SERVICE=txecs-openclaw-bridge.service
 
             # Pull and resolve the immutable digest before touching the live service.
             TCR_REGISTRY="${BRIDGE_SOURCE_REF%%/*}"
@@ -88,19 +89,41 @@ jobs:
             rollback() {
               echo "[cutover] rolling back to ${PREV}"
               sudo cp -a "$STATE_BACKUP" "$STATE_FILE"
-              sudo docker rm -f openclaw-bridge >/dev/null 2>&1 || true
-              sudo docker compose -f "$COMPOSE" --env-file "$STATE_FILE" up -d
+              sudo systemctl restart "$SERVICE"
             }
 
             STATE_TMP="${STATE_FILE}.tmp"
-            sudo sh -c 'printf "OPENCLAW_BRIDGE_IMAGE=%s\nOPENCLAW_BRIDGE_VERSION=%s\n" "$1" "$2" > "$3"' sh "$BRIDGE_IMAGE" "$BRIDGE_VERSION" "$STATE_TMP"
+            sudo python3 - "$STATE_BACKUP" "$STATE_TMP" "$BRIDGE_IMAGE" "$BRIDGE_VERSION" <<'PY'
+            import pathlib
+            import sys
+
+            source, target, image, version = sys.argv[1:]
+            replacements = {
+                "OPENCLAW_BRIDGE_IMAGE": image,
+                "OPENCLAW_BRIDGE_VERSION": version,
+            }
+            lines = pathlib.Path(source).read_text(encoding="utf-8").splitlines()
+            output = []
+            seen = set()
+            for line in lines:
+                key = line.split("=", 1)[0] if "=" in line else ""
+                if key in replacements:
+                    if key not in seen:
+                        output.append(f"{key}={replacements[key]}")
+                        seen.add(key)
+                else:
+                    output.append(line)
+            for key, value in replacements.items():
+                if key not in seen:
+                    output.append(f"{key}={value}")
+            pathlib.Path(target).write_text("\n".join(output) + "\n", encoding="utf-8")
+            PY
             sudo chmod 600 "$STATE_TMP"
             # Validate the exact next state while the current bridge is still live.
             # This catches missing env files and compose drift before removal.
             sudo docker compose -f "$COMPOSE" --env-file "$STATE_TMP" config >/dev/null
             sudo mv -f "$STATE_TMP" "$STATE_FILE"
-            sudo docker rm -f openclaw-bridge >/dev/null 2>&1 || true
-            if ! sudo docker compose -f "$COMPOSE" --env-file "$STATE_FILE" up -d; then
+            if ! sudo systemctl restart "$SERVICE"; then
               rollback
               exit 1
             fi
@@ -113,6 +136,12 @@ jobs:
               sleep 5
             done
             if [ "$ok" = "1" ]; then
+              RUNNING_IMAGE="$(sudo docker inspect --format '{{.Config.Image}}' openclaw-bridge)"
+              if [ "$RUNNING_IMAGE" != "$BRIDGE_IMAGE" ]; then
+                echo "[cutover] runtime image mismatch: expected=${BRIDGE_IMAGE} actual=${RUNNING_IMAGE}" >&2
+                rollback
+                exit 1
+              fi
               echo "[cutover] bridge :18080 healthy on ${BRIDGE_IMAGE}"
               sudo docker ps --format '{{.Names}}|{{.Image}}|{{.Status}}' | grep openclaw-bridge
             else
