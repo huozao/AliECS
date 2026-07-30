@@ -22,6 +22,7 @@ on:
           - mirror-only
           - sso-candidate
           - business-cn
+          - business-candidate
           - edge-us
 
 concurrency:
@@ -172,8 +173,8 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "$TCR_BASE" || -z "$TCR_USERNAME" || -z "$TCR_PASSWORD" ]]; then
-            if [[ "$DEPLOY_TARGET" == "business-cn" ]]; then
-              echo "[registry] business-cn requires TCR_BASE and TCR push credentials" >&2
+            if [[ "$DEPLOY_TARGET" == "business-cn" || "$DEPLOY_TARGET" == "business-candidate" ]]; then
+              echo "[registry] business-cn targets require TCR_BASE and TCR push credentials" >&2
               exit 1
             fi
             echo "[registry] TCR is not configured; GHCR build remains authoritative"
@@ -214,7 +215,7 @@ jobs:
 
   mirror-third-party:
     needs: build-push
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.deploy_target == 'mirror-only' || inputs.deploy_target == 'sso-candidate' || inputs.deploy_target == 'business-cn') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.deploy_target == 'mirror-only' || inputs.deploy_target == 'sso-candidate' || inputs.deploy_target == 'business-cn' || inputs.deploy_target == 'business-candidate') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -359,6 +360,105 @@ jobs:
             export POSTGRES_IMAGE="$TCR_BASE/third-party-postgres:16-runtime-20260725"
             export DEPLOY_COMMIT_SHA DEPLOY_RUN_ID DEPLOY_RUN_ATTEMPT
             sudo -E bash "$CURRENT_LINK/deploy/ecs/deploy-role.sh" business-cn "$RELEASE_ID"
+
+  prepare-business-candidate:
+    needs:
+      - resolve-release
+      - build-push
+      - mirror-third-party
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_target == 'business-candidate' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package the exact source commit
+        run: |
+          set -euo pipefail
+          mkdir release
+          git archive "$GITHUB_SHA" | tar -x -C release
+          printf '%s\n' "$GITHUB_SHA" > release/.source-commit
+          content_tag() { echo "t-$(git rev-parse "HEAD:$1" | cut -c1-12)"; }
+          {
+            echo "PUBLIC_WEB_TAG=$(content_tag services/public-web)"
+            echo "ADMIN_UI_TAG=$(content_tag services/admin-ui)"
+            echo "BACKEND_API_TAG=$(content_tag services/backend-api)"
+            echo "DOC_SYNC_WORKER_TAG=$(content_tag services/doc-sync-worker)"
+            echo "TPLUS_SYNC_WORKER_TAG=$(content_tag services/tplus-sync-worker)"
+            echo "MCP_CODING_SERVER_TAG=$(content_tag services/mcp-coding-server)"
+          } > release/.content-tags.env
+          tar -C release -czf aliecs-release.tgz .
+          sha256sum aliecs-release.tgz > aliecs-release.tgz.sha256
+
+      - name: Upload source artifact to AliECS candidate area
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.ECS_HOST }}
+          username: ${{ secrets.ECS_USER }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          source: "aliecs-release.tgz,aliecs-release.tgz.sha256"
+          target: "/tmp/business-candidate-${{ github.sha }}"
+
+      - name: Prepare isolated AliECS business candidate
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          TCR_BASE: ${{ vars.TCR_BASE }}
+          TCR_USERNAME: ${{ secrets.TCR_USERNAME }}
+          TCR_PASSWORD: ${{ secrets.TCR_PASSWORD }}
+          DEPLOY_COMMIT_SHA: ${{ github.sha }}
+          DEPLOY_RUN_ID: ${{ github.run_id }}
+          DEPLOY_RUN_ATTEMPT: ${{ github.run_attempt }}
+        with:
+          host: ${{ secrets.ECS_HOST }}
+          username: ${{ secrets.ECS_USER }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          command_timeout: 40m
+          envs: TCR_BASE,TCR_USERNAME,TCR_PASSWORD,DEPLOY_COMMIT_SHA,DEPLOY_RUN_ID,DEPLOY_RUN_ATTEMPT
+          script: |
+            set -euo pipefail
+            : "${TCR_BASE:?missing TCR_BASE}"
+            : "${TCR_USERNAME:?missing TCR username}"
+            : "${TCR_PASSWORD:?missing TCR password}"
+
+            INCOMING="/tmp/business-candidate-${DEPLOY_COMMIT_SHA}"
+            RELEASE_ROOT="/srv/business-cn/releases"
+            RELEASE_DIR="${RELEASE_ROOT}/${DEPLOY_COMMIT_SHA}"
+            CURRENT_LINK="/srv/business-cn/current"
+            RELEASE_ID="${{ needs.resolve-release.outputs.release_id }}"
+
+            cd "$INCOMING"
+            sha256sum -c aliecs-release.tgz.sha256
+            install -d -m 0750 "$RELEASE_ROOT"
+            rm -rf -- "$RELEASE_DIR"
+            install -d -m 0750 "$RELEASE_DIR"
+            tar -xzf aliecs-release.tgz -C "$RELEASE_DIR"
+            [[ "$(tr -d '[:space:]' < "$RELEASE_DIR/.source-commit")" == "$DEPLOY_COMMIT_SHA" ]]
+            ln -sfnT "$RELEASE_DIR" "$CURRENT_LINK"
+
+            SOPS_AGE_KEY_FILE=/root/.config/sops/age/keys.txt \
+              /root/infra/scripts/render.sh aliecs-business-candidate
+            bash /root/infra/roles/server/business-candidate/apply.sh \
+              /root/infra/config/servers/aliecs-business-candidate.env
+
+            export DEPLOY_ROLE=business-cn
+            export DEPLOY_PREPARE_ONLY=true
+            export DEPLOY_START_SERVICES=postgres
+            export RELEASE_META_FILE=/srv/business-cn/config/runtime.env
+            export ROLE_COMPOSE_FILE="$CURRENT_LINK/deploy/ecs/compose.business-cn.yml"
+            export ROLE_RUNTIME_ENV_FILE=/srv/business-cn/config/compose.env
+            export ROLE_METADATA_DIR=/srv/business-cn/state/release-meta
+            export ROLE_MIGRATIONS_DIR="$CURRENT_LINK/db/migrations"
+            export ROLE_POSTGRES_CONTAINER_NAME=business-cn-postgres-1
+            export ROLE_HEALTHCHECK_URL=http://127.0.0.1:8080/health/
+            export ROLE_IMAGE_REGISTRY_BASE="$TCR_BASE"
+            export REGISTRY_USERNAME="$TCR_USERNAME"
+            export REGISTRY_TOKEN="$TCR_PASSWORD"
+            set -a
+            source "$CURRENT_LINK/.content-tags.env"
+            set +a
+            export POSTGRES_IMAGE="$TCR_BASE/third-party-postgres:16-runtime-20260725"
+            export DEPLOY_COMMIT_SHA DEPLOY_RUN_ID DEPLOY_RUN_ATTEMPT
+            bash "$CURRENT_LINK/deploy/ecs/deploy-role.sh" business-cn "$RELEASE_ID"
+            /usr/local/sbin/business-candidate-preflight
 
   deploy-edge-us:
     needs:

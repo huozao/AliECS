@@ -53,6 +53,9 @@ assert_contains "$DEPLOY" 'DEPLOY_SERVICES=(postgres backend-api public-web admi
 assert_contains "$DEPLOY" 'P0 只限制“启动哪些服务”，不限制预拉镜像'
 assert_contains "$DEPLOY" 'DEPLOY_START_SERVICES'
 assert_contains "$DEPLOY" 'DEPLOY_START_SERVICES 含非法服务'
+assert_contains "$DEPLOY" 'DEPLOY_PREPARE_ONLY'
+assert_contains "$DEPLOY" '候选预部署必须且只能设置 DEPLOY_START_SERVICES=postgres'
+assert_contains "$DEPLOY" 'PUBLIC_TRAFFIC_SWITCHED=false'
 assert_contains "$DEPLOY" 'stop doc-sync-worker tplus-sync-worker tplus-write-worker'
 assert_contains "$DEPLOY" 'export DOCKER_CONFIG="$REGISTRY_AUTH_DIR"'
 assert_contains "$DEPLOY" 'ALLOW_OFFLINE_CACHED_IMAGES'
@@ -68,6 +71,7 @@ if ENABLE_COLD_RECOVERY=false bash "$ROLE_DEPLOY" business-cold-recovery sha-012
 fi
 
 assert_contains "$RELEASE_WORKFLOW" "  deploy-business-cn:"
+assert_contains "$RELEASE_WORKFLOW" "  prepare-business-candidate:"
 assert_contains "$RELEASE_WORKFLOW" "  preload-sso-candidate:"
 assert_contains "$RELEASE_WORKFLOW" "inputs.deploy_target == 'sso-candidate'"
 assert_contains "$RELEASE_WORKFLOW" 'third-party-authelia:4.39-runtime-20260725'
@@ -75,11 +79,15 @@ assert_contains "$RELEASE_WORKFLOW" 'third-party-lldap:v0.6-runtime-20260725'
 assert_contains "$RELEASE_WORKFLOW" "  deploy-edge-us:"
 assert_contains "$RELEASE_WORKFLOW" 'host: ${{ secrets.TENCENT_HOST }}'
 assert_contains "$RELEASE_WORKFLOW" "inputs.deploy_target == 'business-cn'"
+assert_contains "$RELEASE_WORKFLOW" "inputs.deploy_target == 'business-candidate'"
 assert_contains "$RELEASE_WORKFLOW" "inputs.deploy_target == 'edge-us'"
 assert_contains "$RELEASE_WORKFLOW" "inputs.deploy_target == 'mirror-only'"
 assert_contains "$RELEASE_WORKFLOW" 'ROLE_MIGRATIONS_DIR="$CURRENT_LINK/db/migrations"'
 assert_contains "$RELEASE_WORKFLOW" 'ROLE_POSTGRES_CONTAINER_NAME=business-cn-postgres-1'
 assert_contains "$RELEASE_WORKFLOW" 'ROLE_HEALTHCHECK_URL=http://127.0.0.1:8080/health/'
+assert_contains "$RELEASE_WORKFLOW" 'DEPLOY_PREPARE_ONLY=true'
+assert_contains "$RELEASE_WORKFLOW" 'DEPLOY_START_SERVICES=postgres'
+assert_contains "$RELEASE_WORKFLOW" '/usr/local/sbin/business-candidate-preflight'
 assert_contains "$RELEASE_WORKFLOW" 'TCR_USERNAME: ${{ secrets.TCR_USERNAME }}'
 assert_contains "$RELEASE_WORKFLOW" 'TCR_PASSWORD: ${{ secrets.TCR_PASSWORD }}'
 assert_not_contains "$RELEASE_WORKFLOW" "TCR_PUSH_USERNAME"

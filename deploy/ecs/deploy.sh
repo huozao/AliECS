@@ -461,12 +461,14 @@ ENV
 
 cp "$CURRENT_ENV" "$RUNTIME_ENV_FILE"
 
-if [[ "$WEBDOCK_TUNNEL_PROXY_ENABLED" == "true" ]]; then
+if [[ "${DEPLOY_PREPARE_ONLY:-false}" != "true" \
+    && "$WEBDOCK_TUNNEL_PROXY_ENABLED" == "true" ]]; then
   echo "[部署] 配置 WebDock SSH 隧道容器代理"
   "$ROOT_DIR/install-webdock-tunnel-proxy.sh"
 fi
 
-if [[ "${IMMICH_TUNNEL_PROXY_ENABLED:-false}" == "true" ]]; then
+if [[ "${DEPLOY_PREPARE_ONLY:-false}" != "true" \
+    && "${IMMICH_TUNNEL_PROXY_ENABLED:-false}" == "true" ]]; then
   echo "[部署] 配置 Immich SSH 隧道容器代理"
   "$ROOT_DIR/install-immich-tunnel-proxy.sh"
 fi
@@ -531,6 +533,49 @@ else
     echo "[部署] 3) IMAGE_REGISTRY_BASE/GHCR_BASE 与镜像命名是否一致" >&2
     exit 1
   fi
+fi
+
+if [[ "${DEPLOY_PREPARE_ONLY:-false}" == "true" ]]; then
+  [[ "$DEPLOY_ROLE" == "business-cn" ]] || {
+    echo "[部署] 候选预部署只允许 business-cn" >&2
+    exit 1
+  }
+  [[ "${DEPLOY_START_SERVICES:-}" == "postgres" ]] || {
+    echo "[部署] 候选预部署必须且只能设置 DEPLOY_START_SERVICES=postgres" >&2
+    exit 1
+  }
+  echo "[部署] 候选预部署：只启动空 PostgreSQL，不执行迁移、不启动业务"
+  docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" up -d postgres
+  for _ in $(seq 1 30); do
+    health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' \
+      "${ROLE_POSTGRES_CONTAINER_NAME:-business-cn-postgres-1}" 2>/dev/null || true)"
+    [[ "$health" == healthy ]] && break
+    sleep 2
+  done
+  [[ "${health:-}" == healthy ]] || {
+    echo "[部署] 候选 PostgreSQL 未进入 healthy" >&2
+    exit 1
+  }
+  unexpected="$(docker ps \
+    --filter label=com.docker.compose.project=business-cn \
+    --format '{{.Label "com.docker.compose.service"}}' \
+    | grep -v '^postgres$' || true)"
+  [[ -z "$unexpected" ]] || {
+    echo "[部署] 候选区出现意外运行服务：$unexpected" >&2
+    exit 1
+  }
+  install -d -m 0700 "$METADATA_DIR"
+  cat >"$METADATA_DIR/candidate-staged.env" <<EOF
+SOURCE_COMMIT=${CURRENT_SOURCE_COMMIT:-${DEPLOY_COMMIT_SHA:-unknown}}
+RELEASE_ID=$IMAGE_TAG
+STAGED_UTC=$(date -u +%Y%m%dT%H%M%SZ)
+SERVICES_RUNNING=postgres
+PUBLIC_TRAFFIC_SWITCHED=false
+WORKERS_STARTED=false
+EOF
+  chmod 0600 "$METADATA_DIR/candidate-staged.env"
+  echo "[部署] 候选预部署完成"
+  exit 0
 fi
 
 # 迁移条件化：db/ 与 migrate.sh 自上次成功部署未变更时跳过（省 2G 小机上的数分钟）。
