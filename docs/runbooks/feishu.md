@@ -5,22 +5,22 @@
 ```
 飞书用户
   → 飞书开放平台（长连接，⛔后台绝不要切 webhook，会顶掉长连接）
-  → OpenClaw（aliecs /root/openclaw，飞书插件）
-  → openclaw-bridge（aliecs 容器，源码 deploy/openclaw-bridge/openclaw_bridge.py）
-  → 127.0.0.1:11800（aliecs，webdock-failover-proxy 主备路由）
+  → OpenClaw（txecs 容器，飞书插件）
+  → openclaw-bridge（txecs 容器，源码 deploy/openclaw-bridge/openclaw_bridge.py）
+  → 127.0.0.1:11800（txecs，webdock-failover-proxy 主备路由）
   → 反向隧道（webdock 设备 webdock-ecs-tunnel.service 的 ssh -R）
   → WebDock API :18000（webdock2 主 / webdock1 备）
   → Chrome / ChatGPT 网页
 ```
 
-主备判定权威：aliecs `/etc/default/webdock-failover-proxy`；实际来源看响应头 `X-Webdock-Device` / `X-Webdock-Route`。
+主备判定权威：txecs `/etc/default/webdock-failover-proxy`；实际来源看响应头 `X-Webdock-Device` / `X-Webdock-Route`。
 
 ## 日志位置
 
 | 位置 | 看什么 |
 |---|---|
-| aliecs `docker logs openclaw-bridge` | bridge 收发、`webdock unavailable: timed out`、飞书 API 报错 |
-| bridge 健康端点 `127.0.0.1:18080/v1/models`（aliecs 上 curl） | bridge 是否活 |
+| txecs `docker logs openclaw-bridge` | bridge 收发、`webdock unavailable: timed out`、飞书 API 报错 |
+| bridge 健康端点 `127.0.0.1:18080/v1/models`（txecs 上 curl） | bridge 是否活 |
 | webdock 设备 `/var/log/webdock/archive/<UTC日期>.jsonl` | 每对话一行全量收发存档；查 `status` 和 `outbound.chars` |
 | chain-logger（infra/server/chain-logger） | 全链路断点定位 |
 | 容器内 `/app/logs/api.log`（WebDock） | 路由同步等警告（不在 docker logs 里） |
@@ -29,7 +29,7 @@
 
 | 症状 | 先查 | 已知根因史 |
 |---|---|---|
-| 完全没回复 | ① aliecs `ss -tlnp \| grep 11800` 端口是否被干净绑定 ② webdock2 WSL 是否活（容器 Up 时长 < 命令年龄 = 假活） | 隧道掉线占端口（2026-06-13 已加 sshd ClientAlive 15/3）；Win 重启后 WSL 保活未起（07-12 已改开机+S4U） |
+| 完全没回复 | ① txecs `ss -tlnp \| grep 11800` 端口是否被干净绑定 ② webdock2 WSL 是否活（容器 Up 时长 < 命令年龄 = 假活） | 隧道掉线占端口（2026-06-13 已加 sshd ClientAlive 15/3）；Win 重启后 WSL 保活未起（07-12 已改开机+S4U） |
 | 收到「暂不可用」但怀疑其实答了 | 存档查该条 inbound：`status=ok` 有 outbound = 回程黑洞，非 WebDock 慢；算 bridge flush 时间+320s 是否=超时时刻 | 同上隧道问题；消息无法补送，需用户重发 |
 | 回复只有半截/只有开场白 | 存档 `outbound.chars`；WebDock detector 完成判定 | ⛔ stop 按钮(`data-testid='stop-button'`)是完成判定权威信号，别改回以 streaming 为准 |
 | 回复图片变成链接 | bridge 环境变量 FEISHU_APP_ID/SECRET 是否在 | 缺凭据静默退 fallback；补后必须 force-recreate（restart 不重读 env_file） |
@@ -45,15 +45,15 @@
 ## 验证命令
 
 ```bash
-ssh aliecs "curl -s 127.0.0.1:18080/v1/models"          # bridge 活性
-ssh aliecs "ss -tlnp | grep 11800"                       # 隧道端口
-ssh aliecs "curl -sI http://127.0.0.1:11800/healthz"     # 看 X-Webdock-Device 判主备
+ssh txecs "curl -s 127.0.0.1:18080/v1/models"           # bridge 活性
+ssh txecs "ss -tlnp | grep 11800"                        # 隧道端口
+ssh txecs "curl -sI http://127.0.0.1:11800/healthz"      # 看 X-Webdock-Device 判主备
 ssh webdock2 "wsl -d Ubuntu-24.04-WebDock -- docker ps"  # WebDock 容器状态
 ```
 
 ## 已知坑（改代码前必读）
 
-- bridge 换码：合并到 main 即自动 cutover——release-deploy 发现 `deploy/openclaw-bridge/**` 的内容树 hash 变了，构建完调用 `bridge-cutover`。tree hash 没变则完全不触发（同一镜像标签，切了也只是白重启咽喉服务）。workflow 按所选 Git ref 自动解析内容镜像与 OCI digest，原子切换、健康检查、失败回滚。回滚/重切/切非 main ref 用 `bridge-cutover` 的手工 `workflow_dispatch`（confirmation 填 `CUTOVER_TXECS`）。禁止登机手改 `.env`；并发由 workflow concurrency 串行化。
+- bridge 换码：合并到 main 即自动 cutover——release-deploy 发现 `deploy/openclaw-bridge/**` 的内容树 hash 变了，构建完调用 `bridge-cutover`。tree hash 没变则完全不触发。workflow 按所选 Git ref 解析内容镜像与 OCI digest，原子更新 txecs 的唯一运行状态 `/srv/internal-stack/release.env`，再由 `txecs-openclaw-bridge.service` 使用 `/srv/openclaw-bridge/docker-compose.yml` 重启、健康检查并失败回滚。回滚/重切/切非 main ref 用 `bridge-cutover` 的手工 `workflow_dispatch`（confirmation 填 `CUTOVER_TXECS`）。禁止登机手改状态文件或另起 compose；并发由 workflow concurrency 串行化。
 - 多维表格**不在消息路径上读**。bridge 后台线程按 `FEISHU_BITABLE_SNAPSHOT_REFRESH_SECONDS`（默认 60s）把用到的表全量刷进内存快照，消息只读内存；这个周期是唯一一个「飞书 API 调用量 ↔ 配置生效速度」的旋钮，轮询 N 张表周期 T 秒 = 每天 `86400/T*N` 次请求，60s/4 张表 ≈ 每分钟 4 次。调小只增调用量，不改消息延迟。快照落盘 `/srv/openclaw-bridge/state/bitable-snapshot.json`，容器重启后直接载入。改表生效延迟 = 刷新周期。要立刻生效就 POST `/admin/invalidate-feishu-group-policy`（带 `X-Admin-Secret`），它会清缓存并同步重拉快照。
   - `FEISHU_BITABLE_LIST_CACHE_SECONDS`（默认 900s）不是新鲜度目标，是「刷新线程死了」的兜底岁数，超过就退回同步扫表让真实错误浮出来。
   - 每天 `FEISHU_BITABLE_RECONCILE_AT`（默认 04:00 容器本地时间）全量核对一次，异常告警到飞书群 `oc_84d1130542509e374f7ea20c13d11ca4`。日志关键字 `bitable_reconcile`、`bitable_snapshot_worker_start`。
