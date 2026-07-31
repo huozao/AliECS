@@ -1,39 +1,39 @@
 # 项目修改导航（给人和 AI）
 
-## 1）主流程
-1. 开发与交付：
-   本地改代码 -> 本地 compose 验证 -> push GitHub -> Actions 构建/推送 -> SSH 触发 ECS 部署脚本。
-2. 运行链路：
-   互联网 -> 宿主机 Nginx -> public-web/admin-ui/backend-api -> PostgreSQL。
-3. 代理链路：
-   代理客户端 -> 宿主机 sing-box -> 外部互联网。
-4. Future Sync（骨架）：
-   scheduler -> worker -> fetch -> validate -> upsert -> writeback。
+> 本文只回答“改哪里、先读什么、怎么验证”。当前设备、IP、端口、主备和运行职责统一查 [`fleet.md`](fleet.md) 并只读复核。
 
-## 2）改需求去哪里
-- 改公网展示页面：`services/public-web/`
-- 改后台占位页面：`services/admin-ui/`
-- 改 API 行为和路由：`services/backend-api/app/`
-- 改数据库迁移 SQL：`db/migrations/`
-- 改本地运行拓扑：`local/docker-compose.local.yml`
-- 改 CI/CD 编排：`.github/workflows/`
-- 改 ECS 部署流程：`deploy/ecs/`
-- 改 Future Sync 骨架：`sync-pipeline/`
+## 功能入口
 
-## 3）关键入口（必须显式）
-- 自动部署总说明：`docs/auto-deploy-guide.md`
-- ECS 首次部署清单：`docs/ecs-first-deploy-checklist.md`
-- ECS 运维记录模板：`docs/ecs-operation-record-template.md`
-- 本地运行入口：`local/docker-compose.local.yml`
-- API 主入口：`services/backend-api/app/main.py`
-- 迁移入口：`deploy/ecs/migrate.sh`
-- 部署入口：`deploy/ecs/deploy.sh`
-- 健康检查入口：`deploy/ecs/healthcheck.sh`
-- 回滚入口：`deploy/ecs/rollback.sh`
-- ECS 自动同步入口：`deploy/ecs/auto-sync.sh`
+| 要修改 | 代码入口 | 必读/最小验证 |
+|---|---|---|
+| 公网首页和静态工具 | `services/public-web/` | 服务 README、浏览器 smoke |
+| 管理后台 | `services/admin-ui/` | JS 语法 + 核心入口 smoke |
+| API、配方、导出、BOM | `services/backend-api/app/` | [`backend-api-domains.md`](backend-api-domains.md)、相关单测 |
+| T+ 拉取与写回 | `services/tplus-sync-worker/` | [`runbooks/tplus.md`](runbooks/tplus.md) |
+| 企微/飞书文档同步 | `services/doc-sync-worker/` | [`constraints/doc-sync.md`](constraints/doc-sync.md) |
+| 飞书 bridge | `deploy/openclaw-bridge/` | [`runbooks/feishu.md`](runbooks/feishu.md) |
+| 数据库结构 | `db/migrations/` | [`../db/README.md`](../db/README.md) |
+| 构建、部署与回滚 | `.github/workflows/`、`deploy/ecs/` | [`runbooks/deploy.md`](runbooks/deploy.md)、[`../deploy/README.md`](../deploy/README.md) |
+| 本地拓扑 | `local/docker-compose.local.yml` | `docker compose ... config` |
 
-## 4）不要破坏的边界
-- Nginx 和 sing-box 保持宿主机原生，不容器化。
-- GitHub Actions 只做交付编排，不做运行时托管。
-- 部署顺序固定：先迁移后切换。
-- 不要把业务逻辑塞进泛化的 `utils/common/shared`。
+更细的函数和数据流定位见 [`project-ai-map.md`](project-ai-map.md)。
+
+## 关键入口
+
+- API 装配：`services/backend-api/app/main.py`
+<!-- nav-check: services/backend-api/app/main.py -->
+<!-- nav-check-python: services/backend-api/app/main.py:app -->
+- 生产角色部署：`deploy/ecs/deploy-role.sh`
+- 数据迁移：`deploy/ecs/migrate.sh`
+- 健康检查：`deploy/ecs/healthcheck.sh`
+- 回滚：`deploy/ecs/rollback.sh`、`deploy/ecs/emergency-rollback.sh`
+- 构建与目标选择：`.github/workflows/release-deploy.yml`
+- bridge 切换：`.github/workflows/bridge-cutover.yml`
+
+## 完成闭环
+
+1. 运行最小代码检查和目标功能验证。
+2. 获授权时才做生产更新，并保存 SHA、digest 和健康证据。
+3. 回查路径、符号、配置键、API、部署、回滚、备份和 runbook 是否受影响。
+4. 更新导航，或记录 `Nav-Impact: none` 与理由。
+5. 运行导航检查；从工作区顶层 `AGENTS.md` 重新进入复验一次。

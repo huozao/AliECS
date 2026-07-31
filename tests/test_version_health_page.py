@@ -29,6 +29,7 @@ class VersionDetailPageTests(unittest.TestCase):
     def test_has_render_function_and_api(self) -> None:
         self.assertIn("function renderVersions(", self.html)
         self.assertIn("/v1/ops/versions", self.html)
+        self.assertIn('id="driftDevices"', self.html)
 
     def test_has_status_badges(self) -> None:
         for label in ("落后", "最新", "未登记"):

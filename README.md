@@ -1,92 +1,32 @@
-# AliECS AI 协作友好项目（Phase 1）
+# AliECS
 
-## 项目定位
-- **GitHub**：源码事实来源（仓库：`https://github.com/huozao/AliECS`）。
-- **GHCR**：镜像事实来源。
-- **阿里云 ECS**：运行节点。
-- **AI 客户端**：Codex 桌面版、Claude 桌面版、Claude 终端可作为开发机执行入口；当用户明确授权提交、推送或部署时，可按项目规则完成 commit、push、部署触发和验证。GitHub、GHCR、ECS 仍分别是源码、镜像和运行事实来源。
+业务平台源码仓：Web/API、数据同步 worker、飞书 bridge、数据库迁移和发布编排。
 
-## 已完成范围（Phase 1）
-- 本地可运行：`public-web + admin-ui(占位) + backend-api + postgres`。
-- API 提供健康检查和就绪检查（含数据库连通探测）。
-- CI 做语法与 compose 校验。
-- 发布流支持构建/推送三类镜像并通过 SSH 触发 ECS 部署。
-- ECS 部署主流程明确：`先迁移 -> 再切换 -> 再健康检查 -> 失败回滚`。
-- Future Sync Pipeline 只保留可执行骨架，不实现复杂业务。
+## AI 与人类首跳
 
-## 本地快速启动
+- 工作规则：[`AGENTS.md`](AGENTS.md)
+- 功能到代码：[`docs/project-ai-map.md`](docs/project-ai-map.md)
+- 修改入口：[`docs/project-navigation.md`](docs/project-navigation.md)
+- 设备与运行位置：[`docs/fleet.md`](docs/fleet.md)
+- 部署、回滚与生产验证：[`docs/runbooks/deploy.md`](docs/runbooks/deploy.md)
+- 飞书链路：[`docs/runbooks/feishu.md`](docs/runbooks/feishu.md)
+- T+：[`docs/runbooks/tplus.md`](docs/runbooks/tplus.md)
+- doc-sync 约束：[`docs/constraints/doc-sync.md`](docs/constraints/doc-sync.md)
+
+文档只负责引路；源码、workflow、Compose 与只读实测负责证实。设备、IP、端口、主备和当前生产职责不得从本 README 推断。
+
+## 本地最小验证
+
 ```bash
-docker compose -f local/docker-compose.local.yml up --build
+python -m unittest discover -s tests
+docker compose -f local/docker-compose.local.yml config
 ```
 
-访问地址：
-- 公网展示页（本地）: http://localhost:8080
-- 管理后台占位页（本地）: http://localhost:8081
-- API 健康检查（本地）: http://localhost:8000/healthz
+按改动范围追加对应检查，详见 [`AGENTS.md`](AGENTS.md)。生产环境变量和数据库不得用于本地测试。
 
+## 发布边界
 
-## 自动化部署与日志
-- **主路径（推荐）**：合并到 `main` 或 `V*` tag 均可触发 `.github/workflows/release-deploy.yml`，Actions 构建并推送 GHCR 镜像后，SSH 到 ECS 执行 `deploy/ecs/deploy.sh <tag>`。
-- **过渡路径（可选）**：ECS 侧 `deploy/ecs/auto-sync.sh` 可做“拉代码 + 重建 + 健康检查”的一次性自动化。
-- **镜像命名规范**：
-  - `ghcr.io/<owner>/public-web:<tag>`
-  - `ghcr.io/<owner>/admin-ui:<tag>`
-  - `ghcr.io/<owner>/backend-api:<tag>`
-- **日志查看**：
-  - Actions 发布日志：GitHub Actions 页面（工作流：`发布并部署`）
-  - ECS 发布日志：`/root/AliECS/deploy/ecs/logs/deploy-YYYYMMDD.log`
-  - 容器运行日志：`docker compose --env-file /root/AliECS/deploy/ecs/runtime.env -f /root/AliECS/deploy/ecs/compose.prod.yml logs --tail=200`
-- **GitHub Secrets（自动部署必需）**：
-  - `ECS_HOST` / `ECS_USER` / `ECS_SSH_KEY`
-  - 私有 GHCR 推荐再配：`GHCR_USERNAME` / `GHCR_TOKEN`（`read:packages`）
-- **触发方式差异**：
-  - `git tag VYYYYMMDDNNN && git push origin VYYYYMMDDNNN`：正式发布（推荐）
-  - `workflow_dispatch`：手工重试/补部署（可手工输入版本号；若不输入会自动生成 `VYYYYMMDDNNN`）
-- **主页设计依据**：`DESIGN.md`（参考 VoltAgent/awesome-design-md 的 Claude 设计语言，非像素级复制）。
-- **详细文档**：
-- 自动部署总说明：`docs/auto-deploy-guide.md`
-- ECS 首次部署清单：`docs/ecs-first-deploy-checklist.md`
-- ECS 运维记录模板：`docs/ecs-operation-record-template.md`
-- 线上路由映射：`docs/runtime-routing.md`
-- 环境变量矩阵：`docs/env-matrix.md`
-- 安全基线：`docs/security-baseline.md`
-
-## 入口导航
-- 架构边界：`docs/architecture-boundaries.md`
-- 修改导航：`docs/project-navigation.md`
-- Ubuntu 24.04 新手部署说明：`docs/ubuntu-24.04-ecs-部署指南.md`
-- 本地运行入口：`local/docker-compose.local.yml`
-- ECS 部署入口：`deploy/ecs/deploy.sh`
-- 数据库迁移入口：`deploy/ecs/migrate.sh`
-- 健康检查入口：`deploy/ecs/healthcheck.sh`
-
-
-## 贡献规范
-- 贡献流程与中文提交说明：`CONTRIBUTING.md`
-
-
-## 登录与权限（新）
-- `backend-api` 提供 `POST /v1/auth/login`、`POST /v1/auth/register`、`GET /v1/auth/me`、`GET /v1/features`。
-- 可通过环境变量 `AUTH_USERS_JSON` 配置用户、密码、角色、权限（如 `personal`）。
-- `public-web` 首页会根据登录状态控制“个人板块（人体周期）”入口是否可访问。
-
-
-## Auth/RBAC 基础版
-- `public-web`：普通业务入口（根据 `/v1/features` 展示可访问功能）。
-- `admin-ui`：系统管理后台（仅管理员/具备 `admin.access` 的用户可用）。
-- `backend-api`：唯一登录、鉴权、权限判断中心。
-- `postgres`：保存用户、角色、权限、功能入口、审计日志。
-- 本地默认管理员：`admin / admin123`（仅开发默认）。
-- 生产必须修改：`AUTH_TOKEN_SECRET`、`ADMIN_BOOTSTRAP_PASSWORD`。
-- 企业微信智能表格链接在企微侧仍需配置访问控制，否则复制直链可能绕过网站入口权限。
-- 详见：`docs/auth-rbac-guide.md`。
-
-
-## Couple 隐藏入口配置
-- 开关：`COUPLE_FEATURE_ENABLED=true` 时才启用 💗 入口判定。
-- 路由：`COUPLE_ROUTE=/couple/`（建议保留 `/couple/`）。
-- 白名单：
-  - `COUPLE_ALLOWED_USERS=admin,wh,tx`（按 username/sub 匹配，逗号分隔）
-  - `COUPLE_ALLOWED_EMAILS=user1@example.com,user2@example.com`（逗号分隔，可留空）
-- 生产应修改：`/root/AliECS/deploy/ecs/release-meta.env`，不要长期直接改 `runtime.env`。
-- `deploy/ecs/deploy.sh` 每次发布会把 `release-meta.env` 中的 `COUPLE_*` 写入 `runtime.env` 并注入 `backend-api` 容器。
+- 合入 `main` 会构建镜像；仅 bridge 内容变化时会自动调用 bridge cutover。
+- business-cn、candidate、edge 等业务角色由获授权的 `workflow_dispatch` 显式选择；不得写成“push 即全设备部署”。
+- 源码版本以 Git commit SHA 为准，运行镜像以 OCI digest 为准。
+- 变更走分支和 PR；验证通过后回查 AI 导航并在 PR 记录 Nav Impact。

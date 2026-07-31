@@ -8,6 +8,7 @@ import os
 import re
 import urllib.request
 from contextlib import closing
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -218,17 +219,40 @@ def build_inventory(reports: list[dict], components: list[dict],
             device_extra[r["device"]] = r.get("extra") or {}
 
     devices: dict[str, list] = {}
+    drift_devices: list[dict[str, Any]] = []
+    drift_counts = {"PASS": 0, "FAIL": 0, "UNKNOWN": 0, "STALE": 0}
     summary = {"behind": 0, "current": 0, "pinned": 0, "unregistered": 0,
                "own": 0, "own-mismatch": 0, "stale": 0}
     for r in reports:
         dev = r["device"]
         comp = match_component(r["image"], dev, components)
         if r["image"] == "apt-summary":
-            apt = (r.get("extra") or {}).get("apt", {})
+            extra = r.get("extra") or {}
+            apt = extra.get("apt", {})
             entry = {"key": "apt-summary", "name": "APT 可升级", "current":
                      f"可升级 {apt.get('upgradable', 0)}（security {apt.get('security', 0)}）",
                      "latest": None, "status": "os", "release_url": None, "note": None}
             devices.setdefault(dev, []).append(entry)
+            drift = extra.get("drift")
+            if isinstance(drift, dict):
+                status = str(drift.get("status") or "UNKNOWN").upper()
+                reported_at = r.get("reported_at")
+                if isinstance(reported_at, datetime):
+                    report_time = reported_at if reported_at.tzinfo else reported_at.replace(tzinfo=timezone.utc)
+                    if datetime.now(timezone.utc) - report_time > timedelta(hours=36):
+                        status = "STALE"
+                    reported_at = report_time.isoformat()
+                if status not in drift_counts:
+                    status = "UNKNOWN"
+                drift_counts[status] += 1
+                drift_devices.append({
+                    "device": dev,
+                    "status": status,
+                    "checked_at": drift.get("checked_at"),
+                    "last_reported_at": reported_at,
+                    "reason": drift.get("reason"),
+                    "checks": drift.get("checks") if isinstance(drift.get("checks"), list) else [],
+                })
             continue
         if comp is None:
             entry = {"key": None, "name": r["image"], "current": r.get("tag"),
@@ -250,11 +274,13 @@ def build_inventory(reports: list[dict], components: list[dict],
         devices.setdefault(dev, []).append(entry)
 
     overall = "ok"
-    if summary["behind"] or summary["own-mismatch"]:
+    if summary["behind"] or summary["own-mismatch"] or drift_counts["FAIL"] or drift_counts["STALE"]:
         overall = "warning"
     summary["status"] = overall
+    summary["drift"] = drift_counts
     return {"summary": summary,
-            "devices": [{"device": d, "components": c} for d, c in sorted(devices.items())]}
+            "devices": [{"device": d, "components": c} for d, c in sorted(devices.items())],
+            "drift": sorted(drift_devices, key=lambda item: item["device"])}
 
 
 @router.get("/v1/ops/versions")
@@ -268,9 +294,9 @@ def ops_versions(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
                 ["component_key", "display_name", "kind", "match_images", "devices",
                  "upstream_source", "upstream_ref", "version_pattern", "pin_note", "family"], row))
                 for row in cur.fetchall()]
-            cur.execute("SELECT device, image, tag, digest, extra_json FROM version_reports")
+            cur.execute("SELECT device, image, tag, digest, extra_json, reported_at FROM version_reports")
             reports = [{"device": r[0], "image": r[1], "tag": r[2], "digest": r[3],
-                        "extra": r[4] or {}} for r in cur.fetchall()]
+                        "extra": r[4] or {}, "reported_at": r[5]} for r in cur.fetchall()]
             cur.execute("SELECT component_key, latest_version, release_url, checked_at, "
                         "check_status, check_error FROM version_upstream_state")
             upstream = {r[0]: {"latest_version": r[1], "release_url": r[2],
@@ -342,9 +368,9 @@ def weekly_digest(_: None = Depends(_require_report_token)) -> dict[str, Any]:
                 ["component_key", "display_name", "kind", "match_images", "devices",
                  "upstream_source", "upstream_ref", "version_pattern", "pin_note", "family"], row))
                 for row in cur.fetchall()]
-            cur.execute("SELECT device, image, tag, digest, extra_json FROM version_reports")
+            cur.execute("SELECT device, image, tag, digest, extra_json, reported_at FROM version_reports")
             reports = [{"device": r[0], "image": r[1], "tag": r[2], "digest": r[3],
-                        "extra": r[4] or {}} for r in cur.fetchall()]
+                        "extra": r[4] or {}, "reported_at": r[5]} for r in cur.fetchall()]
             cur.execute("SELECT component_key, latest_version, release_url FROM version_upstream_state")
             upstream = {r[0]: {"latest_version": r[1], "release_url": r[2]} for r in cur.fetchall()}
             cur.execute("SELECT device, MAX(reported_at) FROM version_reports GROUP BY device")
