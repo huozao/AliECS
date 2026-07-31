@@ -5,6 +5,7 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -415,6 +416,137 @@ def test_historical_analysis_uses_interactive_card(monkeypatch) -> None:
     stored = alerts._stored_alert_payload(captured["alert"])
     stored_chart = stored["historical_analysis"]["charts"][0]
     assert "data_base64" not in stored_chart
+
+
+def _wrong_price_with_chart() -> dict[str, object]:
+    """监控端 history.py 实际发出的形状：顶层 charts，不带 historical_analysis。"""
+    body = _payload("wrong_price_detected")
+    body.update(
+        {
+            "trigger_market": "SHFE_AU_1S_LOW",
+            "trigger_price": 995.6,
+            "trigger_tick_id": "3",
+            "volume_delta": 12.0,
+            "deviation_percent": 16.65,
+            "clock_skew_ms": 120.0,
+            "book_breach_cny_per_g": 164.5,
+            "charts": [
+                {
+                    "name": "au2606-20260519-210435.png",
+                    "content_type": "image/png",
+                    "caption": "错单成交明细：价格与盘口 / 成交量 / 横向孤立度 / 成交事实",
+                    "data_base64": base64.b64encode(b"\x89PNG\r\n\x1a\nimage").decode(),
+                }
+            ],
+        }
+    )
+    return body
+
+
+def test_wrong_price_alert_with_chart_goes_out_as_card(monkeypatch) -> None:
+    """带图的逐笔错单必须走卡片而不是纯文本，否则图会被静默丢掉。"""
+    captured: dict[str, object] = {}
+    client = _client(monkeypatch)
+
+    def fake_card(receive_id: str, alert, text: str, **kwargs) -> bool:
+        captured.update(receive_id=receive_id, alert=alert, text=text, **kwargs)
+        return True
+
+    monkeypatch.setattr(alerts, "send_feishu_alert_card", fake_card)
+    monkeypatch.setattr(alerts, "send_feishu_text", lambda *_, **__: False)
+    response = client.post(
+        "/v1/internal/gold-spread/alerts",
+        headers={"X-Gold-Spread-Token": "test-token"},
+        json=_wrong_price_with_chart(),
+    )
+
+    assert response.status_code == 200
+    assert captured["receive_id"] == "oc_target"
+    alert = captured["alert"]
+    assert len(alert.charts) == 1
+    card = alerts.build_alert_card(alert, str(captured["text"]), ["img_key_1"])
+    assert card["header"]["title"]["content"] == "🔴 疑似错单成交｜沪金 AU2606"
+    assert card["header"]["template"] == "orange"
+    images = [element for element in card["elements"] if element.get("tag") == "img"]
+    assert len(images) == 1 and images[0]["img_key"] == "img_key_1"
+    assert any("极值成交价：995.60" in str(element) for element in card["elements"])
+
+
+def test_alert_chart_bytes_are_not_stored(monkeypatch) -> None:
+    """顶层 charts 也要剥 base64，否则 payload_json 每条多存几十万字符。"""
+    alert = alerts.GoldSpreadAlert.model_validate(_wrong_price_with_chart())
+    stored = alerts._stored_alert_payload(alert)
+    chart = stored["charts"][0]
+    assert "data_base64" not in chart
+    assert chart["base64_characters"] > 0
+
+
+def test_charts_and_historical_analysis_cannot_be_combined(monkeypatch) -> None:
+    body = _wrong_price_with_chart()
+    body["historical_analysis"] = {"schema_version": 1}
+    response = _client(monkeypatch).post(
+        "/v1/internal/gold-spread/alerts",
+        headers={"X-Gold-Spread-Token": "test-token"},
+        json=body,
+    )
+    assert response.status_code == 422
+
+
+def test_alert_without_chart_still_goes_out_as_text(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    client = _client(monkeypatch)
+    monkeypatch.setattr(
+        alerts,
+        "send_feishu_text",
+        lambda receive_id, text, **kwargs: captured.update(text=text) or True,
+    )
+    monkeypatch.setattr(
+        alerts,
+        "send_feishu_alert_card",
+        lambda *_, **__: pytest.fail("no charts, must not build a card"),
+    )
+    body = _wrong_price_with_chart()
+    body.pop("charts")
+    response = client.post(
+        "/v1/internal/gold-spread/alerts",
+        headers={"X-Gold-Spread-Token": "test-token"},
+        json=body,
+    )
+    assert response.status_code == 200
+    assert "疑似错单成交" in str(captured["text"])
+
+
+def test_card_delivery_failure_falls_back_to_text(monkeypatch) -> None:
+    """上传图失败不能让告警整条丢掉——图没了，字必须还在。"""
+    captured: dict[str, object] = {}
+    client = _client(monkeypatch)
+    monkeypatch.setattr(alerts, "send_feishu_alert_card", lambda *_, **__: False)
+    monkeypatch.setattr(
+        alerts,
+        "send_feishu_text",
+        lambda receive_id, text, **kwargs: captured.update(text=text) or True,
+    )
+    response = client.post(
+        "/v1/internal/gold-spread/alerts",
+        headers={"X-Gold-Spread-Token": "test-token"},
+        json=_wrong_price_with_chart(),
+    )
+    assert response.status_code == 200
+    assert "疑似错单成交" in str(captured["text"])
+
+
+def test_upload_charts_rejects_non_png() -> None:
+    chart = alerts.AlertChart(
+        name="fake.png",
+        caption="不是 PNG",
+        data_base64=base64.b64encode(b"GIF89a not a png").decode(),
+    )
+    try:
+        alerts._upload_charts([chart], "token")
+    except ValueError as exc:
+        assert "PNG" in str(exc)
+    else:
+        pytest.fail("non-PNG chart must be rejected")
 
 
 def test_data_silence_alert_is_accepted(monkeypatch) -> None:
