@@ -340,8 +340,13 @@ jobs:
             [[ "$actual_commit" == "$DEPLOY_COMMIT_SHA" ]]
             sudo ln -sfnT "$RELEASE_DIR" "$CURRENT_LINK"
 
-            sudo env SOPS_AGE_KEY_FILE=/home/ubuntu/.config/sops/age/keys.txt \
+            sudo env \
+              SOPS_AGE_KEY_FILE=/home/ubuntu/.config/sops/age/keys.txt \
+              TXECS_RUNTIME_PROFILE=production \
+              TXECS_PRODUCTION_CONFIRM=render-production-runtime \
               /home/ubuntu/infra/scripts/render.sh txecs
+            sudo grep -Fxq 'P0_MODE=false' /srv/business-cn/config/runtime.env
+            sudo grep -Fxq 'TPLUS_BOM_WRITE_ENABLED=true' /srv/business-cn/config/runtime.env
 
             export DEPLOY_ROLE=business-cn
             export RELEASE_META_FILE=/srv/business-cn/config/runtime.env

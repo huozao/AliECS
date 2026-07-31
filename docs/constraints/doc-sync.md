@@ -21,6 +21,11 @@ docker compose -f local/docker-compose.local.yml config
 
 ## 相关背景（运行现状）
 
+- 生产唯一实例运行在 txecs 的 `business-cn-doc-sync-worker-1`；aliecs 旧实例保持停止。
+  如果企微接口返回 `errcode 60020`，按错误中的 `from ip` 核对企微自建应用可信 IP；
+  IP 已存在仍报错时，先确认当前后台企业 ID 与失败 profile 的
+  `WECOM_<PROFILE>_CORP_ID` 一致，避免在另一企业主体中重复配置。
+  当前服务器出口以 `docs/fleet.md` 和实时错误为准，不在本文件复制 IP。
 - 同步调度已 DB 化：`system_config` 存调度配置，每天北京时间 02:00 全量（2026-07-06 PR#160/#161）。
 - 手动同步/整簿重扫：INSERT `sync_requests` 后由 worker 消费（飞书重扫 2026-07-05 PR#159）。
 - 设计文档：`docs/doc-sync-design.md`。

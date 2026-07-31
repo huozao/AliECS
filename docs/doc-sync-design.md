@@ -152,11 +152,13 @@ docker compose -f local/docker-compose.local.yml run --rm doc-sync-worker python
 
 ## ECS 运行
 
-建议在 ECS 上用 cron 或 systemd timer 调用 worker。命令示例：
+生产唯一实例运行在 txecs 的 `business-cn` Compose 中。临时手动执行命令示例：
 
 ```bash
-docker compose --env-file /root/AliECS/deploy/ecs/runtime.env -f /root/AliECS/deploy/ecs/compose.prod.yml run --rm doc-sync-worker python -m app.main sync-wecom-full
-docker compose --env-file /root/AliECS/deploy/ecs/runtime.env -f /root/AliECS/deploy/ecs/compose.prod.yml run --rm doc-sync-worker python -m app.main sync-feishu-full --profiles COMPANY_A,COMPANY_B
+ssh txecs
+cd /srv/business-cn/current
+sudo docker compose --env-file /srv/business-cn/config/compose.env -f deploy/ecs/compose.business-cn.yml run --rm doc-sync-worker python -m app.main sync-wecom-full
+sudo docker compose --env-file /srv/business-cn/config/compose.env -f deploy/ecs/compose.business-cn.yml run --rm doc-sync-worker python -m app.main sync-feishu-full --profiles COMPANY_A,COMPANY_B
 ```
 
 不要在 `backend-api` 启动流程里自动同步，避免 API 启动被外部企业微信接口阻塞。
@@ -164,7 +166,7 @@ docker compose --env-file /root/AliECS/deploy/ecs/runtime.env -f /root/AliECS/de
 消费后台手动请求：
 
 ```bash
-docker compose --env-file /root/AliECS/deploy/ecs/runtime.env -f /root/AliECS/deploy/ecs/compose.prod.yml run --rm doc-sync-worker python -m app.main consume-sync-requests --limit 10
+sudo docker compose --env-file /srv/business-cn/config/compose.env -f deploy/ecs/compose.business-cn.yml run --rm doc-sync-worker python -m app.main consume-sync-requests --limit 10
 ```
 
 ## 常见错误
