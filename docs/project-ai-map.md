@@ -49,8 +49,8 @@ MCP 编程路线（OAuth 已上线；⚠️ ECS nginx 域根的 OAuth 路由不�
 
 ## deploy/openclaw-bridge
 
-飞书 ↔ OpenClaw 的 bridge（`openclaw_bridge.py`，跑在 aliecs 容器）。排障：`docs/runbooks/feishu.md`。
-单测 `tests/test_openclaw_bridge.py`；换码永远手动 cutover。
+飞书 ↔ OpenClaw 的 bridge（`openclaw_bridge.py`）。当前运行位置只查 `docs/fleet.md` 并实测；排障见 `docs/runbooks/feishu.md`。
+单测 `tests/test_openclaw_bridge.py`；合入 main 后仅在 bridge 内容树变化时自动 cutover，回滚、重切和非 main ref 仍走手工 `workflow_dispatch`。
 
 ## deploy/ecs
 

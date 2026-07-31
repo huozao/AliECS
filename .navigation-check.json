@@ -1,0 +1,40 @@
+{
+  "documents": [
+    "AGENTS.md",
+    "README.md",
+    "docs/project-navigation.md",
+    "docs/project-ai-map.md",
+    "docs/fleet.md",
+    "docs/runbooks/deploy.md",
+    "docs/runbooks/feishu.md",
+    "docs/runbooks/tplus.md",
+    "docs/constraints/doc-sync.md",
+    "services/backend-api/README.md",
+    "services/coding-executor/README.md",
+    "services/doc-sync-worker/README.md",
+    "services/mcp-coding-server/README.md",
+    "services/public-web/README.md",
+    "services/tplus-sync-worker/README.md",
+    "db/README.md",
+    "deploy/README.md"
+  ],
+  "paths": [
+    "services/public-web",
+    "services/admin-ui",
+    "services/backend-api/app",
+    "services/doc-sync-worker",
+    "services/tplus-sync-worker",
+    "deploy/openclaw-bridge",
+    "deploy/ecs/deploy-role.sh",
+    "deploy/ecs/migrate.sh",
+    "deploy/ecs/healthcheck.sh",
+    "deploy/ecs/rollback.sh",
+    "db/migrations",
+    ".github/workflows/release-deploy.yml",
+    ".github/workflows/bridge-cutover.yml"
+  ],
+  "python_symbols": [
+    {"file": "services/backend-api/app/main.py", "symbol": "app"}
+  ],
+  "optional_link_prefixes": []
+}

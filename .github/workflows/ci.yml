@@ -14,6 +14,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: 导航一致性与红绿测试
+        run: |
+          python scripts/check_navigation.py
+          python -m unittest discover -s tests -p "test_*navigation*.py"
+
+      - name: PR 导航影响记录
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s' "$PR_BODY" > "$RUNNER_TEMP/pr-body.txt"
+          python scripts/check_nav_impact.py --text-file "$RUNNER_TEMP/pr-body.txt"
+
+      - name: Nav Impact 红绿测试
+        run: python -m unittest discover -s tests -p test_nav_impact.py
+
       - name: 版本记录检查
         run: python scripts/validate_version.py
 

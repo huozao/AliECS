@@ -10,6 +10,18 @@
 - 是否影响数据库结构或迁移：是 / 否
 - 是否影响 GitHub Actions：是 / 否
 
+## AI 导航影响（必填，保留机器可读字段）
+
+- 路径/模块/函数、配置键/环境变量/API/端口/服务名是否变化：
+- 构建/部署/回滚/备份/恢复命令是否变化：
+- 功能地图、fleet、project navigation、runbook、README 是否受影响：
+
+Nav-Impact: updated
+
+如无需更新，把上一行改为 `Nav-Impact: none`，并填写：
+
+Nav-Impact-Reason: <无需更新时填写依据>
+
 ## 验证记录（必填）
 
 请粘贴你实际执行过的命令与结果：

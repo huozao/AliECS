@@ -21,6 +21,15 @@
 | `webdock1` | webdock 算力节点（**当前备用**） | 旧 Ubuntu 笔记本 | `ssh webdock1`（Tailscale 100.97.176.57） | webdock 镜像 + 第三方自托管服务 |
 | `webdock2` | webdock 算力节点（**当前主力**） | 新台式机 Windows 11 + WSL2 | `ssh webdock2`（Tailscale 100.67.38.52） | webdock 镜像 |
 
+### 当前事实与目标定位
+
+- **当前事实**：txecs 是生产唯一写端；三个 worker（doc-sync、T+ 只读同步、T+ 写回）
+  只在 txecs 的 `business-cn-*` 实例运行，aliecs 的旧 `ecs-*` 实例保持停止。
+- **目标定位**：txecs 与 aliecs 互为恢复目标，允许未来向任一方向迁移。
+- **尚未证明**：角色仍含设备命名和非对称能力，数据库冻结、DNS、SSO、ERP、
+  ProductCenter、WebDock 与密钥恢复尚未完成一次完整反向演练，因此不能宣称可在
+  20–40 分钟内双向切换。
+
 ## webdock 主备路由（关键，勿凭猜测）
 
 ```
@@ -81,6 +90,9 @@ txecs 127.0.0.1:11800 failover-proxy
   4 vCPU、约 3.6 GiB 可用内存。
 - 当前是生产唯一写端；主站、backend、OpenClaw、bridge 和已启用 worker
   均从本机运行。
+- 2026-07-31 已确认 `business-cn-doc-sync-worker-1`、
+  `business-cn-tplus-sync-worker-1`、`business-cn-tplus-write-worker-1` 均运行，
+  `restart=always`、RestartCount=0；aliecs 同类旧实例停止，避免双写。
 - 主机重建入口：infra
   `roles/server/{common,tencent}`；age 私钥和 GitHub infra 只读 deploy
   key 是最小人工输入。

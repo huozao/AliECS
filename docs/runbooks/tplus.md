@@ -13,7 +13,9 @@
 ```
 
 - 定时同步配置在 DB：`integration_sync_config(provider='chanjet')`，页面 `/tplus-sync/` 顶部可改，worker 每轮热读。
-- 写入开关唯一持久源 = sops 的 `aliecs.enc.env`（release-meta.env 是 render 产物）。
+- 当前 business-cn 写入开关唯一持久源 = infra SOPS 的
+  `txecs-production.enc.env`（目标机 runtime env 是渲染产物）。迁移到其他角色时先从
+  fleet 和 workflow 确认对应 profile，禁止沿用历史文件名猜测。
 
 ## 症状表
 
@@ -44,4 +46,5 @@ SELECT record_key, last_seen_at, missing_since FROM tplus_bom_records WHERE reco
 ## 测试
 
 - worker 测试要 `PYTHONPATH="src;."`（config 在 worker 根不在 src），且 CI 不覆盖 worker——改 worker 必须本地跑。
-- 生产 psql：`docker exec -i ecs-postgres-1 psql -U app -d app`。
+- 当前生产 psql：`ssh txecs 'sudo docker exec -i business-cn-postgres-1 psql -U app -d app'`；
+  只读诊断无需写权限，执行迁移须按 deploy runbook 获授权。
