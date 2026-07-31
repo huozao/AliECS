@@ -54,13 +54,16 @@ MCP 编程路线（OAuth 已上线；⚠️ ECS nginx 域根的 OAuth 路由不�
 
 ## deploy/ecs
 
-生产 compose 与部署脚本，ECS 路径 `/root/AliECS`。排障：`docs/runbooks/deploy.md`。
-`runtime.env`/`release-meta.env` 是渲染产物（真源=infra/secrets SOPS），勿提交真实值。
+生产 compose 与部署脚本。当前 business-cn 运行在 txecs：
+源码 `/srv/business-cn/current`，Compose env `/srv/business-cn/config/compose.env`；
+排障见 `docs/runbooks/deploy.md`。运行 env 是渲染产物
+（真源=infra `secrets/txecs-production.enc.env`），勿在主机长期直改。
 验证：`docker compose --env-file deploy/ecs/runtime.env.example -f deploy/ecs/compose.prod.yml config`。
 
 ## db/migrations
 
-迁移 SQL。写成幂等；生产 psql = `docker exec -i ecs-postgres-1 psql -U app -d app`。
+迁移 SQL。写成幂等；生产 psql =
+`ssh txecs 'sudo docker exec -i business-cn-postgres-1 psql -U app -d app'`。
 
 ## local
 

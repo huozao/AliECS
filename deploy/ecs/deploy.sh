@@ -618,7 +618,23 @@ if (( ${#DEPLOY_SERVICES[@]} )); then
 fi
 docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" up -d "${DEPLOY_SERVICES[@]}"
 
-if "$ROOT_DIR/healthcheck.sh"; then
+WORKERS_READY=true
+if [[ "$DEPLOY_ROLE" == "business-cn" && "${P0_MODE:-false}" != "true" ]]; then
+  running_services="$(
+    docker compose --env-file "$RUNTIME_ENV_FILE" -f "$COMPOSE_FILE" \
+      ps --status running --services
+  )"
+  for worker in doc-sync-worker tplus-sync-worker tplus-write-worker; do
+    if ! grep -Fxq "$worker" <<< "$running_services"; then
+      echo "[部署] 生产 worker 未运行：$worker" >&2
+      WORKERS_READY=false
+      continue
+    fi
+    echo "[部署] 生产 worker 已运行：$worker"
+  done
+fi
+
+if [[ "$WORKERS_READY" == "true" ]] && "$ROOT_DIR/healthcheck.sh"; then
   if [[ -n "$CURRENT_SOURCE_COMMIT" ]]; then
     printf '%s\n' "$CURRENT_SOURCE_COMMIT" > "$LAST_SUCCESS_COMMIT_FILE"
   fi

@@ -4,12 +4,12 @@
 
 ```
 畅捷通 T+ OpenAPI
-  → tplus-sync-worker（容器 ecs-tplus-sync-worker-1，只读拉取）
+  → tplus-sync-worker（txecs 容器 business-cn-tplus-sync-worker-1，只读拉取）
   → Postgres（tplus_bom_records 等，last_seen_at + missing_since 删除追踪）
   → backend-api assemble（WHERE missing_since IS NULL）
   → /formula/ 配方查询、/tplus-sync/ 时间线页
 写回方向（BOM builder）：
-  backend-api → ecs-tplus-write-worker-1（独立写消费者）→ T+
+  backend-api → business-cn-tplus-write-worker-1（独立写消费者）→ T+
 ```
 
 - 定时同步配置在 DB：`integration_sync_config(provider='chanjet')`，页面 `/tplus-sync/` 顶部可改，worker 每轮热读。
@@ -36,7 +36,10 @@ SELECT record_key, last_seen_at, missing_since FROM tplus_bom_records WHERE reco
 
 ## 线上只读探测法（不动部署代码）
 
-脚本 base64 管道进容器：`ssh aliecs` → `docker exec -i ecs-tplus-sync-worker-1 python -`，复用容器 `config` + `ChanjetClient` + 自动刷新 openToken。
+脚本 base64 管道进容器：`ssh txecs` →
+`sudo docker exec -i business-cn-tplus-sync-worker-1 python -`，复用容器
+`config` + `ChanjetClient` + 自动刷新 openToken。aliecs 的同名旧 worker 必须保持停止，
+避免双端同步或写入。
 
 ## 测试
 
