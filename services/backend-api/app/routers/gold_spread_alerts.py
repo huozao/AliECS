@@ -44,7 +44,9 @@ class HistoricalContractSummary(BaseModel):
     zoom_buckets: list[HistoricalBucket] = Field(default_factory=list, max_length=20)
 
 
-class HistoricalChart(BaseModel):
+class AlertChart(BaseModel):
+    """任意告警都可以带的配图。历史回溯报告和逐笔错单共用这一个结构。"""
+
     name: str = Field(max_length=120)
     content_type: Literal["image/png"] = "image/png"
     caption: str = Field(max_length=120)
@@ -74,7 +76,7 @@ class HistoricalAnalysis(BaseModel):
     overall_buckets: list[HistoricalBucket] = Field(default_factory=list, max_length=100)
     zoom_buckets: list[HistoricalBucket] = Field(default_factory=list, max_length=20)
     contracts: list[HistoricalContractSummary] = Field(default_factory=list, max_length=100)
-    charts: list[HistoricalChart] = Field(default_factory=list, max_length=4)
+    charts: list[AlertChart] = Field(default_factory=list, max_length=4)
     report_files: list[str] = Field(default_factory=list, max_length=20)
 
 
@@ -136,6 +138,9 @@ class GoldSpreadAlert(BaseModel):
     recovered: bool | None = None
     recovery_seconds: float | None = Field(default=None, ge=0)
     summary: str = Field(default="", max_length=5000)
+    # 任意 kind 都可以带图（逐笔错单的四面板明细图走这里）。历史回溯报告的图
+    # 在 historical_analysis.charts 里，两者不能同时给，否则不知道该发哪张卡。
+    charts: list[AlertChart] = Field(default_factory=list, max_length=4)
     historical_analysis: HistoricalAnalysis | None = None
 
     @model_validator(mode="after")
@@ -184,6 +189,8 @@ class GoldSpreadAlert(BaseModel):
                 raise ValueError("wrong-price review missing fields: recovery_seconds")
         if self.historical_analysis is not None and self.kind != "historical_complete":
             raise ValueError("historical_analysis is only valid for historical_complete")
+        if self.charts and self.historical_analysis is not None:
+            raise ValueError("charts and historical_analysis cannot be combined")
         return self
 
 
@@ -404,6 +411,54 @@ def _render_wrong_price(alert: GoldSpreadAlert) -> str:
     return "\n".join(lines)
 
 
+def build_alert_card(
+    alert: GoldSpreadAlert,
+    text: str,
+    image_keys: list[str],
+) -> dict[str, Any]:
+    """带图告警的通用卡片：正文直接复用纯文本排版，后面挂图。
+
+    正文用 `plain_text` 而不是 `lark_md`——排版里有 `*`、`|`、`#` 这类字符，
+    走 markdown 会被吃掉或变成标题。
+    """
+    lines = text.split("\n")
+    title = lines[0].strip() or "黄金价差告警"
+    body = "\n".join(lines[1:]).strip()
+    elements: list[dict[str, Any]] = []
+    if body:
+        elements.append({"tag": "div", "text": {"tag": "plain_text", "content": body}})
+    for index, image_key in enumerate(image_keys):
+        caption = alert.charts[index].caption if index < len(alert.charts) else ""
+        if caption:
+            elements.append(
+                {"tag": "div", "text": {"tag": "lark_md", "content": f"**{caption}**"}}
+            )
+        elements.append(
+            {
+                "tag": "img",
+                "img_key": image_key,
+                "alt": {"tag": "plain_text", "content": caption or "告警配图"},
+                "mode": "fit_horizontal",
+                "preview": True,
+            }
+        )
+    elements.append(
+        {
+            "tag": "note",
+            "elements": [{"tag": "plain_text", "content": f"事件编号：{alert.event_id}"}],
+        }
+    )
+    templates = {"info": "blue", "warning": "orange", "critical": "red"}
+    return {
+        "config": {"wide_screen_mode": True, "update_multi": True},
+        "header": {
+            "template": templates.get(alert.severity, "orange"),
+            "title": {"tag": "plain_text", "content": title},
+        },
+        "elements": elements,
+    }
+
+
 def build_historical_report_card(
     alert: GoldSpreadAlert,
     image_keys: list[str],
@@ -587,6 +642,51 @@ def _upload_feishu_image(
     return str(image_key)
 
 
+def _upload_charts(
+    charts: list[AlertChart],
+    token: str,
+    *,
+    opener=urllib.request.urlopen,
+) -> list[str]:
+    image_keys: list[str] = []
+    for chart in charts:
+        data = base64.b64decode(chart.data_base64, validate=True)
+        if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise ValueError("alert chart is not a PNG image")
+        if len(data) > 2_000_000:
+            raise ValueError("alert chart exceeds 2 MB")
+        image_keys.append(_upload_feishu_image(data, token, opener=opener))
+    return image_keys
+
+
+def _post_feishu_card(
+    receive_id: str,
+    card: dict[str, Any],
+    token: str,
+    *,
+    opener=urllib.request.urlopen,
+) -> bool:
+    request = urllib.request.Request(
+        "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
+        data=json.dumps(
+            {
+                "receive_id": receive_id,
+                "msg_type": "interactive",
+                "content": json.dumps(card, ensure_ascii=False),
+            },
+            ensure_ascii=False,
+        ).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + token,
+        },
+        method="POST",
+    )
+    with opener(request, timeout=15) as response:
+        result = json.loads(response.read().decode("utf-8"))
+    return result.get("code") == 0
+
+
 def send_feishu_historical_card(
     receive_id: str,
     alert: GoldSpreadAlert,
@@ -600,47 +700,50 @@ def send_feishu_historical_card(
         return False
     try:
         token = _feishu_tenant_token(app_id, app_secret, opener=opener)
-        image_keys: list[str] = []
-        for chart in report.charts:
-            data = base64.b64decode(chart.data_base64, validate=True)
-            if not data.startswith(b"\x89PNG\r\n\x1a\n"):
-                raise ValueError("historical chart is not a PNG image")
-            if len(data) > 2_000_000:
-                raise ValueError("historical chart exceeds 2 MB")
-            image_keys.append(_upload_feishu_image(data, token, opener=opener))
+        image_keys = _upload_charts(report.charts, token, opener=opener)
         card = build_historical_report_card(alert, image_keys)
-        request = urllib.request.Request(
-            "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
-            data=json.dumps(
-                {
-                    "receive_id": receive_id,
-                    "msg_type": "interactive",
-                    "content": json.dumps(card, ensure_ascii=False),
-                },
-                ensure_ascii=False,
-            ).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": "Bearer " + token,
-            },
-            method="POST",
-        )
-        with opener(request, timeout=15) as response:
-            result = json.loads(response.read().decode("utf-8"))
-        return result.get("code") == 0
+        return _post_feishu_card(receive_id, card, token, opener=opener)
     except Exception as exc:
         logging.warning("Feishu historical card delivery failed: %s", type(exc).__name__)
         return False
+
+
+def send_feishu_alert_card(
+    receive_id: str,
+    alert: GoldSpreadAlert,
+    text: str,
+    *,
+    app_id: str,
+    app_secret: str,
+    opener=urllib.request.urlopen,
+) -> bool:
+    """把带图的普通告警发成一张卡片。失败时调用方会退回纯文本，图丢了但字还在。"""
+    if not (alert.charts and receive_id and app_id and app_secret):
+        return False
+    try:
+        token = _feishu_tenant_token(app_id, app_secret, opener=opener)
+        image_keys = _upload_charts(alert.charts, token, opener=opener)
+        card = build_alert_card(alert, text, image_keys)
+        return _post_feishu_card(receive_id, card, token, opener=opener)
+    except Exception as exc:
+        logging.warning("Feishu alert card delivery failed: %s", type(exc).__name__)
+        return False
+
+
+def _strip_chart_bytes(charts: Any) -> None:
+    """base64 图不入库——一张几十万字符，payload_json 会被撑爆。只留长度做审计。"""
+    for chart in charts or []:
+        if isinstance(chart, dict):
+            encoded = str(chart.pop("data_base64", ""))
+            chart["base64_characters"] = len(encoded)
 
 
 def _stored_alert_payload(alert: GoldSpreadAlert) -> dict[str, Any]:
     payload = alert.model_dump(mode="json")
     analysis = payload.get("historical_analysis")
     if isinstance(analysis, dict):
-        for chart in analysis.get("charts") or []:
-            if isinstance(chart, dict):
-                encoded = str(chart.pop("data_base64", ""))
-                chart["base64_characters"] = len(encoded)
+        _strip_chart_bytes(analysis.get("charts"))
+    _strip_chart_bytes(payload.get("charts"))
     return payload
 
 
@@ -718,6 +821,14 @@ def send_gold_spread_alert(
         sent = send_feishu_historical_card(
             chat_id,
             body,
+            app_id=app_id,
+            app_secret=app_secret,
+        )
+    elif body.charts:
+        sent = send_feishu_alert_card(
+            chat_id,
+            body,
+            text,
             app_id=app_id,
             app_secret=app_secret,
         )
