@@ -512,7 +512,7 @@ def _resolve_couple_space_id(user_id: int, requested_space_id: int | None) -> in
                 row = cur.fetchone()
                 if row:
                     return row[0]
-                raise HTTPException(status_code=403, detail="permission denied")
+                raise HTTPException(status_code=403, detail="当前功能不可用。")
 
             cur.execute(
                 """
@@ -532,7 +532,7 @@ def _resolve_couple_space_id(user_id: int, requested_space_id: int | None) -> in
 
 def _require_couple_user(user: dict[str, Any]) -> int:
     if not _has_couple_access(user):
-        raise HTTPException(status_code=403, detail="permission denied")
+        raise HTTPException(status_code=403, detail="当前功能不可用。")
     user_id = _user_id_by_username(str(user.get("sub", "")))
     if not user_id:
         raise HTTPException(status_code=401, detail="invalid user")
@@ -1406,7 +1406,7 @@ def patch_couple_space(
     user_id = _require_couple_user(user)
     space_id = _resolve_couple_space_id(user_id, couple_space_id)
     if not _is_space_owner(user, user_id, space_id):
-        raise HTTPException(status_code=403, detail="permission denied")
+        raise HTTPException(status_code=403, detail="当前功能不可用。")
     fields: list[str] = []
     params: list[Any] = []
     if body.name is not None:

@@ -113,7 +113,7 @@ def _load_owned_draft(conn, draft_id: int, actor: str, is_admin: bool) -> tuple[
     if not row:
         raise HTTPException(status_code=404, detail="BOM 草稿不存在")
     if not is_admin and str(row[5]) != actor:
-        raise HTTPException(status_code=403, detail="permission denied")
+        raise HTTPException(status_code=403, detail="当前功能不可用。")
     return row
 
 
@@ -567,7 +567,7 @@ def get_bom_submission(submission_id: int, user: dict[str, Any] = Depends(requir
             if not row:
                 raise HTTPException(status_code=404, detail="BOM 提交不存在")
             if not is_admin and str(row[3]) != actor:
-                raise HTTPException(status_code=403, detail="permission denied")
+                raise HTTPException(status_code=403, detail="当前功能不可用。")
             cur.execute(
                 "SELECT event_type, detail_json, created_at FROM tplus_bom_submission_events WHERE submission_id=%s ORDER BY id",
                 (submission_id,),

@@ -207,7 +207,7 @@ def list_quality_reports(
     user: dict[str, Any] = Depends(require_login),
 ) -> dict[str, Any]:
     if status != "published" and not _can_manage(user):
-        raise HTTPException(status_code=403, detail="permission denied")
+        raise HTTPException(status_code=403, detail="当前功能不可用。")
     clauses = ["status = %s"]
     params: list[Any] = [status]
     if q.strip():

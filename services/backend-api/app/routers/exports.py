@@ -348,7 +348,7 @@ def inventory_current_stock(
     scope_permission = "inventory.raw.read" if scope == "raw" else "inventory.finished.read"
     allowed = "admin" in roles or "admin.access" in permissions or scope_permission in permissions
     if not allowed:
-        raise HTTPException(status_code=403, detail="permission denied")
+        raise HTTPException(status_code=403, detail="当前功能不可用。")
 
     path = _latest_tplus_export_file("current_stock")
     if path is None:

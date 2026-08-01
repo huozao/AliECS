@@ -279,7 +279,7 @@ def require_admin(user: dict[str, Any] = Depends(get_current_user)) -> dict[str,
     permissions = user.get("permissions", [])
     if "admin" in roles or "admin.access" in permissions:
         return user
-    raise HTTPException(status_code=403, detail="permission denied")
+    raise HTTPException(status_code=403, detail="当前功能不可用。")
 
 
 def require_permission(permission: str, user: dict[str, Any]) -> dict[str, Any]:
@@ -287,7 +287,7 @@ def require_permission(permission: str, user: dict[str, Any]) -> dict[str, Any]:
     permissions = user.get("permissions", [])
     if "admin" in roles or "admin.access" in permissions or permission in permissions:
         return user
-    raise HTTPException(status_code=403, detail="permission denied")
+    raise HTTPException(status_code=403, detail="当前功能不可用。")
 
 
 def _couple_feature_enabled() -> bool:

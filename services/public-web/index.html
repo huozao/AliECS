@@ -60,7 +60,7 @@
           <div id="menuList" class="menu-list hidden">
             <button id="refreshBtn" type="button">刷新数据</button>
             <a href="/health/">API Health</a>
-            <a id="adminLink" href="/admin/">Admin UI</a>
+            <a id="adminLink" class="hidden" href="/admin/">Admin UI</a>
           </div>
         </div>
       </nav>
@@ -117,16 +117,19 @@
 
     function renderAuth(){
       const logged=Boolean(state.token&&state.user&&state.user.username!=='guest');
+      const roles=state.user&&state.user.roles||[],permissions=state.user&&state.user.permissions||[];
+      const adminAllowed=roles.includes('admin')||permissions.includes('admin.access');
       topLoginBtn.classList.toggle('hidden',logged);
       topLogoutBtn.classList.toggle('hidden',!logged);
       topLogoutBtn.textContent=logged?`退出（${state.user.username}）`:'退出登录';
+      adminLink.classList.toggle('hidden',!adminAllowed);
     }
 
-    // open-internal | open-external | locked-login | locked-reserved
+    // /v1/features 已按当前账号权限过滤；前端只区分可打开与暂未开放。
     function featureState(f){
       if(f.status==='active'&&f.url){
         if(isInternal(f.url))return 'open-internal';
-        return f.allowed?'open-external':'locked-login';
+        return 'open-external';
       }
       return 'locked-reserved';
     }
@@ -139,8 +142,6 @@
           return `<a class="row" href="${f.url}">${body}<span class="arrow">›</span></a>`;
         case 'open-external':
           return `<a class="row" href="${f.url}" target="_blank" rel="noreferrer">${body}<span class="arrow">↗</span></a>`;
-        case 'locked-login':
-          return `<div class="row locked" onclick="showError('未登录或无权限，请点右上角「登录（SSO）」')">${body}<span class="arrow">🔒</span></div>`;
         default:
           return `<div class="row locked" onclick="showError('该功能暂未开放')">${body}<span class="arrow">🔒</span></div>`;
       }
@@ -164,7 +165,7 @@
 
     async function loadFeatures(){
       clearMessage();
-      const data=await api('/v1/features?include_all=true');
+      const data=await api('/v1/features');
       state.user=data.user||{username:'guest',roles:[],permissions:[]};
       state.features=data.features||[];
       syncTokenState();
