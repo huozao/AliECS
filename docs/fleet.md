@@ -56,7 +56,7 @@ webdock2 WSL
 
 txecs 127.0.0.1:11800 failover-proxy
   ├─ 主 127.0.0.1:11810 ← webdock2（已验证）
-  └─ 备 127.0.0.1:11811 ← webdock1（设备离线，待验证）
+  └─ 备 127.0.0.1:11811 ← webdock1（已验证）
 ```
 
 - 当前生产 bridge 已迁 txecs，并经 txecs `127.0.0.1:11800` 访问
@@ -74,12 +74,13 @@ txecs 127.0.0.1:11800 failover-proxy
 - 入口：`ssh aliecs`（root@47.77.176.62）。ECS **不在 tailnet**。
 - 当前运行容器包括旧 public-web/admin-ui/postgres（只作回滚）和
   mcp-coding-server；旧 SSO、业务写端、worker、OpenClaw 和 bridge 均停止。
-- 公网 Nginx 只启用 console、ERP 和默认拒绝；其他历史 server 块隔离在
+- 公网 Nginx 只启用 console、ERP、Immich 和默认拒绝；其他历史 server 块隔离在
   `/etc/nginx/conf.inactive.d/`。console 的 forward-auth 在 txecs 完成，
-  AliECS 源站只允许 txecs 访问。
+  AliECS 源站只允许 txecs 访问。Immich 经 webdock1 的 12283 隧道提供公网入口；
+  `https://immich.hydwang.xyz/api/server/ping` 已于 2026-08-01 外部验证为 200。
 - 反向迁移候选使用独立 `/srv/business-cn` 和 `business-cn-*` 容器。
   在线准备阶段只允许空 PostgreSQL，不启动业务/worker，不覆盖 console/ERP。
-- 隧道端口（127.0.0.1）：11800 为 webdock failover 入口；当前 11810←webdock2 主、11811←webdock1 备（以 `/etc/default/webdock-failover-proxy` 的 NAME 绑定为准）；12283←webdock1 Immich、18015/18016←webdock1 AdventureLog，另有 Gokapi/Authentik 隧道（端口见 webdock1 各 unit 的 env）。
+- 隧道端口（127.0.0.1）：11800 为 webdock failover 入口；当前 11810←webdock2 主、11811←webdock1 备（以 `/etc/default/webdock-failover-proxy` 的 NAME 绑定为准）；12283←webdock1 Immich、18015/18016←webdock1 AdventureLog，另有 Gokapi 隧道（端口见 webdock1 各 unit 的 env）。2026-08-01 实测 webdock1 无 Authentik 容器或 tunnel unit，不再把它列作当前运行事实。
 - 远程控制台（2026-07-04，`https://hydwang.xyz/console/`）：nginx `/console/*` 七路 location（认证=Authelia `two_factor` + lldap `console_admins` 组，成对 deny 兜底；**VNC 层免密设计**，2FA 是唯一闸门）；本机组件 ttyd 7681（unit `ttyd-console`，⚠️ apt 自带 `ttyd.service` 抢端口须 disable）、webtop 3000 按需启停（`/opt/aliecs/aliecs-temp-desktop.sh`，2G 内存用完必须 stop）；ECS `authorized_keys` permitlisten 新增四条 160xx（16080/16081←webdock1、16090/16091←webdock2，与生产 118xx 隔离）。详见 infra `console/README.md`。
 - 部署：push AliECS main → release-deploy 自动构建部署业务镜像；bridge 镜像同流程构建，且当 `deploy/openclaw-bridge/**` 的内容树 hash 变了时，release-deploy 构建完自动调用 `bridge-cutover`（自动解析 digest、验证并失败回滚）。bridge 没变的合并完全不碰它；回滚/重切/切非 main ref 仍走 `bridge-cutover` 的手工 `workflow_dispatch`（填 `CUTOVER_TXECS`）。
 - 排障：`docker ps`、bridge 日志 `docker logs openclaw-bridge`、部署尖峰时 health 告警多为瞬时（2G 内存超卖）。
@@ -99,7 +100,8 @@ txecs 127.0.0.1:11800 failover-proxy
 - 应用部署：AliECS `release-deploy` 的独立 `business-cn` job；
   `/srv/business-cn/current` 记录当前源码提交，镜像从 TCR 按 digest 拉取。
 - WebDock：`127.0.0.1:11800` 为 failover 入口，
-  `11810←webdock2` 已验证，`11811←webdock1` 待设备上线。
+  `11810←webdock2`、`11811←webdock1` 均已验证；当前响应头仍为
+  `X-Webdock-Device: webdock2`、`X-Webdock-Route: primary`。
 - 公网边界：UFW 开放 80/443；Nginx 默认站点仍返回 444。`@`/`www`、
   `auth`/`lldap` 均在本机终止 TLS，Authelia/LLDAP 也在本机运行。无
   sing-box、mihomo 或任何第三方出海转发能力。
@@ -111,8 +113,8 @@ txecs 127.0.0.1:11800 failover-proxy
 ### webdock1（旧笔记本，当前备用）
 
 - 别名：旧电脑；ssh alias `webdock` / `webdock1` / `WebDock01`；tailscale/hostname `webdock-laptop`；用户 `webdock`。
-- 运行：`webdock` 容器（ghcr.io/huozao/webdock:sha-xxx）+ Chrome/ChatGPT 登录态（browser_data 卷，**登录必须人工做，红线**）、noVNC `http://100.97.176.57:6080/`、Immich(2283)、AdventureLog(8015/8016)、Gokapi、Authentik。
-- 反向隧道 unit（systemd）：`-R 11811`（webdock API，备）、`-R 12283`（Immich）、`-R 18015/18016`（AdventureLog）、Gokapi/Authentik（env 参数化）。
+- 运行：`webdock` 容器（ghcr.io/huozao/webdock:sha-xxx）+ Chrome/ChatGPT 登录态（browser_data 卷，**登录必须人工做，红线**）、noVNC `http://100.97.176.57:6080/`、Immich(2283)、AdventureLog(8015/8016)、Gokapi；2026-08-01 实测无 Authentik 运行实例。
+- 反向隧道 unit（systemd）：`-R 11811`（webdock API，备）、`-R 12283`（Immich）、`-R 18015/18016`（AdventureLog）、Gokapi（env 参数化）。
 - 远程控制台：x11vnc :5900（`-nopw`，回环）+ noVNC/websockify 6081（**只绑 Tailscale IP** 100.97.176.57）+ `console-ecs-tunnel`（`-R 16080`←容器 noVNC 6080、`-R 16081`←桌面 6081）；unit：`x11vnc-desktop` / `novnc-desktop` / `console-ecs-tunnel`；GDM 已切 Xorg（`WaylandEnable=false`，自动登录）。
 - 部署：拉新镜像 + `systemctl restart webdock`（卷不丢登录态）。webdock 仓库小改可直推 main（**直推前本地 pytest**，CI 不跑直推）。
 - 日志：消息存档 `/var/log/webdock/archive/<UTC日期>.jsonl`（收发全文+lane+status）；容器内 `/app/logs/`。
@@ -130,6 +132,19 @@ txecs 127.0.0.1:11800 failover-proxy
 - 远程控制台：Windows TightVNC :5900 服务模式（`UseVncAuthentication=0` 免密，防火墙只放行 172.16.0.0/12+100.64.0.0/10，MSI 自建全放行规则已 Disable）+ WSL noVNC 6091（`novnc-desktop`，启动时动态解析 WSL 网关）+ WSL `console-ecs-tunnel`（`-R 16090`←容器 noVNC 6080、`-R 16091`←桌面 6091）。
 - noVNC：`http://100.67.38.52:6080/` 可用。⚠️ 已知怪癖：Tailscale 直连 `100.67.38.52:18000` 返回 502（Windows→WSL 端口转发问题），**生产链路不受影响**（隧道从 WSL 内 localhost 拉出）；从 ECS 探 `127.0.0.1:11810/healthz` 才是有效健康检查。
 - 日志：WSL 内 `/var/log/webdock/archive/`。
+
+### WebDock 双向加密备份
+
+- webdock1 每日把 Immich、Gokapi、AdventureLog、WebDock 登录态与日志写入
+  webdock2 的 `C:\WebDockPeerBackup`；PostgreSQL 先做逻辑导出，不复制运行中的 data dir。
+- webdock2 每日把 WebDock 登录态与日志写入 webdock1 的
+  `/srv/webdock-peer-backup/webdock2/repo`。接收端是只绑定 Tailscale IP:2222、
+  强制 internal-sftp 且无 shell 的独立 sshd。
+- 两端传输经 Tailscale；Windows 方向另强制 SMB 3.1.1 `seal`。两份仓库均由
+  Restic 加密，共享密码只存在 infra 的 SOPS 密文中，两台设备都能解密并打开。
+- 资产契约、保留期与恢复探针的权威源是 infra
+  `config/backup/webdock-peer-assets.json`；以实际 timer、最近 snapshot 和
+  `webdock-peer-restore-check.service` 结果判定是否健康，不从本段推断。
 
 ### devbox（开发机）
 
