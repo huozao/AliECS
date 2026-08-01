@@ -39,6 +39,10 @@ class AdminFrontendTests(unittest.TestCase):
         self.assertIn('source: "读取失败"', self.html)
         self.assertNotIn('api("/v1/admin/system-config/effective")\n      ]);', self.html)
 
+    def test_unauthorized_entry_does_not_disclose_permission_name(self) -> None:
+        self.assertIn('throw new Error("当前页面不可用。");', self.html)
+        self.assertNotIn("当前账号没有 admin.access 权限", self.html)
+
 
 if __name__ == "__main__":
     unittest.main()

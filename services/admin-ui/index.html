@@ -442,7 +442,7 @@
       clearMessage();
       state.me=await api("/v1/auth/me");
       const roles=state.me.roles||[],permissions=state.me.permissions||[];
-      if(!(roles.includes("admin")||permissions.includes("admin.access")))throw new Error("当前账号没有 admin.access 权限，无法进入管理后台。");
+      if(!(roles.includes("admin")||permissions.includes("admin.access")))throw new Error("当前页面不可用。");
       const [usersResp,rolesResp,permissionsResp,featuresResp]=await Promise.all([
         api("/v1/admin/users"),api("/v1/admin/rbac-overview"),api("/v1/admin/permissions"),api("/v1/admin/features")
       ]);

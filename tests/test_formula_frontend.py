@@ -96,6 +96,20 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertIn("匹配 ${data.match_count||0} 条明细，配方 ${data.recipe_count||0} 个", self.html)
         self.assertIn("来源：${data.source_file||'unknown'}", self.html)
 
+    def test_query_silently_hides_unavailable_cost_feature(self) -> None:
+        self.assertIn("if(cost==='denied')showSuccess('配方查询已完成。');", self.html)
+        self.assertIn("error.status=response.status", self.html)
+        self.assertIn("costError&&costError.status===403", self.html)
+        self.assertNotIn("当前账号没有成本核算权限", self.html)
+
+    def test_compare_table_scrolls_only_after_fifteen_rows(self) -> None:
+        self.assertIn(".compare-table-wrap{", self.html)
+        self.assertIn("max-height:988px", self.html)
+        self.assertIn("const MAX_VISIBLE_COMPARE_ROWS=15;", self.html)
+        self.assertIn("function syncCompareTableViewport()", self.html)
+        self.assertIn("rowHeight*MAX_VISIBLE_COMPARE_ROWS", self.html)
+        self.assertIn("syncCompareTableViewport();", self.html)
+
     def test_query_compare_logic_has_bars_filters_and_code_warnings(self) -> None:
         self.assertIn("majorityPatterns(", self.bundle)
         self.assertIn("function isSpecialItemCode(", self.core)
