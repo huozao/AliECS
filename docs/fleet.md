@@ -81,7 +81,7 @@ txecs 127.0.0.1:11800 failover-proxy
 - 反向迁移候选使用独立 `/srv/business-cn` 和 `business-cn-*` 容器。
   在线准备阶段只允许空 PostgreSQL，不启动业务/worker，不覆盖 console/ERP。
 - 隧道端口（127.0.0.1）：11800 为 webdock failover 入口；当前 11810←webdock2 主、11811←webdock1 备（以 `/etc/default/webdock-failover-proxy` 的 NAME 绑定为准）；12283←webdock1 Immich、18015/18016←webdock1 AdventureLog，另有 Gokapi 隧道（端口见 webdock1 各 unit 的 env）。2026-08-01 实测 webdock1 无 Authentik 容器或 tunnel unit，不再把它列作当前运行事实。
-- 远程控制台（2026-07-04，`https://hydwang.xyz/console/`）：nginx `/console/*` 七路 location（认证=Authelia `two_factor` + lldap `console_admins` 组，成对 deny 兜底；**VNC 层免密设计**，2FA 是唯一闸门）；本机组件 ttyd 7681（unit `ttyd-console`，⚠️ apt 自带 `ttyd.service` 抢端口须 disable）、webtop 3000 按需启停（`/opt/aliecs/aliecs-temp-desktop.sh`，2G 内存用完必须 stop）；ECS `authorized_keys` permitlisten 新增四条 160xx（16080/16081←webdock1、16090/16091←webdock2，与生产 118xx 隔离）。详见 infra `console/README.md`。
+- 远程控制台（2026-07-04，`https://hydwang.xyz/console/`）：nginx `/console/*` 七路 location（认证=Authelia `two_factor` + lldap `console_admins` 组，成对 deny 兜底；**VNC 层免密设计**，2FA 是唯一闸门）；本机组件 ttyd 7681（unit `ttyd-console`，⚠️ apt 自带 `ttyd.service` 抢端口须 disable）、webtop 3000 按需启停（`/opt/aliecs/aliecs-temp-desktop.sh`，2G 内存用完必须 stop）；ECS `authorized_keys` permitlisten 新增四条 160xx（16080/16081←webdock1、16090/16091←webdock2，与生产 118xx 隔离）。⚠️ 2026-08-03 起 `/console/devbox/desktop/` 已改为在 txecs 本地终止，不再回源本机；AliECS 侧对应的 16101 location 与 authorized_keys 条目**刻意保留**，仅作回滚路径，不再有流量。详见 infra `console/README.md`。
 - 部署：push AliECS main → release-deploy 自动构建部署业务镜像；bridge 镜像同流程构建，且当 `deploy/openclaw-bridge/**` 的内容树 hash 变了时，release-deploy 构建完自动调用 `bridge-cutover`（自动解析 digest、验证并失败回滚）。bridge 没变的合并完全不碰它；回滚/重切/切非 main ref 仍走 `bridge-cutover` 的手工 `workflow_dispatch`（填 `CUTOVER_TXECS`）。
 - 排障：`docker ps`、bridge 日志 `docker logs openclaw-bridge`、部署尖峰时 health 告警多为瞬时（2G 内存超卖）。
 
@@ -105,10 +105,15 @@ txecs 127.0.0.1:11800 failover-proxy
 - 公网边界：UFW 开放 80/443；Nginx 默认站点仍返回 444。`@`/`www`、
   `auth`/`lldap` 均在本机终止 TLS，Authelia/LLDAP 也在本机运行。无
   sing-box、mihomo 或任何第三方出海转发能力。
+- 远程控制台：公网 `/console/*` 的 Authelia forward-auth 在本机完成；除
+  `/console/devbox/desktop/` 外均反代回 AliECS 源站。devbox 那一路自 2026-08-03 起
+  在本机终止（`127.0.0.1:16101` ← devbox 反向隧道，sshd `PermitListen` 与
+  `webdock-tunnel` authorized_keys 均由 infra `roles/server/tencent` 管理）。
 - 排障：
   `sudo systemctl status webdock-failover-proxy`、
   `curl -i http://127.0.0.1:11800/healthz`、
-  `readlink -f /srv/business-cn/current`。
+  `readlink -f /srv/business-cn/current`、
+  `ss -ltn | grep 16101`（devbox console 隧道）。
 
 ### webdock1（旧笔记本，当前备用）
 
@@ -151,6 +156,14 @@ txecs 127.0.0.1:11800 failover-proxy
 - 别名：开发机、本机。Windows 11，工作区 `C:\Users\ishel\Desktop\编程总库\AliECS-WebDock`。
 - 持有：AliECS、webdock、infra 三个仓库克隆；`gh` 已认证（nihil7）；`~/.ssh/config` 定义全部设备别名。
 - 不运行生产代码。
+- 远程控制台（`https://hydwang.xyz/console/devbox/desktop/`）：TightVNC :5900 免密
+  （防火墙 `DevboxConsole-VNC-5900` 只放行 `100.64.0.0/10`）+ websockify/noVNC 6101 +
+  `console-tunnel`（`-R 16101`）。**2026-08-03 起隧道落 txecs，不再落 aliecs**：
+  原链路每帧往返两次太平洋，实测 1.2–2.3s，改后 0.34s。2FA 闸门不变。
+- 装机/重建与对账剧本：infra `roles/devbox/README.md`；设备参数
+  `infra/config/devices/devbox.env`（换 console 边界只改这里两行）。
+- 低延迟捷径：tailnet 内可原生 VNC 直连 `100.116.248.82:5900`，不经公网与域名。
+- 验证：`pwsh -File infra/roles/devbox/windows-native/apply.ps1 -CheckOnly`。
 
 ## 仓库 ↔ 设备映射
 
