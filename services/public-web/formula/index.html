@@ -52,8 +52,6 @@
         <button id="logoutBtn" class="btn hidden" type="button">退出登录</button>
       </nav>
     </header>
-    <div id="errorBox" class="error"></div>
-    <div id="successBox" class="success"></div>
     <section class="panel">
       <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
         <h2>配方查询</h2>
@@ -207,6 +205,7 @@
     </section>
   </div>
   <script src="compare-core.js"></script>
+  <script src="/common/toast.js"></script>
   <script>
     const API_BASE=location.port==='8080'?'http://localhost:8000':'/api';
     const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
@@ -228,9 +227,9 @@
     const saveSimulatedQuantities=()=>localStorage.setItem(SIM_QTY_KEY,JSON.stringify(state.simulatedQuantities));
     const fmtPriceTime=(ts)=>{if(!ts)return'';const d=new Date(ts);const p=(n)=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;};
     const syncAuth=()=>{state.token=getAuthToken();loginBtn.classList.toggle('hidden',Boolean(state.token));logoutBtn.classList.toggle('hidden',!state.token);};
-    function showError(message){errorBox.textContent=message;errorBox.style.display='block';successBox.style.display='none'}
-    function showSuccess(message){successBox.textContent=message;successBox.style.display='block';errorBox.style.display='none'}
-    function clearMessage(){errorBox.style.display='none';successBox.style.display='none'}
+    function showError(message){AliECSToast.show(message,'error')}
+    function showSuccess(message){AliECSToast.show(message,'success')}
+    function clearMessage(){AliECSToast.hide()}
     async function api(path,opt={}){
       const headers=Object.assign({'Content-Type':'application/json'},opt.headers||{});
       syncAuth();

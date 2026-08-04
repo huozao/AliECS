@@ -20,7 +20,6 @@
       <div><h1 id="pageTitle">原材料库存</h1><div id="metaLine" class="muted small">数据来自 T+ 现存量同步</div></div>
       <nav class="row"><a class="btn" href="/">首页</a><button id="loginBtn" class="btn" type="button">登录（SSO）</button><button id="logoutBtn" class="btn hidden" type="button">退出登录</button></nav>
     </header>
-    <div id="msg" class="attention"></div>
     <section class="panel">
       <div class="row">
         <input id="qInput" name="stock-keyword" autocomplete="off" placeholder="按名称 / 编码 / 规格搜索" style="min-width:240px"/>
@@ -38,6 +37,7 @@
       </div>
     </section>
   </div>
+  <script src="/common/toast.js"></script>
   <script>
     // 本页与 finished-goods 共用同一套逻辑，仅 PAGE_TITLE/DEFAULT_WAREHOUSE 不同。
     const PAGE_TITLE='原材料库存';
@@ -51,8 +51,8 @@
     const clearAuthToken=()=>AUTH_KEYS.forEach((k)=>localStorage.removeItem(k));
     const esc=(v)=>String(v??'').replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const qty=(v)=>Number(v||0).toLocaleString('zh-CN',{maximumFractionDigits:4});
-    function showError(t){const m=$('msg');m.textContent=t;m.style.display=t?'block':'none';}
-    function clearMessage(){$('msg').style.display='none';}
+    function showError(t){AliECSToast.show(t,'error');}
+    function clearMessage(){AliECSToast.hide();}
     async function api(path,opt={}){
       const headers=Object.assign({'Content-Type':'application/json'},opt.headers||{});
       const t=token();if(t)headers.Authorization=`Bearer ${t}`;

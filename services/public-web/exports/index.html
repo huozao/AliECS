@@ -15,7 +15,6 @@
       <div><h1>数据导出</h1><p class="subtitle">管理导出目录、同步文档与下载数据文件。</p></div>
       <nav class="actions"><a class="btn" href="/health/">← 返回 API Health</a><button id="loginBtn" class="btn" type="button">登录（SSO）</button><button id="logoutBtn" class="btn hidden" type="button">退出登录</button><button id="refreshBtn" class="btn primary hidden" type="button">刷新</button></nav>
     </header>
-    <div id="msg" class="attention" style="display:none;margin-bottom:14px"></div>
     <div id="gateHint" class="band">此页面仅管理员可见。请点右上角「登录（SSO）」。</div>
     <div id="adminContent" class="hidden">
       <section class="band">
@@ -45,6 +44,7 @@
       <div id="modalBody" style="margin-top:12px"></div>
     </div>
   </div>
+  <script src="/common/toast.js"></script>
   <script>
     const API_BASE=location.port==='8080'?'http://localhost:8000':'/api';
     const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
@@ -63,9 +63,9 @@
     }
     const $=(id)=>document.getElementById(id);
     const clearAuthToken=()=>AUTH_KEYS.forEach((k)=>localStorage.removeItem(k));
-    function showError(t){const m=$('msg');if(!m)return;m.textContent=t;m.className='attention critical';m.style.display=t?'block':'none';}
-    function showSuccess(t){const m=$('msg');if(!m)return;m.textContent=t;m.className='attention';m.style.display=t?'block':'none';}
-    function clearMessage(){const m=$('msg');if(m)m.style.display='none';}
+    function showError(t){AliECSToast.show(t,'error');}
+    function showSuccess(t){AliECSToast.show(t,'success');}
+    function clearMessage(){AliECSToast.hide();}
     async function fetchMe(){if(!token())return null;try{return await api('/v1/auth/me');}catch{return null;}}
     const isAdminUser=(me)=>!!me&&(((me.roles||[]).includes('admin'))||((me.permissions||[]).includes('admin.access')));
     function applyGate(me){const admin=isAdminUser(me);$('loginBtn').classList.toggle('hidden',admin);$('logoutBtn').classList.toggle('hidden',!token());$('adminContent').classList.toggle('hidden',!admin);$('gateHint').classList.toggle('hidden',admin);$('refreshBtn').classList.toggle('hidden',!admin);if(admin){loadDocSyncConfig();loadExports().catch((e)=>{$('exportList').innerHTML=`<span class="chip failed">导出目录加载失败：${esc(e.message)}</span>`;});}}
