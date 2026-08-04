@@ -1,0 +1,152 @@
+"""定时全量的锚点调度：把同步固定到夜间，避开白天工作时段。
+
+锚点时刻按北京时间解释（容器内是 UTC）；不设锚点时保持"跑完睡一个周期"的原行为。
+"""
+
+import unittest
+from datetime import datetime, timedelta, timezone
+
+from tplus_datahub.jobs.worker_loop import (
+    BEIJING,
+    _normalize_anchor_time,
+    _resolve_sync_config,
+    next_scheduled_full_due,
+    run_forever,
+)
+
+
+def _beijing(year, month, day, hour, minute=0):
+    return datetime(year, month, day, hour, minute, tzinfo=BEIJING).astimezone(timezone.utc)
+
+
+class NextDueTests(unittest.TestCase):
+    def test_never_run_goes_immediately(self):
+        now = _beijing(2026, 8, 5, 14)
+        self.assertEqual(next_scheduled_full_due(now, None, 86400, "02:00"), now)
+
+    def test_without_anchor_keeps_relative_interval(self):
+        last = _beijing(2026, 8, 5, 14)
+        self.assertEqual(
+            next_scheduled_full_due(last, last, 86400, ""),
+            last + timedelta(seconds=86400),
+        )
+
+    def test_anchor_pulls_next_run_to_that_beijing_hour(self):
+        """白天 14:00 跑过一次后，下一次应落在次日凌晨 02:00 北京时间。"""
+        last = _beijing(2026, 8, 5, 14)
+        due = next_scheduled_full_due(last, last, 86400, "02:00")
+        self.assertEqual(due, _beijing(2026, 8, 6, 2))
+        self.assertEqual(due.astimezone(BEIJING).hour, 2)
+
+    def test_anchor_is_beijing_not_utc(self):
+        """02:00 必须是北京时间；若误按 UTC 处理会落在北京 10:00 的工作时段。"""
+        last = _beijing(2026, 8, 5, 14)
+        due = next_scheduled_full_due(last, last, 86400, "02:00")
+        self.assertNotEqual(due.astimezone(BEIJING).hour, 10)
+        self.assertEqual(due.utcoffset(), timedelta(0))
+        self.assertEqual(due.hour, 18)  # 北京 02:00 = 前一日 UTC 18:00
+
+    def test_run_just_before_anchor_snaps_to_the_same_day_anchor(self):
+        """01:30 跑过一次，相位对齐会让它 30 分钟后补到当天 02:00，而不是等一整天。"""
+        last = _beijing(2026, 8, 5, 1, 30)
+        self.assertEqual(next_scheduled_full_due(last, last, 86400, "02:00"), _beijing(2026, 8, 5, 2))
+
+    def test_run_exactly_at_anchor_moves_to_next_day(self):
+        last = _beijing(2026, 8, 5, 2)
+        self.assertEqual(next_scheduled_full_due(last, last, 86400, "02:00"), _beijing(2026, 8, 6, 2))
+
+    def test_twelve_hour_interval_keeps_anchor_phase(self):
+        last = _beijing(2026, 8, 5, 3)
+        self.assertEqual(next_scheduled_full_due(last, last, 43200, "02:00"), _beijing(2026, 8, 5, 14))
+
+    def test_naive_last_full_is_treated_as_utc(self):
+        """DB 里取到的 started_at 可能是 naive，不能因此崩掉调度。"""
+        naive = datetime(2026, 8, 5, 6, 0)
+        due = next_scheduled_full_due(_beijing(2026, 8, 5, 20), naive, 86400, "02:00")
+        self.assertIsNotNone(due.tzinfo)
+
+
+class AnchorNormalizeTests(unittest.TestCase):
+    def test_valid_values(self):
+        self.assertEqual(_normalize_anchor_time("02:00"), "02:00")
+        self.assertEqual(_normalize_anchor_time("2:5"), "02:05")
+        self.assertEqual(_normalize_anchor_time(" 23:59 "), "23:59")
+
+    def test_invalid_values_fall_back_to_no_anchor(self):
+        for bad in ["", None, "24:00", "12:60", "abc", "12", "12:00:00", "-1:00"]:
+            self.assertEqual(_normalize_anchor_time(bad), "", msg=f"{bad!r} 应视为未设锚点")
+
+
+class ResolveConfigTests(unittest.TestCase):
+    def test_anchor_read_from_config(self):
+        enabled, interval, anchor = _resolve_sync_config(
+            lambda: {"enabled": True, "interval_seconds": 86400, "anchor_time": "02:00"}
+        )
+        self.assertTrue(enabled)
+        self.assertEqual(interval, 86400)
+        self.assertEqual(anchor, "02:00")
+
+    def test_missing_anchor_defaults_empty(self):
+        _, _, anchor = _resolve_sync_config(lambda: {"enabled": True, "interval_seconds": 86400})
+        self.assertEqual(anchor, "")
+
+    def test_config_error_falls_back_without_anchor(self):
+        def boom():
+            raise RuntimeError("db down")
+
+        enabled, _, anchor = _resolve_sync_config(boom)
+        self.assertTrue(enabled)
+        self.assertEqual(anchor, "")
+
+
+class RunForeverAnchorTests(unittest.TestCase):
+    def test_skips_full_sync_when_not_due(self):
+        """容器在白天重建时，不该立刻补跑一次全量。"""
+        calls = []
+        sleeps = []
+        last_full = _beijing(2026, 8, 5, 2)
+        run_forever(
+            sync_once=lambda: calls.append("sync") or 0,
+            read_sync_config=lambda: {"enabled": True, "interval_seconds": 86400, "anchor_time": "02:00"},
+            read_last_full=lambda: last_full,
+            now=lambda: _beijing(2026, 8, 5, 14),
+            sleep=sleeps.append,
+            max_runs=2,
+        )
+        self.assertEqual(calls, [])
+        self.assertTrue(sleeps)
+        self.assertEqual(sum(sleeps), 12 * 3600)  # 从北京 14:00 睡到次日 02:00
+
+    def test_runs_when_due(self):
+        calls = []
+        last_full = _beijing(2026, 8, 4, 2)
+        run_forever(
+            sync_once=lambda: calls.append("sync") or 0,
+            read_sync_config=lambda: {"enabled": True, "interval_seconds": 86400, "anchor_time": "02:00"},
+            read_last_full=lambda: last_full,
+            now=lambda: _beijing(2026, 8, 5, 3),
+            sleep=lambda _s: None,
+            max_runs=1,
+        )
+        self.assertEqual(calls, ["sync"])
+
+    def test_unreadable_last_full_runs_immediately(self):
+        """读不到上次时间就按旧行为立即跑，不能因此不同步。"""
+        calls = []
+
+        def boom():
+            raise RuntimeError("db down")
+
+        run_forever(
+            sync_once=lambda: calls.append("sync") or 0,
+            read_sync_config=lambda: {"enabled": True, "interval_seconds": 86400, "anchor_time": "02:00"},
+            read_last_full=boom,
+            now=lambda: _beijing(2026, 8, 5, 14),
+            sleep=lambda _s: None,
+            max_runs=1,
+        )
+        self.assertEqual(calls, ["sync"])
+
+
+if __name__ == "__main__":
+    unittest.main()

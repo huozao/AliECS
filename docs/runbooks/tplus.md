@@ -13,6 +13,11 @@
 ```
 
 - 定时同步配置在 DB：`integration_sync_config(provider='chanjet')`，页面 `/tplus-sync/` 顶部可改，worker 每轮热读。
+- 调度语义：`interval_seconds` 是周期，`anchor_time` 是执行时刻（**北京时间 HH:MM**，容器内是 UTC）。
+  - `anchor_time` 留空 = 跑完睡一个周期，触发时刻逐日漂移（每轮漂几十秒），是旧的默认行为。
+  - 设了锚点 = 相位对齐到 `{锚点 + k*周期}`，并且**容器重建后不会在白天补跑全量**——
+    worker 启动时从 `integration_sync_runs` 读上次 `scheduled_full` 的时刻判断是否到期。
+  - 与 doc-sync 共用同一套语义（`next_scheduled_full_due` / `next_full_sync_due`），两个 worker 行为一致。
 - 当前 business-cn 写入开关唯一持久源 = infra SOPS 的
   `txecs-production.enc.env`（目标机 runtime env 是渲染产物）。迁移到其他角色时先从
   fleet 和 workflow 确认对应 profile，禁止沿用历史文件名猜测。
@@ -25,6 +30,7 @@
 | 数据像被截断/少了 | 各模块是否走 `paginate_query` | 翻页不变量：全量必须翻页取完，不可依赖服务端默认上限（PR#110） |
 | 价格好几天没更新 | `/tplus-sync/` 时间线 + 定时开关是否被关 | 价格走 reportQuery 两报表（翻页用 TaskSessionID，停在 PageIndex>=Pages） |
 | 关了开关后重启 worker，之后不同步 | — | 已知行为：disabled 后重启会 sleep 一整轮；等下轮或重建 worker |
+| 同步跑在白天 / 时刻逐日漂移 | `/tplus-sync/` 的「执行时刻」是否留空 | 留空=相对间隔会漂；填北京时间 HH:MM 即锚定（如 02:00） |
 | timeline 页 500 | tz-aware vs naive 比较 | 已修 36b032a；同类改动注意时区 |
 | BOM builder 保存报错 | T+ 报错透传（PR#186） | 委外=IsMadeRequest / 虚拟件=IsPhantom；T+ 请求 body 须 `{"request":{}}` |
 | BOM builder 读分类/单位 502、worker `openToken已失效`(403 code=50107) | openToken 续期链路（下方） | 迁移/停机把畅捷通消息地址打成「不再发送」，token 6 天后到期（2026-08-04） |

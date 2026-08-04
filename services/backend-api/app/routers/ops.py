@@ -5,9 +5,11 @@ from __future__ import annotations
 import base64
 import hmac
 import json
+import logging
 import os
 import psycopg
 import shutil
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -31,6 +33,7 @@ from app.routers.backups import backup_summary_from_db
 
 
 router = APIRouter()
+LOGGER = logging.getLogger(__name__)
 
 class ReconciliationActionRequest(BaseModel):
     action: str = Field(pattern="^(use_current|use_previous|use_full|use_incremental|ignore)$")
@@ -49,7 +52,7 @@ def healthz() -> dict[str, object]:
     }
 
 
-_SYNC_CONFIG_DEFAULTS = {"enabled": True, "interval_seconds": 86400}
+_SYNC_CONFIG_DEFAULTS = {"enabled": True, "interval_seconds": 86400, "anchor_time": ""}
 
 
 def _read_sync_config_row(provider: str = "chanjet") -> dict[str, Any]:
@@ -58,14 +61,15 @@ def _read_sync_config_row(provider: str = "chanjet") -> dict[str, Any]:
         with closing(_conn()) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT enabled, interval_seconds, updated_at, updated_by "
+                    "SELECT enabled, interval_seconds, anchor_time, updated_at, updated_by "
                     "FROM integration_sync_config WHERE provider = %s",
                     (provider,),
                 )
                 row = cur.fetchone()
                 if row:
                     return {"enabled": bool(row[0]), "interval_seconds": int(row[1]),
-                            "updated_at": str(row[2]) if row[2] else None, "updated_by": row[3]}
+                            "anchor_time": str(row[2] or ""),
+                            "updated_at": str(row[3]) if row[3] else None, "updated_by": row[4]}
     except Exception:
         pass
     return {**_SYNC_CONFIG_DEFAULTS, "updated_at": None, "updated_by": None}
@@ -77,6 +81,7 @@ def _sync_config_response(row: dict[str, Any]) -> dict[str, Any]:
         "enabled": bool(row.get("enabled", True)),
         "interval_seconds": seconds,
         "interval_hours": round(seconds / 3600, 4),
+        "anchor_time": str(row.get("anchor_time") or ""),
         "updated_at": row.get("updated_at"),
         "updated_by": row.get("updated_by"),
     }
@@ -85,6 +90,8 @@ def _sync_config_response(row: dict[str, Any]) -> dict[str, Any]:
 class SyncConfigUpdate(BaseModel):
     enabled: bool
     interval_hours: float = Field(ge=1, le=168)  # 下限 1h（防误填打爆机器）、上限 7d
+    # 北京时间 HH:MM，空=不锚定（保持"跑完睡一个周期"的旧行为）
+    anchor_time: str = Field(default="", pattern=r"^$|^([01]\d|2[0-3]):[0-5]\d$")
 
 
 @router.get("/v1/ops/tplus/sync-config")
@@ -103,15 +110,16 @@ def ops_tplus_sync_config_put(
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO integration_sync_config(provider, enabled, interval_seconds, updated_at, updated_by)
-                    VALUES ('chanjet', %s, %s, NOW(), %s)
+                    INSERT INTO integration_sync_config(provider, enabled, interval_seconds, anchor_time, updated_at, updated_by)
+                    VALUES ('chanjet', %s, %s, %s, NOW(), %s)
                     ON CONFLICT (provider) DO UPDATE
                     SET enabled = EXCLUDED.enabled,
                         interval_seconds = EXCLUDED.interval_seconds,
+                        anchor_time = EXCLUDED.anchor_time,
                         updated_at = NOW(),
                         updated_by = EXCLUDED.updated_by
                     """,
-                    (body.enabled, interval_seconds, str(user.get("sub") or "")),
+                    (body.enabled, interval_seconds, body.anchor_time, str(user.get("sub") or "")),
                 )
             conn.commit()
     except HTTPException:
@@ -432,6 +440,7 @@ def ops_status(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
         "reconciliation": _reconciliation_status_from_db() if db_ok else {"needs_review": 0, "recent": []},
         "backups": backup_summary_from_db() if db_ok else {"status": "unknown", "total": 0, "monitored": 0},
         "hosts": _configured_host_statuses(),
+        "chanjet_token": _chanjet_token_status(),
     }
     status["attention_items"] = build_ops_attention_items(status)
     if status["attention_items"]:
@@ -1027,3 +1036,117 @@ def readyz() -> dict[str, object]:
 @router.get("/v1/ping")
 def ping() -> dict[str, str]:
     return {"message": "pong"}
+
+
+# ---------- T+ openToken 有效期监控 ----------
+# openToken 有效期只有 6 天，全靠畅捷通每约 10 分钟推送 appTicket 到
+# /v1/webhooks/chanjet 续期，服务端无法主动申请。链路一断（迁移、停机、消息地址
+# 被平台标记「不再发送」）就静默失效，整条 T+ 同步与 BOM builder 一起挂。
+# 正常时剩余始终贴近 6 天；掉到阈值以下即说明续期链路已断。详见
+# docs/runbooks/tplus.md 的「openToken 续期链路」。
+
+CHANJET_TOKEN_ALERT_THRESHOLD_SECONDS = 4 * 86400
+CHANJET_TOKEN_ALERT_INTERVAL_SECONDS = 86400
+CHANJET_ALERT_FEISHU_RECEIVE_ID = "oc_84d1130542509e374f7ea20c13d11ca4"
+
+
+def _jwt_expiry(token: str) -> datetime | None:
+    """取 JWT payload 里的 exp。非 JWT 或缺 exp 返回 None。"""
+    parts = token.split(".")
+    if len(parts) < 2:
+        return None
+    payload = parts[1]
+    payload += "=" * (-len(payload) % 4)
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(payload).decode("utf-8"))
+        return datetime.fromtimestamp(int(claims["exp"]), tz=timezone.utc)
+    except Exception:
+        return None
+
+
+def _chanjet_token_status() -> dict[str, Any]:
+    path = os.getenv("CHANJET_OPEN_TOKEN_FILE", "").strip()
+    if not path:
+        return {"configured": False, "ok": True, "message": "未配置 CHANJET_OPEN_TOKEN_FILE"}
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            token = handle.read().strip()
+    except OSError as exc:
+        return {"configured": True, "ok": False, "message": f"读取 token 文件失败：{type(exc).__name__}"}
+    if not token:
+        return {"configured": True, "ok": False, "message": "token 文件为空"}
+    expires_at = _jwt_expiry(token)
+    if expires_at is None:
+        return {"configured": True, "ok": False, "message": "token 解析不出有效期"}
+    remaining = (expires_at - datetime.now(timezone.utc)).total_seconds()
+    expired = remaining <= 0
+    return {
+        "configured": True,
+        "ok": remaining >= CHANJET_TOKEN_ALERT_THRESHOLD_SECONDS,
+        "expired": expired,
+        "expires_at": expires_at.isoformat(),
+        "remaining_hours": round(remaining / 3600, 1),
+        "message": (
+            "openToken 已失效" if expired
+            else f"剩余 {round(remaining / 3600, 1)} 小时"
+        ),
+    }
+
+
+def _chanjet_token_alert_text(status: dict[str, Any]) -> str:
+    head = "⛔ T+ openToken 已失效" if status.get("expired") else "⚠️ T+ openToken 即将失效"
+    lines = [head, status.get("message", "")]
+    if status.get("expires_at"):
+        lines.append(f"到期时间：{status['expires_at']}")
+    lines += [
+        "",
+        "续期靠畅捷通推送 appTicket，链路断了不会自愈。",
+        "处置：畅捷通开放平台 →「消息配置」→ 若「当前平台消息发送状态」显示"
+        "「不再发送」，点「重置消息地址状态并发送AppTicket」。",
+        "详见 AliECS/docs/runbooks/tplus.md",
+    ]
+    return "\n".join(line for line in lines if line is not None)
+
+
+def _send_chanjet_token_alert(status: dict[str, Any]) -> bool:
+    from app.routers.versions import send_feishu_text
+
+    return send_feishu_text(
+        os.getenv("OPS_ALERT_FEISHU_RECEIVE_ID", CHANJET_ALERT_FEISHU_RECEIVE_ID).strip(),
+        _chanjet_token_alert_text(status),
+        app_id=os.getenv("OPS_ALERT_FEISHU_APP_ID", os.getenv("VERSION_DIGEST_FEISHU_APP_ID", "")).strip(),
+        app_secret=os.getenv("OPS_ALERT_FEISHU_APP_SECRET", os.getenv("VERSION_DIGEST_FEISHU_APP_SECRET", "")).strip(),
+    )
+
+
+def chanjet_token_alert_once() -> dict[str, Any]:
+    """检查一次；异常就发飞书。不做去重——每天一次，坏着就每天提醒。"""
+    status = _chanjet_token_status()
+    if not status.get("configured") or status.get("ok"):
+        return {"alerted": False, "status": status}
+    return {"alerted": _send_chanjet_token_alert(status), "status": status}
+
+
+def _chanjet_token_alert_loop() -> None:
+    interval = _read_alert_interval()
+    while True:
+        try:
+            chanjet_token_alert_once()
+        except Exception:
+            LOGGER.exception("chanjet openToken alert check failed")
+        time.sleep(interval)
+
+
+def _read_alert_interval() -> int:
+    try:
+        value = int(os.getenv("CHANJET_TOKEN_ALERT_INTERVAL_SECONDS", "").strip())
+        return value if value > 0 else CHANJET_TOKEN_ALERT_INTERVAL_SECONDS
+    except ValueError:
+        return CHANJET_TOKEN_ALERT_INTERVAL_SECONDS
+
+
+@router.on_event("startup")
+def _start_chanjet_token_watcher() -> None:
+    if os.getenv("CHANJET_TOKEN_ALERT_ENABLED", "1").strip() != "1":
+        return
+    threading.Thread(target=_chanjet_token_alert_loop, name="chanjet-token-watcher", daemon=True).start()
