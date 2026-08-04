@@ -3,15 +3,24 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from tplus_datahub.core.logger import get_logger
-from tplus_datahub.jobs.db_sync_requests import fetch_next_bom_request, fetch_sync_config, finish_bom_request
+from tplus_datahub.jobs.db_sync_requests import (
+    fetch_last_scheduled_full_at,
+    fetch_next_bom_request,
+    fetch_sync_config,
+    finish_bom_request,
+)
 from tplus_datahub.jobs.job_sync_all import run as sync_all_run
 from tplus_datahub.jobs.job_sync_bom import main as sync_bom_main
 from tplus_datahub.jobs.job_sync_bom import run as sync_bom_run
 from tplus_datahub.jobs.sync_state import record_tplus_sync_run_if_configured
+
+
+BEIJING = timezone(timedelta(hours=8))  # 锚点时刻按北京时间解释；容器内是 UTC，中国无夏令时
 
 
 def _read_positive_int(name: str, default: int) -> int:
@@ -74,8 +83,8 @@ def _default_read_sync_config() -> dict | None:
     return fetch_sync_config()
 
 
-def _resolve_sync_config(read_sync_config: Callable[[], dict | None]) -> tuple[bool, int]:
-    """解析定时同步配置 → (enabled, interval_seconds)。
+def _resolve_sync_config(read_sync_config: Callable[[], dict | None]) -> tuple[bool, int, str]:
+    """解析定时同步配置 → (enabled, interval_seconds, anchor_time)。
     任何异常/缺失/非法值都回退到 env 默认（enabled 视为 true），保证不阻断 worker。"""
     try:
         cfg = read_sync_config()
@@ -83,7 +92,7 @@ def _resolve_sync_config(read_sync_config: Callable[[], dict | None]) -> tuple[b
         cfg = None
     env_interval = _read_positive_int("TPLUS_SYNC_INTERVAL_SECONDS", 86400)
     if not cfg:
-        return True, env_interval
+        return True, env_interval, ""
     enabled = bool(cfg.get("enabled", True))
     try:
         interval = int(cfg.get("interval_seconds"))
@@ -91,7 +100,52 @@ def _resolve_sync_config(read_sync_config: Callable[[], dict | None]) -> tuple[b
         interval = 0
     if interval <= 0:
         interval = env_interval
-    return enabled, interval
+    return enabled, interval, _normalize_anchor_time(cfg.get("anchor_time"))
+
+
+def _normalize_anchor_time(value: Any) -> str:
+    """只接受 HH:MM（北京时间）。非法值一律当作未设锚点，不阻断 worker。"""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    parts = text.split(":")
+    if len(parts) != 2:
+        return ""
+    try:
+        hour, minute = int(parts[0]), int(parts[1])
+    except ValueError:
+        return ""
+    if 0 <= hour <= 23 and 0 <= minute <= 59:
+        return f"{hour:02d}:{minute:02d}"
+    return ""
+
+
+def next_scheduled_full_due(
+    now: datetime, last_full: datetime | None, interval_seconds: int, anchor_time: str
+) -> datetime:
+    """下一次定时全量应跑的时刻（aware-UTC）。从未跑过=立即；无锚点=上次+周期；
+    锚点 HH:MM（北京时间）=相位对齐到 {锚点 + k*周期} 序列中大于上次的最小值。
+
+    与 doc-sync 的 next_full_sync_due 同一套语义，便于两个 worker 行为一致。
+    """
+    interval = max(int(interval_seconds), 60)
+    if last_full is None:
+        return now
+    if last_full.tzinfo is None:
+        last_full = last_full.replace(tzinfo=timezone.utc)
+    if not anchor_time:
+        return last_full + timedelta(seconds=interval)
+    hour, minute = (int(part) for part in anchor_time.split(":"))
+    anchor_local = last_full.astimezone(BEIJING).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    anchor = anchor_local.astimezone(timezone.utc)
+    # 把 anchor 移到 last_full 之前，再逐周期前进到第一个大于 last_full 的点。
+    if anchor > last_full:
+        steps = int((anchor - last_full).total_seconds() // interval) + 1
+        anchor -= timedelta(seconds=steps * interval)
+    due = anchor + timedelta(seconds=interval)
+    while due <= last_full:
+        due += timedelta(seconds=interval)
+    return due
 
 
 def _run_pending_db_bom_request(
@@ -180,19 +234,35 @@ def run_forever(
     finish_db_bom_request: Callable[[int, str, int, dict], None] = _default_finish_db_bom_request,
     record_sync_run: Callable[..., int | None] = record_tplus_sync_run_if_configured,
     read_sync_config: Callable[[], dict | None] = _default_read_sync_config,
+    read_last_full: Callable[[], Any | None] = fetch_last_scheduled_full_at,
+    now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     sleep: Callable[[int], None] = time.sleep,
     max_runs: int | None = None,
 ) -> int:
     logger = get_logger("tplus_datahub.worker_loop", "output/logs/worker_loop.log")
     run_count = 0
     last_exit_code = 0
+    # 从 DB 取上次定时全量的时刻，容器重建后锚点相位不丢——否则每次部署都会
+    # 在白天补跑一次全量。读不到（无 DB/首次运行）就按"立即跑"处理，保持旧行为。
+    try:
+        last_full = read_last_full()
+    except Exception:
+        last_full = None
 
     while True:
         run_count += 1
-        # 每轮热读配置：关掉只跳过定时全量同步（手动/订阅照常）；间隔改了下一轮即生效。
-        enabled, interval_seconds = _resolve_sync_config(read_sync_config)
-        if enabled:
-            logger.info("T+ sync run started: run=%s", run_count)
+        # 每轮热读配置：关掉只跳过定时全量同步（手动/订阅照常）；间隔和锚点改了下一轮即生效。
+        enabled, interval_seconds, anchor_time = _resolve_sync_config(read_sync_config)
+        current = now()
+        due = next_scheduled_full_due(current, last_full, interval_seconds, anchor_time)
+        # 未到期就只睡到到期时刻（手动/订阅同步在睡眠中照常轮询消费）。
+        # 只有设了锚点才做到期判断——没设锚点时保持"跑完睡一个周期"的原行为不变。
+        not_due = enabled and bool(anchor_time) and due > current
+        run_full = enabled and not not_due
+        wait_seconds = max(int((due - current).total_seconds()), 1) if not_due else interval_seconds
+        if run_full:
+            last_full = current
+            logger.info("T+ sync run started: run=%s anchor=%s", run_count, anchor_time or "-")
             try:
                 outcome = sync_once()
             except Exception:
@@ -229,15 +299,20 @@ def run_forever(
                 )
             except Exception:
                 logger.exception("Failed to record T+ sync run status: run=%s", run_count)
+        elif not_due:
+            logger.info(
+                "T+ scheduled sync not due yet, skipping: run=%s next=%s anchor=%s",
+                run_count, due.isoformat(), anchor_time or "-",
+            )
         else:
             logger.info("T+ scheduled sync disabled, skipping full sync: run=%s", run_count)
 
         if max_runs is not None and run_count >= max_runs:
             return last_exit_code
 
-        logger.info("T+ sync worker sleeping: seconds=%s", interval_seconds)
+        logger.info("T+ sync worker sleeping: seconds=%s", wait_seconds)
         manual_exit_code = _sleep_with_manual_bom_polling(
-            interval_seconds=interval_seconds,
+            interval_seconds=wait_seconds,
             sleep=sleep,
             sync_bom_once=sync_bom_once,
             sync_bom_request_once=sync_bom_request_once,

@@ -92,6 +92,13 @@ def build_ops_attention_items(status: dict[str, Any]) -> list[dict[str, Any]]:
     for host in hosts:
         if isinstance(host, dict) and not host.get("ok", False):
             items.append({"level": "warning", "code": "host_unreachable", "message": f"{host.get('name', 'host')}: {host.get('message', 'unreachable')}"})
+    chanjet_token = status.get("chanjet_token") if isinstance(status.get("chanjet_token"), dict) else {}
+    if chanjet_token.get("configured") and not chanjet_token.get("ok", True):
+        items.append({
+            "level": "critical" if chanjet_token.get("expired") else "warning",
+            "code": "chanjet_token_expiring",
+            "message": f"T+ openToken {chanjet_token.get('message', '异常')}；续期链路可能已断，见 runbooks/tplus.md",
+        })
     return items
 
 

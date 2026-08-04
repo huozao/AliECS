@@ -20,13 +20,15 @@
     <div id="adminContent" class="hidden">
       <section class="band" id="syncConfigCard">
         <h2>定时同步设置</h2>
-        <p class="muted">控制定时全量同步的开关与间隔。关闭后只停定时器，手动同步与订阅变更同步照常。改动下次循环生效。</p>
+        <p class="muted">控制定时全量同步的开关、间隔与执行时刻。关闭后只停定时器，手动同步与订阅变更同步照常。改动下次循环生效。</p>
         <div class="row" style="gap:16px">
           <label class="row" style="gap:8px"><input type="checkbox" id="syncEnabled"/> 开启定时同步</label>
           <label class="row" style="gap:8px">间隔 <input type="number" id="syncIntervalHours" min="1" max="168" step="1" style="width:92px;border:1px solid var(--line);border-radius:10px;padding:8px 10px;font:inherit"/> 小时</label>
+          <label class="row" style="gap:8px">执行时刻 <input type="time" id="syncAnchorTime" style="width:120px;border:1px solid var(--line);border-radius:10px;padding:8px 10px;font:inherit"/></label>
           <button id="saveSyncConfigBtn" class="btn primary" type="button">保存</button>
           <span id="syncConfigStatus" class="muted"></span>
         </div>
+        <p class="muted" style="margin-top:8px">执行时刻按<b>北京时间</b>，留空＝不固定（跑完睡一个间隔，时刻会逐日漂移）。设为 02:00 + 间隔 24 小时＝每天凌晨 2 点同步，避开白天工作时段。</p>
       </section>
       <section class="band">
         <h2>T+ 同步</h2>
@@ -74,6 +76,7 @@
         const c=await api('/v1/ops/tplus/sync-config');
         $('syncEnabled').checked=!!c.enabled;
         $('syncIntervalHours').value=(c.interval_hours!=null)?c.interval_hours:24;
+        $('syncAnchorTime').value=c.anchor_time||'';
         $('syncConfigStatus').textContent=c.updated_at?`上次更新：${fmtTime(c.updated_at)}${c.updated_by?(' · '+esc(c.updated_by)):''}`:'';
       }catch(e){$('syncConfigStatus').textContent='加载失败：'+esc(e.message);}
     }
@@ -81,11 +84,14 @@
       const enabled=$('syncEnabled').checked;
       const interval_hours=Number($('syncIntervalHours').value);
       if(!(interval_hours>=1)){showError('间隔至少 1 小时。');return;}
+      const anchor_time=($('syncAnchorTime').value||'').trim();
+      if(anchor_time&&!/^([01]\d|2[0-3]):[0-5]\d$/.test(anchor_time)){showError('执行时刻格式应为 HH:MM。');return;}
       $('syncConfigStatus').textContent='保存中…';
       try{
-        const c=await api('/v1/ops/tplus/sync-config',{method:'PUT',body:JSON.stringify({enabled,interval_hours})});
+        const c=await api('/v1/ops/tplus/sync-config',{method:'PUT',body:JSON.stringify({enabled,interval_hours,anchor_time})});
         $('syncEnabled').checked=!!c.enabled;
         $('syncIntervalHours').value=c.interval_hours;
+        $('syncAnchorTime').value=c.anchor_time||'';
         $('syncConfigStatus').textContent='已保存，下次循环生效。';
         showSuccess('定时同步设置已保存。');
       }catch(e){$('syncConfigStatus').textContent='';showError('保存失败：'+esc(e.message));}

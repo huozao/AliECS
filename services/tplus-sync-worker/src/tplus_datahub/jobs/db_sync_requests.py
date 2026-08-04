@@ -68,8 +68,8 @@ def fetch_next_bom_request(conn: Any | None = None, limit: int = 5) -> dict[str,
 
 
 def fetch_sync_config(provider: str = "chanjet", conn: Any | None = None) -> dict[str, Any] | None:
-    """读取定时同步配置（enabled / interval_seconds）。无 DB / 无行 / 表不存在均返回 None，
-    由调用方回退到 env 默认。"""
+    """读取定时同步配置（enabled / interval_seconds / anchor_time）。无 DB / 无行 / 表不存在
+    均返回 None，由调用方回退到 env 默认。"""
     if conn is None:
         owned_conn = connect_if_configured()
         if owned_conn is None:
@@ -79,13 +79,40 @@ def fetch_sync_config(provider: str = "chanjet", conn: Any | None = None) -> dic
 
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT enabled, interval_seconds FROM integration_sync_config WHERE provider = %s",
+            "SELECT enabled, interval_seconds, anchor_time FROM integration_sync_config WHERE provider = %s",
             (provider,),
         )
         row = cur.fetchone()
         if not row:
             return None
-        return {"enabled": bool(row[0]), "interval_seconds": int(row[1])}
+        return {
+            "enabled": bool(row[0]),
+            "interval_seconds": int(row[1]),
+            "anchor_time": str(row[2] or ""),
+        }
+
+
+def fetch_last_scheduled_full_at(provider: str = "chanjet", conn: Any | None = None) -> Any | None:
+    """上一次定时全量同步的开始时刻（aware-UTC）。用于重启后不丢锚点相位：
+    容器重建不应该在白天立刻补跑一次全量。无 DB / 无记录返回 None。"""
+    if conn is None:
+        owned_conn = connect_if_configured()
+        if owned_conn is None:
+            return None
+        with closing(owned_conn):
+            return fetch_last_scheduled_full_at(provider, owned_conn)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT started_at FROM integration_sync_runs
+            WHERE provider = %s AND mode = 'scheduled_full' AND started_at IS NOT NULL
+            ORDER BY started_at DESC LIMIT 1
+            """,
+            (provider,),
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
 
 
 def finish_bom_request(request_id: int, status: str, exit_code: int, detail: dict[str, Any]) -> None:
