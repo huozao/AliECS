@@ -9,6 +9,7 @@ from app.pipelines.group_message_listener import run_group_listener
 from app.pipelines.rnd_record_writer import run_write_rnd_records
 from app.pipelines.sync_feishu_full import run_sync_feishu_full
 from app.pipelines.sync_wecom_full import run_pending_sync_requests, run_sync_wecom_full, run_sync_wecom_source
+from app.pipelines.tplus_parent_match import run_tplus_parent_match
 from app.pipelines.worker_loop import run_worker_loop
 from app.pipelines.wecom_structure_backup import (
     bootstrap_structure_backup,
@@ -75,6 +76,13 @@ def main(argv: list[str] | None = None) -> int:
     rnd_parser = subparsers.add_parser("write-rnd-records", help="把已标节点的群消息写入「研发过程记录」子表")
     rnd_parser.add_argument("--profiles", default="", help="企业微信公司配置，默认自动选有 GROUPBOT 凭据的。")
 
+    match_parser = subparsers.add_parser(
+        "tplus-parent-match",
+        help="用 T+ 当前有效物料清单核对「标准型号0117」的父件名称，异常推飞书群",
+    )
+    match_parser.add_argument("--dry-run", action="store_true", help="只统计并打印，不写表也不推送。")
+    match_parser.add_argument("--no-notify", action="store_true", help="写表但不推飞书。")
+
     subparsers.add_parser("run-loop", help="常驻循环：周期全量 + 轮询消费手动同步请求")
 
     args = parser.parse_args(argv)
@@ -106,6 +114,8 @@ def main(argv: list[str] | None = None) -> int:
         written = run_write_rnd_records(profiles_arg=args.profiles)
         print(f"[研发记录] 写入 {written} 条。")
         return 0
+    if args.command == "tplus-parent-match":
+        return run_tplus_parent_match(dry_run=args.dry_run, notify=not args.no_notify)
     if args.command == "run-loop":
         return run_worker_loop()
 

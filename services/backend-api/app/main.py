@@ -15,6 +15,7 @@ from app.routers.auth_admin import router as auth_admin_router
 from app.routers.auth_oidc import router as auth_oidc_router
 from app.routers.couple import router as couple_router
 from app.routers.exports import router as exports_router
+from app.routers.formula_colors import router as formula_colors_router
 from app.routers.gold_spread_alerts import router as gold_spread_alerts_router
 from app.routers.miniapp_accounts import router as miniapp_accounts_router
 from app.routers.ops import router as ops_router
@@ -37,6 +38,7 @@ app.include_router(gold_spread_alerts_router)
 app.include_router(auth_admin_router)
 app.include_router(auth_oidc_router)
 app.include_router(recipes_router)
+app.include_router(formula_colors_router)
 app.include_router(quality_reports_router)
 app.include_router(tplus_bom_router)
 app.include_router(exports_router)

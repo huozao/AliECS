@@ -9,6 +9,7 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 | router | 功能 |
 |---|---|
 | `recipes.py` | formula 配方查询、成本核算 |
+| `formula_colors.py` | 标准型号色彩空间只读数据（企微「标准型号0117」+ T+ 当前有效 BOM 父件名称） |
 | `exports.py` | 对比表导出（真 xlsx，`compare_export.py`） |
 | `tplus_bom.py` | BOM builder（写回 T+ 经独立 write-worker） |
 | `auth_admin.py` / `auth_oidc.py` | 本地登录 + SSO(Authelia OIDC) |
@@ -37,6 +38,8 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 ## services/public-web
 
 公网首页（纯 nginx 静态）：功能卡片、登录、formula 入口、工具分区（灰分计算器）。
+`formula/colors/` 是标准型号色彩空间（three.js + camera-controls，数据走 `/v1/formula/colors`，
+需登录且有 `formula.read`）；`mock-data.js` 是默认隐藏的参考示例，惰性加载。
 生产热更新可 `docker cp`；HTML 已加 no-cache 头。验证：JS 语法检查 + 浏览器 smoke。
 
 ## services/admin-ui
