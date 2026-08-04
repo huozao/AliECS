@@ -80,7 +80,11 @@ txecs 127.0.0.1:11800 failover-proxy
   `https://immich.hydwang.xyz/api/server/ping` 已于 2026-08-01 外部验证为 200。
 - 反向迁移候选使用独立 `/srv/business-cn` 和 `business-cn-*` 容器。
   在线准备阶段只允许空 PostgreSQL，不启动业务/worker，不覆盖 console/ERP。
-- 隧道端口（127.0.0.1）：11800 为 webdock failover 入口；当前 11810←webdock2 主、11811←webdock1 备（以 `/etc/default/webdock-failover-proxy` 的 NAME 绑定为准）；12283←webdock1 Immich、18015/18016←webdock1 AdventureLog，另有 Gokapi 隧道（端口见 webdock1 各 unit 的 env）。2026-08-01 实测 webdock1 无 Authentik 容器或 tunnel unit，不再把它列作当前运行事实。
+- 隧道端口（127.0.0.1）：11800 为 webdock failover 入口；当前 11810←webdock2 主、11811←webdock1 备（以 `/etc/default/webdock-failover-proxy` 的 NAME 绑定为准）；12283←webdock1 Immich、18015/18016←webdock1 AdventureLog、15342←webdock1 Gokapi、16080/16081←webdock1 console noVNC（2026-08-04 实测；unit 名见 webdock1 档案）。2026-08-01 实测 webdock1 无 Authentik 容器或 tunnel unit，不再把它列作当前运行事实。
+
+  所有承载 `ssh -R` 的服务端（aliecs、txecs）必须有 `ClientAliveInterval` 非 0，否则对端失联时
+  转发端口永不释放、隧道无限重连。配置由 `infra` 的 `server/ssh/10-tunnel-keepalive.conf`
+  统一下发，`roles/server/{tencent,aliecs-edge}/verify.sh` 各有断言。查：`sshd -T | grep clientalive`。
 - 远程控制台（2026-07-04，`https://hydwang.xyz/console/`）：nginx `/console/*` 七路 location（认证=Authelia `two_factor` + lldap `console_admins` 组，成对 deny 兜底；**VNC 层免密设计**，2FA 是唯一闸门）；本机组件 ttyd 7681（unit `ttyd-console`，⚠️ apt 自带 `ttyd.service` 抢端口须 disable）、webtop 3000 按需启停（`/opt/aliecs/aliecs-temp-desktop.sh`，2G 内存用完必须 stop）；ECS `authorized_keys` permitlisten 新增四条 160xx（16080/16081←webdock1、16090/16091←webdock2，与生产 118xx 隔离）。⚠️ 2026-08-03 起 `/console/devbox/desktop/` 已改为在 txecs 本地终止，不再回源本机；AliECS 侧对应的 16101 location 与 authorized_keys 条目**刻意保留**，仅作回滚路径，不再有流量。详见 infra `console/README.md`。
 - 部署：push AliECS main → release-deploy 自动构建部署业务镜像；bridge 镜像同流程构建，且当 `deploy/openclaw-bridge/**` 的内容树 hash 变了时，release-deploy 构建完自动调用 `bridge-cutover`（自动解析 digest、验证并失败回滚）。bridge 没变的合并完全不碰它；回滚/重切/切非 main ref 仍走 `bridge-cutover` 的手工 `workflow_dispatch`（填 `CUTOVER_TXECS`）。
 - 排障：`docker ps`、bridge 日志 `docker logs openclaw-bridge`、部署尖峰时 health 告警多为瞬时（2G 内存超卖）。
@@ -119,7 +123,19 @@ txecs 127.0.0.1:11800 failover-proxy
 
 - 别名：旧电脑；ssh alias `webdock` / `webdock1` / `WebDock01`；tailscale/hostname `webdock-laptop`；用户 `webdock`。
 - 运行：`webdock` 容器（ghcr.io/huozao/webdock:sha-xxx）+ Chrome/ChatGPT 登录态（browser_data 卷，**登录必须人工做，红线**）、noVNC `http://100.97.176.57:6080/`、Immich(2283)、AdventureLog(8015/8016)、Gokapi；2026-08-01 实测无 Authentik 运行实例。
-- 反向隧道 unit（systemd）：`-R 11811`（webdock API，备）、`-R 12283`（Immich）、`-R 18015/18016`（AdventureLog）、Gokapi（env 参数化）。
+- 反向隧道 unit（systemd，2026-08-04 实测五条）：
+
+  | unit | 落点 | 端口 |
+  |---|---|---|
+  | `webdock-business-tunnel` | txecs | `-R 11811` webdock API（备）+ `-L 18020` 回连 backend |
+  | `webdock-immich-tunnel` | aliecs | `-R 12283` Immich |
+  | `adventurelog-tunnel` | aliecs | `-R 18015/18016` |
+  | `console-ecs-tunnel` | aliecs | `-R 16080/16081` noVNC |
+  | `gokapi-ecs-tunnel` | aliecs | `-R 15342` Gokapi |
+
+  ⚠️ unit 命名不统一，只有两条以 `webdock-` 开头。`systemctl list-units 'webdock*tunnel*'`
+  会漏掉后三条并给出"只有两条隧道"的错误结论。要列全用
+  `systemctl list-units --type=service | grep -iE 'tunnel'` 或 `ps -eo pid,cmd | grep 'ssh .*-R '`。
 - 远程控制台：x11vnc :5900（`-nopw`，回环）+ noVNC/websockify 6081（**只绑 Tailscale IP** 100.97.176.57）+ `console-ecs-tunnel`（`-R 16080`←容器 noVNC 6080、`-R 16081`←桌面 6081）；unit：`x11vnc-desktop` / `novnc-desktop` / `console-ecs-tunnel`；GDM 已切 Xorg（`WaylandEnable=false`，自动登录）。
 - 部署：拉新镜像 + `systemctl restart webdock`（卷不丢登录态）。webdock 仓库小改可直推 main（**直推前本地 pytest**，CI 不跑直推）。
 - 日志：消息存档 `/var/log/webdock/archive/<UTC日期>.jsonl`（收发全文+lane+status）；容器内 `/app/logs/`。
