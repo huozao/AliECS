@@ -200,6 +200,9 @@ services:
       WECOM_STRUCTURE_BACKUP_PROFILE: ${WECOM_STRUCTURE_BACKUP_PROFILE:-COMPANY_A}
       WECOM_STRUCTURE_BACKUP_MAX_SHEETS: ${WECOM_STRUCTURE_BACKUP_MAX_SHEETS:-20}
       WECOM_GROUP_MEDIA_DIR: /app/wecom-group-media
+      # T+ 父件核对：留空则只写表不推送飞书，核对本身不受影响。
+      TPLUS_PARENT_MATCH_CHAT_ID: ${TPLUS_PARENT_MATCH_CHAT_ID:-}
+      TPLUS_PARENT_MATCH_FEISHU_PROFILE: ${TPLUS_PARENT_MATCH_FEISHU_PROFILE:-COMPANY_A}
     volumes:
       - wecom_group_media:/app/wecom-group-media
     depends_on:

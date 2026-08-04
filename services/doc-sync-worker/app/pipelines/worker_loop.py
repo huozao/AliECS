@@ -18,6 +18,7 @@ from app.pipelines.sync_schedule import (
     read_schedule_config,
 )
 from app.pipelines.sync_wecom_full import run_pending_sync_requests, run_sync_wecom_full
+from app.pipelines.tplus_parent_match import run_tplus_parent_match
 from app.pipelines.wecom_structure_backup import (
     run_enqueue_daily_structure_backup_jobs,
     run_pending_structure_backup_jobs,
@@ -101,6 +102,11 @@ def run_worker_loop(
             run_pending_structure_backup_jobs(limit=1000)
         except Exception as exc:  # noqa: BLE001 - 备份失败由持久化任务重试，不拖垮源同步。
             print(f"[文档同步循环] 企微结构备份异常：{exc}")
+        # 放在全量同步之后：核对要读刚同步下来的 T+ BOM 与表格最新内容。
+        try:
+            run_tplus_parent_match()
+        except Exception as exc:  # noqa: BLE001 - 核对失败不拖垮源同步周期
+            print(f"[文档同步循环] T+ 父件核对异常：{exc}")
         return code
 
     def _default_consume_requests() -> int:

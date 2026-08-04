@@ -29,3 +29,9 @@ docker compose -f local/docker-compose.local.yml config
 - 同步调度已 DB 化：`system_config` 存调度配置，每天北京时间 02:00 全量（2026-07-06 PR#160/#161）。
 - 手动同步/整簿重扫：INSERT `sync_requests` 后由 worker 消费（飞书重扫 2026-07-05 PR#159）。
 - 设计文档：`docs/doc-sync-design.md`。
+- T+ 父件核对（2026-08-04）：`app/pipelines/tplus_parent_match.py`，每天全量同步后随 `run-loop` 跑一次，
+  也可手动 `python -m app.main tplus-parent-match [--dry-run] [--no-notify]`。
+  它按 `tplus_bom_records` 中 `missing_since IS NULL` 的记录，把父件名称核对回企微「标准型号0117」的
+  「父件名称 / T+匹配状态 / T+核对时间」三列。**父件编码是执行主键，失联时只标状态、绝不自动改写**；
+  异常推 `TPLUS_PARENT_MATCH_CHAT_ID` 指定的飞书群（留空则只写表不推送）。
+  注意 `tplus_bom_records` 按版本累积，同一编码有多条历史记录，漏掉 `missing_since` 过滤会取到已作废的旧名称。

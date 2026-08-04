@@ -15,18 +15,43 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
         self.html = PAGE.read_text(encoding="utf-8")
         self.mock = MOCK_DATA.read_text(encoding="utf-8")
 
-    def test_page_has_lab_space_modes_and_filters(self) -> None:
-        self.assertIn("配方色彩空间", self.html)
-        self.assertIn('data-mode="absolute"', self.html)
-        self.assertIn('data-mode="relative"', self.html)
-        self.assertIn('data-mode="trajectory"', self.html)
+    def test_page_has_lab_space_datasets_and_filters(self) -> None:
+        self.assertIn("标准型号色彩空间", self.html)
+        self.assertIn('id="datasetLive"', self.html)
+        self.assertIn('id="datasetMock"', self.html)
         self.assertIn('id="resinFilter"', self.html)
         self.assertIn('id="dosageFilter"', self.html)
+        self.assertIn('id="statusFilter"', self.html)
+
+    def test_live_dataset_reads_backend_and_mock_stays_lazy(self) -> None:
+        self.assertIn("/v1/formula/colors", self.html)
+        self.assertIn("aliecs_auth_token", self.html)
+        self.assertIn("await import('./mock-data.js')", self.html)
+        # 参考示例必须是惰性加载，否则默认视图会被模拟数据污染。
+        self.assertNotIn("import {MOCK_RECIPE_COLORS} from './mock-data.js'", self.html)
+        self.assertIn("state={dataset:'live'", self.html)
+
+    def test_tolerance_boxes_render_from_internal_control_intervals(self) -> None:
+        self.assertIn("function toleranceRange", self.html)
+        self.assertIn("function rebuildTolerance", self.html)
+        self.assertIn("function boxesOverlap", self.html)
+        self.assertIn('id="toggleTolerance"', self.html)
+        self.assertIn('id="toleranceOpacity"', self.html)
+        self.assertIn('id="toggleOverlapOnly"', self.html)
+        self.assertIn("showTolerance:true", self.html)
+        self.assertIn("new THREE.EdgesGeometry(geometry)", self.html)
+
+    def test_tplus_match_status_is_surfaced(self) -> None:
+        self.assertIn("code_missing", self.html)
+        self.assertIn('id="matchWarning"', self.html)
+        self.assertIn('id="detailParentCode"', self.html)
+        self.assertIn('id="detailParentName"', self.html)
+        self.assertIn("T+ 当前有效物料清单", self.html)
 
     def test_lab_coordinates_keep_uniform_scale(self) -> None:
         self.assertIn("const SCALE=.23", self.html)
-        self.assertIn("source[1]*SCALE", self.html)
-        self.assertIn("-source[2]*SCALE", self.html)
+        self.assertIn("lab[1]*SCALE", self.html)
+        self.assertIn("-lab[2]*SCALE", self.html)
         self.assertIn("state.sliceEnabled?state.sliceL-50:lab[0]-50", self.html)
 
     def test_lab_axes_use_directional_colors_and_labels(self) -> None:
@@ -36,11 +61,11 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
         self.assertIn("+a* 红", self.html)
         self.assertIn("−b* 蓝", self.html)
         self.assertIn("+b* 黄", self.html)
-        self.assertIn("camera.up.set(0,0,-1)", self.html)
-        self.assertIn("camera.position.set(0,55,0)", self.html)
+        # a*b* 俯视要把 up 轴换成 −b*，否则俯视时黄蓝方向会左右颠倒。
+        self.assertIn("applyView([0,0,-1],[0,1,0])", self.html)
 
     def test_ab_grid_has_key_value_scale_labels(self) -> None:
-        self.assertIn("const gridLabelGroup", self.html)
+        self.assertIn("gridLabelGroup=new THREE.Group()", self.html)
         self.assertIn("[-100,-75,-50,-25,0,25,50,75,100]", self.html)
         self.assertNotIn("a* 投影轴", self.html)
         self.assertNotIn("b* 投影轴", self.html)
@@ -65,6 +90,60 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
         self.assertIn('id="toggleReference"', self.html)
         self.assertIn('id="resetCamera"', self.html)
         self.assertIn('id="topCamera"', self.html)
+        self.assertIn('id="frontCamera"', self.html)
+        self.assertIn('id="sideCamera"', self.html)
+        self.assertIn('id="focusSelected"', self.html)
+
+    def test_camera_controls_replace_orbit_controls(self) -> None:
+        self.assertIn("camera-controls@2.10.1", self.html)
+        self.assertIn("CameraControls.install({THREE})", self.html)
+        self.assertNotIn("OrbitControls.js", self.html)
+        # camera-controls 的 update 必须吃 delta，否则阻尼与过渡动画不会推进。
+        self.assertIn("controls.update(clock.getDelta())", self.html)
+        self.assertIn("controls.fitToBox(box,true", self.html)
+
+    def test_touch_gestures_are_explicit_and_pannable(self) -> None:
+        # 缺 touch-action:none 时双指手势会先被浏览器当成页面缩放吃掉。
+        self.assertIn("touch-action:none", self.html)
+        self.assertIn("controls.touches.two=CameraControls.ACTION.TOUCH_DOLLY_TRUCK", self.html)
+        self.assertIn("function setPanMode", self.html)
+        self.assertIn('id="togglePan"', self.html)
+
+    def test_point_radius_stays_smaller_than_tolerance_box(self) -> None:
+        # 球半径 .14 世界单位 ≈ .61 Lab 单位；容差盒最长边通常 .4 Lab 单位。
+        self.assertIn("new THREE.SphereGeometry(.14", self.html)
+        self.assertIn("new THREE.SphereGeometry(.5,10,8)", self.html)
+        # 点半径正比于相机距离 = 屏幕恒定大小，凑近时自动让出容差盒。
+        self.assertIn("controls.distance/SCREEN_CONSTANT_DISTANCE", self.html)
+        self.assertIn("function updatePointScale", self.html)
+
+    def test_views_frame_the_data_instead_of_whole_lab_space(self) -> None:
+        # 41 个型号只占 Lab 全空间一小块，固定视距会让数据缩成一团。
+        self.assertIn("function dataBox", self.html)
+        self.assertIn("controls.setLookAt(eye.x,eye.y,eye.z", self.html)
+        self.assertIn("box.expandByPoint(positionFor(item))", self.html)
+
+    def test_tolerance_magnification_never_leaks_into_judgement(self) -> None:
+        self.assertIn('id="toleranceMagnify"', self.html)
+        self.assertIn("toleranceMagnify:1", self.html)
+        # 放大只作用于渲染；重叠判定与容差内判定必须走默认 magnify=1。
+        self.assertIn("function toleranceRange(item,axis,magnify=1)", self.html)
+        self.assertIn("toleranceRange(a,axis)", self.html)
+        self.assertIn('`容差盒 ×${state.toleranceMagnify}`', self.html)
+
+    def test_delta_view_uses_anchor_relative_coordinates(self) -> None:
+        self.assertIn('id="deltaView"', self.html)
+        self.assertIn("function labToWorld", self.html)
+        self.assertIn("function buildDeltaAxes", self.html)
+        self.assertIn("const DELTA_RANGE=2,DELTA_SCALE=SCALE*25", self.html)
+        # Δ 视图是判色依据，必须真实比例；进入时强制把放大系数打回 1。
+        self.assertIn("state.toleranceMagnify=1;$('toleranceMagnify').value='1'", self.html)
+        self.assertIn("deltaAxisGroup.visible=delta", self.html)
+
+    def test_close_up_hides_global_axis_decoration(self) -> None:
+        self.assertIn("CLOSE_UP_DISTANCE", self.html)
+        self.assertIn("function syncSceneScale", self.html)
+        self.assertIn("axisGroup.visible=!delta&&!closeUp", self.html)
 
     def test_reference_opacity_can_reach_100_percent(self) -> None:
         self.assertIn('id="referenceOpacity" type="range" min="10" max="100"', self.html)
@@ -75,8 +154,10 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
         self.assertIn("showProducts:true", self.html)
         self.assertIn("pointMesh.visible=showProducts", self.html)
         self.assertIn("trajectoryGroup.visible=showProducts", self.html)
-        self.assertIn("if(!state.showProducts)return null", self.html)
+        self.assertIn("if(state.showProducts){", self.html)
         self.assertIn("state.showProducts=!state.showProducts", self.html)
+        # 关掉标准色点后容差盒仍需可点选，否则详情面板会失去入口。
+        self.assertIn("state.showTolerance&&toleranceGroup.visible", self.html)
 
     def test_reference_voxels_show_hover_and_pinned_lab_readout(self) -> None:
         self.assertIn('id="referenceLabReadout"', self.html)
@@ -119,7 +200,8 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
 
     def test_reference_gamut_uses_dense_toggleable_instanced_voxels(self) -> None:
         self.assertIn('id="toggleReference"', self.html)
-        self.assertIn("showReference:true", self.html)
+        # 标准型号是主角，参考色域默认关闭，避免体素方块遮住容差盒。
+        self.assertIn("showReference:false", self.html)
         self.assertIn("const GAMUT_STEPS=20", self.html)
         self.assertIn("new THREE.BoxGeometry(.44", self.html)
         self.assertIn("new THREE.InstancedMesh", self.html)
@@ -137,7 +219,7 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
         self.assertIn("color-gamut: p3", self.html)
 
     def test_product_points_have_larger_invisible_hit_targets_and_hover_feedback(self) -> None:
-        self.assertIn("const hitGeometry=new THREE.SphereGeometry(1.28", self.html)
+        self.assertIn("const hitGeometry=new THREE.SphereGeometry(.5", self.html)
         self.assertIn("colorWrite:false", self.html)
         self.assertIn("raycaster.intersectObject(hitMesh)", self.html)
         self.assertIn("screenRadius=32", self.html)
