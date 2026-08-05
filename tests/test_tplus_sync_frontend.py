@@ -23,6 +23,17 @@ class TplusSyncFrontendTests(unittest.TestCase):
     def test_has_review_action(self) -> None:
         self.assertIn("标记已复核", self.html)
 
+    def test_detail_explains_why_no_diff_instead_of_silently_showing_summary(self) -> None:
+        """无明细时要说清是「本次没变化」还是「老记录」，不能只甩一行汇总。"""
+        self.assertIn("本次内容无变化，无明细", self.html)
+        self.assertIn("该记录早于明细留存", self.html)
+        self.assertIn("function hasDiff(", self.html)
+
+    def test_needs_review_no_longer_paints_the_row(self) -> None:
+        """「需复核」只是分级，不该把整行标红当故障看。"""
+        self.assertNotIn("需复核</span>", self.html)
+        self.assertNotIn("background:#f9eceb", self.html)
+
     def test_has_download_export(self) -> None:
         self.assertIn("function downloadExport(", self.html)
 

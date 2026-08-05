@@ -117,6 +117,52 @@ class RunForeverAnchorTests(unittest.TestCase):
         self.assertTrue(sleeps)
         self.assertEqual(sum(sleeps), 12 * 3600)  # 从北京 14:00 睡到次日 02:00
 
+    def test_sleep_after_full_run_targets_next_anchor(self):
+        """跑完必须睡到下一个锚点。睡固定一个周期会整轮错过锚点，锚点永远收敛不了
+        （2026-08-05 生产实测：08-04 18:38 跑完睡 86400 秒，08-05 02:00 那次直接没跑）。"""
+        sleeps = []
+        run_forever(
+            sync_once=lambda: 0,
+            read_sync_config=lambda: {"enabled": True, "interval_seconds": 86400, "anchor_time": "02:00"},
+            read_last_full=lambda: _beijing(2026, 8, 3, 2),
+            now=lambda: _beijing(2026, 8, 4, 18, 38),
+            sleep=sleeps.append,
+            max_runs=2,
+        )
+        self.assertEqual(sum(sleeps), 7 * 3600 + 22 * 60)  # 18:38 → 次日 02:00
+
+    def test_sleep_without_anchor_keeps_fixed_interval(self):
+        """没设锚点时保持"跑完睡一个周期"的原行为不变。"""
+        sleeps = []
+        run_forever(
+            sync_once=lambda: 0,
+            read_sync_config=lambda: {"enabled": True, "interval_seconds": 3600, "anchor_time": ""},
+            read_last_full=lambda: None,
+            now=lambda: _beijing(2026, 8, 4, 18, 38),
+            sleep=sleeps.append,
+            max_runs=2,
+        )
+        self.assertEqual(sum(sleeps), 3600)
+
+    def test_overrunning_full_sync_does_not_busy_loop(self):
+        """全量跑过了锚点时刻才结束，不能算出 1 秒等待去空转，要顺延一个周期。"""
+        sleeps = []
+        clock = [_beijing(2026, 8, 4, 18, 38)]
+
+        def sync_once():
+            clock[0] = _beijing(2026, 8, 5, 3)  # 跑了 8 小时多，醒来已过锚点
+            return 0
+
+        run_forever(
+            sync_once=sync_once,
+            read_sync_config=lambda: {"enabled": True, "interval_seconds": 86400, "anchor_time": "02:00"},
+            read_last_full=lambda: _beijing(2026, 8, 3, 2),
+            now=lambda: clock[0],
+            sleep=sleeps.append,
+            max_runs=2,
+        )
+        self.assertEqual(sum(sleeps), 23 * 3600)  # 03:00 → 次日 02:00，不是 1 秒
+
     def test_runs_when_due(self):
         calls = []
         last_full = _beijing(2026, 8, 4, 2)

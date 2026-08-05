@@ -18,6 +18,12 @@
   - 设了锚点 = 相位对齐到 `{锚点 + k*周期}`，并且**容器重建后不会在白天补跑全量**——
     worker 启动时从 `integration_sync_runs` 读上次 `scheduled_full` 的时刻判断是否到期。
   - 与 doc-sync 共用同一套语义（`next_scheduled_full_due` / `next_full_sync_due`），两个 worker 行为一致。
+  - **睡眠时长也必须按锚点算**（`_seconds_until_next_due`）。PR#267 只在醒来后判断到期、
+    却仍睡固定一个周期，结果睡眠期内的锚点被整轮跳过、醒来时刻又成了新相位，锚点永远收敛不了
+    （2026-08-05 实测：08-04 18:38 跑完睡 86400 秒，08-05 02:00 那次直接没跑）。
+- 每次全量快照有变化就写一条 `integration_reconciliation_diffs` 明细，`status` 只区分
+  `needs_review`/`informational`；`/tplus-sync/` 的「详情」因此总能回看本次变化。
+  `/health/` 的告警计数只数 `needs_review`，不受 informational 影响。
 - 当前 business-cn 写入开关唯一持久源 = infra SOPS 的
   `txecs-production.enc.env`（目标机 runtime env 是渲染产物）。迁移到其他角色时先从
   fleet 和 workflow 确认对应 profile，禁止沿用历史文件名猜测。
@@ -31,6 +37,7 @@
 | 价格好几天没更新 | `/tplus-sync/` 时间线 + 定时开关是否被关 | 价格走 reportQuery 两报表（翻页用 TaskSessionID，停在 PageIndex>=Pages） |
 | 关了开关后重启 worker，之后不同步 | — | 已知行为：disabled 后重启会 sleep 一整轮；等下轮或重建 worker |
 | 同步跑在白天 / 时刻逐日漂移 | `/tplus-sync/` 的「执行时刻」是否留空 | 留空=相对间隔会漂；填北京时间 HH:MM 即锚定（如 02:00） |
+| 设了执行时刻，那个点却没跑 | `integration_sync_runs` 里最后一条 `scheduled_full` 的 `started_at`，再对 worker 日志的 `sleeping: seconds=` | 睡眠时长没按锚点算就会整轮跳过（已修，见上）。确认修复是否生效：日志里跑完后的 `seconds=` 应是"到下一个锚点"的秒数，不是 86400 |
 | timeline 页 500 | tz-aware vs naive 比较 | 已修 36b032a；同类改动注意时区 |
 | BOM builder 保存报错 | T+ 报错透传（PR#186） | 委外=IsMadeRequest / 虚拟件=IsPhantom；T+ 请求 body 须 `{"request":{}}` |
 | BOM builder 读分类/单位 502、worker `openToken已失效`(403 code=50107) | openToken 续期链路（下方） | 迁移/停机把畅捷通消息地址打成「不再发送」，token 6 天后到期（2026-08-04） |

@@ -370,7 +370,7 @@ def ops_tplus_timeline(
                             ORDER BY requested_at DESC NULLS LAST, id DESC LIMIT 1
                         ) req ON TRUE
                         LEFT JOIN integration_reconciliation_diffs rec
-                            ON rec.provider='chanjet' AND rec.status='needs_review'
+                            ON rec.provider='chanjet'
                             AND rec.full_snapshot_id = NULLIF(sr.detail_json->>'full_snapshot_id','')::bigint
                         WHERE sr.provider='chanjet'
                         UNION ALL

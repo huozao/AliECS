@@ -78,7 +78,7 @@ def upsert_and_snapshot_full_bom(
     fetched_rows: list[Any], *, mode: str, source_json: dict[str, Any] | None = None
 ) -> FullBomSnapshotResult:
     """upsert 抓到的行 → 从 DB 拼全量 → 写全量快照 → 与上一份全量快照分类 diff →
-    仅当 needs_review 时写 reconciliation。返回用于导出的全量行(无 DB 时回退 fetched_rows)。"""
+    有变化即写 reconciliation 明细。返回用于导出的全量行(无 DB 时回退 fetched_rows)。"""
     if psycopg is None:
         return FullBomSnapshotResult(full_rows=fetched_rows)
     database_url = os.getenv("DATABASE_URL", "").strip()
@@ -107,7 +107,9 @@ def upsert_and_snapshot_full_bom(
                 )
                 snapshot["id"] = int(cur.fetchone()[0])
                 diff = build_snapshot_diff(previous, snapshot)
-                if diff is not None and diff["status"] == "needs_review":
+                # 只要内容有变化就落一条明细（needs_review 与否只体现在 status/severity），
+                # 否则页面上「本次变化」的详情只有被判需复核的那几次才看得到。
+                if diff is not None:
                     cur.execute(
                         """
                         INSERT INTO integration_reconciliation_diffs(

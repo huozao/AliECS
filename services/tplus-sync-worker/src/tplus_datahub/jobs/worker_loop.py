@@ -148,6 +148,18 @@ def next_scheduled_full_due(
     return due
 
 
+def _seconds_until_next_due(
+    current: datetime, last_full: datetime | None, interval_seconds: int, anchor_time: str
+) -> int:
+    """距下一次定时全量的等待秒数。全量本身跑过了锚点时刻才结束时顺延一个周期，
+    避免算出 1 秒等待反复空转。"""
+    interval = max(int(interval_seconds), 60)
+    due = next_scheduled_full_due(current, last_full, interval, anchor_time)
+    while due <= current:
+        due += timedelta(seconds=interval)
+    return max(int((due - current).total_seconds()), 1)
+
+
 def _run_pending_db_bom_request(
     *,
     fetch_db_bom_request: Callable[..., dict | None],
@@ -259,7 +271,6 @@ def run_forever(
         # 只有设了锚点才做到期判断——没设锚点时保持"跑完睡一个周期"的原行为不变。
         not_due = enabled and bool(anchor_time) and due > current
         run_full = enabled and not not_due
-        wait_seconds = max(int((due - current).total_seconds()), 1) if not_due else interval_seconds
         if run_full:
             last_full = current
             logger.info("T+ sync run started: run=%s anchor=%s", run_count, anchor_time or "-")
@@ -310,6 +321,13 @@ def run_forever(
         if max_runs is not None and run_count >= max_runs:
             return last_exit_code
 
+        # 睡到下一个锚点，而不是固定睡一个周期——固定睡会把睡眠期内的锚点整轮跳过，
+        # 醒来时刻又变成新的相位，锚点永远收敛不了（2026-08-05 生产实测）。
+        wait_seconds = (
+            _seconds_until_next_due(now(), last_full, interval_seconds, anchor_time)
+            if enabled and anchor_time
+            else interval_seconds
+        )
         logger.info("T+ sync worker sleeping: seconds=%s", wait_seconds)
         manual_exit_code = _sleep_with_manual_bom_polling(
             interval_seconds=wait_seconds,
