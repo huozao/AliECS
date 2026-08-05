@@ -26,7 +26,7 @@ mirror_one() {
   # 与 release-deploy 的 TCR 同步同一跳跨境，同样会挂起而非报错，故超时+重试并用。
   local attempt
   for attempt in 1 2 3; do
-    if timeout 12m skopeo copy --all --preserve-digests --retry-times 3 \
+    if timeout 20m skopeo copy --all --preserve-digests --retry-times 3 \
       --authfile "$auth_file" "docker://$source" "$destination"; then
       break
     fi

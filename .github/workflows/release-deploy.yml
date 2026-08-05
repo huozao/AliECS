@@ -195,7 +195,7 @@ jobs:
           # 08-05 传大镜像时长时间挂起不报错。--retry-times 只管前者，后者必须靠
           # timeout 把挂起转成失败，重试才会发生。
           for attempt in 1 2 3; do
-            if timeout 12m skopeo copy --all --preserve-digests --retry-times 3 \
+            if timeout 20m skopeo copy --all --preserve-digests --retry-times 3 \
               --authfile "$auth_file" "$source" "$target"; then
               break
             fi
