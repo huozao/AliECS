@@ -39,8 +39,36 @@ GitHub Actions runner（美国）
 - 跨境卡死会连带堵住整条发布链：`concurrency: release-deploy` + `cancel-in-progress: false`，
   卡住的 run 会让后面排队的部署一起等。确认是冻结后可直接 `gh run cancel` 止损。
 - aliecs 的 sing-box 只是 Chrome→ChatGPT 的自用出口，迁移方案已定性"境内无任何转发
-  第三方流量的能力"，且 2026-07-25 明确裁决 devbox 不承担 txecs 文件/镜像中转。
-  **不要把镜像分发改道到 sing-box 或 webdock 节点。**
+  第三方流量的能力"。2026-07-25 的裁决原文只限定 **devbox 不承担 txecs 文件/镜像中转**，
+  不涉及其他设备（此处原先写成"不要改道到 sing-box 或 webdock 节点"，是过度概括，已更正）。
+  仍然成立的是：**不要把镜像分发改道成代理转发**（sing-box 转发第三方流量）；
+  服务器自己 pull 再传给另一台，是另一回事，见下面的应急旁路。
+
+### 应急旁路：aliecs 拉 GHCR → peer-restic 通道 → txecs（2026-08-05 实测打通）
+
+runner→TCR 冻结时用这条，**零新增凭据、零新增 SSH 授权**——完全复用 txecs 每日
+Restic 备份用的 `restic-peer` 通道（chroot + `ForceCommand internal-sftp` +
+`AllowTcpForwarding no`，拿不到 shell）。
+
+```
+aliecs ←pull─ GHCR                       12.97 MB/s（aliecs 已长期登录 ghcr.io）
+aliecs ─docker save|gzip -1─> /srv/peer-restic/repos/transfer/   （root:755，txecs 只读）
+ txecs ─sftp get─ 同一条 peer-restic 通道  2.84 MB/s（200MB/74s，无冻结）
+ txecs ─docker load─> docker tag 成 TCR 名 ─> compose up -d
+```
+
+要点：
+
+- aliecs 的 SFTP chroot 根是 `/srv/peer-restic`，`ForceCommand internal-sftp -d /repos`，
+  所以 txecs 侧看到的路径是 `transfer/xxx`，实际落在 `/srv/peer-restic/repos/transfer/`。
+- txecs 侧的 key 是 `/srv/business-cn/config/peer-backup.key`（0600，render.sh 渲染）。
+- `docker load` 会校验层 digest；实测 image ID 与 GHCR 源完全一致，传输无损。
+- **必须打成 TCR 镜像名**再 up，因为 compose.env 里是 `*_IMAGE=ccr.ccs.tencentyun.com/...`。
+- `deploy.sh` 已内置 `ALLOW_OFFLINE_CACHED_IMAGES=true` 离线缓存门（验证本地镜像存在而不 pull），
+  走完整 deploy 流程时用它；只换镜像 tag 的最小切换则直接改 compose.env + `compose up -d`。
+- 用完清理两侧的中转文件与镜像；aliecs 根分区只有 13G 余量。
+- ⚠️ 只换 tag 的最小切换**不写部署清单、不更新 last-success-commit**，CI 侧仍显示未部署；
+  网络恢复后重跑一次正式 workflow 即可对齐（tag 相同，容器不会重复重建）。
 - 增量部署已实战验证：改 1 个服务只重建 1-2 个容器。
 - 纯 Markdown/AGENTS/CLAUDE 变更不触发生产部署。
 - 日常版本权威链：Git commit SHA → GitHub Actions run/attempt → OCI image digest。
