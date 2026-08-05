@@ -110,6 +110,8 @@
         renderTplusTimeline(d);
       }catch(e){$('tplusTimeline').innerHTML=`<span class="chip failed">时间线加载失败：${esc(e.message)}</span>`;$('tplusTimelinePager').innerHTML='';}
     }
+    const DIFF_KINDS=['qty_changed','material_changed','bom_deleted','bom_added','status_changed','cosmetic_changed'];
+    function hasDiff(s){return !!s&&DIFF_KINDS.some((k)=>s[k]);}
     function diffSummaryText(s){
       if(!s)return '<span class="muted">—</span>';
       const parts=[];
@@ -121,7 +123,7 @@
       if(s.cosmetic_changed)parts.push(`其它${s.cosmetic_changed}`);
       if(!parts.length)return '<span class="muted">无变化</span>';
       const txt=parts.join(' · ');
-      return s.needs_review?`<span class="chip failed">需复核</span> ${esc(txt)}`:esc(txt);
+      return esc(txt);
     }
     function excelCell(files){
       if(!files||!files.length)return '<span class="muted">—</span>';
@@ -134,10 +136,9 @@
       tplusTlItems=d.items||[];
       const rows=tplusTlItems.map((it,index)=>{
         const numCell=it.kind==='run'?`<b>${esc(it.number)}</b>`:`<span class="muted">${esc(it.number)}</span>`;
-        const trCls=it.needs_review?' style="background:#f9eceb"':'';
         const fileCount=(it.export_files||[]).length;
         const fileBtn=fileCount>0?`<button class="btn" type="button" onclick="openExcelOnly(${index})">📄 ${fileCount} 个</button>`:'<span class="muted">—</span>';
-        return `<tr${trCls}><td>${numCell}</td><td>${syncOriginLabel(it)}</td><td>${esc(it.module)}</td><td>${esc(it.mode)}</td><td>${chip(it.status)}</td><td>${fmtTime(it.event_time)}</td><td>${esc(it.row_count??'')}</td><td>${esc(it.exit_code??'')}</td><td>${esc(it.reason_event_id||'')}</td><td>${diffSummaryText(it.diff_summary)}</td><td>${fileBtn}</td><td><button class="btn primary" type="button" onclick="openTimelineDetail(${index})">详情</button></td></tr>`;
+        return `<tr><td>${numCell}</td><td>${syncOriginLabel(it)}</td><td>${esc(it.module)}</td><td>${esc(it.mode)}</td><td>${chip(it.status)}</td><td>${fmtTime(it.event_time)}</td><td>${esc(it.row_count??'')}</td><td>${esc(it.exit_code??'')}</td><td>${esc(it.reason_event_id||'')}</td><td>${diffSummaryText(it.diff_summary)}</td><td>${fileBtn}</td><td><button class="btn primary" type="button" onclick="openTimelineDetail(${index})">详情</button></td></tr>`;
       }).join('');
       $('tplusTimeline').innerHTML=`<table><thead><tr><th>编号</th><th>来源</th><th>模块</th><th>模式</th><th>状态</th><th>时间</th><th>行数</th><th>退出码</th><th>回调事件ID</th><th>本次变化</th><th>生成的 Excel</th><th>详情</th></tr></thead><tbody>${rows||'<tr><td colspan="12" class="muted">暂无记录</td></tr>'}</tbody></table>`;
       const total=d.total||0,limit=d.limit||TPLUS_TL_LIMIT,offset=d.offset||0;
@@ -168,14 +169,19 @@
       const it=tplusTlItems[index];if(!it)return;
       const head=`<p class="muted">${esc(it.number)} · ${esc(it.module)}/${esc(it.mode)}/${esc(it.status)} · ${fmtTime(it.event_time)} · 请求ID ${esc(it.request_id||'-')} · 事件 ${esc(it.reason_event_id||'-')}</p>`;
       const base=`${head}<p>本次变化：${diffSummaryText(it.diff_summary)}</p>`;
-      if(!it.reconciliation_id){openModal(`同步详情 ${it.number}`,base);return;}
+      // 没有明细只有两种情况：这次同步内容完全没变，或者是改造前(2026-08-05)的老记录。
+      if(!it.reconciliation_id){
+        const why=hasDiff(it.diff_summary)?'该记录早于明细留存，只有汇总':'本次内容无变化，无明细';
+        openModal(`同步详情 ${it.number}`,`${base}<p class="muted">${why}。</p>`);
+        return;
+      }
       openModal(`同步详情 ${it.number}`,`${base}<p class="muted">正在加载变化明细…</p>`);
       try{
         const data=await api(`/v1/ops/reconciliation/${it.reconciliation_id}`);
         const detail=renderDiffDetail(data.diff_json||{});
         const action=data.status==='needs_review'
           ?`<div class="row" style="margin-top:10px"><button class="btn primary" onclick="resolveRecon(${it.reconciliation_id},'ignore')">标记已复核</button></div>`
-          :`<p class="muted">复核状态：${esc(data.status)}</p>`;
+          :'';
         openModal(`同步详情 ${it.number}`,`${base}<h3 style="margin:14px 0 6px">变化明细</h3>${detail}${action}`);
       }catch(error){
         openModal(`同步详情 ${it.number}`,`${base}<div class="attention critical">变化明细加载失败：${esc(error.message)}</div>`);
