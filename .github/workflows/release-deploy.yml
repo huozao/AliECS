@@ -191,7 +191,21 @@ jobs:
 
           source="docker://ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.tree.outputs.tag }}"
           target="docker://${TCR_BASE}/${{ matrix.image }}:${{ steps.tree.outputs.tag }}"
-          skopeo copy --all --preserve-digests --authfile "$auth_file" "$source" "$target"
+          # runner→TCR 是跨境一跳，两种失败都实测过：08-04 快速 i/o timeout、
+          # 08-05 传大镜像时长时间挂起不报错。--retry-times 只管前者，后者必须靠
+          # timeout 把挂起转成失败，重试才会发生。
+          for attempt in 1 2 3; do
+            if timeout 12m skopeo copy --all --preserve-digests --retry-times 3 \
+              --authfile "$auth_file" "$source" "$target"; then
+              break
+            fi
+            if [[ "$attempt" == 3 ]]; then
+              echo "[registry] TCR sync failed after 3 attempts: ${{ matrix.image }}" >&2
+              exit 1
+            fi
+            echo "[registry] TCR sync attempt $attempt failed or timed out; retrying in 20s" >&2
+            sleep 20
+          done
 
           source_digest="$(skopeo inspect --authfile "$auth_file" "$source" | jq -r .Digest)"
           target_digest="$(skopeo inspect --authfile "$auth_file" "$target" | jq -r .Digest)"
