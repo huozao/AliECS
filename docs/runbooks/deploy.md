@@ -22,9 +22,22 @@ GitHub Actions runner（美国）
   → txecs 只从 TCR 拉，26 个镜像全部来自 TCR，不直连 GHCR/Docker Hub
 ```
 
-- runner→TCR 是跨境一跳，会偶发 `dial tcp …:443: i/o timeout`（2026-08-04 实测单个
-  build-push 卡满 60s 超时失败，同批其他 6 个正常）。这跳失败与 txecs 无关，
-  **txecs 侧的任何中转/代理都帮不上**——它不在这条路径上。
+- runner→TCR 是跨境一跳，**只在真正需要实传新镜像时才会暴露问题**：tree hash 命中
+  （target 已是同 digest）时秒过，所以「以前一直没事」往往只是没传过。两种失败形态：
+  - 快速报错 `dial tcp …:443: i/o timeout`（2026-08-04，同批 7 个挂 1 个，人工 rerun 后过）。
+  - **连接建立后完全冻结**（2026-08-05，backend-api / tplus-sync-worker）：日志把
+    `Copying blob` 列完就再无任何输出，20 分钟 0 字节，三次重试形态完全一致。
+    判断依据就是看 `Copying blob` 之后有没有进度行——没有就是冻结，不是慢，
+    **放宽超时毫无意义**。
+  - 已加护栏（PR#272）：`timeout 20m skopeo copy --retry-times 3`，最多 3 轮。
+    `--retry-times` 只对报错有效，对冻结无效，必须靠 `timeout` 把冻结转成失败才会重试。
+    因为已确认是冻结而非慢传输，20m 偏宽（每次白等 60 分钟才失败），可下调到 8-10m。
+- 这跳失败与 txecs 无关，**txecs 侧的任何中转/代理都帮不上**——它不在这条路径上。
+  「让 txecs 直接从 GHCR 拉」这个看似显然的备选**同样不可行**：2026-08-05 实测
+  txecs←ghcr.io 握手仅 0.09s 但吞吐只有 **13.6 KB/s**，拉 300MB 镜像要 6 小时。
+  跨境劣化时（实测下午到傍晚）唯一有效的办法是**换时段重跑**，不要改架构。
+- 跨境卡死会连带堵住整条发布链：`concurrency: release-deploy` + `cancel-in-progress: false`，
+  卡住的 run 会让后面排队的部署一起等。确认是冻结后可直接 `gh run cancel` 止损。
 - aliecs 的 sing-box 只是 Chrome→ChatGPT 的自用出口，迁移方案已定性"境内无任何转发
   第三方流量的能力"，且 2026-07-25 明确裁决 devbox 不承担 txecs 文件/镜像中转。
   **不要把镜像分发改道到 sing-box 或 webdock 节点。**
@@ -45,6 +58,7 @@ GitHub Actions runner（美国）
 | 部署后页面没变 | 内容寻址：内容没变的服务标签不变、容器不重建 | 确认改动落在对应构建上下文目录内 |
 | txecs 的三个 worker 同时 Exited(137)，随后部署仍不启动 | `sudo grep -E '^(P0_MODE|TPLUS_BOM_WRITE_ENABLED)=' /srv/business-cn/config/runtime.env` | 正式 `business-cn` workflow 必须用 infra 的 production profile：`P0_MODE=false`、`TPLUS_BOM_WRITE_ENABLED=true`。P0 profile 会主动停 worker，只用于隔离阶段 |
 | workflow 显示 success，但生产没变（容器还是旧的 Up N days） | **`deploy-*` job 的结论是不是 `skipped`**，而不是只看 workflow 总结论 | ⚠️ `gh run rerun --failed` **只重跑 failed 的 job，skipped 的不会被拉起**。build 失败 → deploy 被 skip → 重跑后 build 转绿、workflow conclusion=success，部署却压根没执行（2026-08-04 实际踩到）。正确处置：`gh workflow run release-deploy.yml --ref main -f deploy_target=business-cn` 重跑完整一轮。判定成功必须落到 `deploy-business-cn` 的 job 结论 + `docker ps` 的容器启动时间，两个都看 |
+| build-push 挂着不动，步骤停在 `Sync the same immutable manifest to TCR` | 日志里 `Copying blob` 之后有没有进度行 | 没有进度＝跨境冻结（见上）。等 3 轮重试自然失败，或 `gh run cancel` 止损，**换时段重跑**；不要改镜像流向，也不要指望 txecs 侧中转 |
 | 8 个 build-push 全 success，只有 `cutover-bridge / cutover` 失败，日志是 `ssh: handshake failed: EOF` | 本机 `ssh txecs` 同时也会间歇 `Connection closed`。查 `sudo journalctl -u ssh` 是否出现 `beginning MaxStartups throttling` / `drop connection`，再查 `sudo fail2ban-client status sshd` | txecs 公网 22 持续遭遇机会型自动扫描；来源 IP 多登记在腾讯云网段，但不能据此断言主机归属或是否已被入侵。2026-07-28 曾触发 `MaxStartups 10:30:100` 并丢弃合法连接；同日已启用 fail2ban sshd aggressive jail（5 次/10 分钟、封 24 小时），未放宽 `MaxStartups`。确认扫描源已被封且本机 SSH 稳定后，再用 `gh run rerun <id> --failed` 重跑。密码和 root 登录均关闭；成功登录还必须按用户、来源 IP、密钥指纹核对，不能只看 IP |
 
 ## 验证命令
