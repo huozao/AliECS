@@ -66,6 +66,34 @@ txecs 127.0.0.1:11800 failover-proxy
   `11800/healthz` 响应头共同确认；不得拿 AliECS 的环境文件判断 txecs。
 - WebDock browser_data 不随业务服务器迁移；console 隧道仍落 AliECS。
 
+## 设备间既存通道（要传文件/镜像前先看这里，别重新摸索）
+
+**已存在、可复用**：
+
+| 方向 | 形态 | 凭据/配置 | 本职用途 | 能否复用 |
+|---|---|---|---|---|
+| txecs → aliecs | SFTP，chroot 到 `/srv/peer-restic`（`ForceCommand internal-sftp -d /repos`、`AllowTcpForwarding no`、拿不到 shell） | txecs 侧 `/srv/business-cn/config/peer-backup.key`（render.sh 渲染）；aliecs 侧 `/etc/ssh/sshd_config.d/50-peer-restic.conf` | txecs 每日 Restic 备份写入 aliecs | **可以**。2026-08-05 实测 2.84 MB/s 稳定，已用于跨境冻结时的镜像旁路，见 `runbooks/deploy.md` |
+| webdock1 ↔ webdock2 | Restic over SFTP(:2222) + SMB | `webdock-peer-backup.enc.env` | 两机互为加密备份 | 未验证他用 |
+| webdock2 → txecs | SSH 反向隧道 11810 | infra roles | 生产业务隧道（bridge 主路） | 勿占用 |
+| webdock2 → aliecs | SSH 隧道 16090/16091 | infra roles | console 通道 | 勿占用 |
+
+**确认不存在的连接**（2026-08-05 实测，别再逐个试）：
+
+- aliecs ↔ txecs **没有** SSH 互信，双向都是 `Permission denied (publickey)`（网络本身可达）。
+- txecs **没装 tailscale**，连不到 webdock1/webdock2 的 100.x 地址，因此
+  **GitHub Actions 无法经 txecs 跳板触达 webdock**；webdock 侧只能主动外连。
+- txecs **没有持久的 TCR 凭据**，部署时由 CI 通过环境变量传入；`runtime.env` 里只有
+  `IMAGE_REGISTRY_BASE`。TCR **push** 凭据只在 GitHub Actions secrets，不在 SOPS。
+
+**镜像拉取能力**（同上日实测）：
+
+| 主体 | 拉 GHCR | 备注 |
+|---|---|---|
+| aliecs | **12.97 MB/s** | 早已长期 `docker login ghcr.io`，`/root/.docker/config.json` 里有 |
+| webdock2 | 3.7 MB/s | 经 mihomo；出口是 aliecs。mihomo 已按国内/国外分流，**访问国内目标本来就直连**（实测出口=家宽 IP），不需要改 `NO_PROXY`，更不该为此重启 docker（会打断 ChatGPT 会话，触碰红线） |
+| txecs | 13.6 KB/s | 实质不可用，别把它当备选 |
+| GitHub runner → TCR | 劣化时 **0 B/s 冻结** | 判别与处置见 `runbooks/deploy.md` |
+
 ## 设备档案
 
 ### aliecs（海外边界与 business-cn 隔离候选）
