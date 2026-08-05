@@ -25,7 +25,6 @@
       <div class="title"><h1>质检报告</h1><p>按产品编码、名称、批次号或报告编号查询。</p></div>
       <nav class="actions"><a class="btn ghost" href="/">返回首页</a><button id="loginBtn" class="primary" type="button">登录（SSO）</button><button id="logoutBtn" class="hidden" type="button">退出登录</button></nav>
     </header>
-    <div id="message" class="message"></div>
     <section class="panel">
       <form id="searchForm" class="search-grid">
         <div class="field search-main"><label for="query">通用搜索</label><input id="query" name="q" placeholder="产品编码 / 产品名称 / 批次号 / 报告编号" autocomplete="off"/></div>
@@ -84,6 +83,7 @@
     <div class="modal-panel"><div class="modal-head"><div><h2 id="detailTitle">报告详情</h2><div id="detailSubtitle" class="muted"></div></div><button id="closeModalBtn" type="button">关闭</button></div><div id="detailBody"></div></div>
   </div>
 
+  <script src="/common/toast.js"></script>
   <script>
     const API_BASE=location.port==='8080'?'http://localhost:8000':'/api';
     const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
@@ -92,7 +92,7 @@
     const fmtBytes=(n)=>{n=Number(n||0);if(n>=1048576)return `${(n/1048576).toFixed(1)} MB`;if(n>=1024)return `${(n/1024).toFixed(0)} KB`;return `${n} B`};
     const statusLabel={draft:'草稿',published:'有效',superseded:'已替换',revoked:'已作废'};
     let me=null,currentDraft=null,selectedSubject=null,catalogs={},selectedTestItems=new Set();
-    function showMessage(text,type='bad'){const node=$('message');node.textContent=text;node.className=`message show ${type}`;if(type==='good')setTimeout(()=>node.classList.remove('show'),5000)}
+    function showMessage(text,type='bad'){AliECSToast.show(text,type==='good'?'success':'error')}
     function headers(json=true){const h={};if(json)h['Content-Type']='application/json';if(token())h.Authorization=`Bearer ${token()}`;h['X-Client-Channel']='website';return h}
     async function api(path,opt={}){const response=await fetch(`${API_BASE}${path}`,{...opt,headers:Object.assign(headers(opt.json!==false),opt.headers||{})});const text=await response.text();let data={};if(text){try{data=JSON.parse(text)}catch{data={raw:text}}}if(!response.ok){if(response.status===401){clearToken();applyAuth(null)}throw new Error(data.detail||`HTTP ${response.status}`)}return data}
     const can=(permission)=>!!me&&(((me.roles||[]).includes('admin'))||((me.permissions||[]).includes('admin.access'))||((me.permissions||[]).includes(permission)));

@@ -65,13 +65,12 @@
         </div>
       </nav>
     </header>
-    <div id="errorBox" class="error"></div>
-    <div id="successBox" class="success"></div>
     <main id="groupsRoot"></main>
     <footer class="site-footer">
       <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">蜀ICP备2026040494号-2</a>
     </footer>
   </div>
+  <script src="/common/toast.js"></script>
   <script>
     const API_BASE=location.port==='8080'?'http://localhost:8000':'/api';
     const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
@@ -96,9 +95,9 @@
     const clearAuthToken=()=>AUTH_KEYS.forEach((k)=>localStorage.removeItem(k));
     const syncTokenState=()=>{state.token=getAuthToken();};
     const isInternal=(u)=>typeof u==='string'&&u.startsWith('/');
-    function showError(m){errorBox.textContent=m;errorBox.style.display='block';successBox.style.display='none';}
-    function showSuccess(m){successBox.textContent=m;successBox.style.display='block';errorBox.style.display='none';}
-    function clearMessage(){errorBox.style.display='none';successBox.style.display='none';}
+    function showError(m){AliECSToast.show(m,'error');}
+    function showSuccess(m){AliECSToast.show(m,'success');}
+    function clearMessage(){AliECSToast.hide();}
 
     async function api(path,opt={}){
       const headers=Object.assign({'Content-Type':'application/json'},opt.headers||{});

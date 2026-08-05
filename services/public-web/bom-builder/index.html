@@ -71,7 +71,6 @@
       <div><h1>新建 T+ BOM</h1><div class="muted small">逐行搜索原料录入；写入前经服务端校验与人工确认</div></div>
       <nav class="row"><a class="btn" href="/">首页</a><button id="loginBtn" type="button">登录（SSO）</button><button id="logoutBtn" class="hidden" type="button">退出登录</button></nav>
     </header>
-    <div id="msg" class="msg"></div>
 
     <div class="tabs">
       <div id="tabEntry" class="tab active" role="button">录入</div>
@@ -181,6 +180,7 @@
     <div class="row" style="justify-content:flex-end;margin-top:14px"><button id="addCustomBtn" class="primary" type="button">加入子件</button></div>
   </div></div>
 
+  <script src="/common/toast.js"></script>
   <script>
     const API_BASE=location.port==='8080'?'http://localhost:8000':'/api';
     const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
@@ -196,7 +196,7 @@
     const esc=(v)=>String(v??'').replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const ssoLogin=()=>{location.href=`${API_BASE}/v1/auth/oidc/login?rd=${encodeURIComponent(location.pathname+location.search)}`;};
     const fmtQty=(n)=>Number(n).toLocaleString('zh-CN',{maximumFractionDigits:4});
-    function message(text,type='error'){const box=$('msg');box.textContent=text;box.className=`msg ${type==='good'?'good':type==='warn'?'warn':''}`;box.style.display=text?'block':'none';}
+    function message(text,type='error'){AliECSToast.show(text,type==='good'?'success':type==='warn'?'warn':'error');}
     function syncAuth(){$('loginBtn').classList.toggle('hidden',!!token());$('logoutBtn').classList.toggle('hidden',!token());}
     async function api(path,opt={}){const headers=Object.assign({'Content-Type':'application/json'},opt.headers||{});if(token())headers.Authorization=`Bearer ${token()}`;const response=await fetch(`${API_BASE}${path}`,{...opt,headers});const text=await response.text();let data={};if(text){try{data=JSON.parse(text)}catch{data={raw:text}}}if(!response.ok){if(response.status===401){clearToken();syncAuth();}throw new Error(data.detail||`HTTP ${response.status}`)}return data;}
     function debounce(fn,ms){let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms)};}

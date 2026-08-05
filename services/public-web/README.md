@@ -17,6 +17,11 @@ Static public pages for AliECS. The homepage shows business feature entries and 
 - User-triggered Excel downloads from backend-api.
 - User-triggered T+ BOM sync request files created by backend-api for `tplus-sync-worker` to consume.
 
+## Shared Scripts
+
+- `common/user-badge.js` — `AliECSAuth` helpers plus the "current user" badge.
+- `common/toast.js` — `AliECSToast.show(text, type)` / `AliECSToast.hide()`, the single implementation of user-facing messages. Pages must not render their own inline message banner: the banner sits at the top of the document and is invisible once the user scrolls down. `error` toasts stay until dismissed; other types auto-hide after 6s. `services/admin-ui/common/toast.js` is a byte-identical copy because admin-ui builds from its own context; `tests/test_frontend_toast.py` asserts both copies match and that every messaging page loads the script.
+
 ## Do Not Commit
 
 Do not commit downloaded workbooks, screenshots containing private data, browser storage, copied tokens, or embedded production API secrets.
