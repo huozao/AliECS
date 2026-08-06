@@ -599,9 +599,9 @@ git commit -m "feat(tplus): T+ BOM 同步完成后即时触发父件核对与补
 
 ---
 
-### Task 4: 色点标签换成 DOM 覆盖层
+### Task 5: 色点标签换成 DOM 覆盖层
 
-先做等价替换：行为仍是"只有选中点有标签"，但底层从 canvas Sprite 换成 DOM，并接上距离淡化。高亮集这一步先返回 `null`（Task 8 填实现）。
+先做等价替换：行为仍是"只有选中点有标签"，但底层从 canvas Sprite 换成 DOM，并接上距离淡化。高亮集这一步先返回 `null`（Task 9 填实现）。
 
 **Files:**
 - Modify: `services/public-web/formula/colors/index.html`
@@ -695,7 +695,7 @@ Expected: 3 个用例 FAIL（`function rebuildLabels` 等不在 HTML 中）
     const normalized=Math.min(worldPos.distanceTo(_focalV3),state.labelFocal)/state.labelFocal;
     return 1-(.5-.5*Math.cos(normalized*Math.PI));
   }
-  // Task 8 会把重叠型号填进来；返回 null 表示「无高亮集」，此时不压暗任何点。
+  // Task 9 会把重叠型号填进来；返回 null 表示「无高亮集」，此时不压暗任何点。
   function labelHighlightSet(){return null;}
   function labelTargets(){
     if(!state.labelFields.size)return[];
@@ -762,14 +762,14 @@ git commit -m "refactor(colors): 色点标签换成 DOM 层并按距离余弦淡
 
 ---
 
-### Task 5: 全部显示标签开关 + 淡化距离滑块
+### Task 6: 全部显示标签开关 + 淡化距离滑块
 
 **Files:**
 - Modify: `services/public-web/formula/colors/index.html`
 - Test: `tests/test_formula_color_space_frontend.py`
 
 **Interfaces:**
-- Consumes: Task 4 的 `rebuildLabels()`、`state.showAllLabels`、`state.labelFocal`、`labelsDirty`
+- Consumes: Task 5 的 `rebuildLabels()`、`state.showAllLabels`、`state.labelFocal`、`labelsDirty`
 - Produces: DOM 元素 `#toggleAllLabels`、`#labelFocal`、`#labelFocalValue`
 
 - [ ] **Step 1: 写失败测试**
@@ -806,7 +806,7 @@ Expected: FAIL，`id="toggleAllLabels"` 不在 HTML 中
           </div>
 ```
 
-> Task 6 会把这段连同整个 `view-settings-body` 搬到顶部面板，此处先就地加以保证本任务可独立验收。
+> Task 7 会把这段连同整个 `view-settings-body` 搬到顶部面板，此处先就地加以保证本任务可独立验收。
 
 - [ ] **Step 3b: 接事件**
 
@@ -835,14 +835,14 @@ git commit -m "feat(colors): 支持全部色点显示标签与淡化距离调节
 
 ---
 
-### Task 6: 设置收纳到顶部面板
+### Task 7: 设置收纳到顶部面板
 
 **Files:**
 - Modify: `services/public-web/formula/colors/index.html`
 - Test: `tests/test_formula_color_space_frontend.py:87-95`
 
 **Interfaces:**
-- Consumes: Task 5 的 `#toggleAllLabels`、`#labelFocal`
+- Consumes: Task 6 的 `#toggleAllLabels`、`#labelFocal`
 - Produces: `#toggleSettings`（齿轮按钮）、`#settingsPanel`（横幅面板）。所有被搬运的控件 id 保持不变
 
 - [ ] **Step 1: 改写既有测试为新期望**
@@ -917,7 +917,7 @@ Expected: 3 个用例 FAIL（`<details id="viewSettings"` 仍在）
   </section>
 ```
 
-> `#saveViewPrefs` / `#resetViewPrefs` 在 Task 7 接事件，此处先放进 DOM，避免再动一次面板结构。
+> `#saveViewPrefs` / `#resetViewPrefs` 在 Task 8 接事件，此处先放进 DOM，避免再动一次面板结构。
 
 - [ ] **Step 3c: 样式**
 
@@ -971,14 +971,14 @@ git commit -m "refactor(colors): 视图设置从画布浮层收进顶部面板"
 
 ---
 
-### Task 7: 设为默认（localStorage）
+### Task 8: 设为默认（localStorage）
 
 **Files:**
 - Modify: `services/public-web/formula/colors/index.html`
 - Test: `tests/test_formula_color_space_frontend.py`
 
 **Interfaces:**
-- Consumes: Task 6 的 `#saveViewPrefs`、`#resetViewPrefs`；Task 4 的 `state.labelFields`、`state.showAllLabels`、`state.labelFocal`
+- Consumes: Task 7 的 `#saveViewPrefs`、`#resetViewPrefs`；Task 5 的 `state.labelFields`、`state.showAllLabels`、`state.labelFocal`
 - Produces: `savePrefs()`、`loadPrefs()`、`applyPrefsToControls()`
 
 - [ ] **Step 1: 写失败测试**
@@ -1076,14 +1076,14 @@ git commit -m "feat(colors): 标签勾选与淡化设置可存为默认"
 
 ---
 
-### Task 8: hover 联动高亮容差重叠型号
+### Task 9: hover 联动高亮容差重叠型号
 
 **Files:**
 - Modify: `services/public-web/formula/colors/index.html`
 - Test: `tests/test_formula_color_space_frontend.py`
 
 **Interfaces:**
-- Consumes: 已有的 `boxesOverlap(a, b)`、`state.hoveredId`、`state.selected`、`state.points`；Task 4 的 `labelHighlightSet()` 占位
+- Consumes: 已有的 `boxesOverlap(a, b)`、`state.hoveredId`、`state.selected`、`state.points`；Task 5 的 `labelHighlightSet()` 占位
 - Produces: `labelHighlightSet()` 的真实实现，返回 `Set<number> | null`；`rebuildTolerance()` 内容差盒 opacity 随高亮集衰减
 
 - [ ] **Step 1: 写失败测试**
@@ -1112,7 +1112,7 @@ Expected: FAIL，`boxesOverlap(focus,item)` 不在 HTML 中
 
 - [ ] **Step 3a: 实现高亮集**
 
-把 Task 4 留下的占位：
+把 Task 5 留下的占位：
 
 ```js
   function labelHighlightSet(){return null;}
@@ -1183,7 +1183,7 @@ git commit -m "feat(colors): hover 型号时高亮容差重叠伙伴并压暗无
 
 ---
 
-### Task 9: 搜索命中自动聚焦 + 移动端取证 + 文档闭环
+### Task 10: 搜索命中自动聚焦 + 移动端取证 + 文档闭环
 
 **Files:**
 - Modify: `services/public-web/formula/colors/index.html`
@@ -1267,7 +1267,7 @@ EOF
 
 ## 自查记录
 
-- **Spec 覆盖**：PR-A 三项改动 → Task 1/2/3；PR-B 的 B1 → Task 4/5，B2 → Task 7，B3 → Task 6，B4 → Task 8，B5 → Task 9。设计文档「验证」一节的每条都落在对应 Task 的 Step 5。
-- **既有测试冲突**：`test_unchanged_row_only_refreshes_checked_at`（Task 2 改写）、`test_detail_fields_control_selected_product_3d_label`（Task 4 改写）、`test_view_controls_are_collapsible`（Task 6 改写）。三处都在对应任务的 Step 1 明确替换，不会留下红灯。
+- **Spec 覆盖**：PR-A 三项改动 → Task 1/2/3，事件触发 → Task 4；PR-B 的 B1 → Task 5/6，B2 → Task 8，B3 → Task 7，B4 → Task 9，B5 → Task 10。设计文档「验证」一节的每条都落在对应 Task 的 Step 5。
+- **既有测试冲突**：`test_unchanged_row_only_refreshes_checked_at`（Task 2 改写）、`test_detail_fields_control_selected_product_3d_label`（Task 5 改写）、`test_view_controls_are_collapsible`（Task 7 改写）。三处都在对应任务的 Step 1 明确替换，不会留下红灯。
 - **命名一致性**：`plan_creates` / `created_rows` / `rebuildLabels` / `syncLabels` / `labelHighlightSet` / `labelOpacityBase` / `savePrefs` / `loadPrefs` / `applyPrefsToControls` / `state.labelFocal` / `state.showAllLabels` 在定义处与所有引用处拼写一致。
-- **待实跑确认的两处**：`add_records` 是否需要显式 `key_type`（Task 3 Step 3d 已写明失败时的处理）；淡化距离默认值 12 的观感（Task 5 Step 5 实测后可微调常量）。
+- **待实跑确认的两处**：`add_records` 是否需要显式 `key_type`（Task 3 Step 3d 已写明失败时的处理）；淡化距离默认值 12 的观感（Task 6 Step 5 实测后可微调常量）。
