@@ -72,11 +72,20 @@ class TplusParentMatchTests(unittest.TestCase):
         self.assertEqual(result.missing, [])
         self.assertEqual(result.updates[0]["values"]["T+匹配状态"], _cells("无父件编码"))
 
-    def test_unchanged_row_only_refreshes_checked_at(self) -> None:
+    def test_unchanged_row_produces_no_write_at_all(self) -> None:
+        """全表每天重写核对时间，在补建后会变成上千行的无效写入。"""
         records = [{"record_id": "r1", "values": {
             "父件编码": _cells("40000019"), "父件名称": _cells("已经对了"), "T+匹配状态": _cells("一致")}}]
         result = self._plan(records, {"40000019": ("已经对了", "v1")})
-        self.assertEqual(list(result.updates[0]["values"]), ["T+核对时间"])
+        self.assertEqual(result.updates, [])
+        self.assertEqual(result.ok, 1)
+
+    def test_changed_row_still_carries_the_checked_at_stamp(self) -> None:
+        records = [{"record_id": "r1", "values": {
+            "父件编码": _cells("40000019"), "父件名称": _cells("旧名"), "T+匹配状态": _cells("一致")}}]
+        result = self._plan(records, {"40000019": ("新名", "v1")})
+        self.assertEqual(result.updates[0]["values"]["T+核对时间"], _cells("2026-08-04 03:00"))
+        self.assertEqual(result.updates[0]["values"]["父件名称"], _cells("新名"))
 
     def test_creates_rows_for_bom_codes_absent_from_the_sheet(self) -> None:
         records = [{"record_id": "r1", "values": {"父件编码": _cells("A")}}]

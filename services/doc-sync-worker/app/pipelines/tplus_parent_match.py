@@ -150,9 +150,10 @@ def plan_updates(records: list[dict[str, Any]], bom: dict[str, tuple[str, str]],
             changed[F_PARENT_NAME] = text_cell(target_name)
         if status != current_status:
             changed[F_MATCH_STATUS] = text_cell(status)
-        # 核对时间每轮都刷新，方便一眼看出数据新鲜度。
-        changed[F_CHECKED_AT] = text_cell(checked_at)
-        result.updates.append({"record_id": record_id, "values": changed})
+        # 只有真的改了才盖时间戳：补建后全表上千行，每轮重写整表既无信息量又吃接口配额。
+        if changed:
+            changed[F_CHECKED_AT] = text_cell(checked_at)
+            result.updates.append({"record_id": record_id, "values": changed})
     return result
 
 
