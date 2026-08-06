@@ -223,6 +223,15 @@ def summarize_wecom_error(error_text: str) -> dict[str, Any]:
     return {"errcodes": errcodes, "from_ips": from_ips}
 
 
+class WeComApiError(RuntimeError):
+    """企微接口返回非 0 errcode。保留原有 str 形式，另挂 errcode/errmsg 供调用方分流。"""
+
+    def __init__(self, path: str, data: dict[str, Any]) -> None:
+        self.errcode = data.get("errcode")
+        self.errmsg = data.get("errmsg")
+        super().__init__(f"{path} failed: {data}")
+
+
 class WeComSmartsheetClient:
     def __init__(self, corpid: str, secret: str, timeout: int = 15, use_system_proxy: bool = False) -> None:
         self.corpid = corpid
@@ -282,7 +291,7 @@ class WeComSmartsheetClient:
             json=payload,
         )
         if data.get("errcode") != 0:
-            raise RuntimeError(f"{path} failed: {data}")
+            raise WeComApiError(path, data)
         return data
 
     def get_fields(self, docid: str, sheet_id: str) -> dict[str, Any]:

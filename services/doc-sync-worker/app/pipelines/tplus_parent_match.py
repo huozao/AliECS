@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.providers.feishu import FeishuBitableClient, credentials_for_profile as feishu_credentials
-from app.providers.wecom import WeComSmartsheetClient, credentials_for_profile as wecom_credentials
+from app.providers.wecom import WeComApiError, WeComSmartsheetClient, credentials_for_profile as wecom_credentials
 from app.storage.postgres import connect
 
 
@@ -69,6 +69,8 @@ class MatchResult:
     no_code: int = 0
     updates: list[dict[str, Any]] = field(default_factory=list)
     created_fields: list[str] = field(default_factory=list)
+    created_rows: list[str] = field(default_factory=list)
+    write_errors: list[str] = field(default_factory=list)
     exit_code: int = 0
 
 
@@ -150,10 +152,30 @@ def plan_updates(records: list[dict[str, Any]], bom: dict[str, tuple[str, str]],
             changed[F_PARENT_NAME] = text_cell(target_name)
         if status != current_status:
             changed[F_MATCH_STATUS] = text_cell(status)
-        # 核对时间每轮都刷新，方便一眼看出数据新鲜度。
-        changed[F_CHECKED_AT] = text_cell(checked_at)
-        result.updates.append({"record_id": record_id, "values": changed})
+        # 只有真的改了才盖时间戳：补建后全表上千行，每轮重写整表既无信息量又吃接口配额。
+        if changed:
+            changed[F_CHECKED_AT] = text_cell(checked_at)
+            result.updates.append({"record_id": record_id, "values": changed})
     return result
+
+
+def plan_creates(records: list[dict[str, Any]], bom: dict[str, tuple[str, str]], checked_at: str) -> list[dict[str, Any]]:
+    """T+ 有、企微表没有的父件，补一行只带编码与名称的空白标准行。
+
+    「型号」及 Lab/容差列一律留空——人工按「型号为空」筛出待补标准的行。
+    编码排序是为了批次稳定，便于失败时按批重跑。
+    """
+    existing = {cell_text(record.get("values") or {}, F_PARENT_CODE) for record in records}
+    existing.discard("")
+    return [
+        {"values": {
+            F_PARENT_CODE: text_cell(code),
+            F_PARENT_NAME: text_cell(bom[code][0]),
+            F_MATCH_STATUS: text_cell(STATUS_OK),
+            F_CHECKED_AT: text_cell(checked_at),
+        }}
+        for code in sorted(set(bom) - existing)
+    ]
 
 
 def build_alert(result: MatchResult) -> str:
@@ -176,7 +198,19 @@ def build_alert(result: MatchResult) -> str:
             lines.append(f"  {code}｜{model or '-'}")
         if len(result.missing) > 20:
             lines.append(f"  …另有 {len(result.missing) - 20} 行")
-    if not result.renamed and not result.missing:
+    if result.created_rows:
+        lines.append(f"🆕 按 T+ 补建 {len(result.created_rows)} 行（仅编码与名称，标准待人工补）：")
+        for code in result.created_rows[:20]:
+            lines.append(f"  {code}")
+        if len(result.created_rows) > 20:
+            lines.append(f"  …另有 {len(result.created_rows) - 20} 行")
+    if result.write_errors:
+        lines.append(f"❌ 写入失败 {len(result.write_errors)} 批：")
+        for msg in result.write_errors[:10]:
+            lines.append(f"  {msg}")
+        if len(result.write_errors) > 10:
+            lines.append(f"  …另有 {len(result.write_errors) - 10} 批")
+    if not result.renamed and not result.missing and not result.created_rows and not result.write_errors:
         lines.append("✅ 无异常。")
     return "\n".join(lines)
 
@@ -210,40 +244,122 @@ def run_tplus_parent_match(*, dry_run: bool = False, notify: bool = True) -> int
     if not creds:
         print(f"[T+核对] 企微 profile {SOURCE_PROFILE} 无凭据，跳过。")
         return 0
-    docid, sheet_id = resolve_source()
-    client = WeComSmartsheetClient(creds[0].corpid, creds[0].secret)
-    bom = load_active_bom()
-    if not bom:
-        print("[T+核对] tplus_bom_records 没有当前有效记录，跳过（避免把整表标成失联）。")
-        return 0
 
-    created = [] if dry_run else ensure_fields(client, docid, sheet_id)
-    records = list(client.get_records(docid, sheet_id).get("records") or [])
+    try:
+        # 企微读侧整轮故障（corpsecret 轮换/应用权限被收回/token 失效/网络不通）最常命中这几步；
+        # resolve_source() 拿不到已同步的源时也抛 RuntimeError，同一层捕获。不捕获就直接冒泡，
+        # 跳过下面的 notify 分支——飞书一条告警都没有，只剩容器 stdout；事件通道还会每 poll 周期重试。
+        docid, sheet_id = resolve_source()
+        client = WeComSmartsheetClient(creds[0].corpid, creds[0].secret)
+        bom = load_active_bom()
+        if not bom:
+            print("[T+核对] tplus_bom_records 没有当前有效记录，跳过（避免把整表标成失联）。")
+            return 0
+        created = [] if dry_run else ensure_fields(client, docid, sheet_id)
+        records = list(client.get_records(docid, sheet_id).get("records") or [])
+    except RuntimeError as exc:
+        checked_at = datetime.now(_BEIJING).strftime("%Y-%m-%d %H:%M")
+        msg = f"核对未能开始（企微读取失败，非写入问题）：{exc}"
+        print(f"[T+核对] {msg}")
+        if notify:
+            alert_text = f"【{SOURCE_DOCUMENT} · T+ 物料清单核对】\n核对时间 {checked_at}\n❌ {msg}"
+            if not send_feishu_alert(alert_text):
+                print("[T+核对] 飞书告警未送达。")
+        return 1
+
     checked_at = datetime.now(_BEIJING).strftime("%Y-%m-%d %H:%M")
     result = plan_updates(records, bom, checked_at)
     result.created_fields = created
+    creates = plan_creates(records, bom, checked_at)
+    result.created_rows = [item["values"][F_PARENT_CODE][0]["text"] for item in creates]
 
     print(
         f"[T+核对] 共 {result.total} 行 / 有编码 {result.with_code} / 一致 {result.ok} / "
-        f"改名 {len(result.renamed)} / 失联 {len(result.missing)} / 无编码 {result.no_code}"
+        f"改名 {len(result.renamed)} / 失联 {len(result.missing)} / 无编码 {result.no_code} / "
+        f"待补建 {len(result.created_rows)}"
     )
     for code, model in result.missing:
         print(f"[T+核对] 失联 {code}｜{model}")
 
     if dry_run:
-        print("[T+核对] dry-run，未写入。")
+        for code in result.created_rows[:50]:
+            print(f"[T+核对] 待补建 {code}｜{bom[code][0]}")
+        print(f"[T+核对] dry-run，未写入（待补建 {len(result.created_rows)} 行）。")
         return 0
 
     for start in range(0, len(result.updates), 200):
         batch = result.updates[start:start + 200]
-        response = client._post("/wedoc/smartsheet/update_records", {
-            "docid": docid, "sheet_id": sheet_id,
-            "key_type": "CELL_VALUE_KEY_TYPE_FIELD_TITLE", "records": batch,
-        })
-        if response.get("errcode") not in (0, None):
-            print(f"[T+核对] 写入失败 errcode={response.get('errcode')} errmsg={response.get('errmsg')}")
+        try:
+            client._post("/wedoc/smartsheet/update_records", {
+                "docid": docid, "sheet_id": sheet_id,
+                "key_type": "CELL_VALUE_KEY_TYPE_FIELD_TITLE", "records": batch,
+            })
+        except RuntimeError as exc:
+            msg = f"更新第 {start // 200 + 1} 批：{exc}"
+            print(f"[T+核对] {msg}")
+            result.write_errors.append(msg)
             result.exit_code = 1
 
-    if notify and (result.missing or result.renamed or result.created_fields):
-        send_feishu_alert(build_alert(result))
+    for start in range(0, len(creates), 200):
+        batch = creates[start:start + 200]
+        try:
+            client.add_records(docid, sheet_id, batch)
+        except RuntimeError as exc:
+            msg = f"补建第 {start // 200 + 1} 批：{exc}"
+            print(f"[T+核对] {msg}")
+            result.write_errors.append(msg)
+            result.exit_code = 1
+
+    if notify and (result.missing or result.renamed or result.created_fields or result.created_rows or result.write_errors):
+        if not send_feishu_alert(build_alert(result)):
+            print("[T+核对] 飞书告警未送达。")
+            result.exit_code = 1
     return result.exit_code
+
+
+# integration_sync_runs 有两个真实写入点，缺一都会让事件触发失灵：
+#   1) tplus-sync-worker db_sync_requests.py:finish_bom_request() —— BOM builder 提交回写，
+#      module 硬编码 'bom'。
+#   2) tplus-sync-worker sync_state.py:record_tplus_sync_run_if_configured() —— 每日 T+ 全量，
+#      由 worker_loop.py 以 module="all" 调用；这是新建物料/BOM 最常见的来源，漏掉它水位就纹丝不动。
+# status = 'success' 必须过滤：module 放宽到 'all' 后，一次部分成功的全量会让 sync_state.py 的
+# _mark_missing_records 把本批未出现的记录标 missing_since，此时再触发核对会把大量行误标「编码失联」
+# 并发一条大告警。取值不是猜的，与 backend-api recipes.py/ops.py 的既有查询惯例一致。
+_LATEST_BOM_SYNC_SQL = """
+SELECT MAX(finished_at)
+FROM integration_sync_runs
+WHERE provider = 'chanjet' AND status = 'success' AND module IN ('all', 'bom')
+"""
+
+
+def latest_bom_sync_at() -> datetime | None:
+    """T+ BOM 最近一次同步的完成时间；读不到一律返回 None（不抛，不拖垮轮询）。"""
+    try:
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(_LATEST_BOM_SYNC_SQL)
+                row = cur.fetchone()
+        return row[0] if row and row[0] else None
+    except Exception as exc:  # noqa: BLE001 - 水位读不到只是本轮不触发
+        print(f"[T+核对] 读取 BOM 同步水位失败：{exc}")
+        return None
+
+
+def run_backfill_if_bom_synced(last_seen: datetime | None) -> tuple[datetime | None, bool]:
+    """BOM 同步水位涨了就跑一次核对+补建，返回 (新水位, 是否真的跑了)。
+
+    首轮（last_seen 为 None）只记水位不跑：容器重启风暴不该反复触发，当天的兜底轮已覆盖。
+    读不到水位时保持原值——清成 None 会让下一轮把首轮逻辑再走一遍，白跑一次。
+    """
+    current = latest_bom_sync_at()
+    if current is None:
+        return last_seen, False
+    if last_seen is None or current <= last_seen:
+        return current, False
+    exit_code = run_tplus_parent_match()
+    if exit_code != 0:
+        # 水位仍然推进，不重试：失败可能是永久性的（比如某行数据被企微一直拒绝），
+        # 不推进会变成每 30s 一次飞书告警风暴。失败已经在 run_tplus_parent_match 里推过告警，
+        # 这里只把非零码留痕到 stdout，当天兜底轮会再跑一次。
+        print(f"[T+核对] 事件触发的核对未完全成功（exit_code={exit_code}），水位仍推进，等下次 BOM 同步再触发。")
+    return current, True

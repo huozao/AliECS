@@ -319,6 +319,43 @@ class WorkerLoopTests(WorkerImportTestCase):
         self.assertEqual(8 * 3600, sum(slept))
 
 
+    def test_default_consume_requests_carries_bom_watermark_across_polls(self) -> None:
+        """_default_consume_requests 的布线此前零覆盖：5 处既有 run_worker_loop 调用全部注入了
+        consume_requests，从未真正跑过默认实现里 nonlocal bom_watermark 那条线。这里不注入
+        consume_requests（走默认实现），只打桩 run_backfill_if_bom_synced 验证水位真的跨 poll
+        周期活在闭包里——第一次 poll 传 None，第二次传第一次的返回值。patch 的是
+        app.pipelines.worker_loop 模块命名空间里的名字，因为 _default_consume_requests 内部
+        都是裸名调用。"""
+        import unittest.mock as mock
+
+        from app.pipelines import worker_loop as module
+
+        watermark_calls: list[object] = []
+
+        def fake_backfill(last_seen):
+            watermark_calls.append(last_seen)
+            return (f"wm-{len(watermark_calls)}", False)
+
+        with mock.patch.object(module, "run_backfill_if_bom_synced", side_effect=fake_backfill), \
+                mock.patch.object(module, "run_pending_sync_requests", return_value=0), \
+                mock.patch.object(module, "run_pending_structure_backup_jobs", return_value=0), \
+                mock.patch.object(module, "run_write_rnd_records", return_value=0):
+            code = module.run_worker_loop(
+                full_sync=lambda: 0,
+                sleep=lambda s: None,
+                max_cycles=2,
+                schedule_reader=lambda: {
+                    "enabled": False, "interval_seconds": 60, "anchor_time": "", "pull_paused": False,
+                },
+            )
+
+        self.assertEqual(0, code)
+        self.assertGreaterEqual(len(watermark_calls), 2)
+        self.assertIsNone(watermark_calls[0])
+        for i in range(1, len(watermark_calls)):
+            self.assertEqual(watermark_calls[i], f"wm-{i}")
+
+
 class SyncScheduleTests(WorkerImportTestCase):
     def test_parse_config_rows_accepts_typed_singleton_row(self) -> None:
         from app.pipelines.sync_schedule import parse_config_rows

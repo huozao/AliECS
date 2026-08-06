@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 WORKER_ROOT = Path(__file__).resolve().parents[1] / "services" / "doc-sync-worker"
@@ -16,6 +18,45 @@ def _clear_app_modules() -> None:
 
 def _cells(text: str) -> list[dict[str, str]]:
     return [{"type": "text", "text": text}]
+
+
+class _FakeWeComClient:
+    """记录调用顺序与参数的假企微客户端，供编排测试打桩用。"""
+
+    def __init__(self, api_error_cls, records=None, fail_add_batches=None):
+        self.api_error_cls = api_error_cls
+        self.records = records or []
+        self.fail_add_batches = set(fail_add_batches or [])
+        self.calls: list[str] = []
+        self.add_records_batches: list[list] = []
+        self.update_records_batches: list[list] = []
+
+    def get_fields(self, docid, sheet_id):
+        self.calls.append("get_fields")
+        return {"fields": [{"field_title": name} for name in ("父件名称", "T+匹配状态", "T+核对时间")]}
+
+    def add_fields(self, docid, sheet_id, fields):
+        self.calls.append("add_fields")
+
+    def get_records(self, docid, sheet_id):
+        self.calls.append("get_records")
+        return {"records": self.records}
+
+    def _post(self, path, payload):
+        self.calls.append("_post")
+        self.update_records_batches.append(payload.get("records") or [])
+        return {"errcode": 0}
+
+    def add_records(self, docid, sheet_id, records):
+        self.calls.append("add_records")
+        batch_no = len(self.add_records_batches) + 1
+        self.add_records_batches.append(records)
+        if batch_no in self.fail_add_batches:
+            raise self.api_error_cls(
+                "/wedoc/smartsheet/add_records",
+                {"errcode": 301031, "errmsg": "boom"},
+            )
+        return {"errcode": 0}
 
 
 class TplusParentMatchTests(unittest.TestCase):
@@ -35,6 +76,31 @@ class TplusParentMatchTests(unittest.TestCase):
 
     def _plan(self, records, bom):
         return self.module.plan_updates(records, bom, "2026-08-04 03:00")
+
+    def _creates(self, records, bom):
+        return self.module.plan_creates(records, bom, "2026-08-06 03:00")
+
+    def _patch_run(self, *, bom, records, fail_add_batches=None):
+        """打桩 run_tplus_parent_match 的外部依赖（凭据/数据源/DB/企微客户端/飞书推送）。
+
+        注意：patch 的是 app.pipelines.tplus_parent_match 模块命名空间里的名字，
+        因为 run_tplus_parent_match 内部都是裸名调用，在模块全局里查找。
+        """
+        fake_client = _FakeWeComClient(self.module.WeComApiError, records=records, fail_add_batches=fail_add_batches)
+        credential = SimpleNamespace(corpid="c", secret="s")
+
+        patchers = [
+            patch.object(self.module, "wecom_credentials", return_value=[credential]),
+            patch.object(self.module, "resolve_source", return_value=("doc1", "sheet1")),
+            patch.object(self.module, "load_active_bom", return_value=bom),
+            patch.object(self.module, "WeComSmartsheetClient", return_value=fake_client),
+            patch.object(self.module, "send_feishu_alert"),
+        ]
+        mocks = [p.start() for p in patchers]
+        for p in patchers:
+            self.addCleanup(p.stop)
+        mock_send_feishu_alert = mocks[-1]
+        return fake_client, mock_send_feishu_alert
 
     def test_matched_row_fills_parent_name_from_tplus(self) -> None:
         records = [{"record_id": "r1", "values": {"父件编码": _cells("40000019"), "型号": _cells("0539-ABS耐候玄武灰")}}]
@@ -69,11 +135,50 @@ class TplusParentMatchTests(unittest.TestCase):
         self.assertEqual(result.missing, [])
         self.assertEqual(result.updates[0]["values"]["T+匹配状态"], _cells("无父件编码"))
 
-    def test_unchanged_row_only_refreshes_checked_at(self) -> None:
+    def test_unchanged_row_produces_no_write_at_all(self) -> None:
+        """全表每天重写核对时间，在补建后会变成上千行的无效写入。"""
         records = [{"record_id": "r1", "values": {
             "父件编码": _cells("40000019"), "父件名称": _cells("已经对了"), "T+匹配状态": _cells("一致")}}]
         result = self._plan(records, {"40000019": ("已经对了", "v1")})
-        self.assertEqual(list(result.updates[0]["values"]), ["T+核对时间"])
+        self.assertEqual(result.updates, [])
+        self.assertEqual(result.ok, 1)
+
+    def test_changed_row_still_carries_the_checked_at_stamp(self) -> None:
+        records = [{"record_id": "r1", "values": {
+            "父件编码": _cells("40000019"), "父件名称": _cells("旧名"), "T+匹配状态": _cells("一致")}}]
+        result = self._plan(records, {"40000019": ("新名", "v1")})
+        self.assertEqual(result.updates[0]["values"]["T+核对时间"], _cells("2026-08-04 03:00"))
+        self.assertEqual(result.updates[0]["values"]["父件名称"], _cells("新名"))
+
+    def test_creates_rows_for_bom_codes_absent_from_the_sheet(self) -> None:
+        records = [{"record_id": "r1", "values": {"父件编码": _cells("A")}}]
+        creates = self._creates(records, {"A": ("甲", "v1"), "B": ("乙", "v2")})
+        self.assertEqual(len(creates), 1)
+        self.assertEqual(creates[0]["values"]["父件编码"], _cells("B"))
+        self.assertEqual(creates[0]["values"]["父件名称"], _cells("乙"))
+        self.assertEqual(creates[0]["values"]["T+匹配状态"], _cells("一致"))
+        self.assertEqual(creates[0]["values"]["T+核对时间"], _cells("2026-08-06 03:00"))
+
+    def test_created_rows_leave_model_and_standard_columns_empty(self) -> None:
+        """型号留空是人工筛选待补标准行的唯一依据，不能顺手填上。"""
+        creates = self._creates([], {"B": ("乙", "v2")})
+        self.assertEqual(set(creates[0]["values"]), {"父件编码", "父件名称", "T+匹配状态", "T+核对时间"})
+
+    def test_creates_nothing_when_every_bom_code_already_has_a_row(self) -> None:
+        records = [{"record_id": "r1", "values": {"父件编码": _cells("A")}}]
+        self.assertEqual(self._creates(records, {"A": ("甲", "v1")}), [])
+
+    def test_blank_code_rows_do_not_suppress_creation(self) -> None:
+        """表里有一行只填了型号没填编码，不能因此认为 T+ 的编码已存在。"""
+        records = [{"record_id": "r1", "values": {"型号": _cells("只有型号")}}]
+        creates = self._creates(records, {"A": ("甲", "v1")})
+        self.assertEqual(len(creates), 1)
+        self.assertEqual(creates[0]["values"]["父件编码"], _cells("A"))
+
+    def test_creates_are_sorted_by_code_for_stable_batches(self) -> None:
+        creates = self._creates([], {"C": ("丙", "v"), "A": ("甲", "v"), "B": ("乙", "v")})
+        codes = [item["values"]["父件编码"][0]["text"] for item in creates]
+        self.assertEqual(codes, ["A", "B", "C"])
 
     def test_alert_lists_missing_rows_and_says_code_untouched(self) -> None:
         records = [
@@ -92,6 +197,71 @@ class TplusParentMatchTests(unittest.TestCase):
         text = self.module.build_alert(self._plan(records, {"A": ("甲", "v1")}))
         self.assertIn("✅ 无异常。", text)
 
+    def test_alert_reports_created_rows(self) -> None:
+        result = self._plan([], {})
+        result.created_rows = ["A", "B"]
+        text = self.module.build_alert(result)
+        self.assertIn("补建 2 行", text)
+        self.assertIn("A", text)
+        self.assertNotIn("✅ 无异常。", text)
+
+    def test_dry_run_never_calls_add_records(self) -> None:
+        """dry-run 是确认补建量级的唯一手段，误写会直接把上千行灌进生产表。"""
+        import inspect
+        source = inspect.getsource(self.module.run_tplus_parent_match)
+        head, _, tail = source.partition("if dry_run:")
+        self.assertTrue(tail, "run_tplus_parent_match 必须保留 dry_run 分支")
+        self.assertNotIn("add_records", head)
+
+    def test_dry_run_makes_no_write_calls_behaviorally(self) -> None:
+        """行为断言，防止字符串检查失效——就算 add_records 被抽进辅助函数，这条仍能拦住。"""
+        records = [{"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("旧名")}}]
+        bom = {"A": ("新名", "v1"), "B": ("乙", "v2")}
+        fake_client, mock_send_feishu_alert = self._patch_run(bom=bom, records=records)
+
+        exit_code = self.module.run_tplus_parent_match(dry_run=True, notify=True)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake_client.add_records_batches, [])
+        self.assertEqual(fake_client.calls.count("_post"), 0)
+        self.assertEqual(fake_client.calls.count("get_fields"), 0)
+        mock_send_feishu_alert.assert_not_called()
+
+    def test_ensure_fields_runs_before_both_write_loops(self) -> None:
+        records = [{"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("旧名")}}]
+        bom = {"A": ("新名", "v1"), "B": ("乙", "v2")}
+        fake_client, _ = self._patch_run(bom=bom, records=records)
+
+        self.module.run_tplus_parent_match(notify=False)
+
+        self.assertIn("get_fields", fake_client.calls)
+        self.assertIn("_post", fake_client.calls)
+        self.assertIn("add_records", fake_client.calls)
+        self.assertLess(fake_client.calls.index("get_fields"), fake_client.calls.index("_post"))
+        self.assertLess(fake_client.calls.index("get_fields"), fake_client.calls.index("add_records"))
+
+    def test_notify_false_never_calls_feishu_alert(self) -> None:
+        records = [{"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("旧名")}}]
+        bom = {"A": ("新名", "v1")}
+        _, mock_send_feishu_alert = self._patch_run(bom=bom, records=records)
+
+        self.module.run_tplus_parent_match(notify=False)
+
+        mock_send_feishu_alert.assert_not_called()
+
+    def test_write_batch_error_does_not_break_remaining_batches_and_still_notifies(self) -> None:
+        """某批补建失败必须继续写剩余批次，而不是 break；且失败要能被人看到（推飞书）。"""
+        bom = {f"CODE{i:04d}": (f"NAME{i}", "v1") for i in range(250)}  # 250 行 -> add_records 拆成 2 批（200+50）
+        fake_client, mock_send_feishu_alert = self._patch_run(bom=bom, records=[], fail_add_batches={1})
+
+        exit_code = self.module.run_tplus_parent_match(notify=True)
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(len(fake_client.add_records_batches), 2, "第 1 批失败后第 2 批仍应被调用，不能 break")
+        mock_send_feishu_alert.assert_called_once()
+        alert_text = mock_send_feishu_alert.call_args[0][0]
+        self.assertIn("补建第 1 批", alert_text)
+
     def test_active_bom_query_excludes_superseded_versions(self) -> None:
         self.assertIn("missing_since IS NULL", self.module._ACTIVE_BOM_SQL)
         self.assertIn("DISTINCT ON (raw_json->>'Code')", self.module._ACTIVE_BOM_SQL)
@@ -99,6 +269,167 @@ class TplusParentMatchTests(unittest.TestCase):
     def test_managed_fields_never_include_the_parent_code(self) -> None:
         self.assertNotIn(self.module.F_PARENT_CODE, self.module.MANAGED_FIELDS)
         self.assertEqual(self.module.MANAGED_FIELDS, ("父件名称", "T+匹配状态", "T+核对时间"))
+
+    def test_bom_watermark_sql_covers_both_real_writers(self) -> None:
+        """integration_sync_runs 有两个真实写入点：module='bom'（BOM builder 回写，
+        finish_bom_request()）与 module='all'（每日 T+ 全量，record_tplus_sync_run_if_configured()）。
+        只认 'bom' 会漏掉最常见的新父件来源——直接在 T+ 建物料/BOM 走的是全量。"""
+        sql = self.module._LATEST_BOM_SYNC_SQL
+        self.assertIn("integration_sync_runs", sql)
+        self.assertIn("provider = 'chanjet'", sql)
+        self.assertIn("module IN ('all', 'bom')", sql)
+        # status 必须过滤：放开到 'all' 后，一次部分成功的全量会让未出现的记录被标 missing_since，
+        # 此时触发核对会把大量行误标「编码失联」并发一条大告警。
+        self.assertIn("status = 'success'", sql)
+
+    def test_first_poll_only_records_the_watermark(self) -> None:
+        """首轮不跑：容器重启风暴不该反复触发补建，当天的兜底轮已覆盖。"""
+        from datetime import datetime, timezone
+        stamp = datetime(2026, 8, 6, 3, 0, tzinfo=timezone.utc)
+        calls = []
+        self.module.latest_bom_sync_at = lambda: stamp
+        self.module.run_tplus_parent_match = lambda **kwargs: calls.append(kwargs) or 0
+        watermark, ran = self.module.run_backfill_if_bom_synced(None)
+        self.assertEqual(watermark, stamp)
+        self.assertFalse(ran)
+        self.assertEqual(calls, [])
+
+    def test_rising_watermark_triggers_one_backfill(self) -> None:
+        from datetime import datetime, timedelta, timezone
+        old = datetime(2026, 8, 6, 3, 0, tzinfo=timezone.utc)
+        new = old + timedelta(minutes=5)
+        calls = []
+        self.module.latest_bom_sync_at = lambda: new
+        self.module.run_tplus_parent_match = lambda **kwargs: calls.append(kwargs) or 0
+        watermark, ran = self.module.run_backfill_if_bom_synced(old)
+        self.assertEqual(watermark, new)
+        self.assertTrue(ran)
+        self.assertEqual(len(calls), 1)
+
+    def test_flat_watermark_does_not_retrigger(self) -> None:
+        from datetime import datetime, timezone
+        stamp = datetime(2026, 8, 6, 3, 0, tzinfo=timezone.utc)
+        calls = []
+        self.module.latest_bom_sync_at = lambda: stamp
+        self.module.run_tplus_parent_match = lambda **kwargs: calls.append(kwargs) or 0
+        watermark, ran = self.module.run_backfill_if_bom_synced(stamp)
+        self.assertEqual(watermark, stamp)
+        self.assertFalse(ran)
+        self.assertEqual(calls, [])
+
+    def test_unreadable_watermark_keeps_the_old_one_and_does_not_run(self) -> None:
+        """DB 读不到时保持原水位：清成 None 会让下一轮把首轮逻辑再走一遍，白跑一次。"""
+        from datetime import datetime, timezone
+        stamp = datetime(2026, 8, 6, 3, 0, tzinfo=timezone.utc)
+        calls = []
+        self.module.latest_bom_sync_at = lambda: None
+        self.module.run_tplus_parent_match = lambda **kwargs: calls.append(kwargs) or 0
+        watermark, ran = self.module.run_backfill_if_bom_synced(stamp)
+        self.assertEqual(watermark, stamp)
+        self.assertFalse(ran)
+        self.assertEqual(calls, [])
+
+    def test_wecom_read_failure_before_writes_notifies_and_returns_error(self) -> None:
+        """resolve_source() 等读侧步骤整轮故障（token 失效/权限收回/网络不通）必须能被人看到，
+        不能直接冒泡跳过 notify——那样飞书一条告警都没有，只剩容器 stdout。"""
+        credential = SimpleNamespace(corpid="c", secret="s")
+        with patch.object(self.module, "wecom_credentials", return_value=[credential]), \
+                patch.object(self.module, "resolve_source", side_effect=RuntimeError("企微 token 失效")) as mock_resolve, \
+                patch.object(self.module, "send_feishu_alert") as mock_send:
+            exit_code = self.module.run_tplus_parent_match(notify=True)
+
+        mock_resolve.assert_called_once()
+        self.assertEqual(exit_code, 1)
+        mock_send.assert_called_once()
+        alert_text = mock_send.call_args[0][0]
+        self.assertIn("核对未能开始", alert_text)
+        self.assertNotIn("写入失败", alert_text)
+
+    def test_wecom_get_records_failure_notifies_and_skips_writes(self) -> None:
+        """get_records() 命中网络/权限故障时，同一层必须捕获，且不能走到写入分支。"""
+        class _FailingClient:
+            def get_fields(self, docid, sheet_id):
+                return {"fields": [{"field_title": n} for n in ("父件名称", "T+匹配状态", "T+核对时间")]}
+
+            def add_fields(self, docid, sheet_id, fields):
+                raise AssertionError("不应走到 add_fields")
+
+            def get_records(self, docid, sheet_id):
+                raise RuntimeError("connection reset")
+
+            def add_records(self, docid, sheet_id, records):
+                raise AssertionError("读侧失败后不能写入")
+
+            def _post(self, path, payload):
+                raise AssertionError("读侧失败后不能写入")
+
+        credential = SimpleNamespace(corpid="c", secret="s")
+        with patch.object(self.module, "wecom_credentials", return_value=[credential]), \
+                patch.object(self.module, "resolve_source", return_value=("doc1", "sheet1")), \
+                patch.object(self.module, "load_active_bom", return_value={"A": ("甲", "v1")}), \
+                patch.object(self.module, "WeComSmartsheetClient", return_value=_FailingClient()), \
+                patch.object(self.module, "send_feishu_alert") as mock_send:
+            exit_code = self.module.run_tplus_parent_match(notify=True)
+
+        self.assertEqual(exit_code, 1)
+        mock_send.assert_called_once()
+
+    def test_wecom_read_failure_with_notify_false_still_returns_error_but_no_alert(self) -> None:
+        credential = SimpleNamespace(corpid="c", secret="s")
+        with patch.object(self.module, "wecom_credentials", return_value=[credential]), \
+                patch.object(self.module, "resolve_source", side_effect=RuntimeError("boom")), \
+                patch.object(self.module, "send_feishu_alert") as mock_send:
+            exit_code = self.module.run_tplus_parent_match(notify=False)
+
+        self.assertEqual(exit_code, 1)
+        mock_send.assert_not_called()
+
+    def test_feishu_alert_delivery_failure_forces_nonzero_exit_code(self) -> None:
+        """send_feishu_alert() 吞异常返回 False 时，调用方不能把返回值丢掉——否则写失败+告警失败
+        同时发生时这一轮补建完全无声，要等次日兜底轮。"""
+        records = [{"record_id": "r1", "values": {"父件编码": _cells("A")}}]
+        bom = {"A": ("甲", "v1"), "B": ("乙", "v2")}  # B 触发 created_rows，进而触发 notify 分支
+        fake_client, mock_send_feishu_alert = self._patch_run(bom=bom, records=records)
+        mock_send_feishu_alert.return_value = False
+
+        exit_code = self.module.run_tplus_parent_match(notify=True)
+
+        self.assertEqual(exit_code, 1)
+        mock_send_feishu_alert.assert_called_once()
+
+    def test_backfill_advances_watermark_even_when_run_fails(self) -> None:
+        """写批次失败（exit_code!=0）不能让事件通道当天不再重试之外，也不能变成 30s 告警风暴——
+        水位仍要推进，失败可见性由 run_tplus_parent_match 自己的 notify 负责。"""
+        from datetime import datetime, timedelta, timezone
+        old = datetime(2026, 8, 6, 3, 0, tzinfo=timezone.utc)
+        new = old + timedelta(minutes=5)
+        self.module.latest_bom_sync_at = lambda: new
+        self.module.run_tplus_parent_match = lambda **kwargs: 1
+        watermark, ran = self.module.run_backfill_if_bom_synced(old)
+        self.assertEqual(watermark, new)
+        self.assertTrue(ran)
+
+    def test_write_batch_runtime_error_does_not_break_remaining_batches_and_still_notifies(self) -> None:
+        """企微客户端网络层失败抛裸 RuntimeError（非 WeComApiError），同样不能中断批次或吞掉告警。"""
+        bom = {f"CODE{i:04d}": (f"NAME{i}", "v1") for i in range(250)}  # 250 行 -> add_records 拆成 2 批（200+50）
+        fake_client, mock_send_feishu_alert = self._patch_run(bom=bom, records=[], fail_add_batches=set())
+        original_add_records = fake_client.add_records
+
+        def _add_records_raw_runtime_error(docid, sheet_id, records):
+            batch_no = len(fake_client.add_records_batches) + 1
+            if batch_no == 1:
+                fake_client.calls.append("add_records")
+                fake_client.add_records_batches.append(records)
+                raise RuntimeError("connection reset")
+            return original_add_records(docid, sheet_id, records)
+
+        fake_client.add_records = _add_records_raw_runtime_error
+
+        exit_code = self.module.run_tplus_parent_match(notify=True)
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(len(fake_client.add_records_batches), 2, "第 1 批裸 RuntimeError 后第 2 批仍应被调用，不能 break")
+        mock_send_feishu_alert.assert_called_once()
 
 
 if __name__ == "__main__":
