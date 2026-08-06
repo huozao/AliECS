@@ -176,13 +176,31 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
         self.assertIn("state.sliceEnabled?state.sliceL-50:lab[0]-50", self.html)
         self.assertIn("L*=${state.sliceL} 切面", self.html)
 
-    def test_detail_fields_control_selected_product_3d_label(self) -> None:
+    def test_detail_fields_drive_a_dom_label_layer(self) -> None:
         self.assertGreaterEqual(self.html.count('data-label-field="'), 11)
         self.assertIn("labelFields:new Set(['formula','resin','dosage'])", self.html)
-        self.assertIn("function updateSelectedLabel", self.html)
-        self.assertIn("function labelValue", self.html)
-        self.assertIn("selectedLabel.position.copy(positionFor(state.selected))", self.html)
+        self.assertIn("function rebuildLabels", self.html)
+        self.assertIn("function syncLabels", self.html)
         self.assertIn("checkbox.onchange", self.html)
+        # 标签改成 DOM 层：canvas sprite 每块要建 192×72 纹理，全量显示时会吃爆显存。
+        self.assertIn('class="label-layer"', self.html)
+        self.assertIn("el.className='point-label'", self.html)
+        self.assertNotIn("selectedLabelCanvas", self.html)
+        self.assertNotIn("function updateSelectedLabel", self.html)
+
+    def test_label_opacity_uses_cosine_fade_from_the_orbit_target(self) -> None:
+        # 余弦缓动：焦点附近与远端都平缓，过渡集中在中段，比线性自然。
+        self.assertIn("controls.getTarget(_focalV3)", self.html)
+        self.assertIn(".5-.5*Math.cos(normalized*Math.PI)", self.html)
+        self.assertIn("function labelOpacityBase", self.html)
+        self.assertIn("function labelHighlightSet", self.html)
+        # 三态：hover/选中全亮，非高亮压到 20% 以下，其余按距离淡化。
+        self.assertIn("Math.min(base,.2)", self.html)
+
+    def test_label_layer_only_repaints_when_the_camera_moved(self) -> None:
+        # camera-controls 的 update() 返回是否有相机变化，是最可靠的节流信号。
+        self.assertIn("const cameraMoved=controls.update(clock.getDelta())", self.html)
+        self.assertIn("if(cameraMoved||labelsDirty)", self.html)
 
     def test_color_math_and_gamut_warning_are_present(self) -> None:
         self.assertIn("function deltaE76", self.html)
