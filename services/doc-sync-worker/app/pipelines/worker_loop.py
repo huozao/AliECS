@@ -18,7 +18,7 @@ from app.pipelines.sync_schedule import (
     read_schedule_config,
 )
 from app.pipelines.sync_wecom_full import run_pending_sync_requests, run_sync_wecom_full
-from app.pipelines.tplus_parent_match import run_tplus_parent_match
+from app.pipelines.tplus_parent_match import run_backfill_if_bom_synced, run_tplus_parent_match
 from app.pipelines.wecom_structure_backup import (
     run_enqueue_daily_structure_backup_jobs,
     run_pending_structure_backup_jobs,
@@ -82,6 +82,9 @@ def run_worker_loop(
     else:
         pull_config = lambda: "noop"  # noqa: E731
 
+    # BOM 同步水位存进程内存即可：补建幂等，重启后首轮只记水位不跑。
+    bom_watermark: datetime | None = None
+
     def _default_full_sync() -> int:
         code = run_sync_wecom_full()
         try:
@@ -110,6 +113,7 @@ def run_worker_loop(
         return code
 
     def _default_consume_requests() -> int:
+        nonlocal bom_watermark
         code = run_pending_sync_requests(limit=10)
         backup_code = run_pending_structure_backup_jobs(limit=10)
         try:
@@ -118,6 +122,13 @@ def run_worker_loop(
                 print(f"[文档同步循环] 研发过程记录写入 {written} 条。")
         except Exception as exc:  # noqa: BLE001 - 写表失败不拖垮轮询
             print(f"[文档同步循环] 研发过程记录写入异常：{exc}")
+        # T+ BOM 同步完成后立刻补建，不必等次日兜底轮。
+        try:
+            bom_watermark, ran = run_backfill_if_bom_synced(bom_watermark)
+            if ran:
+                print("[文档同步循环] 检测到 T+ BOM 新同步，已跑一次父件核对与补建。")
+        except Exception as exc:  # noqa: BLE001 - 核对失败不拖垮轮询
+            print(f"[文档同步循环] T+ 事件触发核对异常：{exc}")
         return code or backup_code
 
     run_full = full_sync or _default_full_sync

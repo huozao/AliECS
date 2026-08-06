@@ -270,6 +270,84 @@ class TplusParentMatchTests(unittest.TestCase):
         self.assertNotIn(self.module.F_PARENT_CODE, self.module.MANAGED_FIELDS)
         self.assertEqual(self.module.MANAGED_FIELDS, ("父件名称", "T+匹配状态", "T+核对时间"))
 
+    def test_bom_watermark_sql_matches_the_only_real_writer(self) -> None:
+        """integration_sync_runs 里 BOM 记录的 provider/module 是硬编码的，写错就永远触发不了。"""
+        sql = self.module._LATEST_BOM_SYNC_SQL
+        self.assertIn("integration_sync_runs", sql)
+        self.assertIn("provider = 'chanjet'", sql)
+        self.assertIn("module = 'bom'", sql)
+        # 故意不过滤 status：取值猜错会导致水位永不上涨，而补建是幂等的，宁可多跑一次。
+        self.assertNotIn("status", sql)
+
+    def test_first_poll_only_records_the_watermark(self) -> None:
+        """首轮不跑：容器重启风暴不该反复触发补建，当天的兜底轮已覆盖。"""
+        from datetime import datetime, timezone
+        stamp = datetime(2026, 8, 6, 3, 0, tzinfo=timezone.utc)
+        calls = []
+        self.module.latest_bom_sync_at = lambda: stamp
+        self.module.run_tplus_parent_match = lambda **kwargs: calls.append(kwargs) or 0
+        watermark, ran = self.module.run_backfill_if_bom_synced(None)
+        self.assertEqual(watermark, stamp)
+        self.assertFalse(ran)
+        self.assertEqual(calls, [])
+
+    def test_rising_watermark_triggers_one_backfill(self) -> None:
+        from datetime import datetime, timedelta, timezone
+        old = datetime(2026, 8, 6, 3, 0, tzinfo=timezone.utc)
+        new = old + timedelta(minutes=5)
+        calls = []
+        self.module.latest_bom_sync_at = lambda: new
+        self.module.run_tplus_parent_match = lambda **kwargs: calls.append(kwargs) or 0
+        watermark, ran = self.module.run_backfill_if_bom_synced(old)
+        self.assertEqual(watermark, new)
+        self.assertTrue(ran)
+        self.assertEqual(len(calls), 1)
+
+    def test_flat_watermark_does_not_retrigger(self) -> None:
+        from datetime import datetime, timezone
+        stamp = datetime(2026, 8, 6, 3, 0, tzinfo=timezone.utc)
+        calls = []
+        self.module.latest_bom_sync_at = lambda: stamp
+        self.module.run_tplus_parent_match = lambda **kwargs: calls.append(kwargs) or 0
+        watermark, ran = self.module.run_backfill_if_bom_synced(stamp)
+        self.assertEqual(watermark, stamp)
+        self.assertFalse(ran)
+        self.assertEqual(calls, [])
+
+    def test_unreadable_watermark_keeps_the_old_one_and_does_not_run(self) -> None:
+        """DB 读不到时保持原水位：清成 None 会让下一轮把首轮逻辑再走一遍，白跑一次。"""
+        from datetime import datetime, timezone
+        stamp = datetime(2026, 8, 6, 3, 0, tzinfo=timezone.utc)
+        calls = []
+        self.module.latest_bom_sync_at = lambda: None
+        self.module.run_tplus_parent_match = lambda **kwargs: calls.append(kwargs) or 0
+        watermark, ran = self.module.run_backfill_if_bom_synced(stamp)
+        self.assertEqual(watermark, stamp)
+        self.assertFalse(ran)
+        self.assertEqual(calls, [])
+
+    def test_write_batch_runtime_error_does_not_break_remaining_batches_and_still_notifies(self) -> None:
+        """企微客户端网络层失败抛裸 RuntimeError（非 WeComApiError），同样不能中断批次或吞掉告警。"""
+        bom = {f"CODE{i:04d}": (f"NAME{i}", "v1") for i in range(250)}  # 250 行 -> add_records 拆成 2 批（200+50）
+        fake_client, mock_send_feishu_alert = self._patch_run(bom=bom, records=[], fail_add_batches=set())
+        original_add_records = fake_client.add_records
+
+        def _add_records_raw_runtime_error(docid, sheet_id, records):
+            batch_no = len(fake_client.add_records_batches) + 1
+            if batch_no == 1:
+                fake_client.calls.append("add_records")
+                fake_client.add_records_batches.append(records)
+                raise RuntimeError("connection reset")
+            return original_add_records(docid, sheet_id, records)
+
+        fake_client.add_records = _add_records_raw_runtime_error
+
+        exit_code = self.module.run_tplus_parent_match(notify=True)
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(len(fake_client.add_records_batches), 2, "第 1 批裸 RuntimeError 后第 2 批仍应被调用，不能 break")
+        mock_send_feishu_alert.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

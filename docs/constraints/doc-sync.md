@@ -41,3 +41,9 @@ docker compose -f local/docker-compose.local.yml config
   同时核对时间改为只在该行内容变化时才写——全量后每轮重写整表既无信息量又吃接口配额。
   首次上线务必先 `--dry-run` 看待补建行数再实跑。
   注意 `tplus_bom_records` 按版本累积，同一编码有多条历史记录，漏掉 `missing_since` 过滤会取到已作废的旧名称。
+  触发时机是**每日兜底 + 事件触发**双通道：兜底走 `run-loop` 的全量周期；事件触发在同一 loop 的
+  poll 周期（`DOC_SYNC_POLL_SECONDS`，默认 30s）里查 `integration_sync_runs` 中
+  `provider='chanjet' AND module='bom'` 的 `MAX(finished_at)`，水位上涨即跑一次核对与补建。
+  水位存 worker 进程内存，重启后首轮只记水位不跑（补建幂等，兜底轮已覆盖）。
+  该 SQL 的 provider/module 对应 tplus-sync-worker `db_sync_requests.py` 的 `finish_bom_request()`
+  硬编码值，**改那边就要同步改这里**，否则事件触发会静默失效。

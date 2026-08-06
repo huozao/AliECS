@@ -280,7 +280,7 @@ def run_tplus_parent_match(*, dry_run: bool = False, notify: bool = True) -> int
                 "docid": docid, "sheet_id": sheet_id,
                 "key_type": "CELL_VALUE_KEY_TYPE_FIELD_TITLE", "records": batch,
             })
-        except WeComApiError as exc:
+        except RuntimeError as exc:
             msg = f"更新第 {start // 200 + 1} 批：{exc}"
             print(f"[T+核对] {msg}")
             result.write_errors.append(msg)
@@ -290,7 +290,7 @@ def run_tplus_parent_match(*, dry_run: bool = False, notify: bool = True) -> int
         batch = creates[start:start + 200]
         try:
             client.add_records(docid, sheet_id, batch)
-        except WeComApiError as exc:
+        except RuntimeError as exc:
             msg = f"补建第 {start // 200 + 1} 批：{exc}"
             print(f"[T+核对] {msg}")
             result.write_errors.append(msg)
@@ -299,3 +299,41 @@ def run_tplus_parent_match(*, dry_run: bool = False, notify: bool = True) -> int
     if notify and (result.missing or result.renamed or result.created_fields or result.created_rows or result.write_errors):
         send_feishu_alert(build_alert(result))
     return result.exit_code
+
+
+# BOM 同步记录的唯一真实写入点是 tplus-sync-worker 的 finish_bom_request()，
+# 那里 provider 与 module 都是硬编码；写错这两个值会让事件触发永远不生效。
+# 故意不过滤 status：取值猜错的代价是"永不触发"，而补建幂等，多跑一次无害。
+_LATEST_BOM_SYNC_SQL = """
+SELECT MAX(finished_at)
+FROM integration_sync_runs
+WHERE provider = 'chanjet' AND module = 'bom'
+"""
+
+
+def latest_bom_sync_at() -> datetime | None:
+    """T+ BOM 最近一次同步的完成时间；读不到一律返回 None（不抛，不拖垮轮询）。"""
+    try:
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(_LATEST_BOM_SYNC_SQL)
+                row = cur.fetchone()
+        return row[0] if row and row[0] else None
+    except Exception as exc:  # noqa: BLE001 - 水位读不到只是本轮不触发
+        print(f"[T+核对] 读取 BOM 同步水位失败：{exc}")
+        return None
+
+
+def run_backfill_if_bom_synced(last_seen: datetime | None) -> tuple[datetime | None, bool]:
+    """BOM 同步水位涨了就跑一次核对+补建，返回 (新水位, 是否真的跑了)。
+
+    首轮（last_seen 为 None）只记水位不跑：容器重启风暴不该反复触发，当天的兜底轮已覆盖。
+    读不到水位时保持原值——清成 None 会让下一轮把首轮逻辑再走一遍，白跑一次。
+    """
+    current = latest_bom_sync_at()
+    if current is None:
+        return last_seen, False
+    if last_seen is None or current <= last_seen:
+        return current, False
+    run_tplus_parent_match()
+    return current, True
