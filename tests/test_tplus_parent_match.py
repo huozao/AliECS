@@ -36,6 +36,9 @@ class TplusParentMatchTests(unittest.TestCase):
     def _plan(self, records, bom):
         return self.module.plan_updates(records, bom, "2026-08-04 03:00")
 
+    def _creates(self, records, bom):
+        return self.module.plan_creates(records, bom, "2026-08-06 03:00")
+
     def test_matched_row_fills_parent_name_from_tplus(self) -> None:
         records = [{"record_id": "r1", "values": {"父件编码": _cells("40000019"), "型号": _cells("0539-ABS耐候玄武灰")}}]
         result = self._plan(records, {"40000019": ("0539-耐候ABS  玄武灰色母", "20250208")})
@@ -74,6 +77,36 @@ class TplusParentMatchTests(unittest.TestCase):
             "父件编码": _cells("40000019"), "父件名称": _cells("已经对了"), "T+匹配状态": _cells("一致")}}]
         result = self._plan(records, {"40000019": ("已经对了", "v1")})
         self.assertEqual(list(result.updates[0]["values"]), ["T+核对时间"])
+
+    def test_creates_rows_for_bom_codes_absent_from_the_sheet(self) -> None:
+        records = [{"record_id": "r1", "values": {"父件编码": _cells("A")}}]
+        creates = self._creates(records, {"A": ("甲", "v1"), "B": ("乙", "v2")})
+        self.assertEqual(len(creates), 1)
+        self.assertEqual(creates[0]["values"]["父件编码"], _cells("B"))
+        self.assertEqual(creates[0]["values"]["父件名称"], _cells("乙"))
+        self.assertEqual(creates[0]["values"]["T+匹配状态"], _cells("一致"))
+        self.assertEqual(creates[0]["values"]["T+核对时间"], _cells("2026-08-06 03:00"))
+
+    def test_created_rows_leave_model_and_standard_columns_empty(self) -> None:
+        """型号留空是人工筛选待补标准行的唯一依据，不能顺手填上。"""
+        creates = self._creates([], {"B": ("乙", "v2")})
+        self.assertEqual(set(creates[0]["values"]), {"父件编码", "父件名称", "T+匹配状态", "T+核对时间"})
+
+    def test_creates_nothing_when_every_bom_code_already_has_a_row(self) -> None:
+        records = [{"record_id": "r1", "values": {"父件编码": _cells("A")}}]
+        self.assertEqual(self._creates(records, {"A": ("甲", "v1")}), [])
+
+    def test_blank_code_rows_do_not_suppress_creation(self) -> None:
+        """表里有一行只填了型号没填编码，不能因此认为 T+ 的编码已存在。"""
+        records = [{"record_id": "r1", "values": {"型号": _cells("只有型号")}}]
+        creates = self._creates(records, {"A": ("甲", "v1")})
+        self.assertEqual(len(creates), 1)
+        self.assertEqual(creates[0]["values"]["父件编码"], _cells("A"))
+
+    def test_creates_are_sorted_by_code_for_stable_batches(self) -> None:
+        creates = self._creates([], {"C": ("丙", "v"), "A": ("甲", "v"), "B": ("乙", "v")})
+        codes = [item["values"]["父件编码"][0]["text"] for item in creates]
+        self.assertEqual(codes, ["A", "B", "C"])
 
     def test_alert_lists_missing_rows_and_says_code_untouched(self) -> None:
         records = [

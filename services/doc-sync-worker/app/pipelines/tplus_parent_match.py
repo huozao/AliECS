@@ -156,6 +156,25 @@ def plan_updates(records: list[dict[str, Any]], bom: dict[str, tuple[str, str]],
     return result
 
 
+def plan_creates(records: list[dict[str, Any]], bom: dict[str, tuple[str, str]], checked_at: str) -> list[dict[str, Any]]:
+    """T+ 有、企微表没有的父件，补一行只带编码与名称的空白标准行。
+
+    「型号」及 Lab/容差列一律留空——人工按「型号为空」筛出待补标准的行。
+    编码排序是为了批次稳定，便于失败时按批重跑。
+    """
+    existing = {cell_text(record.get("values") or {}, F_PARENT_CODE) for record in records}
+    existing.discard("")
+    return [
+        {"values": {
+            F_PARENT_CODE: text_cell(code),
+            F_PARENT_NAME: text_cell(bom[code][0]),
+            F_MATCH_STATUS: text_cell(STATUS_OK),
+            F_CHECKED_AT: text_cell(checked_at),
+        }}
+        for code in sorted(set(bom) - existing)
+    ]
+
+
 def build_alert(result: MatchResult) -> str:
     lines = [
         f"【{SOURCE_DOCUMENT} · T+ 物料清单核对】",
