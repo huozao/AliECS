@@ -134,6 +134,22 @@ class TplusParentMatchTests(unittest.TestCase):
         text = self.module.build_alert(self._plan(records, {"A": ("甲", "v1")}))
         self.assertIn("✅ 无异常。", text)
 
+    def test_alert_reports_created_rows(self) -> None:
+        result = self._plan([], {})
+        result.created_rows = ["A", "B"]
+        text = self.module.build_alert(result)
+        self.assertIn("补建 2 行", text)
+        self.assertIn("A", text)
+        self.assertNotIn("✅ 无异常。", text)
+
+    def test_dry_run_never_calls_add_records(self) -> None:
+        """dry-run 是确认补建量级的唯一手段，误写会直接把上千行灌进生产表。"""
+        import inspect
+        source = inspect.getsource(self.module.run_tplus_parent_match)
+        head, _, tail = source.partition("if dry_run:")
+        self.assertTrue(tail, "run_tplus_parent_match 必须保留 dry_run 分支")
+        self.assertNotIn("add_records", head)
+
     def test_active_bom_query_excludes_superseded_versions(self) -> None:
         self.assertIn("missing_since IS NULL", self.module._ACTIVE_BOM_SQL)
         self.assertIn("DISTINCT ON (raw_json->>'Code')", self.module._ACTIVE_BOM_SQL)

@@ -69,6 +69,7 @@ class MatchResult:
     no_code: int = 0
     updates: list[dict[str, Any]] = field(default_factory=list)
     created_fields: list[str] = field(default_factory=list)
+    created_rows: list[str] = field(default_factory=list)
     exit_code: int = 0
 
 
@@ -196,7 +197,13 @@ def build_alert(result: MatchResult) -> str:
             lines.append(f"  {code}｜{model or '-'}")
         if len(result.missing) > 20:
             lines.append(f"  …另有 {len(result.missing) - 20} 行")
-    if not result.renamed and not result.missing:
+    if result.created_rows:
+        lines.append(f"🆕 按 T+ 补建 {len(result.created_rows)} 行（仅编码与名称，标准待人工补）：")
+        for code in result.created_rows[:20]:
+            lines.append(f"  {code}")
+        if len(result.created_rows) > 20:
+            lines.append(f"  …另有 {len(result.created_rows) - 20} 行")
+    if not result.renamed and not result.missing and not result.created_rows:
         lines.append("✅ 无异常。")
     return "\n".join(lines)
 
@@ -242,16 +249,21 @@ def run_tplus_parent_match(*, dry_run: bool = False, notify: bool = True) -> int
     checked_at = datetime.now(_BEIJING).strftime("%Y-%m-%d %H:%M")
     result = plan_updates(records, bom, checked_at)
     result.created_fields = created
+    creates = plan_creates(records, bom, checked_at)
+    result.created_rows = [item["values"][F_PARENT_CODE][0]["text"] for item in creates]
 
     print(
         f"[T+核对] 共 {result.total} 行 / 有编码 {result.with_code} / 一致 {result.ok} / "
-        f"改名 {len(result.renamed)} / 失联 {len(result.missing)} / 无编码 {result.no_code}"
+        f"改名 {len(result.renamed)} / 失联 {len(result.missing)} / 无编码 {result.no_code} / "
+        f"待补建 {len(result.created_rows)}"
     )
     for code, model in result.missing:
         print(f"[T+核对] 失联 {code}｜{model}")
 
     if dry_run:
-        print("[T+核对] dry-run，未写入。")
+        for code in result.created_rows[:50]:
+            print(f"[T+核对] 待补建 {code}｜{bom[code][0]}")
+        print(f"[T+核对] dry-run，未写入（待补建 {len(result.created_rows)} 行）。")
         return 0
 
     for start in range(0, len(result.updates), 200):
@@ -264,6 +276,13 @@ def run_tplus_parent_match(*, dry_run: bool = False, notify: bool = True) -> int
             print(f"[T+核对] 写入失败 errcode={response.get('errcode')} errmsg={response.get('errmsg')}")
             result.exit_code = 1
 
-    if notify and (result.missing or result.renamed or result.created_fields):
+    for start in range(0, len(creates), 200):
+        batch = creates[start:start + 200]
+        response = client.add_records(docid, sheet_id, batch)
+        if response.get("errcode") not in (0, None):
+            print(f"[T+核对] 补建失败 errcode={response.get('errcode')} errmsg={response.get('errmsg')}")
+            result.exit_code = 1
+
+    if notify and (result.missing or result.renamed or result.created_fields or result.created_rows):
         send_feishu_alert(build_alert(result))
     return result.exit_code
