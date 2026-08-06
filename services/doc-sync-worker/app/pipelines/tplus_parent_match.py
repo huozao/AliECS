@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.providers.feishu import FeishuBitableClient, credentials_for_profile as feishu_credentials
-from app.providers.wecom import WeComSmartsheetClient, credentials_for_profile as wecom_credentials
+from app.providers.wecom import WeComApiError, WeComSmartsheetClient, credentials_for_profile as wecom_credentials
 from app.storage.postgres import connect
 
 
@@ -70,6 +70,7 @@ class MatchResult:
     updates: list[dict[str, Any]] = field(default_factory=list)
     created_fields: list[str] = field(default_factory=list)
     created_rows: list[str] = field(default_factory=list)
+    write_errors: list[str] = field(default_factory=list)
     exit_code: int = 0
 
 
@@ -203,7 +204,13 @@ def build_alert(result: MatchResult) -> str:
             lines.append(f"  {code}")
         if len(result.created_rows) > 20:
             lines.append(f"  …另有 {len(result.created_rows) - 20} 行")
-    if not result.renamed and not result.missing and not result.created_rows:
+    if result.write_errors:
+        lines.append(f"❌ 写入失败 {len(result.write_errors)} 批：")
+        for msg in result.write_errors[:10]:
+            lines.append(f"  {msg}")
+        if len(result.write_errors) > 10:
+            lines.append(f"  …另有 {len(result.write_errors) - 10} 批")
+    if not result.renamed and not result.missing and not result.created_rows and not result.write_errors:
         lines.append("✅ 无异常。")
     return "\n".join(lines)
 
@@ -268,21 +275,27 @@ def run_tplus_parent_match(*, dry_run: bool = False, notify: bool = True) -> int
 
     for start in range(0, len(result.updates), 200):
         batch = result.updates[start:start + 200]
-        response = client._post("/wedoc/smartsheet/update_records", {
-            "docid": docid, "sheet_id": sheet_id,
-            "key_type": "CELL_VALUE_KEY_TYPE_FIELD_TITLE", "records": batch,
-        })
-        if response.get("errcode") not in (0, None):
-            print(f"[T+核对] 写入失败 errcode={response.get('errcode')} errmsg={response.get('errmsg')}")
+        try:
+            client._post("/wedoc/smartsheet/update_records", {
+                "docid": docid, "sheet_id": sheet_id,
+                "key_type": "CELL_VALUE_KEY_TYPE_FIELD_TITLE", "records": batch,
+            })
+        except WeComApiError as exc:
+            msg = f"更新第 {start // 200 + 1} 批：{exc}"
+            print(f"[T+核对] {msg}")
+            result.write_errors.append(msg)
             result.exit_code = 1
 
     for start in range(0, len(creates), 200):
         batch = creates[start:start + 200]
-        response = client.add_records(docid, sheet_id, batch)
-        if response.get("errcode") not in (0, None):
-            print(f"[T+核对] 补建失败 errcode={response.get('errcode')} errmsg={response.get('errmsg')}")
+        try:
+            client.add_records(docid, sheet_id, batch)
+        except WeComApiError as exc:
+            msg = f"补建第 {start // 200 + 1} 批：{exc}"
+            print(f"[T+核对] {msg}")
+            result.write_errors.append(msg)
             result.exit_code = 1
 
-    if notify and (result.missing or result.renamed or result.created_fields or result.created_rows):
+    if notify and (result.missing or result.renamed or result.created_fields or result.created_rows or result.write_errors):
         send_feishu_alert(build_alert(result))
     return result.exit_code
