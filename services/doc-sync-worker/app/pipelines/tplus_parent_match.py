@@ -244,15 +244,29 @@ def run_tplus_parent_match(*, dry_run: bool = False, notify: bool = True) -> int
     if not creds:
         print(f"[T+核对] 企微 profile {SOURCE_PROFILE} 无凭据，跳过。")
         return 0
-    docid, sheet_id = resolve_source()
-    client = WeComSmartsheetClient(creds[0].corpid, creds[0].secret)
-    bom = load_active_bom()
-    if not bom:
-        print("[T+核对] tplus_bom_records 没有当前有效记录，跳过（避免把整表标成失联）。")
-        return 0
 
-    created = [] if dry_run else ensure_fields(client, docid, sheet_id)
-    records = list(client.get_records(docid, sheet_id).get("records") or [])
+    try:
+        # 企微读侧整轮故障（corpsecret 轮换/应用权限被收回/token 失效/网络不通）最常命中这几步；
+        # resolve_source() 拿不到已同步的源时也抛 RuntimeError，同一层捕获。不捕获就直接冒泡，
+        # 跳过下面的 notify 分支——飞书一条告警都没有，只剩容器 stdout；事件通道还会每 poll 周期重试。
+        docid, sheet_id = resolve_source()
+        client = WeComSmartsheetClient(creds[0].corpid, creds[0].secret)
+        bom = load_active_bom()
+        if not bom:
+            print("[T+核对] tplus_bom_records 没有当前有效记录，跳过（避免把整表标成失联）。")
+            return 0
+        created = [] if dry_run else ensure_fields(client, docid, sheet_id)
+        records = list(client.get_records(docid, sheet_id).get("records") or [])
+    except RuntimeError as exc:
+        checked_at = datetime.now(_BEIJING).strftime("%Y-%m-%d %H:%M")
+        msg = f"核对未能开始（企微读取失败，非写入问题）：{exc}"
+        print(f"[T+核对] {msg}")
+        if notify:
+            alert_text = f"【{SOURCE_DOCUMENT} · T+ 物料清单核对】\n核对时间 {checked_at}\n❌ {msg}"
+            if not send_feishu_alert(alert_text):
+                print("[T+核对] 飞书告警未送达。")
+        return 1
+
     checked_at = datetime.now(_BEIJING).strftime("%Y-%m-%d %H:%M")
     result = plan_updates(records, bom, checked_at)
     result.created_fields = created
@@ -297,17 +311,24 @@ def run_tplus_parent_match(*, dry_run: bool = False, notify: bool = True) -> int
             result.exit_code = 1
 
     if notify and (result.missing or result.renamed or result.created_fields or result.created_rows or result.write_errors):
-        send_feishu_alert(build_alert(result))
+        if not send_feishu_alert(build_alert(result)):
+            print("[T+核对] 飞书告警未送达。")
+            result.exit_code = 1
     return result.exit_code
 
 
-# BOM 同步记录的唯一真实写入点是 tplus-sync-worker 的 finish_bom_request()，
-# 那里 provider 与 module 都是硬编码；写错这两个值会让事件触发永远不生效。
-# 故意不过滤 status：取值猜错的代价是"永不触发"，而补建幂等，多跑一次无害。
+# integration_sync_runs 有两个真实写入点，缺一都会让事件触发失灵：
+#   1) tplus-sync-worker db_sync_requests.py:finish_bom_request() —— BOM builder 提交回写，
+#      module 硬编码 'bom'。
+#   2) tplus-sync-worker sync_state.py:record_tplus_sync_run_if_configured() —— 每日 T+ 全量，
+#      由 worker_loop.py 以 module="all" 调用；这是新建物料/BOM 最常见的来源，漏掉它水位就纹丝不动。
+# status = 'success' 必须过滤：module 放宽到 'all' 后，一次部分成功的全量会让 sync_state.py 的
+# _mark_missing_records 把本批未出现的记录标 missing_since，此时再触发核对会把大量行误标「编码失联」
+# 并发一条大告警。取值不是猜的，与 backend-api recipes.py/ops.py 的既有查询惯例一致。
 _LATEST_BOM_SYNC_SQL = """
 SELECT MAX(finished_at)
 FROM integration_sync_runs
-WHERE provider = 'chanjet' AND module = 'bom'
+WHERE provider = 'chanjet' AND status = 'success' AND module IN ('all', 'bom')
 """
 
 
@@ -335,5 +356,10 @@ def run_backfill_if_bom_synced(last_seen: datetime | None) -> tuple[datetime | N
         return last_seen, False
     if last_seen is None or current <= last_seen:
         return current, False
-    run_tplus_parent_match()
+    exit_code = run_tplus_parent_match()
+    if exit_code != 0:
+        # 水位仍然推进，不重试：失败可能是永久性的（比如某行数据被企微一直拒绝），
+        # 不推进会变成每 30s 一次飞书告警风暴。失败已经在 run_tplus_parent_match 里推过告警，
+        # 这里只把非零码留痕到 stdout，当天兜底轮会再跑一次。
+        print(f"[T+核对] 事件触发的核对未完全成功（exit_code={exit_code}），水位仍推进，等下次 BOM 同步再触发。")
     return current, True

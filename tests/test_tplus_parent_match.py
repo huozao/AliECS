@@ -270,14 +270,17 @@ class TplusParentMatchTests(unittest.TestCase):
         self.assertNotIn(self.module.F_PARENT_CODE, self.module.MANAGED_FIELDS)
         self.assertEqual(self.module.MANAGED_FIELDS, ("父件名称", "T+匹配状态", "T+核对时间"))
 
-    def test_bom_watermark_sql_matches_the_only_real_writer(self) -> None:
-        """integration_sync_runs 里 BOM 记录的 provider/module 是硬编码的，写错就永远触发不了。"""
+    def test_bom_watermark_sql_covers_both_real_writers(self) -> None:
+        """integration_sync_runs 有两个真实写入点：module='bom'（BOM builder 回写，
+        finish_bom_request()）与 module='all'（每日 T+ 全量，record_tplus_sync_run_if_configured()）。
+        只认 'bom' 会漏掉最常见的新父件来源——直接在 T+ 建物料/BOM 走的是全量。"""
         sql = self.module._LATEST_BOM_SYNC_SQL
         self.assertIn("integration_sync_runs", sql)
         self.assertIn("provider = 'chanjet'", sql)
-        self.assertIn("module = 'bom'", sql)
-        # 故意不过滤 status：取值猜错会导致水位永不上涨，而补建是幂等的，宁可多跑一次。
-        self.assertNotIn("status", sql)
+        self.assertIn("module IN ('all', 'bom')", sql)
+        # status 必须过滤：放开到 'all' 后，一次部分成功的全量会让未出现的记录被标 missing_since，
+        # 此时触发核对会把大量行误标「编码失联」并发一条大告警。
+        self.assertIn("status = 'success'", sql)
 
     def test_first_poll_only_records_the_watermark(self) -> None:
         """首轮不跑：容器重启风暴不该反复触发补建，当天的兜底轮已覆盖。"""
@@ -325,6 +328,86 @@ class TplusParentMatchTests(unittest.TestCase):
         self.assertEqual(watermark, stamp)
         self.assertFalse(ran)
         self.assertEqual(calls, [])
+
+    def test_wecom_read_failure_before_writes_notifies_and_returns_error(self) -> None:
+        """resolve_source() 等读侧步骤整轮故障（token 失效/权限收回/网络不通）必须能被人看到，
+        不能直接冒泡跳过 notify——那样飞书一条告警都没有，只剩容器 stdout。"""
+        credential = SimpleNamespace(corpid="c", secret="s")
+        with patch.object(self.module, "wecom_credentials", return_value=[credential]), \
+                patch.object(self.module, "resolve_source", side_effect=RuntimeError("企微 token 失效")) as mock_resolve, \
+                patch.object(self.module, "send_feishu_alert") as mock_send:
+            exit_code = self.module.run_tplus_parent_match(notify=True)
+
+        mock_resolve.assert_called_once()
+        self.assertEqual(exit_code, 1)
+        mock_send.assert_called_once()
+        alert_text = mock_send.call_args[0][0]
+        self.assertIn("核对未能开始", alert_text)
+        self.assertNotIn("写入失败", alert_text)
+
+    def test_wecom_get_records_failure_notifies_and_skips_writes(self) -> None:
+        """get_records() 命中网络/权限故障时，同一层必须捕获，且不能走到写入分支。"""
+        class _FailingClient:
+            def get_fields(self, docid, sheet_id):
+                return {"fields": [{"field_title": n} for n in ("父件名称", "T+匹配状态", "T+核对时间")]}
+
+            def add_fields(self, docid, sheet_id, fields):
+                raise AssertionError("不应走到 add_fields")
+
+            def get_records(self, docid, sheet_id):
+                raise RuntimeError("connection reset")
+
+            def add_records(self, docid, sheet_id, records):
+                raise AssertionError("读侧失败后不能写入")
+
+            def _post(self, path, payload):
+                raise AssertionError("读侧失败后不能写入")
+
+        credential = SimpleNamespace(corpid="c", secret="s")
+        with patch.object(self.module, "wecom_credentials", return_value=[credential]), \
+                patch.object(self.module, "resolve_source", return_value=("doc1", "sheet1")), \
+                patch.object(self.module, "load_active_bom", return_value={"A": ("甲", "v1")}), \
+                patch.object(self.module, "WeComSmartsheetClient", return_value=_FailingClient()), \
+                patch.object(self.module, "send_feishu_alert") as mock_send:
+            exit_code = self.module.run_tplus_parent_match(notify=True)
+
+        self.assertEqual(exit_code, 1)
+        mock_send.assert_called_once()
+
+    def test_wecom_read_failure_with_notify_false_still_returns_error_but_no_alert(self) -> None:
+        credential = SimpleNamespace(corpid="c", secret="s")
+        with patch.object(self.module, "wecom_credentials", return_value=[credential]), \
+                patch.object(self.module, "resolve_source", side_effect=RuntimeError("boom")), \
+                patch.object(self.module, "send_feishu_alert") as mock_send:
+            exit_code = self.module.run_tplus_parent_match(notify=False)
+
+        self.assertEqual(exit_code, 1)
+        mock_send.assert_not_called()
+
+    def test_feishu_alert_delivery_failure_forces_nonzero_exit_code(self) -> None:
+        """send_feishu_alert() 吞异常返回 False 时，调用方不能把返回值丢掉——否则写失败+告警失败
+        同时发生时这一轮补建完全无声，要等次日兜底轮。"""
+        records = [{"record_id": "r1", "values": {"父件编码": _cells("A")}}]
+        bom = {"A": ("甲", "v1"), "B": ("乙", "v2")}  # B 触发 created_rows，进而触发 notify 分支
+        fake_client, mock_send_feishu_alert = self._patch_run(bom=bom, records=records)
+        mock_send_feishu_alert.return_value = False
+
+        exit_code = self.module.run_tplus_parent_match(notify=True)
+
+        self.assertEqual(exit_code, 1)
+        mock_send_feishu_alert.assert_called_once()
+
+    def test_backfill_advances_watermark_even_when_run_fails(self) -> None:
+        """写批次失败（exit_code!=0）不能让事件通道当天不再重试之外，也不能变成 30s 告警风暴——
+        水位仍要推进，失败可见性由 run_tplus_parent_match 自己的 notify 负责。"""
+        from datetime import datetime, timedelta, timezone
+        old = datetime(2026, 8, 6, 3, 0, tzinfo=timezone.utc)
+        new = old + timedelta(minutes=5)
+        self.module.latest_bom_sync_at = lambda: new
+        self.module.run_tplus_parent_match = lambda **kwargs: 1
+        watermark, ran = self.module.run_backfill_if_bom_synced(old)
+        self.assertEqual(watermark, new)
+        self.assertTrue(ran)
 
     def test_write_batch_runtime_error_does_not_break_remaining_batches_and_still_notifies(self) -> None:
         """企微客户端网络层失败抛裸 RuntimeError（非 WeComApiError），同样不能中断批次或吞掉告警。"""
