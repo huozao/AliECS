@@ -302,14 +302,13 @@
   // 余弦缓动淡化：焦点取 camera-controls 的 orbit target，
   // focusSelected / fitToBox 之后它正好是用户的关注点。
   function labelOpacityBase(worldPos){
-    controls.getTarget(_focalV3);
     const normalized=Math.min(worldPos.distanceTo(_focalV3),state.labelFocal)/state.labelFocal;
     return 1-(.5-.5*Math.cos(normalized*Math.PI));
   }
   // Task 9 会把重叠型号填进来；返回 null 表示「无高亮集」，此时不压暗任何点。
   function labelHighlightSet(){return null;}
   function labelTargets(){
-    if(!state.labelFields.size)return[];
+    if(!state.showProducts||!state.labelFields.size)return[];
     if(state.showAllLabels)return state.points;
     return state.selected?state.points.filter((item)=>item.id===state.selected.id):[];
   }
@@ -325,6 +324,7 @@
   }
   function syncLabels(){
     if(!labelEntries.length)return;
+    controls.getTarget(_focalV3);
     const width=labelLayer.clientWidth,height=labelLayer.clientHeight,highlight=labelHighlightSet();
     for(const {item,el} of labelEntries){
       const worldPos=positionFor(item);

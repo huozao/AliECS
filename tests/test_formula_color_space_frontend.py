@@ -188,6 +188,10 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
         self.assertNotIn("selectedLabelCanvas", self.html)
         self.assertNotIn("function updateSelectedLabel", self.html)
 
+    def test_label_targets_hide_with_product_points(self) -> None:
+        # 隐藏标准色点后其 DOM 标签也必须一起消失，否则会追着一个隐形的点漂浮。
+        self.assertIn("if(!state.showProducts||!state.labelFields.size)return[]", self.html)
+
     def test_label_opacity_uses_cosine_fade_from_the_orbit_target(self) -> None:
         # 余弦缓动：焦点附近与远端都平缓，过渡集中在中段，比线性自然。
         self.assertIn("controls.getTarget(_focalV3)", self.html)
