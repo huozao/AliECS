@@ -54,6 +54,10 @@
             <label>切面 L* <span id="sliceLValue">50</span><input id="sliceL" type="range" min="0" max="100" step="1" value="50" disabled/></label>
             <span id="deviceGamut" class="device-gamut"></span>
           </div>
+          <div class="reference-controls" aria-label="标签显示设置">
+            <label class="slice-switch"><input id="toggleAllLabels" type="checkbox"/>全部显示标签</label>
+            <label>淡化距离 <span id="labelFocalValue">12</span><input id="labelFocal" type="range" min="2" max="60" step="1" value="12"/></label>
+          </div>
         </div>
       </details>
       <div id="labelLayer" class="label-layer"></div>
@@ -606,6 +610,8 @@
   $('toleranceMagnify').onchange=(event)=>{state.toleranceMagnify=Number(event.target.value);renderScene();};
   $('toggleToleranceEdges').onchange=(event)=>{state.toleranceEdges=event.target.checked;renderScene();};
   $('toggleOverlapOnly').onchange=(event)=>{state.overlapOnly=event.target.checked;filtersChanged();};
+  $('toggleAllLabels').onchange=(event)=>{state.showAllLabels=event.target.checked;rebuildLabels();};
+  $('labelFocal').oninput=(event)=>{state.labelFocal=Number(event.target.value);$('labelFocalValue').textContent=event.target.value;labelsDirty=true;};
   $('focusTrajectory').onclick=()=>{if(!state.selected||!state.selected.resin_code)return;state.resin=state.selected.resin_code;$('resinFilter').value=state.resin;filtersChanged();};
   $('findNearest').onclick=()=>{const raw=[$('targetL').value,$('targetA').value,$('targetB').value];if(raw.some((value)=>value.trim()===''))return;const target=raw.map(Number);if(target.some((value)=>!Number.isFinite(value)))return;locateTarget(target);};
   document.querySelectorAll('[data-label-field]').forEach((checkbox)=>checkbox.onchange=()=>{if(checkbox.checked)state.labelFields.add(checkbox.dataset.labelField);else state.labelFields.delete(checkbox.dataset.labelField);rebuildLabels();});

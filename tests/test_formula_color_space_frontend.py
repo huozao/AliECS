@@ -206,6 +206,18 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
         self.assertIn("const cameraMoved=controls.update(clock.getDelta())", self.html)
         self.assertIn("if(cameraMoved||labelsDirty)", self.html)
 
+    def test_all_labels_can_be_shown_at_once(self) -> None:
+        self.assertIn('id="toggleAllLabels"', self.html)
+        self.assertIn("showAllLabels:false", self.html)
+        self.assertIn("state.showAllLabels=", self.html)
+        # 全量显示时不再限制点数：DOM 标签没有纹理开销。
+        self.assertIn("if(state.showAllLabels)return state.points", self.html)
+
+    def test_label_fade_distance_is_adjustable(self) -> None:
+        self.assertIn('id="labelFocal" type="range" min="2" max="60"', self.html)
+        self.assertIn("labelFocal:12", self.html)
+        self.assertIn('id="labelFocalValue"', self.html)
+
     def test_color_math_and_gamut_warning_are_present(self) -> None:
         self.assertIn("function deltaE76", self.html)
         self.assertIn("function deltaE00", self.html)
