@@ -5,7 +5,7 @@ from config.settings import ConfigError, load_settings
 from tplus_datahub.core.exceptions import ChanjetAPIError, TPlusDataHubError
 from tplus_datahub.core.logger import get_logger
 from tplus_datahub.core.utils import now_timestamp, text_preview
-from tplus_datahub.jobs.sync_state import upsert_and_snapshot_full_bom
+from tplus_datahub.jobs.sync_state import persist_inventory_records, upsert_and_snapshot_full_bom
 from tplus_datahub.modules.base_archive.export_base_archive import export_base_archive
 from tplus_datahub.modules.base_archive.sync_base_archive import sync_base_archive
 from tplus_datahub.modules.bom.export_bom import export_bom
@@ -69,6 +69,7 @@ def run() -> SyncAllResult:
         inventory_rows = sync_inventory(settings=settings, timestamp=timestamp)
         inventory_path = export_inventory(inventory_rows, settings=settings, timestamp=timestamp)
         exports.append(_basename(inventory_path)); logger.info("Inventory Excel exported: %s", inventory_path)
+        persist_inventory_records(inventory_rows, mode="scheduled_full")
 
         partner_rows = sync_partner(settings=settings, timestamp=timestamp)
         partner_path = export_partner(partner_rows, settings=settings, timestamp=timestamp)

@@ -482,3 +482,59 @@ def _json_value(value: Any) -> dict[str, Any]:
 
 def _json_safe(value: Any) -> Any:
     return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+
+def _inventory_record_key(row: Any) -> str:
+    """存货档案按 Code 唯一；取不到 Code 时退回内容哈希，保证 upsert 键稳定。"""
+    if isinstance(row, dict):
+        code = row.get("Code") or row.get("code")
+        if code not in (None, ""):
+            return str(code)
+    return _stable_hash(row)
+
+
+def upsert_inventory_records(cur: Any, records: list[dict[str, Any]]) -> None:
+    for record in records:
+        cur.execute(
+            """
+            INSERT INTO tplus_inventory_records(record_key, record_hash, raw_json, last_seen_at, missing_since)
+            VALUES (%s, %s, %s, NOW(), NULL)
+            ON CONFLICT(record_key) DO UPDATE
+            SET record_hash = EXCLUDED.record_hash,
+                raw_json = EXCLUDED.raw_json,
+                last_seen_at = NOW(),
+                missing_since = NULL
+            """,
+            (record["record_key"], record["record_hash"], Jsonb(record["raw"])),
+        )
+
+
+def mark_missing_inventory_records(cur: Any, mode: str, records: list[dict[str, Any]]) -> None:
+    if mode not in _FULL_SYNC_MODES or not records:
+        return
+    cur.execute(
+        "UPDATE tplus_inventory_records SET missing_since = NOW() "
+        "WHERE missing_since IS NULL AND record_key <> ALL(%s)",
+        ([record["record_key"] for record in records],),
+    )
+
+
+def persist_inventory_records(fetched_rows: list[Any], *, mode: str) -> None:
+    """把 T+ 存货档案落到 tplus_inventory_records，供 doc-sync 核对与页面匹配；
+    失败只告警不中断同步主流程（导出照常）。"""
+    if psycopg is None:
+        return
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if not database_url:
+        return
+    try:
+        with closing(psycopg.connect(database_url, connect_timeout=3)) as conn:
+            normalized = [
+                {"record_key": _inventory_record_key(row), "record_hash": _stable_hash(row), "raw": row}
+                for row in fetched_rows
+            ]
+            with conn.cursor() as cur:
+                upsert_inventory_records(cur, normalized)
+                mark_missing_inventory_records(cur, mode, normalized)
+            conn.commit()
+    except Exception as exc:  # noqa: BLE001 - 落库失败不拖垮全量同步
+        print(f"[tplus] 存货主数据落库失败（跳过，导出照常）：{exc}")

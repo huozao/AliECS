@@ -61,10 +61,17 @@ WITH active_bom AS (
     FROM tplus_bom_records
     WHERE missing_since IS NULL AND coalesce(raw_json->>'Code', '') <> ''
     ORDER BY raw_json->>'Code', raw_json->>'UpdateDate' DESC
+),
+active_inventory AS (
+    SELECT raw_json->>'Code' AS code, raw_json->>'Name' AS name
+    FROM tplus_inventory_records
+    WHERE missing_since IS NULL AND coalesce(raw_json->>'Code', '') <> ''
 )
-SELECT er.external_record_id, er.normalized_json, b.name, b.version
+SELECT er.external_record_id, er.normalized_json,
+       COALESCE(b.name, i.name) AS name, COALESCE(b.version, '') AS version
 FROM external_records er
 LEFT JOIN active_bom b ON b.code = er.normalized_json->>%s
+LEFT JOIN active_inventory i ON i.code = er.normalized_json->>%s
 WHERE er.source_id = %s
 ORDER BY er.id
 """
@@ -142,7 +149,7 @@ def formula_colors(user: dict[str, Any] = Depends(require_login)) -> dict[str, A
                     "items": [],
                 }
             source_id, last_sync_at = source[0], source[1]
-            cur.execute(_RECORD_SQL, (F_PARENT_CODE, source_id))
+            cur.execute(_RECORD_SQL, (F_PARENT_CODE, F_PARENT_CODE, source_id))
             rows = cur.fetchall()
 
     items = [_build_item(str(row[0]), row[1] or {}, row[2], row[3]) for row in rows]
