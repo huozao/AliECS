@@ -66,6 +66,7 @@ active_inventory AS (
     SELECT raw_json->>'Code' AS code, raw_json->>'Name' AS name
     FROM tplus_inventory_records
     WHERE missing_since IS NULL AND coalesce(raw_json->>'Code', '') <> ''
+      AND raw_json->'InventoryClass'->>'Code' = '06'
 )
 SELECT er.external_record_id, er.normalized_json,
        COALESCE(b.name, i.name) AS name, COALESCE(b.version, '') AS version

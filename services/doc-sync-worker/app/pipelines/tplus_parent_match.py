@@ -52,6 +52,7 @@ _ACTIVE_INVENTORY_SQL = """
 SELECT raw_json->>'Code', raw_json->>'Name'
 FROM tplus_inventory_records
 WHERE missing_since IS NULL AND coalesce(raw_json->>'Code', '') <> ''
+  AND raw_json->'InventoryClass'->>'Code' = '06'
 ORDER BY raw_json->>'Code'
 """
 

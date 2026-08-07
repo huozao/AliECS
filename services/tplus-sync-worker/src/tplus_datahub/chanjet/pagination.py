@@ -59,6 +59,7 @@ def paginate_query_disabled_variants(
     timestamp: str | None = None,
     annotate_missing_disabled: bool = False,
     dedupe_key_fields: tuple[str, ...] = ("ID", "Code"),
+    extra_payload: dict[str, Any] | None = None,
 ) -> list[Any]:
     run_timestamp = timestamp or now_timestamp()
     rows_all: list[Any] = []
@@ -69,7 +70,7 @@ def paginate_query_disabled_variants(
             endpoint=endpoint,
             module_name=module_name,
             settings=settings,
-            base_payload={"Disabled": disabled_value},
+            base_payload={**(extra_payload or {}), "Disabled": disabled_value},
             timestamp=f"{run_timestamp}_{suffix}",
         )
         if annotate_missing_disabled:

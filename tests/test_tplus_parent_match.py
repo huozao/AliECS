@@ -270,6 +270,8 @@ class TplusParentMatchTests(unittest.TestCase):
         self.assertIn("tplus_inventory_records", self.module._ACTIVE_INVENTORY_SQL)
         self.assertIn("missing_since IS NULL", self.module._ACTIVE_INVENTORY_SQL)
         self.assertIn("raw_json->>'Code'", self.module._ACTIVE_INVENTORY_SQL)
+        self.assertIn("InventoryClass", self.module._ACTIVE_INVENTORY_SQL)
+        self.assertIn("'06'", self.module._ACTIVE_INVENTORY_SQL)
     def test_managed_fields_never_include_the_parent_code(self) -> None:
         self.assertNotIn(self.module.F_PARENT_CODE, self.module.MANAGED_FIELDS)
         self.assertEqual(self.module.MANAGED_FIELDS, ("父件名称", "T+匹配状态", "T+核对时间"))
