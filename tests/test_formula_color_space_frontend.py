@@ -141,6 +141,12 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
         self.assertIn("state.points.length===1", self.html)
         self.assertIn("selectPoint(state.points[0]);focusSelected()", self.html)
 
+    def test_manual_refresh_button_reenqueues_wecom_sync(self) -> None:
+        self.assertIn('id="refreshData"', self.html)
+        self.assertIn("刷新数据", self.html)
+        self.assertIn("/v1/formula/colors/refresh", self.html)
+        self.assertIn("method:'POST'", self.html)
+        self.assertIn("updateDatasetMetaUi()", self.html)
     def test_camera_controls_replace_orbit_controls(self) -> None:
         self.assertIn("camera-controls@2.10.1", self.html)
         self.assertIn("CameraControls.install({THREE})", self.html)

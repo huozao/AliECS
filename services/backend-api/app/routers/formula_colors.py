@@ -38,6 +38,18 @@ ORDER BY id
 LIMIT 1
 """
 
+_ENQUEUE_DEDUP_SQL = """
+SELECT id FROM sync_requests
+WHERE source_id = %s AND status IN ('pending', 'running')
+ORDER BY id DESC
+LIMIT 1
+"""
+
+_ENQUEUE_SQL = """
+INSERT INTO sync_requests(source_id, provider, env_profile, mode, status, requested_by)
+VALUES (%s, %s, %s, 'manual', 'pending', %s)
+"""
+
 # tplus_bom_records 按版本累积，同一父件编码有多条历史记录；
 # missing_since IS NULL 才是 T+ 当前仍存在的那条，否则会取到已作废的旧名称。
 _RECORD_SQL = """
@@ -148,4 +160,40 @@ def formula_colors(user: dict[str, Any] = Depends(require_login)) -> dict[str, A
         },
         # 三维视图只用得上有完整 Lab 的行，其余行留在统计里即可。
         "items": with_lab,
+    }
+
+
+@router.post("/colors/refresh")
+def formula_colors_refresh(user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
+    """手动触发一次企微标准型号表重新拉取：入队 sync_requests，doc-sync worker 约 30 秒内消费。"""
+    require_permission("formula.read", user)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(_SOURCE_SQL, (SOURCE_PROVIDER, SOURCE_PROFILE, SOURCE_DOCUMENT, SOURCE_SHEET))
+            source = cur.fetchone()
+            if not source:
+                return {
+                    "queued": False,
+                    "available": False,
+                    "message": "该智能表格尚未在 doc-sync 登记或同步。",
+                    "last_sync_at": None,
+                }
+            source_id, last_sync_at = source[0], source[1]
+            cur.execute(_ENQUEUE_DEDUP_SQL, (source_id,))
+            if cur.fetchone():
+                return {
+                    "queued": False,
+                    "already_pending": True,
+                    "message": "已有进行中的同步请求，无需重复提交。",
+                    "last_sync_at": last_sync_at.isoformat() if last_sync_at else None,
+                }
+            cur.execute(
+                _ENQUEUE_SQL,
+                (source_id, SOURCE_PROVIDER, SOURCE_PROFILE, str(user.get("sub") or "")),
+            )
+        conn.commit()
+    return {
+        "queued": True,
+        "message": "已提交手动同步请求，doc-sync 约 30 秒内开始拉取。",
+        "last_sync_at": last_sync_at.isoformat() if last_sync_at else None,
     }

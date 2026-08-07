@@ -22,7 +22,7 @@
 <div class="page">
   <header class="topbar">
     <div><h1>标准型号色彩空间 <span id="datasetBadge" class="mock-badge">加载中…</span></h1><div id="datasetSubtitle" class="subtitle">以客户标准 CIELAB 与内控容差为主空间，定位标准型号与判色风险</div></div>
-    <div class="actions"><a class="btn" href="/">返回主页</a><a class="btn primary" href="/formula/">系统配方</a><button id="loginBtn" class="btn" hidden>登录</button></div>
+    <div class="actions"><a class="btn" href="/">返回主页</a><a class="btn primary" href="/formula/">系统配方</a><button id="refreshData" class="btn">刷新数据</button><button id="loginBtn" class="btn" hidden>登录</button></div>
   </header>
   <section class="toolbar">
     <div class="field"><label for="formulaSearch">型号搜索</label><input id="formulaSearch" placeholder="型号 / 父件编码 / 父件名称"/></div>
@@ -673,6 +673,9 @@
     datasetMeta=data.meta||{};
     enriched=enrichLive((data.items||[]).filter((item)=>Array.isArray(item.lab)));
     baselines=[];
+    $('refreshData').hidden=false;updateDatasetMetaUi();
+  }
+  function updateDatasetMetaUi(){
     const synced=datasetMeta.last_sync_at?new Date(datasetMeta.last_sync_at).toLocaleString('zh-CN'):'未知';
     $('datasetBadge').textContent=`企微智能表格 · ${enriched.length} 个型号`;
     $('datasetSubtitle').textContent=`数据源：${datasetMeta.document||'标准型号0117'} / ${datasetMeta.sheet||''}　同步于 ${synced}`;
@@ -685,7 +688,7 @@
     baselines=MOCK_RECIPE_COLORS.resins.map((resin)=>({code:resin.code,name:resin.name,baseline:resin.baseline}));
     $('datasetBadge').textContent='参考示例（模拟数据）';
     $('datasetSubtitle').textContent='仅供演示三维色彩空间的交互，不是真实产品数据。';
-    $('datasetNote').textContent='近邻按 ΔE00 排序';
+    $('datasetNote').textContent='近邻按 ΔE00 排序';$('refreshData').hidden=true;
   }
   async function switchDataset(target){
     if(state.dataset===target&&enriched.length)return;
@@ -698,12 +701,37 @@
       const needLogin=error.status===401||error.status===403;
       $('loginBtn').hidden=!needLogin;
       $('datasetBadge').textContent=needLogin?'需要登录':'加载失败';
-      $('datasetSubtitle').textContent=needLogin?'标准型号数据需要登录后按 formula.read 权限查看，也可先切到「参考示例」。':`读取标准型号失败：${error.message}`;
+      $('datasetSubtitle').textContent=needLogin?'标准型号数据需要登录后按 formula.read 权限查看，也可先切到「参考示例」。':`读取标准型号失败：${error.message}`;$('refreshData').hidden=true;
     }
     resetSelection();rebuildFilterOptions();renderScene();resetCamera();
   }
   $('datasetLive').onclick=()=>switchDataset('live');
   $('datasetMock').onclick=()=>switchDataset('mock');
+
+  // 手动刷新：入队后 worker 约 30 秒内拉取，轮询 meta.last_sync_at 直到变化。
+  $('refreshData').onclick=async()=>{
+    const btn=$('refreshData'),orig=btn.textContent;
+    btn.disabled=true;btn.textContent='同步中…';
+    try{
+      const before=datasetMeta&&datasetMeta.last_sync_at;
+      await api('/v1/formula/colors/refresh',{method:'POST'});
+      const deadline=Date.now()+90000;
+      while(Date.now()<deadline){
+        await new Promise((resolve)=>setTimeout(resolve,5000));
+        const data=await api('/v1/formula/colors');
+        const after=data.meta&&data.meta.last_sync_at;
+        if(after&&after!==before){
+          datasetMeta=data.meta;enriched=enrichLive((data.items||[]).filter((item)=>Array.isArray(item.lab)));baselines=[];
+          updateDatasetMetaUi();resetSelection();rebuildFilterOptions();renderScene();resetCamera();
+          btn.textContent='已更新';break;
+        }
+      }
+      if(btn.textContent==='同步中…')btn.textContent='超时未更新';
+    }catch(error){
+      btn.textContent='失败';
+    }
+    setTimeout(()=>{btn.disabled=false;btn.textContent=orig;},2500);
+  };
 
   function syncDeltaButton(){
     const anchor=state.deltaAnchor,button=$('deltaView');
