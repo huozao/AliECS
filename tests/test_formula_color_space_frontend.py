@@ -137,6 +137,10 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
         self.assertIn("const highlight=labelHighlightSet()", self.html)
         self.assertIn("dimmed=highlight&&!highlight.has(item.id)", self.html)
 
+    def test_unique_search_hit_flies_the_camera_to_it(self) -> None:
+        self.assertIn("state.points.length===1", self.html)
+        self.assertIn("selectPoint(state.points[0]);focusSelected()", self.html)
+
     def test_camera_controls_replace_orbit_controls(self) -> None:
         self.assertIn("camera-controls@2.10.1", self.html)
         self.assertIn("CameraControls.install({THREE})", self.html)

@@ -611,7 +611,8 @@
   $('deviceGamut').textContent=matchMedia('(color-gamut: rec2020)').matches?'设备报告：Rec.2020':matchMedia('(color-gamut: p3)').matches?'设备报告：Display-P3':'设备报告：sRGB';
 
   const filtersChanged=()=>state.target?locateTarget(state.target):renderScene();
-  $('formulaSearch').oninput=(event)=>{state.query=event.target.value.trim();filtersChanged();};
+  // 搜到唯一型号就直接飞过去；命中多个时不动相机，否则边打字边跳很晕。
+  $('formulaSearch').oninput=(event)=>{state.query=event.target.value.trim();filtersChanged();if(state.query&&state.points.length===1){selectPoint(state.points[0]);focusSelected();}};
   $('resinFilter').onchange=(event)=>{state.resin=event.target.value;filtersChanged();};
   $('dosageFilter').onchange=(event)=>{state.dosage=event.target.value;filtersChanged();};
   $('statusFilter').onchange=(event)=>{state.status=event.target.value;filtersChanged();};
