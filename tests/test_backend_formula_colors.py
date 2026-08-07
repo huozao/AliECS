@@ -91,6 +91,8 @@ class FormulaColorsParsingTests(unittest.TestCase):
         self.assertIn("active_inventory", self.module._RECORD_SQL)
         self.assertIn("tplus_inventory_records", self.module._RECORD_SQL)
         self.assertIn("COALESCE(b.name, i.name)", self.module._RECORD_SQL)
+        self.assertIn("InventoryClass", self.module._RECORD_SQL)
+        self.assertIn("'06'", self.module._RECORD_SQL)
     def test_source_is_located_by_document_and_sheet_name(self) -> None:
         self.assertEqual(self.module.SOURCE_DOCUMENT, "标准型号0117")
         self.assertEqual(self.module.SOURCE_SHEET, "标准型号规格&月统计")
