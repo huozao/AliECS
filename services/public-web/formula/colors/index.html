@@ -9,10 +9,10 @@
     *{box-sizing:border-box}html,body{height:100%}body{margin:0;background:radial-gradient(circle at 12% 0,rgba(192,153,101,.18),transparent 31%),var(--bg);color:var(--text);font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
     button,input,select{font:inherit}.page{min-height:100%;display:flex;flex-direction:column}.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:15px 20px;background:rgba(255,253,249,.94);border-bottom:1px solid var(--line);backdrop-filter:blur(12px)}h1{font-size:24px;margin:0}.subtitle{color:var(--muted);margin-top:3px}.actions{display:flex;gap:8px;flex-wrap:wrap}.btn,button{border:1px solid var(--line);border-radius:10px;padding:8px 12px;background:#fff;color:var(--text);font-weight:750;cursor:pointer;text-decoration:none}.btn.primary,button.primary{background:var(--primary);border-color:var(--primary);color:#fff}button.active{background:#e9dccb;border-color:#b99b76;color:#4d3923}.mock-badge{display:inline-flex;margin-left:8px;padding:3px 8px;border-radius:999px;background:#fff1d9;color:#9a5a08;font-size:12px;vertical-align:3px}
     .toolbar{display:grid;grid-template-columns:minmax(180px,1.25fr) repeat(3,minmax(120px,.8fr)) auto;gap:8px;padding:9px 12px;background:rgba(255,253,249,.86);border-bottom:1px solid var(--line)}.field label{display:block;color:var(--muted);font-size:11px;margin-bottom:2px}.field input,.field select{width:100%;height:34px;border:1px solid var(--line);border-radius:8px;padding:0 9px;background:#fff;color:var(--text)}.mode-row{display:flex;align-items:flex-end;gap:5px;flex-wrap:wrap}.mode-row button{padding:6px 9px}
-    .workspace{flex:1;min-height:680px;display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:12px;padding:12px}.stage-card,.detail-card{background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);overflow:hidden}.stage-card{position:relative;min-height:680px}.stage{position:absolute;inset:0}.stage canvas{display:block;width:100%;height:100%;touch-action:none}.stage-overlay{position:absolute;left:14px;right:14px;top:14px;display:grid;gap:7px;pointer-events:none}.metric-row{display:flex;gap:5px;flex-wrap:nowrap}.metric{display:flex;align-items:baseline;gap:3px;white-space:nowrap;background:rgba(255,253,249,.91);border:1px solid rgba(222,213,200,.9);border-radius:8px;padding:5px 7px;font-size:11px;box-shadow:0 6px 16px rgba(45,34,22,.08)}.metric b{font-size:15px}.lab-readout{background:rgba(35,31,27,.78);color:#fff;border-radius:9px;padding:6px 9px;width:max-content;min-width:176px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.view-settings{position:absolute;left:14px;bottom:14px;max-width:calc(100% - 28px);padding:8px 10px;background:rgba(255,253,249,.94);border:1px solid rgba(222,213,200,.9);border-radius:11px;box-shadow:0 6px 16px rgba(45,34,22,.08)}.view-settings summary{cursor:pointer;font-weight:750;user-select:none}.view-settings[open] summary{margin-bottom:8px}.view-settings-body{display:grid;gap:8px}.stage-actions{display:flex;gap:6px;flex-wrap:wrap}.stage-actions button{padding:6px 9px;background:rgba(255,253,249,.92)}.reference-controls{display:flex;align-items:flex-end;gap:7px;flex-wrap:wrap}.reference-controls label{display:grid;gap:3px;color:var(--muted);font-size:11px}.reference-controls select{height:32px;min-width:118px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--text);padding:0 8px}.reference-controls input{width:110px}.slice-switch{display:flex!important;align-items:center;gap:6px;height:32px}.hidden-control{display:none!important}.slice-switch input{width:16px;height:16px;margin:0;accent-color:var(--primary)}.device-gamut{align-self:center;color:var(--muted);font-size:11px}.tooltip{position:absolute;display:none;pointer-events:none;background:rgba(32,28,24,.94);color:#fff;border-radius:9px;padding:7px 9px;font-size:12px;box-shadow:0 8px 18px rgba(0,0,0,.25)}
+    .workspace{flex:1;min-height:680px;display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:12px;padding:12px}.stage-card,.detail-card{background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);overflow:hidden}.stage-card{position:relative;min-height:680px}.stage{position:absolute;inset:0}.stage canvas{display:block;width:100%;height:100%;touch-action:none}.stage-overlay{position:absolute;left:14px;right:14px;top:14px;display:grid;gap:7px;pointer-events:none}.metric-row{display:flex;gap:5px;flex-wrap:nowrap}.metric{display:flex;align-items:baseline;gap:3px;white-space:nowrap;background:rgba(255,253,249,.91);border:1px solid rgba(222,213,200,.9);border-radius:8px;padding:5px 7px;font-size:11px;box-shadow:0 6px 16px rgba(45,34,22,.08)}.metric b{font-size:15px}.lab-readout{background:rgba(35,31,27,.78);color:#fff;border-radius:9px;padding:6px 9px;width:max-content;min-width:176px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.settings-panel{display:flex;gap:14px;flex-wrap:wrap;padding:10px 14px;background:rgba(255,253,249,.92);border-bottom:1px solid var(--line);max-height:38vh;overflow-y:auto}.settings-panel[hidden]{display:none}.settings-group{display:grid;gap:6px;align-content:start}.settings-group h4{margin:0;color:var(--muted);font-size:11px;font-weight:750;letter-spacing:.04em}.stage-actions{display:flex;gap:6px;flex-wrap:wrap}.stage-actions button{padding:6px 9px;background:rgba(255,253,249,.92)}.reference-controls{display:flex;align-items:flex-end;gap:7px;flex-wrap:wrap}.reference-controls label{display:grid;gap:3px;color:var(--muted);font-size:11px}.reference-controls select{height:32px;min-width:118px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--text);padding:0 8px}.reference-controls input{width:110px}.slice-switch{display:flex!important;align-items:center;gap:6px;height:32px}.hidden-control{display:none!important}.slice-switch input{width:16px;height:16px;margin:0;accent-color:var(--primary)}.device-gamut{align-self:center;color:var(--muted);font-size:11px}.tooltip{position:absolute;display:none;pointer-events:none;background:rgba(32,28,24,.94);color:#fff;border-radius:9px;padding:7px 9px;font-size:12px;box-shadow:0 8px 18px rgba(0,0,0,.25)}.label-layer{position:absolute;inset:0;overflow:hidden;pointer-events:none}.point-label{position:absolute;left:0;top:0;padding:2px 6px;border-radius:6px;background:rgba(24,20,16,.62);color:#fff;font-size:12px;line-height:1.35;white-space:pre;transform-origin:0 0;will-change:transform,opacity}
     .detail-card{padding:16px;overflow:auto}.detail-card h2{margin:0 0 5px;font-size:20px}.detail-empty{color:var(--muted);padding:36px 6px;text-align:center}.swatch{height:94px;border-radius:13px;border:1px solid rgba(0,0,0,.12);margin:12px 0;position:relative;overflow:hidden}.swatch span{position:absolute;right:8px;bottom:7px;padding:3px 7px;border-radius:7px;background:rgba(255,255,255,.82);font:12px ui-monospace,monospace;color:#222}.info{display:grid;gap:7px;padding:12px 0;border-top:1px solid var(--line)}.info-row{display:grid;grid-template-columns:92px minmax(0,1fr) 24px;gap:8px;align-items:start}.info dt{color:var(--muted)}.info dd{margin:0;font-weight:720;word-break:break-word}.field-toggle{display:grid;place-items:center;width:24px;height:24px;cursor:pointer}.field-toggle input{width:16px;height:16px;margin:0;accent-color:var(--primary)}.triplet{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.warning{display:none;padding:9px 10px;border-radius:9px;background:#fff3e5;color:#9a4e05;margin:9px 0}.detail-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
     .coverage{margin-top:14px;padding:12px;border:1px solid var(--line);border-radius:11px;background:#fbf7f0}.coverage h3{margin:0 0 5px}.coverage p{margin:0;color:var(--muted);font-size:12px}.nearest{margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}.nearest h3{margin:0 0 8px}.nearest-inputs{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.nearest-inputs input{width:100%;height:36px;border:1px solid var(--line);border-radius:8px;padding:0 8px}.nearest>button{width:100%;margin-top:8px}.nearest-results{display:grid;gap:7px;margin-top:10px}.neighbor{display:grid;grid-template-columns:25px 1fr auto;align-items:center;gap:7px;width:100%;text-align:left;padding:8px;border:1px solid var(--line);border-radius:9px;background:#fff;font-weight:650}.neighbor:hover{border-color:#b99b76;background:#fffaf2}.neighbor-rank{display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:#eee4d7;color:#5f4932;font-size:12px}.neighbor small{display:block;color:var(--muted);font-weight:500}.neighbor-de{font-family:ui-monospace,monospace;color:#8d4e2c}.legend{display:flex;gap:12px;flex-wrap:wrap;padding:10px 18px;color:var(--muted);background:rgba(255,253,249,.8);border-top:1px solid var(--line)}.legend span{display:flex;align-items:center;gap:5px}.dot{width:10px;height:10px;border-radius:50%;background:#8b6b47}.dot.reference{width:8px;height:8px;background:linear-gradient(135deg,#e85d5d,#e9ce69,#66a9df);opacity:.55}.dot.target{border-radius:2px;transform:rotate(45deg);background:#fff;border:2px solid #222}.dot.hollow{background:#fff;border:2px solid #8b6b47}.diamond{width:9px;height:9px;background:#fff;transform:rotate(45deg);border:2px solid #5f6670}
-    @media(max-width:1000px){.toolbar{grid-template-columns:repeat(4,minmax(0,1fr))}.mode-row{grid-column:1/-1}.workspace{grid-template-columns:1fr}.stage-card{min-height:560px}.detail-card{max-height:none}}@media(max-width:620px){.topbar{align-items:flex-start;flex-direction:column}.toolbar{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 7px;padding:8px}.mode-row{grid-column:1/-1}.workspace{padding:8px}.stage-card{min-height:600px}.detail-actions{grid-template-columns:1fr}.stage-overlay{left:8px;right:8px;top:8px}.metric-row{gap:3px}.metric{flex:1;justify-content:center;padding:4px 3px;font-size:10px}.metric b{font-size:14px}.view-settings{right:8px;left:8px;bottom:8px}.reference-controls label{flex:1;min-width:115px}.reference-controls select{width:100%;min-width:0}.reference-controls input{width:100%}.reference-controls .slice-switch input{width:16px;flex:0 0 16px}}
+    @media(max-width:1000px){.toolbar{grid-template-columns:repeat(4,minmax(0,1fr))}.mode-row{grid-column:1/-1}.workspace{grid-template-columns:1fr}.stage-card{min-height:560px}.detail-card{max-height:none}}@media(max-width:620px){.topbar{align-items:flex-start;flex-direction:column}.toolbar{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 7px;padding:8px}.mode-row{grid-column:1/-1}.workspace{padding:8px}.stage-card{min-height:600px}.detail-actions{grid-template-columns:1fr}.stage-overlay{left:8px;right:8px;top:8px}.metric-row{gap:3px}.metric{flex:1;justify-content:center;padding:4px 3px;font-size:10px}.metric b{font-size:14px}.reference-controls label{flex:1;min-width:115px}.reference-controls select{width:100%;min-width:0}.reference-controls input{width:100%}.reference-controls .slice-switch input{width:16px;flex:0 0 16px}.settings-panel{gap:9px;padding:8px}.settings-group{width:100%}}
   </style>
   <script type="importmap">
     {"imports":{"three":"https://unpkg.com/three@0.180.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.180.0/examples/jsm/","camera-controls":"https://unpkg.com/camera-controls@2.10.1/dist/camera-controls.module.js"}}
@@ -29,33 +29,37 @@
     <div class="field"><label for="resinFilter">打样基料</label><select id="resinFilter"><option value="">全部基料</option></select></div>
     <div class="field"><label for="dosageFilter">添加比例</label><select id="dosageFilter"><option value="">全部比例</option></select></div>
     <div class="field"><label for="statusFilter">T+ 匹配</label><select id="statusFilter"><option value="">全部</option><option value="matched">已匹配</option><option value="code_missing">编码失联</option><option value="no_parent_code">无父件编码</option></select></div>
-    <div class="mode-row" aria-label="数据源与视图"><button id="datasetLive" class="active">标准型号</button><button id="datasetMock">参考示例</button><button id="deltaView">Δ 判色视图</button></div>
+    <div class="mode-row" aria-label="数据源与视图"><button id="datasetLive" class="active">标准型号</button><button id="datasetMock">参考示例</button><button id="deltaView">Δ 判色视图</button><button id="toggleSettings">⚙ 显示设置</button></div>
+  </section>
+  <section id="settingsPanel" class="settings-panel" hidden>
+    <div class="settings-group" aria-label="观察视角"><h4>观察视角</h4><div class="stage-actions"><button id="resetCamera">复位</button><button id="topCamera">a*b* 俯视</button><button id="frontCamera">L*–a* 立面</button><button id="sideCamera">L*–b* 立面</button><button id="focusSelected">聚焦选中</button><button id="togglePan">单指平移</button></div></div>
+    <div class="settings-group" aria-label="显示开关"><h4>显示开关</h4><div class="stage-actions"><button id="toggleTolerance" class="active">隐藏容差盒</button><button id="toggleProducts" class="active">隐藏标准色点</button><button id="toggleReference">显示参考色域</button></div></div>
+    <div class="settings-group" aria-label="容差盒"><h4>容差盒</h4><div class="reference-controls">
+      <label>容差放大<select id="toleranceMagnify"><option value="1">×1 真实比例</option><option value="5">×5</option><option value="10">×10</option><option value="20">×20</option><option value="50">×50</option></select></label>
+      <label>透明度 <span id="toleranceOpacityValue">30%</span><input id="toleranceOpacity" type="range" min="8" max="90" value="30"/></label>
+      <label class="slice-switch"><input id="toggleToleranceEdges" type="checkbox" checked/>显示盒棱线</label>
+      <label class="slice-switch"><input id="toggleOverlapOnly" type="checkbox"/>只看容差重叠</label>
+    </div></div>
+    <div class="settings-group" aria-label="参考色域"><h4>参考色域</h4><div class="reference-controls">
+      <label>色域<select id="referenceMode"><option value="overlay">sRGB + Display-P3</option><option value="srgb">仅 sRGB</option><option value="p3">仅 Display-P3</option><option value="difference">P3 − sRGB 差集</option></select></label>
+      <label>显示方式<select id="referenceStyle"><option value="surface">方块外壳</option><option value="solid">方块实体</option><option value="wireframe">线框方块</option></select></label>
+      <label>透明度 <span id="referenceOpacityValue">32%</span><input id="referenceOpacity" type="range" min="10" max="100" value="32"/></label>
+      <label class="slice-switch"><input id="toggleLSlice" type="checkbox"/>L* 水平切面</label>
+      <label>切面 L* <span id="sliceLValue">50</span><input id="sliceL" type="range" min="0" max="100" step="1" value="50" disabled/></label>
+      <span id="deviceGamut" class="device-gamut"></span>
+    </div></div>
+    <div class="settings-group" aria-label="标签"><h4>标签</h4><div class="reference-controls">
+      <label class="slice-switch"><input id="toggleAllLabels" type="checkbox"/>全部显示标签</label>
+      <label>淡化距离 <span id="labelFocalValue">12</span><input id="labelFocal" type="range" min="2" max="60" step="1" value="12"/></label>
+      <button id="saveViewPrefs">设为默认</button><button id="resetViewPrefs">恢复默认</button>
+    </div></div>
   </section>
   <main class="workspace">
     <section class="stage-card">
       <div id="stage" class="stage" aria-label="三维 CIELAB 色彩空间"></div>
       <div class="stage-overlay"><div class="metric-row"><div class="metric"><b id="visibleCount">0</b><span>标准型号</span></div><div class="metric"><b id="formulaCount">0</b><span id="toleranceMetricLabel">容差盒</span></div><div class="metric"><b id="resinCount">0</b><span>打样基料</span></div><div class="metric"><b id="coverageCount">0</b><span>覆盖色区</span></div></div><div id="referenceLabReadout" class="lab-readout">指向参考色域查看 Lab</div></div>
-      <details id="viewSettings" class="view-settings">
-        <summary>视图设置</summary>
-        <div class="view-settings-body">
-          <div class="stage-actions"><button id="toggleTolerance" class="active">隐藏容差盒</button><button id="toggleReference">显示参考色域</button><button id="toggleProducts" class="active">隐藏标准色点</button><button id="togglePan">单指平移</button></div>
-          <div class="stage-actions" aria-label="观察视角"><button id="resetCamera">复位</button><button id="topCamera">a*b* 俯视</button><button id="frontCamera">L*–a* 立面</button><button id="sideCamera">L*–b* 立面</button><button id="focusSelected">聚焦选中</button></div>
-          <div class="reference-controls" aria-label="容差盒显示设置">
-            <label>容差放大<select id="toleranceMagnify"><option value="1">×1 真实比例</option><option value="5">×5</option><option value="10">×10</option><option value="20">×20</option><option value="50">×50</option></select></label>
-            <label>容差盒透明度 <span id="toleranceOpacityValue">30%</span><input id="toleranceOpacity" type="range" min="8" max="90" value="30"/></label>
-            <label class="slice-switch"><input id="toggleToleranceEdges" type="checkbox" checked/>显示盒棱线</label>
-            <label class="slice-switch"><input id="toggleOverlapOnly" type="checkbox"/>只看容差重叠</label>
-          </div>
-          <div class="reference-controls" aria-label="参考色域显示设置">
-            <label>参考色域<select id="referenceMode"><option value="overlay">sRGB + Display-P3</option><option value="srgb">仅 sRGB</option><option value="p3">仅 Display-P3</option><option value="difference">P3 − sRGB 差集</option></select></label>
-            <label>显示方式<select id="referenceStyle"><option value="surface">方块外壳</option><option value="solid">方块实体</option><option value="wireframe">线框方块</option></select></label>
-            <label>透明度 <span id="referenceOpacityValue">32%</span><input id="referenceOpacity" type="range" min="10" max="100" value="32"/></label>
-            <label class="slice-switch"><input id="toggleLSlice" type="checkbox"/>L* 水平切面</label>
-            <label>切面 L* <span id="sliceLValue">50</span><input id="sliceL" type="range" min="0" max="100" step="1" value="50" disabled/></label>
-            <span id="deviceGamut" class="device-gamut"></span>
-          </div>
-        </div>
-      </details>
+
+      <div id="labelLayer" class="label-layer"></div>
       <div id="tooltip" class="tooltip"></div>
     </section>
     <aside class="detail-card">
@@ -108,7 +112,7 @@
   }
 
   const MAX_POINTS=512,MAX_BASELINES=16;
-  const state={dataset:'live',mode:'absolute',selected:null,hoveredId:null,points:[],query:'',resin:'',dosage:'',status:'',target:null,neighbors:[],showReference:false,showProducts:true,showTolerance:true,toleranceOpacity:.3,toleranceEdges:true,toleranceMagnify:1,overlapOnly:false,panMode:false,deltaAnchor:null,referenceMode:'overlay',referenceStyle:'surface',referenceOpacity:.32,sliceEnabled:false,sliceL:50,referencePinned:null,labelFields:new Set(['formula','resin','dosage'])};
+  const state={dataset:'live',mode:'absolute',selected:null,hoveredId:null,points:[],query:'',resin:'',dosage:'',status:'',target:null,neighbors:[],showReference:false,showProducts:true,showTolerance:true,toleranceOpacity:.3,toleranceEdges:true,toleranceMagnify:1,overlapOnly:false,panMode:false,deltaAnchor:null,referenceMode:'overlay',referenceStyle:'surface',referenceOpacity:.32,sliceEnabled:false,sliceL:50,referencePinned:null,labelFields:new Set(['formula','resin','dosage']),showAllLabels:false,labelFocal:12};
   const SCALE=.23;
   const $=(id)=>document.getElementById(id);
   const round=(value,digits=2)=>Number(value).toFixed(digits);
@@ -265,7 +269,6 @@
   const deltaAxisGroup=new THREE.Group();deltaAxisGroup.visible=false;scene.add(deltaAxisGroup);
   const trajectoryGroup=new THREE.Group();scene.add(trajectoryGroup);const neighborLineGroup=new THREE.Group();scene.add(neighborLineGroup);const matrix=new THREE.Matrix4(),color=new THREE.Color();
   const targetMarker=new THREE.Mesh(new THREE.OctahedronGeometry(.26),new THREE.MeshBasicMaterial({color:0xffffff}));targetMarker.visible=false;scene.add(targetMarker);const targetHalo=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.OctahedronGeometry(.34)),new THREE.LineBasicMaterial({color:0x222222}));targetHalo.visible=false;scene.add(targetHalo);
-  const selectedLabelCanvas=document.createElement('canvas'),selectedLabelTexture=new THREE.CanvasTexture(selectedLabelCanvas),selectedLabel=new THREE.Sprite(new THREE.SpriteMaterial({map:selectedLabelTexture,transparent:true,depthTest:false}));selectedLabelTexture.colorSpace=THREE.SRGBColorSpace;selectedLabel.visible=false;selectedLabel.renderOrder=20;scene.add(selectedLabel);
 
   // Δ 判色视图：以选中型号的客户标准色为原点，坐标换成 ΔL*/Δa*/Δb*，
   // 放大 25 倍后 ±2 Lab 单位铺满视野——容差盒是真实比例，这才是判色可用的视图。
@@ -295,9 +298,56 @@
       usage:[item.company,item.usage].filter(Boolean).join(' · ')};
     return values[field]||'';
   }
-  function positionSelectedLabel(){const visible=state.showProducts&&Boolean(state.selected)&&state.points.some((item)=>item.id===state.selected.id)&&state.labelFields.size>0;selectedLabel.visible=visible;if(visible)selectedLabel.position.copy(positionFor(state.selected)).add(new THREE.Vector3(1.2,1.8,0));}
-  function updateSelectedLabel(){
-    if(!state.selected||!state.labelFields.size){selectedLabel.visible=false;return;}const values=[...state.labelFields].map((field)=>labelValue(state.selected,field)).filter(Boolean),context=selectedLabelCanvas.getContext('2d'),maxWidth=470,lines=[];let line='';selectedLabelCanvas.width=512;context.font='600 24px system-ui, sans-serif';for(const value of values){const candidate=line?`${line} · ${value}`:value;if(line&&context.measureText(candidate).width>maxWidth){lines.push(line);line=value;}else line=candidate;}if(line)lines.push(line);selectedLabelCanvas.height=Math.max(62,28+lines.length*34);context.fillStyle='rgba(32,28,24,.9)';context.fillRect(0,0,selectedLabelCanvas.width,selectedLabelCanvas.height);context.font='600 24px system-ui, sans-serif';context.fillStyle='#fff';context.textAlign='center';context.textBaseline='middle';lines.forEach((text,index)=>context.fillText(text,256,18+17+index*34,maxWidth));selectedLabelTexture.needsUpdate=true;selectedLabel.scale.set(8,8*selectedLabelCanvas.height/512,1);positionSelectedLabel();
+  // 标签用 DOM 而非 canvas sprite：全量显示时几百块 192×72 纹理会吃爆显存，
+  // DOM 层几乎零成本、文字锐利，投影计算与 hitAt() 用的是同一套。
+  const labelLayer=$('labelLayer'),labelEntries=[],_labelV3=new THREE.Vector3(),_focalV3=new THREE.Vector3();
+  let labelsDirty=true;
+  // 余弦缓动淡化：焦点取 camera-controls 的 orbit target，
+  // focusSelected / fitToBox 之后它正好是用户的关注点。
+  function labelOpacityBase(worldPos){
+    const normalized=Math.min(worldPos.distanceTo(_focalV3),state.labelFocal)/state.labelFocal;
+    return 1-(.5-.5*Math.cos(normalized*Math.PI));
+  }
+  // Task 9 会把重叠型号填进来；返回 null 表示「无高亮集」，此时不压暗任何点。
+  // hover 或选中某型号时，高亮与它容差盒重叠的型号、压暗其余——
+  // 比「只看容差重叠」那个二元筛选多一条不改筛选就能看清重叠关系的路径。
+  // 没有重叠邻居就返回 null：孤立型号不该把全场压暗。
+  function labelHighlightSet(){
+    const focus=state.hoveredId!==null?state.points.find((item)=>item.id===state.hoveredId):state.selected;
+    if(!focus||!focus.tolerance)return null;
+    const set=new Set([focus.id]);
+    for(const item of state.points)if(item.id!==focus.id&&item.tolerance&&boxesOverlap(focus,item))set.add(item.id);
+    return set.size>1?set:null;
+  }
+  function labelTargets(){
+    if(!state.showProducts||!state.labelFields.size)return[];
+    if(state.showAllLabels)return state.points;
+    return state.selected?state.points.filter((item)=>item.id===state.selected.id):[];
+  }
+  function rebuildLabels(){
+    labelLayer.textContent='';labelEntries.length=0;
+    for(const item of labelTargets()){
+      const text=[...state.labelFields].map((field)=>labelValue(item,field)).filter(Boolean).join('\n');
+      if(!text)continue;
+      const el=document.createElement('div');el.className='point-label';el.textContent=text;
+      labelLayer.appendChild(el);labelEntries.push({item,el});
+    }
+    labelsDirty=true;
+  }
+  function syncLabels(){
+    if(!labelEntries.length)return;
+    controls.getTarget(_focalV3);
+    const width=labelLayer.clientWidth,height=labelLayer.clientHeight,highlight=labelHighlightSet();
+    for(const {item,el} of labelEntries){
+      const worldPos=positionFor(item);
+      _labelV3.copy(worldPos).project(camera);
+      // z>1 是相机背后，投影坐标会翻折到画面里。
+      if(_labelV3.z>1){el.style.display='none';continue;}
+      el.style.display='';
+      el.style.transform=`translate(${(_labelV3.x+1)/2*width}px,${(1-_labelV3.y)/2*height}px)`;
+      const base=labelOpacityBase(worldPos),focused=state.hoveredId===item.id||(state.selected&&state.selected.id===item.id);
+      el.style.opacity=(focused?1:highlight&&!highlight.has(item.id)?Math.min(base,.2):base).toFixed(3);
+    }
   }
   // 容差盒的绝对区间：客户标准 Lab 加上该轴的 Δ 上下限。
   // magnify 只用于「放大显示」，重叠判定与容差内判定必须走默认的真实比例，否则结论会失真。
@@ -379,6 +429,7 @@
   function rebuildTolerance(){
     clearTolerance();
     if(!state.showTolerance||state.mode==='relative')return;
+    const highlight=labelHighlightSet();
     for(const item of state.points){
       if(!item.tolerance)continue;
       // 盒中心可能偏离标准色点：容差区间通常不对称（例如 ΔL* [-2.00, -1.50]）。
@@ -392,10 +443,11 @@
       size.set(Math.max(size.x,.004),Math.max(size.y,.004),Math.max(size.z,.004));
       const geometry=new THREE.BoxGeometry(size.x,size.y,size.z);
       const selected=state.selected&&state.selected.id===item.id;
-      const box=new THREE.Mesh(geometry,new THREE.MeshBasicMaterial({color:item.display.hex,transparent:true,opacity:selected?Math.min(.85,state.toleranceOpacity+.25):state.toleranceOpacity,depthWrite:false,side:THREE.DoubleSide}));
+      const dimmed=highlight&&!highlight.has(item.id);
+      const box=new THREE.Mesh(geometry,new THREE.MeshBasicMaterial({color:item.display.hex,transparent:true,opacity:selected?Math.min(.85,state.toleranceOpacity+.25):(highlight&&!highlight.has(item.id)?state.toleranceOpacity*.25:state.toleranceOpacity),depthWrite:false,side:THREE.DoubleSide}));
       box.position.copy(center);box.userData={pointId:item.id};toleranceGroup.add(box);
       if(state.toleranceEdges){
-        const edges=new THREE.LineSegments(new THREE.EdgesGeometry(geometry),new THREE.LineBasicMaterial({color:selected?0x1f1a15:0x6b5f52,transparent:true,opacity:selected?.95:.5}));
+        const edges=new THREE.LineSegments(new THREE.EdgesGeometry(geometry),new THREE.LineBasicMaterial({color:selected?0x1f1a15:0x6b5f52,transparent:true,opacity:selected?.95:dimmed?.12:.5}));
         edges.position.copy(center);toleranceGroup.add(edges);
       }
     }
@@ -430,10 +482,10 @@
     pointMesh.count=state.points.length;hitMesh.count=state.points.length;pointGeometry.setAttribute('instanceColor',new THREE.InstancedBufferAttribute(instanceColors,3));updatePointScale();rebuildBaselines();rebuildTrajectories();rebuildTolerance();const delta=Boolean(state.deltaAnchor);
     // Δ 视图有自己的一套坐标装饰，全局那套（轴、网格、参考色域、包围盒）全部让位。
     deltaAxisGroup.visible=delta;axisGroup.visible=!delta&&!closeUp;gridLabelGroup.visible=!delta&&!closeUp;grid.visible=!delta&&!closeUp;
-    const showReference=state.showReference&&state.mode!=='relative'&&!closeUp&&!delta,showProducts=state.showProducts;referenceGroup.visible=showReference;boundsHelper.visible=showReference;pointMesh.visible=showProducts;hitMesh.visible=showProducts;baselineMesh.visible=showProducts;trajectoryGroup.visible=showProducts;neighborLineGroup.visible=showProducts;$('toggleReference').disabled=state.mode==='relative';$('toggleReference').textContent=state.showReference?'隐藏参考色域':'显示参考色域';$('toggleReference').classList.toggle('active',showReference);$('toggleProducts').textContent=showProducts?'隐藏标准色点':'显示标准色点';$('toggleProducts').classList.toggle('active',showProducts);$('toggleTolerance').textContent=state.showTolerance?'隐藏容差盒':'显示容差盒';$('toggleTolerance').classList.toggle('active',state.showTolerance&&state.mode!=='relative');$('toggleTolerance').disabled=state.mode==='relative';renderTarget();positionSelectedLabel();updateCoverage();
+    const showReference=state.showReference&&state.mode!=='relative'&&!closeUp&&!delta,showProducts=state.showProducts;referenceGroup.visible=showReference;boundsHelper.visible=showReference;pointMesh.visible=showProducts;hitMesh.visible=showProducts;baselineMesh.visible=showProducts;trajectoryGroup.visible=showProducts;neighborLineGroup.visible=showProducts;$('toggleReference').disabled=state.mode==='relative';$('toggleReference').textContent=state.showReference?'隐藏参考色域':'显示参考色域';$('toggleReference').classList.toggle('active',showReference);$('toggleProducts').textContent=showProducts?'隐藏标准色点':'显示标准色点';$('toggleProducts').classList.toggle('active',showProducts);$('toggleTolerance').textContent=state.showTolerance?'隐藏容差盒':'显示容差盒';$('toggleTolerance').classList.toggle('active',state.showTolerance&&state.mode!=='relative');$('toggleTolerance').disabled=state.mode==='relative';renderTarget();syncLabels();updateCoverage();
     $('visibleCount').textContent=state.points.length;$('formulaCount').textContent=state.points.filter((item)=>item.tolerance).length;
     // 放大后的盒子不是真实比例，必须在读数上写明，否则重叠会被误读。
-    $('toleranceMetricLabel').textContent=state.toleranceMagnify>1?`容差盒 ×${state.toleranceMagnify}`:'容差盒';$('resinCount').textContent=new Set(state.points.map((item)=>item.resin_code).filter(Boolean)).size;updateReferenceReadout();
+    $('toleranceMetricLabel').textContent=state.toleranceMagnify>1?`容差盒 ×${state.toleranceMagnify}`:'容差盒';$('resinCount').textContent=new Set(state.points.map((item)=>item.resin_code).filter(Boolean)).size;rebuildLabels();updateReferenceReadout();
   }
 
   const MATCH_LABEL={matched:'已匹配 T+',code_missing:'编码失联',no_parent_code:'未填父件编码'};
@@ -448,7 +500,7 @@
     $('detailTolL').textContent=item.tolerance?tolText(item.tolerance[0]):'—';$('detailTolA').textContent=item.tolerance?tolText(item.tolerance[1]):'—';$('detailTolB').textContent=item.tolerance?tolText(item.tolerance[2]):'—';
     $('detailDe').textContent=item.delta_e||'—';$('detailCondition').textContent=item.method||'—';$('detailDate').textContent=item.sheet_version||'—';
     $('detailUsage').textContent=[item.company,item.usage].filter(Boolean).join(' · ')||'—';
-    const linkKey=item.parent_code||item.model;$('formulaLink').href=`/formula/?q=${encodeURIComponent(linkKey)}`;updateSelectedLabel();syncDeltaButton();renderScene();
+    const linkKey=item.parent_code||item.model;$('formulaLink').href=`/formula/?q=${encodeURIComponent(linkKey)}`;rebuildLabels();syncDeltaButton();renderScene();
   }
   function locateTarget(target){
     const candidates=filteredPoints();state.target=target;if(!candidates.length){state.neighbors=[];$('nearestResults').innerHTML='<div class="detail-empty">当前筛选范围没有可比较的产品。</div>';renderScene();return;}state.neighbors=[...candidates].sort((a,b)=>deltaE00(target,a.sample_lab)-deltaE00(target,b.sample_lab)).slice(0,5);selectPoint(state.neighbors[0]);
@@ -480,7 +532,7 @@
   renderer.domElement.addEventListener('pointermove',(event)=>{const item=hitAt(event,30),tip=$('tooltip'),rect=$('stage').getBoundingClientRect(),nextId=item?item.id:null;if(state.hoveredId!==nextId){state.hoveredId=nextId;renderScene();}if(item){renderer.domElement.style.cursor='pointer';tip.style.display='block';tip.style.left=`${event.clientX-rect.left+12}px`;tip.style.top=`${event.clientY-rect.top+12}px`;tip.textContent=[item.model,item.resin_name,dosageText(item)].filter(Boolean).join(' · ');updateReferenceReadout();return;}const reference=referenceHitAt(event);renderer.domElement.style.cursor=reference?'crosshair':'grab';tip.style.display='none';updateReferenceReadout(reference||state.referencePinned);});
   renderer.domElement.addEventListener('pointerleave',()=>{if(state.hoveredId!==null){state.hoveredId=null;renderScene();}$('tooltip').style.display='none';renderer.domElement.style.cursor='grab';updateReferenceReadout();});
 
-  function resize(){const rect=$('stage').getBoundingClientRect();camera.aspect=rect.width/rect.height;camera.updateProjectionMatrix();renderer.setSize(rect.width,rect.height,false);}new ResizeObserver(resize).observe($('stage'));
+  function resize(){const rect=$('stage').getBoundingClientRect();camera.aspect=rect.width/rect.height;camera.updateProjectionMatrix();renderer.setSize(rect.width,rect.height,false);labelsDirty=true;}new ResizeObserver(resize).observe($('stage'));
   const clock=new THREE.Clock();
   // 相机贴近到容差盒尺度时收起全局坐标装饰，只留颜色点与容差盒。
   // 自动取景后的默认视距约 26；降到 2.5 时视野只剩约 9 Lab 单位，才算真的在看单个型号。
@@ -497,7 +549,7 @@
     renderScene();
     if(near)$('referenceLabReadout').textContent='近距视图：已收起坐标装饰';
   }
-  function animate(){requestAnimationFrame(animate);controls.update(clock.getDelta());syncSceneScale();renderer.render(scene,camera);}animate();
+  function animate(){requestAnimationFrame(animate);const cameraMoved=controls.update(clock.getDelta());syncSceneScale();if(cameraMoved||labelsDirty){syncLabels();labelsDirty=false;}renderer.render(scene,camera);}animate();
   // 41 个标准型号只占 Lab 全空间的一小块，固定视距会让数据缩成一团，
   // 因此所有预设视角都按当前筛选结果的包围盒取景，只保留观察方向不同。
   function dataBox(){
@@ -559,7 +611,8 @@
   $('deviceGamut').textContent=matchMedia('(color-gamut: rec2020)').matches?'设备报告：Rec.2020':matchMedia('(color-gamut: p3)').matches?'设备报告：Display-P3':'设备报告：sRGB';
 
   const filtersChanged=()=>state.target?locateTarget(state.target):renderScene();
-  $('formulaSearch').oninput=(event)=>{state.query=event.target.value.trim();filtersChanged();};
+  // 搜到唯一型号就直接飞过去；命中多个时不动相机，否则边打字边跳很晕。
+  $('formulaSearch').oninput=(event)=>{state.query=event.target.value.trim();filtersChanged();if(state.query&&state.points.length===1){selectPoint(state.points[0]);focusSelected();}};
   $('resinFilter').onchange=(event)=>{state.resin=event.target.value;filtersChanged();};
   $('dosageFilter').onchange=(event)=>{state.dosage=event.target.value;filtersChanged();};
   $('statusFilter').onchange=(event)=>{state.status=event.target.value;filtersChanged();};
@@ -568,10 +621,37 @@
   $('toleranceMagnify').onchange=(event)=>{state.toleranceMagnify=Number(event.target.value);renderScene();};
   $('toggleToleranceEdges').onchange=(event)=>{state.toleranceEdges=event.target.checked;renderScene();};
   $('toggleOverlapOnly').onchange=(event)=>{state.overlapOnly=event.target.checked;filtersChanged();};
+  $('toggleAllLabels').onchange=(event)=>{state.showAllLabels=event.target.checked;rebuildLabels();};
+  $('labelFocal').oninput=(event)=>{state.labelFocal=Number(event.target.value);$('labelFocalValue').textContent=event.target.value;labelsDirty=true;};
   $('focusTrajectory').onclick=()=>{if(!state.selected||!state.selected.resin_code)return;state.resin=state.selected.resin_code;$('resinFilter').value=state.resin;filtersChanged();};
   $('findNearest').onclick=()=>{const raw=[$('targetL').value,$('targetA').value,$('targetB').value];if(raw.some((value)=>value.trim()===''))return;const target=raw.map(Number);if(target.some((value)=>!Number.isFinite(value)))return;locateTarget(target);};
-  document.querySelectorAll('[data-label-field]').forEach((checkbox)=>checkbox.onchange=()=>{if(checkbox.checked)state.labelFields.add(checkbox.dataset.labelField);else state.labelFields.delete(checkbox.dataset.labelField);updateSelectedLabel();});
+  document.querySelectorAll('[data-label-field]').forEach((checkbox)=>checkbox.onchange=()=>{if(checkbox.checked)state.labelFields.add(checkbox.dataset.labelField);else state.labelFields.delete(checkbox.dataset.labelField);rebuildLabels();});
   $('loginBtn').onclick=()=>{location.href=`${API_BASE}/v1/auth/oidc/login?rd=${encodeURIComponent(location.pathname+location.search)}`;};
+  // 只持久化标签相关的三项。容差盒/参考色域等不存，
+  // 否则下次打开时容差盒莫名其妙是隐藏的，排查成本远高于省下的两次点击。
+  const PREFS_KEY='aliecs_formula_colors_view_prefs';
+  function savePrefs(){
+    localStorage.setItem(PREFS_KEY,JSON.stringify({labelFields:[...state.labelFields],showAllLabels:state.showAllLabels,labelFocal:state.labelFocal}));
+    $('saveViewPrefs').textContent='已设为默认';setTimeout(()=>{$('saveViewPrefs').textContent='设为默认';},1600);
+  }
+  function loadPrefs(){
+    let prefs=null;try{prefs=JSON.parse(localStorage.getItem(PREFS_KEY)||'null');}catch{prefs=null;}
+    if(!prefs)return;
+    if(Array.isArray(prefs.labelFields))state.labelFields=new Set(prefs.labelFields);
+    if(typeof prefs.showAllLabels==='boolean')state.showAllLabels=prefs.showAllLabels;
+    if(Number.isFinite(prefs.labelFocal))state.labelFocal=prefs.labelFocal;
+  }
+  function applyPrefsToControls(){
+    document.querySelectorAll('[data-label-field]').forEach((checkbox)=>{checkbox.checked=state.labelFields.has(checkbox.dataset.labelField);});
+    $('toggleAllLabels').checked=state.showAllLabels;
+    $('labelFocal').value=String(state.labelFocal);$('labelFocalValue').textContent=String(state.labelFocal);
+  }
+  $('saveViewPrefs').onclick=savePrefs;
+  $('resetViewPrefs').onclick=()=>{
+    localStorage.removeItem(PREFS_KEY);
+    state.labelFields=new Set(['formula','resin','dosage']);state.showAllLabels=false;state.labelFocal=12;
+    applyPrefsToControls();rebuildLabels();
+  };
 
   function rebuildFilterOptions(){
     const resins=[...new Set(enriched.map((item)=>item.resin_code).filter(Boolean))].sort();
@@ -586,7 +666,7 @@
     state.resin='';state.dosage='';state.status='';state.overlapOnly=false;
     $('statusFilter').value='';$('toggleOverlapOnly').checked=false;
   }
-  function resetSelection(){state.selected=null;state.deltaAnchor=null;state.target=null;state.neighbors=[];state.hoveredId=null;$('detailContent').hidden=true;$('detailEmpty').hidden=false;$('nearestResults').innerHTML='';selectedLabel.visible=false;syncDeltaButton();}
+  function resetSelection(){state.selected=null;state.deltaAnchor=null;state.target=null;state.neighbors=[];state.hoveredId=null;$('detailContent').hidden=true;$('detailEmpty').hidden=false;$('nearestResults').innerHTML='';rebuildLabels();syncDeltaButton();}
 
   async function loadLive(){
     const data=await api('/v1/formula/colors');
@@ -645,11 +725,13 @@
     closeUp=null;syncDeltaButton();renderScene();resetCamera();
   }
   $('deltaView').onclick=()=>enterDeltaView(state.deltaAnchor?null:state.selected);
+  // 面板是 .page 这个 flex column 的一个节点，展开时 .workspace 的 flex:1 自动让出高度，
+  // 不覆盖三维画布。ResizeObserver 已监听 #stage，相机 aspect 会自动跟上。
+  $('toggleSettings').onclick=()=>{const panel=$('settingsPanel');panel.hidden=!panel.hidden;$('toggleSettings').classList.toggle('active',!panel.hidden);};
 
   const params=new URLSearchParams(location.search),queryParam=params.get('q')||params.get('formula_key');
   if(queryParam){state.query=queryParam.split('::')[0];$('formulaSearch').value=state.query;}
-  // 视图设置展开后会占满窄屏的整个画布，移动端默认收起。
-  if(matchMedia('(max-width:1000px)').matches)$('viewSettings').removeAttribute('open');
+  loadPrefs();applyPrefsToControls();
   setPanMode(false);rebuildReferenceGamut();resetCamera(false);
   switchDataset('live');
 </script>

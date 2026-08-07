@@ -84,15 +84,62 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
         self.assertIn("flex-wrap:nowrap", self.html)
         self.assertNotIn("<br/>现有产品点", self.html)
 
-    def test_view_controls_are_collapsible(self) -> None:
-        self.assertIn('<details id="viewSettings"', self.html)
-        self.assertIn("<summary>视图设置</summary>", self.html)
-        self.assertIn('id="toggleReference"', self.html)
-        self.assertIn('id="resetCamera"', self.html)
-        self.assertIn('id="topCamera"', self.html)
-        self.assertIn('id="frontCamera"', self.html)
-        self.assertIn('id="sideCamera"', self.html)
-        self.assertIn('id="focusSelected"', self.html)
+    def test_view_controls_live_in_a_top_panel_not_over_the_canvas(self) -> None:
+        # 浮层压在画布上会挡住三维图；改为顶部横幅面板，展开时挤压画布高度。
+        self.assertNotIn('<details id="viewSettings"', self.html)
+        self.assertNotIn("<summary>视图设置</summary>", self.html)
+        self.assertIn('id="toggleSettings"', self.html)
+        self.assertIn('id="settingsPanel"', self.html)
+        self.assertIn("显示设置", self.html)
+        for control in ("toggleReference", "resetCamera", "topCamera", "frontCamera",
+                        "sideCamera", "focusSelected", "togglePan", "toggleTolerance",
+                        "toleranceMagnify", "referenceMode", "toggleAllLabels", "labelFocal"):
+            self.assertIn(f'id="{control}"', self.html)
+
+    def test_settings_panel_sits_between_toolbar_and_workspace(self) -> None:
+        toolbar = self.html.index('class="toolbar"')
+        panel = self.html.index('id="settingsPanel"')
+        workspace = self.html.index('class="workspace"')
+        self.assertLess(toolbar, panel)
+        self.assertLess(panel, workspace)
+
+    def test_settings_panel_groups_are_labelled(self) -> None:
+        for group in ("观察视角", "显示开关", "容差盒", "参考色域", "标签"):
+            self.assertIn(group, self.html)
+
+    def test_label_preferences_can_be_saved_as_default(self) -> None:
+        self.assertIn("aliecs_formula_colors_view_prefs", self.html)
+        self.assertIn('id="saveViewPrefs"', self.html)
+        self.assertIn('id="resetViewPrefs"', self.html)
+        self.assertIn("function savePrefs", self.html)
+        self.assertIn("function loadPrefs", self.html)
+        self.assertIn("function applyPrefsToControls", self.html)
+
+    def test_only_label_preferences_persist(self) -> None:
+        """容差盒/参考色域等不进 localStorage，否则下次打开会莫名其妙是隐藏状态。"""
+        prefs = self.html[self.html.index("function savePrefs"):self.html.index("function loadPrefs")]
+        self.assertIn("labelFields", prefs)
+        self.assertIn("showAllLabels", prefs)
+        self.assertIn("labelFocal", prefs)
+        for leaked in ("showTolerance", "showReference", "toleranceMagnify", "referenceMode"):
+            self.assertNotIn(leaked, prefs)
+
+    def test_hover_highlights_tolerance_overlapping_models(self) -> None:
+        self.assertIn("function labelHighlightSet", self.html)
+        self.assertIn("boxesOverlap(focus,item)", self.html)
+        # 重叠判定必须走真实比例，放大后的盒会得出错误结论。
+        self.assertIn("function boxesOverlap", self.html)
+        self.assertIn("toleranceRange(a,axis)", self.html)
+        # 孤立型号没有重叠邻居，此时不该把全场压暗。
+        self.assertIn("return set.size>1?set:null", self.html)
+
+    def test_highlight_dims_unrelated_tolerance_boxes_too(self) -> None:
+        self.assertIn("const highlight=labelHighlightSet()", self.html)
+        self.assertIn("dimmed=highlight&&!highlight.has(item.id)", self.html)
+
+    def test_unique_search_hit_flies_the_camera_to_it(self) -> None:
+        self.assertIn("state.points.length===1", self.html)
+        self.assertIn("selectPoint(state.points[0]);focusSelected()", self.html)
 
     def test_camera_controls_replace_orbit_controls(self) -> None:
         self.assertIn("camera-controls@2.10.1", self.html)
@@ -176,13 +223,47 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
         self.assertIn("state.sliceEnabled?state.sliceL-50:lab[0]-50", self.html)
         self.assertIn("L*=${state.sliceL} 切面", self.html)
 
-    def test_detail_fields_control_selected_product_3d_label(self) -> None:
+    def test_detail_fields_drive_a_dom_label_layer(self) -> None:
         self.assertGreaterEqual(self.html.count('data-label-field="'), 11)
         self.assertIn("labelFields:new Set(['formula','resin','dosage'])", self.html)
-        self.assertIn("function updateSelectedLabel", self.html)
-        self.assertIn("function labelValue", self.html)
-        self.assertIn("selectedLabel.position.copy(positionFor(state.selected))", self.html)
+        self.assertIn("function rebuildLabels", self.html)
+        self.assertIn("function syncLabels", self.html)
         self.assertIn("checkbox.onchange", self.html)
+        # 标签改成 DOM 层：canvas sprite 每块要建 192×72 纹理，全量显示时会吃爆显存。
+        self.assertIn('class="label-layer"', self.html)
+        self.assertIn("el.className='point-label'", self.html)
+        self.assertNotIn("selectedLabelCanvas", self.html)
+        self.assertNotIn("function updateSelectedLabel", self.html)
+
+    def test_label_targets_hide_with_product_points(self) -> None:
+        # 隐藏标准色点后其 DOM 标签也必须一起消失，否则会追着一个隐形的点漂浮。
+        self.assertIn("if(!state.showProducts||!state.labelFields.size)return[]", self.html)
+
+    def test_label_opacity_uses_cosine_fade_from_the_orbit_target(self) -> None:
+        # 余弦缓动：焦点附近与远端都平缓，过渡集中在中段，比线性自然。
+        self.assertIn("controls.getTarget(_focalV3)", self.html)
+        self.assertIn(".5-.5*Math.cos(normalized*Math.PI)", self.html)
+        self.assertIn("function labelOpacityBase", self.html)
+        self.assertIn("function labelHighlightSet", self.html)
+        # 三态：hover/选中全亮，非高亮压到 20% 以下，其余按距离淡化。
+        self.assertIn("Math.min(base,.2)", self.html)
+
+    def test_label_layer_only_repaints_when_the_camera_moved(self) -> None:
+        # camera-controls 的 update() 返回是否有相机变化，是最可靠的节流信号。
+        self.assertIn("const cameraMoved=controls.update(clock.getDelta())", self.html)
+        self.assertIn("if(cameraMoved||labelsDirty)", self.html)
+
+    def test_all_labels_can_be_shown_at_once(self) -> None:
+        self.assertIn('id="toggleAllLabels"', self.html)
+        self.assertIn("showAllLabels:false", self.html)
+        self.assertIn("state.showAllLabels=", self.html)
+        # 全量显示时不再限制点数：DOM 标签没有纹理开销。
+        self.assertIn("if(state.showAllLabels)return state.points", self.html)
+
+    def test_label_fade_distance_is_adjustable(self) -> None:
+        self.assertIn('id="labelFocal" type="range" min="2" max="60"', self.html)
+        self.assertIn("labelFocal:12", self.html)
+        self.assertIn('id="labelFocalValue"', self.html)
 
     def test_color_math_and_gamut_warning_are_present(self) -> None:
         self.assertIn("function deltaE76", self.html)
