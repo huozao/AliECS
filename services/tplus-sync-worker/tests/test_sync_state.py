@@ -231,3 +231,35 @@ class _FakeBomRecordsCursor:
 
 if __name__ == "__main__":
     unittest.main()
+
+class InventoryRecordTests(unittest.TestCase):
+    def test_inventory_record_key_uses_code(self):
+        from tplus_datahub.jobs.sync_state import _inventory_record_key
+        self.assertEqual("HYD-8201", _inventory_record_key({"Code": "HYD-8201", "Name": "HYD-8201紫"}))
+        self.assertNotEqual("", _inventory_record_key({}))
+
+    def test_upsert_inventory_records_issues_insert(self):
+        from tplus_datahub.jobs.sync_state import upsert_inventory_records
+        executed = []
+
+        class FakeCur:
+            def execute(self, sql, params):
+                executed.append((sql, params))
+
+        record = {"record_key": "HYD-8201", "record_hash": "h", "raw": {"Code": "HYD-8201"}}
+        upsert_inventory_records(FakeCur(), [record])
+        self.assertIn("tplus_inventory_records", executed[0][0])
+        self.assertEqual("HYD-8201", executed[0][1][0])
+
+    def test_mark_missing_inventory_respects_full_sync_modes(self):
+        from tplus_datahub.jobs.sync_state import mark_missing_inventory_records
+        called = []
+
+        class FakeCur:
+            def execute(self, sql, params):
+                called.append(sql)
+
+        mark_missing_inventory_records(FakeCur(), "incremental", [{"record_key": "A"}])
+        self.assertEqual([], called)
+        mark_missing_inventory_records(FakeCur(), "scheduled_full", [{"record_key": "A"}])
+        self.assertEqual(1, len(called))

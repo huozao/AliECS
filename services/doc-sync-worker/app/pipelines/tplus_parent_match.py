@@ -48,6 +48,13 @@ WHERE missing_since IS NULL AND coalesce(raw_json->>'Code', '') <> ''
 ORDER BY raw_json->>'Code', raw_json->>'UpdateDate' DESC
 """
 
+_ACTIVE_INVENTORY_SQL = """
+SELECT raw_json->>'Code', raw_json->>'Name'
+FROM tplus_inventory_records
+WHERE missing_since IS NULL AND coalesce(raw_json->>'Code', '') <> ''
+ORDER BY raw_json->>'Code'
+"""
+
 _SOURCE_SQL = """
 SELECT external_doc_id, external_sheet_id
 FROM external_sources
@@ -87,10 +94,15 @@ def text_cell(value: str) -> list[dict[str, str]]:
 
 
 def load_active_bom() -> dict[str, tuple[str, str]]:
+    """T+ 有效父件：BOM 记录优先，纯存货档案（暂无 BOM）兜底，避免新建父件被误判失联。"""
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(_ACTIVE_BOM_SQL)
-            return {str(row[0]): (str(row[1] or ""), str(row[2] or "")) for row in cur.fetchall()}
+            bom = {str(row[0]): (str(row[1] or ""), str(row[2] or "")) for row in cur.fetchall()}
+            cur.execute(_ACTIVE_INVENTORY_SQL)
+            for code, name in cur.fetchall():
+                bom.setdefault(str(code), (str(name or ""), ""))
+            return bom
 
 
 def resolve_source() -> tuple[str, str]:
