@@ -92,6 +92,16 @@ class FormulaColorsParsingTests(unittest.TestCase):
         self.assertEqual(self.module.SOURCE_SHEET, "标准型号规格&月统计")
         self.assertNotIn("20120", self.module._SOURCE_SQL)
 
+    def test_refresh_enqueues_sheet_sync_request(self) -> None:
+        self.assertIn("INSERT INTO sync_requests", self.module._ENQUEUE_SQL)
+        self.assertIn("'manual', 'pending'", self.module._ENQUEUE_SQL)
+        self.assertIn("status IN ('pending', 'running')", self.module._ENQUEUE_DEDUP_SQL)
+
+    def test_refresh_router_exists_and_reuses_page_permission(self) -> None:
+        import inspect
+        self.assertTrue(hasattr(self.module, "formula_colors_refresh"))
+        source = inspect.getsource(self.module.formula_colors_refresh)
+        self.assertIn("require_permission(", source)
 
 if __name__ == "__main__":
     unittest.main()
