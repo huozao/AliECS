@@ -122,22 +122,24 @@ def process_submission(submission: dict[str, Any], client: ChanjetClient | None 
     dto = payload.get("dto") or {}
     parent_code = str((dto.get("Inventory") or {}).get("Code") or "").strip()
     version = str(dto.get("Version") or "").strip()
+    has_children = bool(dto.get("BOMChildDTOs"))
     query_payload = {"dto": {"Code": parent_code, "Version": version}}
-    try:
-        preflight_response = client.post(BOM_QUERY_ENDPOINT, query_payload)
-    except Exception as exc:
-        finish_submission(
-            submission_id, status="failed",
-            error={"type": type(exc).__name__, "message": f"写入前查询失败：{exc}"},
-        )
-        return "failed"
-    existing = _verified_bom(preflight_response, parent_code, version, "")
-    if existing is not None:
-        finish_submission(
-            submission_id, status="failed", verification={"existing": existing},
-            error={"message": "T+ 已存在相同父件编码和版本号的 BOM"},
-        )
-        return "failed"
+    if has_children:
+        try:
+            preflight_response = client.post(BOM_QUERY_ENDPOINT, query_payload)
+        except Exception as exc:
+            finish_submission(
+                submission_id, status="failed",
+                error={"type": type(exc).__name__, "message": f"写入前查询失败：{exc}"},
+            )
+            return "failed"
+        existing = _verified_bom(preflight_response, parent_code, version, "")
+        if existing is not None:
+            finish_submission(
+                submission_id, status="failed", verification={"existing": existing},
+                error={"message": "T+ 已存在相同父件编码和版本号的 BOM"},
+            )
+            return "failed"
 
     prepared: list[dict[str, Any]] = []
     for inventory_request in custom_inventories:
@@ -170,6 +172,20 @@ def process_submission(submission: dict[str, Any], client: ChanjetClient | None 
                 error={"type": type(exc).__name__, "message": f"自定义存货处理结果不确定：{exc}"},
             )
             return "needs_review"
+
+    if not has_children:
+        # 只创建父件：无子件时跳过 BOM 创建，父件存货已在上方处理完毕。
+        add_event(submission_id, "parent_only_created", {"parent_code": parent_code, "version": version})
+        finish_submission(
+            submission_id, status="success",
+            verification={
+                "Code": parent_code,
+                "Version": version,
+                "children": 0,
+                "note": "仅创建父件（无子件），未创建 BOM",
+            },
+        )
+        return "success"
 
     try:
         add_event(submission_id, "create_requested", {"parent_code": parent_code, "version": version})

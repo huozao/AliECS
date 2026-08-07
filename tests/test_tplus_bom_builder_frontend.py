@@ -44,6 +44,11 @@ class TPlusBomBuilderFrontendTests(unittest.TestCase):
         self.assertIn("role_permissions", sql)
         self.assertIn("admin", sql)
 
+    def test_code_suggestion_memory_migration_adds_memory_table(self):
+        from pathlib import Path
+        sql = (ROOT / "db" / "migrations" / "0046_tplus_code_suggestion_memory.sql").read_text(encoding="utf-8")
+        self.assertIn("tplus_inventory_code_memory", sql)
+
 
 if __name__ == "__main__":
     unittest.main()

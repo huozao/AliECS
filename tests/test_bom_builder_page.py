@@ -85,6 +85,16 @@ def test_code_suggestion_and_duplicate_check_wiring():
     assert 'id="customCodeHint"' in html and 'id="customCodeWarn"' in html
     assert "编码已存在" in html
     assert "dupState" in html
+    assert "live_checked" in html
+
+
+def test_parent_only_submit_allowed_and_guarded():
+    html = read_page()
+    # 无子件可直接提交（仅创建父件），不再强制至少一个子件
+    assert "请至少添加一个子件" not in html
+    assert "仅创建父件（不创建 BOM）" in html
+    # 已选 T+ 已有父件且无子件时没有可写入内容，给出明确提示
+    assert "已选 T+ 已有父件且未添加子件" in html
 
 
 def test_version_defaults_to_yymmdd_today():
