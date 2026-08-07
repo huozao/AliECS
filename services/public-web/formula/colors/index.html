@@ -615,6 +615,31 @@
   $('findNearest').onclick=()=>{const raw=[$('targetL').value,$('targetA').value,$('targetB').value];if(raw.some((value)=>value.trim()===''))return;const target=raw.map(Number);if(target.some((value)=>!Number.isFinite(value)))return;locateTarget(target);};
   document.querySelectorAll('[data-label-field]').forEach((checkbox)=>checkbox.onchange=()=>{if(checkbox.checked)state.labelFields.add(checkbox.dataset.labelField);else state.labelFields.delete(checkbox.dataset.labelField);rebuildLabels();});
   $('loginBtn').onclick=()=>{location.href=`${API_BASE}/v1/auth/oidc/login?rd=${encodeURIComponent(location.pathname+location.search)}`;};
+  // 只持久化标签相关的三项。容差盒/参考色域等不存，
+  // 否则下次打开时容差盒莫名其妙是隐藏的，排查成本远高于省下的两次点击。
+  const PREFS_KEY='aliecs_formula_colors_view_prefs';
+  function savePrefs(){
+    localStorage.setItem(PREFS_KEY,JSON.stringify({labelFields:[...state.labelFields],showAllLabels:state.showAllLabels,labelFocal:state.labelFocal}));
+    $('saveViewPrefs').textContent='已设为默认';setTimeout(()=>{$('saveViewPrefs').textContent='设为默认';},1600);
+  }
+  function loadPrefs(){
+    let prefs=null;try{prefs=JSON.parse(localStorage.getItem(PREFS_KEY)||'null');}catch{prefs=null;}
+    if(!prefs)return;
+    if(Array.isArray(prefs.labelFields))state.labelFields=new Set(prefs.labelFields);
+    if(typeof prefs.showAllLabels==='boolean')state.showAllLabels=prefs.showAllLabels;
+    if(Number.isFinite(prefs.labelFocal))state.labelFocal=prefs.labelFocal;
+  }
+  function applyPrefsToControls(){
+    document.querySelectorAll('[data-label-field]').forEach((checkbox)=>{checkbox.checked=state.labelFields.has(checkbox.dataset.labelField);});
+    $('toggleAllLabels').checked=state.showAllLabels;
+    $('labelFocal').value=String(state.labelFocal);$('labelFocalValue').textContent=String(state.labelFocal);
+  }
+  $('saveViewPrefs').onclick=savePrefs;
+  $('resetViewPrefs').onclick=()=>{
+    localStorage.removeItem(PREFS_KEY);
+    state.labelFields=new Set(['formula','resin','dosage']);state.showAllLabels=false;state.labelFocal=12;
+    applyPrefsToControls();rebuildLabels();
+  };
 
   function rebuildFilterOptions(){
     const resins=[...new Set(enriched.map((item)=>item.resin_code).filter(Boolean))].sort();
@@ -694,6 +719,7 @@
 
   const params=new URLSearchParams(location.search),queryParam=params.get('q')||params.get('formula_key');
   if(queryParam){state.query=queryParam.split('::')[0];$('formulaSearch').value=state.query;}
+  loadPrefs();applyPrefsToControls();
   setPanMode(false);rebuildReferenceGamut();resetCamera(false);
   switchDataset('live');
 </script>

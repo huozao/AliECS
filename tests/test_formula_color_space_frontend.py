@@ -107,6 +107,23 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
         for group in ("观察视角", "显示开关", "容差盒", "参考色域", "标签"):
             self.assertIn(group, self.html)
 
+    def test_label_preferences_can_be_saved_as_default(self) -> None:
+        self.assertIn("aliecs_formula_colors_view_prefs", self.html)
+        self.assertIn('id="saveViewPrefs"', self.html)
+        self.assertIn('id="resetViewPrefs"', self.html)
+        self.assertIn("function savePrefs", self.html)
+        self.assertIn("function loadPrefs", self.html)
+        self.assertIn("function applyPrefsToControls", self.html)
+
+    def test_only_label_preferences_persist(self) -> None:
+        """容差盒/参考色域等不进 localStorage，否则下次打开会莫名其妙是隐藏状态。"""
+        prefs = self.html[self.html.index("function savePrefs"):self.html.index("function loadPrefs")]
+        self.assertIn("labelFields", prefs)
+        self.assertIn("showAllLabels", prefs)
+        self.assertIn("labelFocal", prefs)
+        for leaked in ("showTolerance", "showReference", "toleranceMagnify", "referenceMode"):
+            self.assertNotIn(leaked, prefs)
+
     def test_camera_controls_replace_orbit_controls(self) -> None:
         self.assertIn("camera-controls@2.10.1", self.html)
         self.assertIn("CameraControls.install({THREE})", self.html)
