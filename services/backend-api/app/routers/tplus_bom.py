@@ -68,7 +68,7 @@ class BomOptions(BaseModel):
 
 class BomDraftBody(BaseModel):
     parent: BomParent
-    children: list[BomChild] = Field(min_length=1, max_length=500)
+    children: list[BomChild] = Field(default_factory=list, max_length=500)
     options: BomOptions
 
 
@@ -280,6 +280,65 @@ def tplus_inventory_choices(
 
 CODE_SERIAL_WIDTH = 6
 CODE_SERIAL_MAX = 10 ** CODE_SERIAL_WIDTH - 1
+CODE_LIVE_CHECK_LIMIT = 100
+INVENTORY_QUERY_ENDPOINT = "/tplus/api/v2/inventory/Query"
+
+
+def _chanjet_rows(response: Any) -> list[dict[str, Any]]:
+    """把 T+ 查询返回统一折成行列表（兼容 list / result/data/value 等包装与嵌套 dict）。"""
+    if isinstance(response, list):
+        return [row for row in response if isinstance(row, dict)]
+    if not isinstance(response, dict):
+        return []
+    for key in ("result", "Result", "data", "Data", "value", "Value", "rows", "Rows"):
+        value = response.get(key)
+        if isinstance(value, list):
+            return [row for row in value if isinstance(row, dict)]
+        if isinstance(value, dict):
+            nested = _chanjet_rows(value)
+            if nested:
+                return nested
+    return []
+
+
+def _suggested_code_memory() -> set[str]:
+    """工具已知在 T+ 落库的存货编码：建议记忆表 + 本工具成功提交/已建存货事件。"""
+    codes: set[str] = set()
+    try:
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT code FROM tplus_inventory_code_memory
+                       UNION
+                       SELECT DISTINCT detail_json->>'code' FROM tplus_bom_submission_events
+                       WHERE event_type IN ('inventory_created', 'inventory_reused')
+                       UNION
+                       SELECT DISTINCT request_json->'bom'->'dto'->'Inventory'->>'Code'
+                       FROM tplus_bom_submissions WHERE status = 'success'"""
+                )
+                for row in cur.fetchall():
+                    code = str(row[0] or "").strip()
+                    if code:
+                        codes.add(code)
+    except Exception:
+        # 记忆不可读时降级为仅导出文件建议，不阻塞录入
+        pass
+    return codes
+
+
+def _remember_inventory_code(code: str, source: str, actor: str) -> None:
+    try:
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO tplus_inventory_code_memory(code, source, created_by)
+                       VALUES (%s, %s, %s) ON CONFLICT (code) DO NOTHING""",
+                    (code, source, actor),
+                )
+            conn.commit()
+    except Exception:
+        # 记忆写入失败不影响本次实时查重结果
+        pass
 
 
 @router.get("/inventory-code-suggestion")
@@ -287,7 +346,11 @@ def tplus_inventory_code_suggestion(
     class_code: str = Query(min_length=2, max_length=100),
     user: dict[str, Any] = Depends(require_login),
 ) -> dict[str, Any]:
-    """按用户约定：分类编码前 2 位 + 6 位不重复流水；历史杂乱编码不参与。"""
+    """按用户约定：分类编码前 2 位 + 6 位不重复流水；历史杂乱编码不参与。
+
+    候选码每次实时向畅捷通 T+ 查询确认未占用：若已占用则记入记忆并立刻顺延到
+    下一个未占用流水；实时校验不可用时回退「导出文件 + 工具记忆」建议，不阻塞录入。
+    """
     _require_bom_write(user)
     prefix = class_code.strip()[:2]
     if not re.fullmatch(r"\d{2}", prefix):
@@ -302,19 +365,63 @@ def tplus_inventory_code_suggestion(
     if not code_col:
         raise HTTPException(status_code=409, detail="存货档案缺少编码字段")
     pattern = re.compile(rf"^{prefix}(\d{{{CODE_SERIAL_WIDTH}}})$")
-    serials = [
+    used_serials = {
         int(match.group(1))
         for code in df[code_col].astype(str).str.strip()
         if (match := pattern.fullmatch(code))
-    ]
-    next_serial = (max(serials) + 1) if serials else 1
-    if next_serial > CODE_SERIAL_MAX:
-        raise HTTPException(status_code=409, detail="该类别流水号已用尽，请人工定义编码")
-    return {
-        "suggested": f"{prefix}{next_serial:0{CODE_SERIAL_WIDTH}d}",
-        "prefix": prefix,
-        "source_file": path.name,
     }
+    for code in _suggested_code_memory():
+        if match := pattern.fullmatch(code):
+            used_serials.add(int(match.group(1)))
+
+    next_serial = (max(used_serials) + 1) if used_serials else 1
+    actor = _actor(user)
+    candidate = ""
+    fallback = ""
+    live_checked = False
+    checked = 0
+    while next_serial <= CODE_SERIAL_MAX:
+        trial = f"{prefix}{next_serial:0{CODE_SERIAL_WIDTH}d}"
+        if checked >= CODE_LIVE_CHECK_LIMIT:
+            fallback = trial
+            break
+        try:
+            rows = _chanjet_rows(
+                _chanjet_read_post(
+                    INVENTORY_QUERY_ENDPOINT,
+                    {"param": {"Code": trial, "SelectFields": "Code"}},
+                )
+            )
+        except HTTPException:
+            # 实时校验不可用（凭据/网络）：回退到导出 + 记忆结果
+            fallback = trial
+            break
+        live_checked = True
+        checked += 1
+        if any(str(row.get("Code") or "").strip() == trial for row in rows):
+            _remember_inventory_code(trial, "live_duplicate", actor)
+            next_serial += 1
+            continue
+        candidate = trial
+        break
+
+    if candidate:
+        return {
+            "suggested": candidate,
+            "prefix": prefix,
+            "source_file": path.name,
+            "live_checked": live_checked,
+        }
+    if live_checked:
+        raise HTTPException(status_code=409, detail="连续多个候选流水已被 T+ 占用，请人工定义编码")
+    if fallback:
+        return {
+            "suggested": fallback,
+            "prefix": prefix,
+            "source_file": path.name,
+            "live_checked": live_checked,
+        }
+    raise HTTPException(status_code=409, detail="该类别流水号已用尽，请人工定义编码")
 
 
 BOM_QUERY_ENDPOINT = "/tplus/api/v2/bom/Query"

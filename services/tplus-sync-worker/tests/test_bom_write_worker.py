@@ -32,10 +32,44 @@ class BomWriteWorkerTests(unittest.TestCase):
                     "Unit": {"Name": "个"},
                     "ProduceQuantity": "1",
                     "YieldRate": "1",
-                    "BOMChildDTOs": [],
+                    "BOMChildDTOs": [
+                        {"Inventory": {"Code": "RM-1"}, "Unit": {"Name": "kg"}, "RequiredQuantity": "1"}
+                    ],
                 }
             },
         }
+
+    @patch.object(bom_write_worker, "add_event")
+    @patch.object(bom_write_worker, "finish_submission")
+    def test_parent_only_creates_inventory_and_skips_bom_create(self, finish, _event):
+        submission = self._submission()
+        submission["request_json"]["dto"]["BOMChildDTOs"] = []
+        submission["request_json"] = {
+            "bom": submission["request_json"],
+            "custom_inventories": [{
+                "kind": "parent", "code": "06000001",
+                "payload": {"dto": {"Code": "06000001", "Name": "新父件"}},
+            }],
+        }
+        client = FakeClient([
+            None,
+            568,
+            [{"ID": 568, "Code": "06000001", "Name": "新父件"}],
+        ])
+        status = bom_write_worker.process_submission(submission, client=client)
+        self.assertEqual("success", status)
+        self.assertEqual(
+            [
+                bom_write_worker.INVENTORY_QUERY_ENDPOINT,
+                bom_write_worker.INVENTORY_CREATE_ENDPOINT,
+                bom_write_worker.INVENTORY_QUERY_ENDPOINT,
+            ],
+            [call[0] for call in client.calls],
+        )
+        self.assertNotIn(bom_write_worker.BOM_CREATE_ENDPOINT, [call[0] for call in client.calls])
+        self.assertEqual("success", finish.call_args.kwargs["status"])
+        self.assertEqual(0, finish.call_args.kwargs["verification"]["children"])
+        self.assertIn("仅创建父件", finish.call_args.kwargs["verification"]["note"])
 
     @patch.object(bom_write_worker, "add_event")
     @patch.object(bom_write_worker, "finish_submission")

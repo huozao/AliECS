@@ -86,8 +86,8 @@ def validate_bom_draft(parent: dict[str, Any], children: list[dict[str, Any]], o
     except ValueError as exc:
         errors.append(str(exc))
 
-    if not children:
-        errors.append("至少选择一个子件")
+    if not children and _text(parent.get("source")) != "custom":
+        errors.append("已选 T+ 已有父件且未添加子件，没有可写入内容")
     if len(children) > 500:
         errors.append("单个 BOM 最多支持 500 个子件")
 

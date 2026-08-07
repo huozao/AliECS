@@ -111,6 +111,31 @@ class TPlusBomWriteDomainTests(unittest.TestCase):
         errors = main.validate_bom_draft(parent, children, options)
         self.assertTrue(any("至少勾选一项存货属性" in error for error in errors))
 
+    def _custom_parent(self):
+        parent, _, options = self._draft()
+        parent.update({
+            "source": "custom",
+            "unit_code": "2",
+            "inventory_class_code": "06",
+            "inventory_class_name": "物料清单",
+        })
+        return parent, options
+
+    def test_parent_only_draft_is_valid(self):
+        parent, options = self._custom_parent()
+        errors = main.validate_bom_draft(parent, [], options)
+        self.assertEqual([], errors)
+
+    def test_parent_only_builds_empty_bom_children(self):
+        parent, options = self._custom_parent()
+        payload = main.build_bom_create_payload(parent, [], options)
+        self.assertEqual([], payload["dto"]["BOMChildDTOs"])
+
+    def test_existing_tplus_parent_without_children_rejected(self):
+        parent, options = self._custom_parent()
+        parent["source"] = "tplus"
+        errors = main.validate_bom_draft(parent, [], options)
+        self.assertTrue(any("没有可写入内容" in error for error in errors))
 
     def test_voucher_is_pending_only_for_code_00(self):
         self.assertTrue(main.voucher_is_pending({"VoucherState": {"Code": "00", "Name": "未审"}}))

@@ -143,8 +143,20 @@ class TPlusCodeSuggestionTests(unittest.TestCase):
         self.old_dir = os.environ.get("TPLUS_EXPORT_DIR")
         os.environ["TPLUS_EXPORT_DIR"] = self.tmp.name
         _write_inventory_for_suggestion(Path(self.tmp.name))
+        self.old_read_post = self.main._chanjet_read_post
+        self.main._chanjet_read_post = lambda endpoint, payload: []
+        self.old_memory = self.main._suggested_code_memory
+        self.main._suggested_code_memory = lambda: set()
+        self.old_remember = self.main._remember_inventory_code
+        self.remembered: list[tuple[str, str, str]] = []
+        self.main._remember_inventory_code = (
+            lambda code, source, actor: self.remembered.append((code, source, actor))
+        )
 
     def tearDown(self) -> None:
+        self.main._chanjet_read_post = self.old_read_post
+        self.main._suggested_code_memory = self.old_memory
+        self.main._remember_inventory_code = self.old_remember
         if self.old_dir is None:
             os.environ.pop("TPLUS_EXPORT_DIR", None)
         else:
@@ -158,6 +170,7 @@ class TPlusCodeSuggestionTests(unittest.TestCase):
         result = self.main.tplus_inventory_code_suggestion(class_code="06", user=self._user())
         self.assertEqual("06000013", result["suggested"])
         self.assertEqual("06", result["prefix"])
+        self.assertTrue(result["live_checked"])
 
     def test_first_code_when_prefix_unused(self):
         result = self.main.tplus_inventory_code_suggestion(class_code="09", user=self._user())
@@ -173,6 +186,31 @@ class TPlusCodeSuggestionTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             self.main.tplus_inventory_code_suggestion(class_code="AB", user=self._user())
         self.assertEqual(400, ctx.exception.status_code)
+
+    def test_live_duplicate_skips_to_next_free_and_remembers(self):
+        taken = {"06000013"}
+        def fake_query(endpoint, payload):
+            code = payload["param"]["Code"]
+            return [{"Code": code}] if code in taken else []
+        self.main._chanjet_read_post = fake_query
+        result = self.main.tplus_inventory_code_suggestion(class_code="06", user=self._user())
+        self.assertEqual("06000014", result["suggested"])
+        self.assertTrue(result["live_checked"])
+        self.assertEqual(("06000013", "live_duplicate"), self.remembered[0][:2])
+
+    def test_memory_codes_are_skipped(self):
+        self.main._suggested_code_memory = lambda: {"06000013"}
+        result = self.main.tplus_inventory_code_suggestion(class_code="06", user=self._user())
+        self.assertEqual("06000014", result["suggested"])
+
+    def test_falls_back_to_export_when_live_check_unavailable(self):
+        from fastapi import HTTPException
+        def fake_query(endpoint, payload):
+            raise HTTPException(status_code=503, detail="T+ 查询凭据未配置")
+        self.main._chanjet_read_post = fake_query
+        result = self.main.tplus_inventory_code_suggestion(class_code="06", user=self._user())
+        self.assertEqual("06000013", result["suggested"])
+        self.assertFalse(result["live_checked"])
 
 
 class TPlusBomPendingTests(unittest.TestCase):
