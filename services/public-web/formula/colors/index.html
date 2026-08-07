@@ -309,7 +309,16 @@
     return 1-(.5-.5*Math.cos(normalized*Math.PI));
   }
   // Task 9 会把重叠型号填进来；返回 null 表示「无高亮集」，此时不压暗任何点。
-  function labelHighlightSet(){return null;}
+  // hover 或选中某型号时，高亮与它容差盒重叠的型号、压暗其余——
+  // 比「只看容差重叠」那个二元筛选多一条不改筛选就能看清重叠关系的路径。
+  // 没有重叠邻居就返回 null：孤立型号不该把全场压暗。
+  function labelHighlightSet(){
+    const focus=state.hoveredId!==null?state.points.find((item)=>item.id===state.hoveredId):state.selected;
+    if(!focus||!focus.tolerance)return null;
+    const set=new Set([focus.id]);
+    for(const item of state.points)if(item.id!==focus.id&&item.tolerance&&boxesOverlap(focus,item))set.add(item.id);
+    return set.size>1?set:null;
+  }
   function labelTargets(){
     if(!state.showProducts||!state.labelFields.size)return[];
     if(state.showAllLabels)return state.points;
@@ -420,6 +429,7 @@
   function rebuildTolerance(){
     clearTolerance();
     if(!state.showTolerance||state.mode==='relative')return;
+    const highlight=labelHighlightSet();
     for(const item of state.points){
       if(!item.tolerance)continue;
       // 盒中心可能偏离标准色点：容差区间通常不对称（例如 ΔL* [-2.00, -1.50]）。
@@ -433,10 +443,11 @@
       size.set(Math.max(size.x,.004),Math.max(size.y,.004),Math.max(size.z,.004));
       const geometry=new THREE.BoxGeometry(size.x,size.y,size.z);
       const selected=state.selected&&state.selected.id===item.id;
-      const box=new THREE.Mesh(geometry,new THREE.MeshBasicMaterial({color:item.display.hex,transparent:true,opacity:selected?Math.min(.85,state.toleranceOpacity+.25):state.toleranceOpacity,depthWrite:false,side:THREE.DoubleSide}));
+      const dimmed=highlight&&!highlight.has(item.id);
+      const box=new THREE.Mesh(geometry,new THREE.MeshBasicMaterial({color:item.display.hex,transparent:true,opacity:selected?Math.min(.85,state.toleranceOpacity+.25):(highlight&&!highlight.has(item.id)?state.toleranceOpacity*.25:state.toleranceOpacity),depthWrite:false,side:THREE.DoubleSide}));
       box.position.copy(center);box.userData={pointId:item.id};toleranceGroup.add(box);
       if(state.toleranceEdges){
-        const edges=new THREE.LineSegments(new THREE.EdgesGeometry(geometry),new THREE.LineBasicMaterial({color:selected?0x1f1a15:0x6b5f52,transparent:true,opacity:selected?.95:.5}));
+        const edges=new THREE.LineSegments(new THREE.EdgesGeometry(geometry),new THREE.LineBasicMaterial({color:selected?0x1f1a15:0x6b5f52,transparent:true,opacity:selected?.95:dimmed?.12:.5}));
         edges.position.copy(center);toleranceGroup.add(edges);
       }
     }

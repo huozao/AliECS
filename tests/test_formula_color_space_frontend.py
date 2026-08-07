@@ -124,6 +124,19 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
         for leaked in ("showTolerance", "showReference", "toleranceMagnify", "referenceMode"):
             self.assertNotIn(leaked, prefs)
 
+    def test_hover_highlights_tolerance_overlapping_models(self) -> None:
+        self.assertIn("function labelHighlightSet", self.html)
+        self.assertIn("boxesOverlap(focus,item)", self.html)
+        # 重叠判定必须走真实比例，放大后的盒会得出错误结论。
+        self.assertIn("function boxesOverlap", self.html)
+        self.assertIn("toleranceRange(a,axis)", self.html)
+        # 孤立型号没有重叠邻居，此时不该把全场压暗。
+        self.assertIn("return set.size>1?set:null", self.html)
+
+    def test_highlight_dims_unrelated_tolerance_boxes_too(self) -> None:
+        self.assertIn("const highlight=labelHighlightSet()", self.html)
+        self.assertIn("dimmed=highlight&&!highlight.has(item.id)", self.html)
+
     def test_camera_controls_replace_orbit_controls(self) -> None:
         self.assertIn("camera-controls@2.10.1", self.html)
         self.assertIn("CameraControls.install({THREE})", self.html)
