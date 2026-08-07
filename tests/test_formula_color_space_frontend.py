@@ -84,15 +84,28 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
         self.assertIn("flex-wrap:nowrap", self.html)
         self.assertNotIn("<br/>现有产品点", self.html)
 
-    def test_view_controls_are_collapsible(self) -> None:
-        self.assertIn('<details id="viewSettings"', self.html)
-        self.assertIn("<summary>视图设置</summary>", self.html)
-        self.assertIn('id="toggleReference"', self.html)
-        self.assertIn('id="resetCamera"', self.html)
-        self.assertIn('id="topCamera"', self.html)
-        self.assertIn('id="frontCamera"', self.html)
-        self.assertIn('id="sideCamera"', self.html)
-        self.assertIn('id="focusSelected"', self.html)
+    def test_view_controls_live_in_a_top_panel_not_over_the_canvas(self) -> None:
+        # 浮层压在画布上会挡住三维图；改为顶部横幅面板，展开时挤压画布高度。
+        self.assertNotIn('<details id="viewSettings"', self.html)
+        self.assertNotIn("<summary>视图设置</summary>", self.html)
+        self.assertIn('id="toggleSettings"', self.html)
+        self.assertIn('id="settingsPanel"', self.html)
+        self.assertIn("显示设置", self.html)
+        for control in ("toggleReference", "resetCamera", "topCamera", "frontCamera",
+                        "sideCamera", "focusSelected", "togglePan", "toggleTolerance",
+                        "toleranceMagnify", "referenceMode", "toggleAllLabels", "labelFocal"):
+            self.assertIn(f'id="{control}"', self.html)
+
+    def test_settings_panel_sits_between_toolbar_and_workspace(self) -> None:
+        toolbar = self.html.index('class="toolbar"')
+        panel = self.html.index('id="settingsPanel"')
+        workspace = self.html.index('class="workspace"')
+        self.assertLess(toolbar, panel)
+        self.assertLess(panel, workspace)
+
+    def test_settings_panel_groups_are_labelled(self) -> None:
+        for group in ("观察视角", "显示开关", "容差盒", "参考色域", "标签"):
+            self.assertIn(group, self.html)
 
     def test_camera_controls_replace_orbit_controls(self) -> None:
         self.assertIn("camera-controls@2.10.1", self.html)
