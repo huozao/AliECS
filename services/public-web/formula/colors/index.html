@@ -102,9 +102,11 @@
   const API_BASE=location.port==='8080'?'http://localhost:8000':'/api';
   const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
   const getAuthToken=()=>AUTH_KEYS.map((key)=>localStorage.getItem(key)||'').find(Boolean)||'';
-  async function api(path){
+  // options 必须展开进 fetch 的 init：漏了它，调用方传的 {method:'POST'} 会被静默丢弃，
+  // POST 退化成 GET（2026-08-07 生产实测 /v1/formula/colors/refresh 一路 405）。
+  async function api(path,options){
     const headers={};const token=getAuthToken();if(token)headers.Authorization=`Bearer ${token}`;
-    const response=await fetch(`${API_BASE}${path}`,{headers});
+    const response=await fetch(`${API_BASE}${path}`,{...(options||{}),headers});
     const text=await response.text();let data={};
     if(text){try{data=JSON.parse(text)}catch{data={raw:text}}}
     if(!response.ok){if(response.status===401)AUTH_KEYS.forEach((key)=>localStorage.removeItem(key));const error=new Error(data.detail||`HTTP ${response.status}`);error.status=response.status;throw error;}
@@ -708,14 +710,22 @@
   $('datasetLive').onclick=()=>switchDataset('live');
   $('datasetMock').onclick=()=>switchDataset('mock');
 
-  // 手动刷新：入队后 worker 约 30 秒内拉取，轮询 meta.last_sync_at 直到变化。
+  // 手动刷新：入队后 doc-sync worker 消费，轮询 meta.last_sync_at 直到变化。
+  // 死线放到 180s：worker poll 默认 30s，且每日全量运行期间根本不消费手动请求，
+  // 90s 会在正常排队时就误报超时。刷新只重拉企微表，T+ 父件名称不在这条链路上。
   $('refreshData').onclick=async()=>{
     const btn=$('refreshData'),orig=btn.textContent;
     btn.disabled=true;btn.textContent='同步中…';
+    let hold=2500;
     try{
       const before=datasetMeta&&datasetMeta.last_sync_at;
-      await api('/v1/formula/colors/refresh',{method:'POST'});
-      const deadline=Date.now()+90000;
+      const queued=await api('/v1/formula/colors/refresh',{method:'POST'});
+      if(queued&&queued.available===false){
+        btn.textContent='未登记';$('datasetNote').textContent=queued.message||'该智能表格尚未在 doc-sync 登记。';
+        hold=4000;throw new Error('skip-poll');
+      }
+      if(queued&&queued.already_pending)btn.textContent='排队中…';
+      const deadline=Date.now()+180000;
       while(Date.now()<deadline){
         await new Promise((resolve)=>setTimeout(resolve,5000));
         const data=await api('/v1/formula/colors');
@@ -726,11 +736,19 @@
           btn.textContent='已更新';break;
         }
       }
-      if(btn.textContent==='同步中…')btn.textContent='超时未更新';
+      if(btn.textContent!=='已更新'){
+        btn.textContent='仍在同步';
+        $('datasetNote').textContent='同步请求已提交但还没落库，稍后重新打开页面即可看到新数据。';
+        hold=4000;
+      }
     }catch(error){
-      btn.textContent='失败';
+      if(error.message!=='skip-poll'){
+        btn.textContent='失败';
+        $('datasetNote').textContent=`刷新失败：${error.message}`;
+        hold=4000;
+      }
     }
-    setTimeout(()=>{btn.disabled=false;btn.textContent=orig;},2500);
+    setTimeout(()=>{btn.disabled=false;btn.textContent=orig;},hold);
   };
 
   function syncDeltaButton(){

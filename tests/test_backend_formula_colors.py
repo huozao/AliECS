@@ -103,6 +103,12 @@ class FormulaColorsParsingTests(unittest.TestCase):
         self.assertIn("'manual', 'pending'", self.module._ENQUEUE_SQL)
         self.assertIn("status IN ('pending', 'running')", self.module._ENQUEUE_DEDUP_SQL)
 
+    def test_refresh_dedup_is_time_bounded(self) -> None:
+        """去重不设时限时，一条卡在 running 的请求会让「刷新数据」永久返回
+        already_pending——按钮再也入不了队。"""
+        self.assertIn("requested_at", self.module._ENQUEUE_DEDUP_SQL)
+        self.assertIn("INTERVAL", self.module._ENQUEUE_DEDUP_SQL.upper())
+
     def test_refresh_router_exists_and_reuses_page_permission(self) -> None:
         import inspect
         self.assertTrue(hasattr(self.module, "formula_colors_refresh"))
