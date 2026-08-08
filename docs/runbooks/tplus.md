@@ -41,6 +41,19 @@
 | timeline 页 500 | tz-aware vs naive 比较 | 已修 36b032a；同类改动注意时区 |
 | BOM builder 保存报错 | T+ 报错透传（PR#186） | 委外=IsMadeRequest / 虚拟件=IsPhantom；T+ 请求 body 须 `{"request":{}}` |
 | BOM builder 读分类/单位 502、worker `openToken已失效`(403 code=50107) | openToken 续期链路（下方） | 迁移/停机把畅捷通消息地址打成「不再发送」，token 6 天后到期（2026-08-04） |
+| `/formula/colors/` 冒出一批「编码失联」，但父件在 T+ 里确实存在 | worker 日志 `Module failed, continuing with the rest: module=inventory`；`integration_sync_runs` 最后一条 `scheduled_full` 的 `detail_json.failed_modules` | 存货档案**只在定时全量里落库**（`job_sync_all` → `persist_inventory_records`）。纯存货父件（无 BOM）全靠它匹配；那一轮没跑成，页面就误判失联（2026-08-07 实测 41 条） |
+
+## 定时全量的失败边界与告警
+
+- **模块独立容错**：`job_sync_all.run()` 每个模块单独 try，一个挂掉只记账、后面照跑。
+  失败模块名进 `SyncAllResult.failed_modules` → `integration_sync_runs.detail_json.failed_modules`。
+  退出码取第一个失败模块的码（配置错 2 / 接口错 3 / 其他同步错 4 / 未知 1）。
+  历史反例：2026-08-07 18:00 BOM 接口超时，拆分前整轮 abort，存货跟着不落库。
+- **失败仍不重试**：worker 记完账就睡到下一个锚点（约 24h）。要立刻补，用手动全量或重启 worker。
+- **告警**：backend `ops.py` 的 `tplus-full-sync-watcher` 线程每小时查一次最后一轮 `scheduled_full`，
+  失败、`failed_modules` 非空、或超过 2 天没有成功记录都推飞书；同一轮按 `finished_at` 去重只报一次。
+  复用 openToken 告警那组凭据（`OPS_ALERT_FEISHU_*`，回退 `VERSION_DIGEST_FEISHU_*`），无新增密钥。
+  开关 `TPLUS_SYNC_ALERT_ENABLED`（默认 1）、间隔 `TPLUS_SYNC_ALERT_INTERVAL_SECONDS`（默认 3600）。
 
 ## openToken 续期链路（整条 T+ 的命门）
 

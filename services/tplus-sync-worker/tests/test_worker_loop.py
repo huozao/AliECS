@@ -76,7 +76,7 @@ class WorkerLoopTests(unittest.TestCase):
                     "status": "success",
                     "row_count": 0,
                     "exit_code": 0,
-                    "detail_json": {"run": 1, "export_files": [], "diff_summary": None, "full_snapshot_id": None},
+                    "detail_json": {"run": 1, "export_files": [], "diff_summary": None, "full_snapshot_id": None, "failed_modules": []},
                     "error_json": {},
                 }
             ],
@@ -99,7 +99,28 @@ class WorkerLoopTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertEqual("failed", recorded[0]["status"])
         self.assertEqual(1, recorded[0]["exit_code"])
-        self.assertEqual({"run": 1, "export_files": [], "diff_summary": None, "full_snapshot_id": None}, recorded[0]["detail_json"])
+        self.assertEqual({"run": 1, "export_files": [], "diff_summary": None, "full_snapshot_id": None, "failed_modules": []}, recorded[0]["detail_json"])
+
+    def test_run_forever_records_failed_modules_for_partial_success(self):
+        """模块独立容错后，整轮可能 status=success 却有模块没数据；
+        backend 的告警只认 detail_json.failed_modules，这里不落就永远报不出来。"""
+        recorded = []
+
+        class _Outcome:
+            exit_code = 0
+            export_files = ["bom.xlsx"]
+            diff_summary = None
+            full_snapshot_id = None
+            failed_modules = ["inventory"]
+
+        run_forever(
+            sync_once=lambda: _Outcome(),
+            record_sync_run=lambda **kwargs: recorded.append(kwargs),
+            sleep=lambda _seconds: None,
+            max_runs=1,
+        )
+
+        self.assertEqual(["inventory"], recorded[0]["detail_json"]["failed_modules"])
 
     def test_run_forever_consumes_manual_bom_request_between_full_runs(self):
         old_interval = os.environ.get("TPLUS_SYNC_INTERVAL_SECONDS")

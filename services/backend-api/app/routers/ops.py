@@ -1150,3 +1150,137 @@ def _start_chanjet_token_watcher() -> None:
     if os.getenv("CHANJET_TOKEN_ALERT_ENABLED", "1").strip() != "1":
         return
     threading.Thread(target=_chanjet_token_alert_loop, name="chanjet-token-watcher", daemon=True).start()
+
+
+# ---------- T+ 定时全量同步结果监控 ----------
+# tplus-sync-worker 跑完一轮定时全量会写 integration_sync_runs(provider='chanjet',
+# mode='scheduled_full')，但失败时它只记日志、不重试，直接睡到下一个锚点（约 24h）。
+# 2026-08-07 18:00 的失败就是这样没人知道，直到 /formula/colors/ 冒出 41 个「编码失联」
+# 才被发现（存货档案只有这一轮会落库）。这里在 backend 侧盯这张表：
+# 失败、部分模块失败、或久无成功记录都告警，复用 openToken 告警那组飞书凭据。
+
+TPLUS_FULL_SYNC_STALE_SECONDS = 2 * 86400
+TPLUS_FULL_SYNC_ALERT_INTERVAL_SECONDS = 3600
+
+_TPLUS_FULL_SYNC_SQL = """
+SELECT status, finished_at, exit_code, detail_json
+FROM integration_sync_runs
+WHERE provider = 'chanjet' AND mode = 'scheduled_full'
+ORDER BY started_at DESC, id DESC
+LIMIT 1
+"""
+
+
+def evaluate_tplus_full_sync(latest: dict[str, Any] | None, *, now: datetime,
+                             stale_after_seconds: int = TPLUS_FULL_SYNC_STALE_SECONDS) -> dict[str, Any]:
+    """判定最近一轮定时全量是否健康。纯函数，方便测；查库在调用方。"""
+    if not latest:
+        return {"ok": False, "status": "missing", "failed_modules": [], "stale": True,
+                "message": "从未见到定时全量同步记录"}
+    status = str(latest.get("status") or "")
+    detail = latest.get("detail_json") or {}
+    failed_modules = [str(item) for item in (detail.get("failed_modules") or [])]
+    finished_at = latest.get("finished_at")
+    age_seconds = (now - finished_at).total_seconds() if finished_at else None
+    stale = age_seconds is not None and age_seconds > stale_after_seconds
+    # status=success 但 failed_modules 非空 = 模块独立容错后的部分失败，同样要报。
+    ok = status == "success" and not failed_modules and not stale
+    if status != "success":
+        message = f"最近一轮定时全量失败（exit_code={latest.get('exit_code')}）"
+    elif failed_modules:
+        message = f"最近一轮定时全量部分模块失败：{'、'.join(failed_modules)}"
+    elif stale:
+        message = f"已 {round((age_seconds or 0) / 3600)} 小时没有成功的定时全量"
+    else:
+        message = "正常"
+    return {
+        "ok": ok,
+        "status": status,
+        "exit_code": latest.get("exit_code"),
+        "failed_modules": failed_modules,
+        "finished_at": finished_at.isoformat() if hasattr(finished_at, "isoformat") else finished_at,
+        "stale": stale,
+        "message": message,
+    }
+
+
+def _tplus_full_sync_status() -> dict[str, Any]:
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(_TPLUS_FULL_SYNC_SQL)
+            row = cur.fetchone()
+    latest = None
+    if row:
+        latest = {"status": row[0], "finished_at": row[1], "exit_code": row[2], "detail_json": row[3] or {}}
+    return evaluate_tplus_full_sync(latest, now=datetime.now(timezone.utc))
+
+
+def _tplus_full_sync_alert_text(status: dict[str, Any]) -> str:
+    lines = ["⛔ T+ 定时全量同步异常", status.get("message", "")]
+    if status.get("failed_modules"):
+        lines.append(f"失败模块：{'、'.join(status['failed_modules'])}")
+    if status.get("finished_at"):
+        lines.append(f"最近一轮结束于：{status['finished_at']}")
+    lines += [
+        "",
+        "影响：存货档案只在定时全量里落库，缺了会让 /formula/colors/ 的父件误判「编码失联」。",
+        "worker 失败后不重试，会一直等到下一个锚点。",
+        "详见 AliECS/docs/runbooks/tplus.md",
+    ]
+    return "\n".join(line for line in lines if line)
+
+
+def _send_tplus_full_sync_alert(status: dict[str, Any]) -> bool:
+    from app.routers.versions import send_feishu_text
+
+    return send_feishu_text(
+        os.getenv("OPS_ALERT_FEISHU_RECEIVE_ID", CHANJET_ALERT_FEISHU_RECEIVE_ID).strip(),
+        _tplus_full_sync_alert_text(status),
+        app_id=os.getenv("OPS_ALERT_FEISHU_APP_ID", os.getenv("VERSION_DIGEST_FEISHU_APP_ID", "")).strip(),
+        app_secret=os.getenv("OPS_ALERT_FEISHU_APP_SECRET", os.getenv("VERSION_DIGEST_FEISHU_APP_SECRET", "")).strip(),
+    )
+
+
+def tplus_full_sync_alert_once() -> dict[str, Any]:
+    """检查一次；异常就发飞书。同一轮失败只报一次，靠 finished_at 去重——
+    否则每小时一条会把群刷爆。"""
+    global _TPLUS_LAST_ALERTED_RUN
+    status = _tplus_full_sync_status()
+    if status.get("ok"):
+        _TPLUS_LAST_ALERTED_RUN = None
+        return {"alerted": False, "status": status}
+    marker = str(status.get("finished_at") or status.get("status"))
+    if marker == _TPLUS_LAST_ALERTED_RUN:
+        return {"alerted": False, "status": status, "deduped": True}
+    alerted = _send_tplus_full_sync_alert(status)
+    if alerted:
+        _TPLUS_LAST_ALERTED_RUN = marker
+    return {"alerted": alerted, "status": status}
+
+
+_TPLUS_LAST_ALERTED_RUN: str | None = None
+
+
+def _read_tplus_alert_interval() -> int:
+    try:
+        value = int(os.getenv("TPLUS_SYNC_ALERT_INTERVAL_SECONDS", "").strip())
+        return value if value > 0 else TPLUS_FULL_SYNC_ALERT_INTERVAL_SECONDS
+    except ValueError:
+        return TPLUS_FULL_SYNC_ALERT_INTERVAL_SECONDS
+
+
+def _tplus_full_sync_alert_loop() -> None:
+    interval = _read_tplus_alert_interval()
+    while True:
+        try:
+            tplus_full_sync_alert_once()
+        except Exception:
+            LOGGER.exception("T+ full sync alert check failed")
+        time.sleep(interval)
+
+
+@router.on_event("startup")
+def _start_tplus_full_sync_watcher() -> None:
+    if os.getenv("TPLUS_SYNC_ALERT_ENABLED", "1").strip() != "1":
+        return
+    threading.Thread(target=_tplus_full_sync_alert_loop, name="tplus-full-sync-watcher", daemon=True).start()

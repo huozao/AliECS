@@ -284,11 +284,13 @@ def run_forever(
                 export_files = list(getattr(outcome, "export_files", []) or [])
                 diff_summary = getattr(outcome, "diff_summary", None)
                 full_snapshot_id = getattr(outcome, "full_snapshot_id", None)
+                failed_modules = list(getattr(outcome, "failed_modules", []) or [])
             else:
                 last_exit_code = int(outcome or 0)
                 export_files = []
                 diff_summary = None
                 full_snapshot_id = None
+                failed_modules = []
 
             if last_exit_code == 0:
                 logger.info("T+ sync run finished: run=%s status=success", run_count)
@@ -304,8 +306,11 @@ def run_forever(
                     status=status,
                     row_count=0,
                     exit_code=last_exit_code,
+                    # failed_modules 是 backend 侧告警的唯一依据（模块独立容错后，
+                    # 整轮可能 status=success 却有个别模块没数据），别在写入侧省掉。
                     detail_json={"run": run_count, "export_files": export_files,
-                                 "diff_summary": diff_summary, "full_snapshot_id": full_snapshot_id},
+                                 "diff_summary": diff_summary, "full_snapshot_id": full_snapshot_id,
+                                 "failed_modules": failed_modules},
                     error_json={},
                 )
             except Exception:
