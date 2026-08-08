@@ -40,6 +40,9 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 公网首页（纯 nginx 静态）：功能卡片、登录、formula 入口、工具分区（灰分计算器）。
 `formula/colors/` 是标准型号色彩空间（three.js + camera-controls，数据走 `/v1/formula/colors`，
 需登录且有 `formula.read`）；`mock-data.js` 是默认隐藏的参考示例，惰性加载。视图设置已从画布浮层移到顶部 `#settingsPanel`；色点标签由 `rebuildLabels()` / `syncLabels()` 的 DOM 层渲染，偏好存 `localStorage['aliecs_formula_colors_view_prefs']`。
+「刷新数据」按钮走 `POST /v1/formula/colors/refresh` 入队 `sync_requests` 后轮询 `meta.last_sync_at`（死线 180s）——
+它**只重拉企微表**，页面上的父件名称/匹配状态来自 T+ 两张表，不在这条链路上。页内所有请求都经 `api(path, options)`，
+第二个参数会展开进 `fetch` 的 init；漏掉它会把 POST 悄悄降级成 GET。
 生产热更新可 `docker cp`；HTML 已加 no-cache 头。验证：JS 语法检查 + 浏览器 smoke。
 
 ## services/admin-ui

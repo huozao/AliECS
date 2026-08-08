@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -147,6 +148,44 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
         self.assertIn("/v1/formula/colors/refresh", self.html)
         self.assertIn("method:'POST'", self.html)
         self.assertIn("updateDatasetMetaUi()", self.html)
+
+    def test_api_helper_accepts_and_forwards_request_options(self) -> None:
+        """api() 只收 path 时，调用方传的 {method:'POST'} 被静默丢弃，
+        POST 退化成 GET → 405。2026-08-07/08 生产日志里 4 次刷新全是
+        `GET /v1/formula/colors/refresh 405`。光断言 HTML 里有 "method:'POST'"
+        这个字符串是抓不到的——那个对象根本没被读。"""
+        signature = re.search(r"async function api\(([^)]*)\)", self.html)
+        self.assertIsNotNone(signature, "找不到 api() 定义")
+        params = [item.strip() for item in signature.group(1).split(",") if item.strip()]
+        self.assertGreaterEqual(len(params), 2, f"api() 必须接住第二个参数，当前签名参数为 {params}")
+        options = params[1].split("=")[0].strip()
+        body = re.search(r"async function api\([^)]*\)\{(.*?)\n  \}", self.html, re.S)
+        self.assertIsNotNone(body, "找不到 api() 函数体")
+        self.assertRegex(
+            body.group(1),
+            r"fetch\(.*\.\.\.\(?\s*" + re.escape(options) + r"\b",
+            f"api() 必须把 {options} 展开进 fetch 的 init，否则 method 永远是 GET",
+        )
+
+    def test_every_api_call_site_with_options_targets_a_helper_that_takes_them(self) -> None:
+        """任何 api(path, {...}) 调用点都要求 api() 有第二个形参——防止再退化。"""
+        call_sites = re.findall(r"\bapi\((['\"][^'\"]+['\"])\s*,", self.html)
+        self.assertTrue(call_sites, "至少应有一个带 options 的 api() 调用点")
+        signature = re.search(r"async function api\(([^)]*)\)", self.html)
+        self.assertIsNotNone(signature)
+        self.assertGreaterEqual(len([p for p in signature.group(1).split(",") if p.strip()]), 2)
+
+    def test_refresh_surfaces_queue_state_instead_of_blind_polling(self) -> None:
+        """后端会回 already_pending / available:false；前端不看就只会空转到超时。"""
+        self.assertIn("already_pending", self.html)
+        self.assertIn("queued", self.html)
+
+    def test_refresh_poll_window_covers_a_worker_poll_plus_pull(self) -> None:
+        """worker poll 默认 30s，且全量同步期间根本不消费手动请求；90s 太紧。"""
+        deadline = re.search(r"Date\.now\(\)\+(\d+)", self.html)
+        self.assertIsNotNone(deadline, "找不到轮询死线")
+        self.assertGreaterEqual(int(deadline.group(1)), 180000)
+
     def test_camera_controls_replace_orbit_controls(self) -> None:
         self.assertIn("camera-controls@2.10.1", self.html)
         self.assertIn("CameraControls.install({THREE})", self.html)

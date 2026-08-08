@@ -38,9 +38,12 @@ ORDER BY id
 LIMIT 1
 """
 
+# 只把「近 10 分钟内」的 pending/running 视为进行中：worker 崩在 running 状态时，
+# 无时限的去重会让这个按钮永久返回 already_pending，再也入不了队。
 _ENQUEUE_DEDUP_SQL = """
 SELECT id FROM sync_requests
 WHERE source_id = %s AND status IN ('pending', 'running')
+  AND requested_at > NOW() - INTERVAL '10 minutes'
 ORDER BY id DESC
 LIMIT 1
 """
