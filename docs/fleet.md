@@ -96,6 +96,19 @@ txecs 127.0.0.1:11800 failover-proxy
 
 ## SSH 账户与认证姿态（改 sshd 前必读，改错直接断生产）
 
+> **本节两类内容，过期方式不同**：账户清单、红线、排序陷阱属**持久约束**，
+> 变化时应随改动更新本节；带具体数字的是 **2026-08-08 的取证快照**，只用来支撑
+> 当时的判断，不代表当前状态。要重新评估（比如再次考虑收紧 SSH）时**必须重新取证**，
+> 不要直接引用下面的数字：
+>
+> ```bash
+> # 各机真实登录账户与所用 key（换成目标设备）
+> ssh txecs 'sudo journalctl -u ssh --since "30 days ago" | \
+>   grep -oE "Accepted publickey for [a-z]+ from [0-9.]+" | awk "{print \$4}" | sort | uniq -c'
+> ssh txecs 'sudo sshd -T | grep -E "^(passwordauthentication|permitrootlogin|maxauthtries) "'
+> ssh txecs 'sudo fail2ban-client status sshd'
+> ```
+
 **各机实际登录账户**（2026-08-08 实测，别假设"只有一个管理员账户"）：
 
 | 设备 | 账户 | 用途 | 形态 |
@@ -104,7 +117,7 @@ txecs 127.0.0.1:11800 failover-proxy
 | txecs | `webdock-tunnel` | 生产隧道 11810/11811 + console 16101 | `Match User` 块，`PermitListen` 锁定这三个端口 |
 | txecs | `artifact-drop` | artifact 投递 | SFTP chroot，拿不到 shell |
 | txecs | `restic-peer` | 跨机备份接收 | SFTP chroot，拿不到 shell |
-| aliecs | `root` | **全部**：CI 部署、bridge/console/T+ 隧道、ProductCenter | 30 天 5733 次登录，`authorized_keys` 8 个 key |
+| aliecs | `root` | **全部**：CI 部署、bridge/console/T+ 隧道、ProductCenter | 5733 次登录（2026-07-09~08-08 区间计数），`authorized_keys` 8 个 key |
 
 **两条已踩过的红线**（2026-08-08 各拦下一次）：
 
@@ -125,11 +138,13 @@ txecs 127.0.0.1:11800 failover-proxy
 `40-business-cn.conf` 的 `Match` 块作用域，只对单个用户生效。改完必须用
 `sshd -T` 验生效值、`sshd -T -C user=webdock-tunnel` 验 Match 块没被污染。
 
-**IP 白名单不可行（评估过，别再提）**：devbox 家宽 IP 7 天内就变过
-（`222.210.79.47` / `171.221.110.108`，同一把 key），GitHub Actions 走 Azure 动态段
-（7 天内 3 个 IP）。收白名单会同时锁死自己和断掉 CI 部署。现有防护是 key-only
-（`PasswordAuthentication no`）+ fail2ban（bantime 1 天，累计封 105 个）；
-爆破噪音 348 次/7 天属互联网背景水平，不是定向攻击。
+**IP 白名单不可行**——结论持久，依据是 2026-08-08 的快照（`2026-08-01~08-08` 区间计数）：
+devbox 家宽 IP 在这 7 天里就变过（`222.210.79.47` / `171.221.110.108`，同一把 key），
+GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会同时锁死自己和断掉 CI 部署。
+**结论不依赖具体数字**：只要家宽是动态 IP、CI 跑在公有云 runner 上，这条就成立；
+哪天改成固定 IP 或自建 runner，可以重新评估。
+当时的防护基线：key-only（`PasswordAuthentication no`）+ fail2ban（bantime 1 天，
+累计封 105 个），爆破 348 次/7 天属互联网背景水平、不是定向攻击。
 
 ## 设备档案
 
