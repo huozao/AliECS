@@ -41,6 +41,7 @@
 | timeline 页 500 | tz-aware vs naive 比较 | 已修 36b032a；同类改动注意时区 |
 | BOM builder 保存报错 | T+ 报错透传（PR#186） | 委外=IsMadeRequest / 虚拟件=IsPhantom；T+ 请求 body 须 `{"request":{}}` |
 | BOM builder 读分类/单位 502、worker `openToken已失效`(403 code=50107) | openToken 续期链路（下方） | 迁移/停机把畅捷通消息地址打成「不再发送」，token 6 天后到期（2026-08-04） |
+| 定时全量里只有 bom 模块挂、报 `status=None body=`，其他模块全正常 | worker 日志 `API error detail:` 那行的 message；BOM 的 PageSize | **服务端慢查询撞读超时**。`bom/QueryPage` 每行要展开整棵子件树，耗时随 PageSize 超线性（2026-08-09 实测 219 行：5→2.1s / 20→3.4s / 100→14.6s / **500→38.5s**），而 `REQUEST_TIMEOUT_READ=30`。已拆出 BOM 专用 `TPLUS_BOM_PAGE_SIZE`（默认 50，单页 7~11s）。**不要调大读超时或加重试**——前者数据再长还会撞，后者对确定性超时只是每轮多耗几十秒 |
 | `/formula/colors/` 冒出一批「编码失联」，但父件在 T+ 里确实存在 | worker 日志 `Module failed, continuing with the rest: module=inventory`；`integration_sync_runs` 最后一条 `scheduled_full` 的 `detail_json.failed_modules` | 存货档案**只在定时全量里落库**（`job_sync_all` → `persist_inventory_records`）。纯存货父件（无 BOM）全靠它匹配；那一轮没跑成，页面就误判失联（2026-08-07 实测 41 条） |
 
 ## 定时全量的失败边界与告警
@@ -50,6 +51,14 @@
   退出码取第一个失败模块的码（配置错 2 / 接口错 3 / 其他同步错 4 / 未知 1）。
   历史反例：2026-08-07 18:00 BOM 接口超时，拆分前整轮 abort，存货跟着不落库。
 - **失败仍不重试**：worker 记完账就睡到下一个锚点（约 24h）。要立刻补，用手动全量或重启 worker。
+- **失败详情看 `integration_sync_runs.error_json`**：结构是 `{"modules": [{module, type, message, endpoint, status}]}`。
+  `message` 是唯一能看出真因的字段——`status=None body=` 三个字段全空时，
+  `read timeout=30` 只在 message 里。2026-08-09 之前 `error_json` 恒为 `{}`，
+  BOM 连挂四天都只能看到 `status=None`，最后靠手动复现才定位。同一份详情也写进日志
+  `API error detail: module=...`。
+- **分页规模是每个模块单独一档**：全局 `DEFAULT_PAGE_SIZE=500` 只适合扁平档案
+  （inventory 609 行 2 页共 9s）。重查询接口必须单独压小，否则总量一涨单页就变慢、迟早撞读超时；
+  压小后数据增长只增加页数，单页耗时恒定。目前只有 BOM 走独立档（`TPLUS_BOM_PAGE_SIZE`）。
 - **告警**：backend `ops.py` 的 `tplus-full-sync-watcher` 线程每小时查一次最后一轮 `scheduled_full`，
   失败、`failed_modules` 非空、或超过 2 天没有成功记录都推飞书；同一轮按 `finished_at` 去重只报一次。
   复用 openToken 告警那组凭据（`OPS_ALERT_FEISHU_*`，回退 `VERSION_DIGEST_FEISHU_*`），无新增密钥。

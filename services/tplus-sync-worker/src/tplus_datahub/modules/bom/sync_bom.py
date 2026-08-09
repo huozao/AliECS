@@ -42,6 +42,7 @@ def sync_bom(
                     settings=runtime_settings,
                     base_payload=payload,
                     timestamp=f"{run_timestamp}_{suffix}",
+                    page_size=runtime_settings.bom_page_size,
                 )
             )
         rows = _dedupe_bom_rows(rows_all)
@@ -56,6 +57,7 @@ def sync_bom(
             settings=runtime_settings,
             base_payload=query_params,
             timestamp=timestamp,
+            page_size=runtime_settings.bom_page_size,
         )
         logger.info("BOM sync finished: rows=%s", len(rows))
         return rows
@@ -71,6 +73,7 @@ def sync_bom(
                 settings=runtime_settings,
                 base_payload={"Disabled": disabled_value},
                 timestamp=f"{run_timestamp}_{suffix}",
+                page_size=runtime_settings.bom_page_size,
             )
         )
 

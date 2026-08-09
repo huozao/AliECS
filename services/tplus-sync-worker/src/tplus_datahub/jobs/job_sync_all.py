@@ -32,6 +32,8 @@ class SyncAllResult:
     diff_summary: dict | None = None
     full_snapshot_id: int | None = None
     failed_modules: list[str] = field(default_factory=list)
+    # 只有模块名和 status 定位不了问题：真因在异常 message 里（如 read timeout=30）。
+    failure_details: list[dict] = field(default_factory=list)
 
 
 def _basename(path: object) -> str:
@@ -48,12 +50,27 @@ def _exit_code_for(exc: BaseException) -> int:
     return 1
 
 
+def _failure_detail(module_name: str, exc: BaseException) -> dict:
+    detail = {
+        "module": module_name,
+        "type": type(exc).__name__,
+        "message": text_preview(str(exc), 500),
+    }
+    if isinstance(exc, ChanjetAPIError):
+        detail["endpoint"] = exc.endpoint
+        detail["status"] = exc.status_code
+    return detail
+
+
 def _log_stage_error(logger, module_name: str, exc: BaseException) -> None:
     """保留原有的三种错误日志措辞（runbook 和告警按它们检索），再补一行模块名。"""
     if isinstance(exc, ConfigError):
         logger.error("Config error: %s", exc)
     elif isinstance(exc, ChanjetAPIError):
         logger.error("API error: endpoint=%s status=%s body=%s", exc.endpoint, exc.status_code, text_preview(exc.body_preview))
+        # status=None 时 endpoint/status/body 三个字段全是空信息，真因只在 message 里
+        # （2026-08-09：整整四天只看到 status=None，直到手动复现才读到 read timeout=30）。
+        logger.error("API error detail: module=%s %s", module_name, text_preview(str(exc), 500))
     elif isinstance(exc, TPlusDataHubError):
         logger.error("Sync failed: %s", exc)
     else:
@@ -89,6 +106,7 @@ def run() -> SyncAllResult:
     timestamp = now_timestamp()
     exports: list[str] = []
     failures: list[tuple[str, int]] = []
+    failure_details: list[dict] = []
     snap = None
 
     try:
@@ -96,7 +114,8 @@ def run() -> SyncAllResult:
     except ConfigError as exc:
         # 配置读不出来时每个模块都会同样失败，没必要逐个撞一遍。
         logger.error("Config error: %s", exc)
-        return SyncAllResult(2, exports, failed_modules=["config"])
+        return SyncAllResult(2, exports, failed_modules=["config"],
+                             failure_details=[_failure_detail("config", exc)])
 
     def stage(module_name: str, action):
         try:
@@ -104,6 +123,7 @@ def run() -> SyncAllResult:
         except Exception as exc:  # noqa: BLE001 - 单模块失败不拖垮整轮全量
             _log_stage_error(logger, module_name, exc)
             failures.append((module_name, _exit_code_for(exc)))
+            failure_details.append(_failure_detail(module_name, exc))
             return None
 
     def _bom():
@@ -167,6 +187,7 @@ def run() -> SyncAllResult:
         diff_summary=snap.diff_summary if snap else None,
         full_snapshot_id=snap.full_snapshot_id if snap else None,
         failed_modules=[name for name, _ in failures],
+        failure_details=failure_details,
     )
 
 

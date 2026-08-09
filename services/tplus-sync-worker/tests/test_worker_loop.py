@@ -122,6 +122,42 @@ class WorkerLoopTests(unittest.TestCase):
 
         self.assertEqual(["inventory"], recorded[0]["detail_json"]["failed_modules"])
 
+    def test_run_forever_records_failure_details_in_error_json(self):
+        """error_json 一直是空 {}，失败详情只能翻容器内日志文件——
+        08-09 那次要不是手动复现，30 秒读超时这个决定性事实根本看不到。"""
+        recorded = []
+
+        class _Outcome:
+            exit_code = 3
+            export_files = []
+            diff_summary = None
+            full_snapshot_id = None
+            failed_modules = ["bom"]
+            failure_details = [{"module": "bom", "type": "ChanjetAPIError",
+                                "endpoint": "/tplus/api/v2/bom/QueryPage", "status": None,
+                                "message": "请求失败：Read timed out. (read timeout=30)"}]
+
+        run_forever(
+            sync_once=lambda: _Outcome(),
+            record_sync_run=lambda **kwargs: recorded.append(kwargs),
+            sleep=lambda _seconds: None,
+            max_runs=1,
+        )
+
+        error_json = recorded[0]["error_json"]
+        self.assertEqual(["bom"], [item["module"] for item in error_json["modules"]])
+        self.assertIn("read timeout=30", error_json["modules"][0]["message"])
+
+    def test_run_forever_keeps_error_json_empty_on_success(self):
+        recorded = []
+        run_forever(
+            sync_once=lambda: 0,
+            record_sync_run=lambda **kwargs: recorded.append(kwargs),
+            sleep=lambda _seconds: None,
+            max_runs=1,
+        )
+        self.assertEqual({}, recorded[0]["error_json"])
+
     def test_run_forever_consumes_manual_bom_request_between_full_runs(self):
         old_interval = os.environ.get("TPLUS_SYNC_INTERVAL_SECONDS")
         old_poll = os.environ.get("TPLUS_SYNC_POLL_SECONDS")

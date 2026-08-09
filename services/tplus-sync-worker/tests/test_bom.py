@@ -39,6 +39,8 @@ class BomSyncTests(unittest.TestCase):
                 timeout_read=30,
                 output_dir=str(Path(tmp) / "output"),
                 data_dir=str(Path(tmp) / "data"),
+                # BOM 走自己那档 page size，这里压到 1 才能验证翻页（见 test_bom_page_size.py）
+                bom_page_size=1,
             )
             client = FakeClient()
 
@@ -85,6 +87,7 @@ class BomSyncTests(unittest.TestCase):
                 timeout_read=30,
                 output_dir=str(Path(tmp) / "output"),
                 data_dir=str(Path(tmp) / "data"),
+                bom_page_size=1,
             )
             client = FakeClient()
 
