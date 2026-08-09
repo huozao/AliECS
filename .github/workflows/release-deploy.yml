@@ -22,6 +22,7 @@ on:
           - mirror-only
           - sso-candidate
           - business-cn
+          - business-cn-tcr-fallback
           - business-candidate
           - edge-us
 
@@ -148,6 +149,7 @@ jobs:
         with:
           context: ${{ matrix.context }}
           push: true
+          sbom: true
           tags: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.tree.outputs.tag }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
@@ -160,60 +162,72 @@ jobs:
             -t "ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ needs.resolve-release.outputs.release_id }}" \
             "ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.tree.outputs.tag }}"
 
-      - name: Install skopeo for optional TCR sync
-        if: ${{ vars.TCR_BASE != '' }}
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq skopeo
+      - name: Export queryable SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.tree.outputs.tag }}
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          format: spdx-json
+          syft-version: v1.50.0
+          artifact-name: sbom-${{ matrix.image }}-${{ steps.tree.outputs.tag }}.spdx.json
+          output-file: sbom-${{ matrix.image }}.spdx.json
+          upload-artifact-retention: 30
+          upload-release-assets: false
 
-      - name: Sync the same immutable manifest to TCR
+
+  # TCR is retained as an asynchronous registry fallback. A slow cross-border
+  # mirror must never hold the peer-channel deployment in the critical path.
+  mirror-built-to-tcr:
+    needs: build-push
+    if: ${{ vars.TCR_BASE != '' }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: public-web
+            context: services/public-web
+          - image: admin-ui
+            context: services/admin-ui
+          - image: backend-api
+            context: services/backend-api
+          - image: doc-sync-worker
+            context: services/doc-sync-worker
+          - image: tplus-sync-worker
+            context: services/tplus-sync-worker
+          - image: openclaw-bridge
+            context: deploy/openclaw-bridge
+          - image: mcp-coding-server
+            context: services/mcp-coding-server
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve content tag
+        id: tree
+        run: echo "tag=t-$(git rev-parse "HEAD:${{ matrix.context }}" | cut -c1-12)" >> "$GITHUB_OUTPUT"
+      - name: Install skopeo
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq skopeo
+      - name: Mirror immutable image to TCR fallback
         env:
-          DEPLOY_TARGET: ${{ inputs.deploy_target }}
           TCR_BASE: ${{ vars.TCR_BASE }}
           TCR_USERNAME: ${{ secrets.TCR_USERNAME }}
           TCR_PASSWORD: ${{ secrets.TCR_PASSWORD }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          if [[ -z "$TCR_BASE" || -z "$TCR_USERNAME" || -z "$TCR_PASSWORD" ]]; then
-            if [[ "$DEPLOY_TARGET" == "business-cn" || "$DEPLOY_TARGET" == "business-candidate" ]]; then
-              echo "[registry] business-cn targets require TCR_BASE and TCR push credentials" >&2
-              exit 1
-            fi
-            echo "[registry] TCR is not configured; GHCR build remains authoritative"
-            exit 0
-          fi
-
-          auth_dir="$(mktemp -d)"
-          auth_file="$auth_dir/auth.json"
+          : "${TCR_USERNAME:?missing TCR username}"
+          : "${TCR_PASSWORD:?missing TCR password}"
+          auth_dir="$(mktemp -d)"; auth_file="$auth_dir/auth.json"
           trap 'rm -rf "$auth_dir"' EXIT
-          printf '%s' "${{ secrets.GITHUB_TOKEN }}" \
-            | skopeo login --authfile "$auth_file" --username "${{ github.actor }}" --password-stdin ghcr.io
-          printf '%s' "$TCR_PASSWORD" \
-            | skopeo login --authfile "$auth_file" --username "$TCR_USERNAME" --password-stdin "${TCR_BASE%%/*}"
-
+          printf '%s' "$GHCR_TOKEN" | skopeo login --authfile "$auth_file" -u "${{ github.actor }}" --password-stdin ghcr.io
+          printf '%s' "$TCR_PASSWORD" | skopeo login --authfile "$auth_file" -u "$TCR_USERNAME" --password-stdin "${TCR_BASE%%/*}"
           source="docker://ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.tree.outputs.tag }}"
           target="docker://${TCR_BASE}/${{ matrix.image }}:${{ steps.tree.outputs.tag }}"
-          # runner→TCR 是跨境一跳，两种失败都实测过：08-04 快速 i/o timeout、
-          # 08-05 传大镜像时长时间挂起不报错。--retry-times 只管前者，后者必须靠
-          # timeout 把挂起转成失败，重试才会发生。
-          for attempt in 1 2 3; do
-            if timeout 20m skopeo copy --all --preserve-digests --retry-times 3 \
-              --authfile "$auth_file" "$source" "$target"; then
-              break
-            fi
-            if [[ "$attempt" == 3 ]]; then
-              echo "[registry] TCR sync failed after 3 attempts: ${{ matrix.image }}" >&2
-              exit 1
-            fi
-            echo "[registry] TCR sync attempt $attempt failed or timed out; retrying in 20s" >&2
-            sleep 20
-          done
-
-          source_digest="$(skopeo inspect --authfile "$auth_file" "$source" | jq -r .Digest)"
-          target_digest="$(skopeo inspect --authfile "$auth_file" "$target" | jq -r .Digest)"
-          [[ "$source_digest" == "$target_digest" ]] || {
-            echo "[registry] digest mismatch: source=$source_digest target=$target_digest" >&2
-            exit 1
-          }
-          echo "[registry] ${{ matrix.image }} synced at $source_digest"
+          timeout 25m skopeo copy --all --preserve-digests --retry-times 3 --authfile "$auth_file" "$source" "$target"
 
   # 合并即上线，但只限 bridge 自己变了的那次合并；其余 main push 一概不碰咽喉服务。
   # 回滚/重切仍走 bridge-cutover 的 workflow_dispatch 手工入口。
@@ -221,15 +235,135 @@ jobs:
     needs:
       - resolve-release
       - build-push
+      - mirror-built-to-tcr
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.resolve-release.outputs.bridge_changed == 'true' && vars.TCR_BASE != '' }}
     uses: ./.github/workflows/bridge-cutover.yml
     with:
       confirmation: CUTOVER_TXECS
     secrets: inherit
 
+  stage-business-cn-peer:
+    needs:
+      - resolve-release
+      - build-push
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_target == 'business-cn' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: sbom-*
+          path: peer-bundle/sboms
+          merge-multiple: true
+      - name: Install pinned regctl
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o /tmp/regctl https://github.com/regclient/regclient/releases/download/v0.11.5/regctl-linux-amd64
+          echo 'c93aa7638749f5aaac1a8e01787321889c78f0101809bb2880343478d0ba0467  /tmp/regctl' | sha256sum -c -
+          sudo install -m 0755 /tmp/regctl /usr/local/bin/regctl
+      - name: Package source and immutable release request
+        env:
+          TCR_BASE: ${{ vars.TCR_BASE }}
+          RELEASE_ID: ${{ needs.resolve-release.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          : "${TCR_BASE:?TCR_BASE is required as the local runtime tag namespace}"
+          mkdir -p peer-bundle/release
+          git archive "$GITHUB_SHA" | tar -x -C peer-bundle/release
+          printf '%s\n' "$GITHUB_SHA" > peer-bundle/release/.source-commit
+          content_tag() { echo "t-$(git rev-parse "HEAD:$1" | cut -c1-12)"; }
+          {
+            echo "PUBLIC_WEB_TAG=$(content_tag services/public-web)"
+            echo "ADMIN_UI_TAG=$(content_tag services/admin-ui)"
+            echo "BACKEND_API_TAG=$(content_tag services/backend-api)"
+            echo "DOC_SYNC_WORKER_TAG=$(content_tag services/doc-sync-worker)"
+            echo "TPLUS_SYNC_WORKER_TAG=$(content_tag services/tplus-sync-worker)"
+            echo "MCP_CODING_SERVER_TAG=$(content_tag services/mcp-coding-server)"
+          } > peer-bundle/release/.content-tags.env
+          tar -C peer-bundle/release -czf peer-bundle/aliecs-release.tgz .
+
+          export PUBLIC_WEB_TAG="$(content_tag services/public-web)"
+          export ADMIN_UI_TAG="$(content_tag services/admin-ui)"
+          export BACKEND_API_TAG="$(content_tag services/backend-api)"
+          export DOC_SYNC_WORKER_TAG="$(content_tag services/doc-sync-worker)"
+          export TPLUS_SYNC_WORKER_TAG="$(content_tag services/tplus-sync-worker)"
+          export MCP_CODING_SERVER_TAG="$(content_tag services/mcp-coding-server)"
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          rows = [
+              ("public-web", os.environ["PUBLIC_WEB_TAG"]),
+              ("admin-ui", os.environ["ADMIN_UI_TAG"]),
+              ("backend-api", os.environ["BACKEND_API_TAG"]),
+              ("doc-sync-worker", os.environ["DOC_SYNC_WORKER_TAG"]),
+              ("tplus-sync-worker", os.environ["TPLUS_SYNC_WORKER_TAG"]),
+              ("mcp-coding-server", os.environ["MCP_CODING_SERVER_TAG"]),
+          ]
+          images=[]
+          for name, tag in rows:
+              source=f"ghcr.io/{os.environ['GITHUB_REPOSITORY_OWNER']}/{name}:{tag}"
+              digest=subprocess.check_output(["regctl","image","digest","--platform","linux/amd64",source], text=True).strip()
+              sbom=f"sbom-{name}.spdx.json"
+              source_sbom=pathlib.Path("peer-bundle/sboms")/sbom
+              if not source_sbom.is_file(): raise SystemExit(f"missing {source_sbom}")
+              source_sbom.replace(pathlib.Path("peer-bundle")/sbom)
+              images.append({"name":name,"source":source,"target":f"{os.environ['TCR_BASE']}/{name}:{tag}",
+                             "digest":digest,"file":f"{name}.tar","sbom":sbom})
+          request={"release_id":os.environ["RELEASE_ID"],"source_commit":os.environ["GITHUB_SHA"],
+                   "github_run_id":os.environ["GITHUB_RUN_ID"],"github_run_attempt":os.environ["GITHUB_RUN_ATTEMPT"],
+                   "source_archive":"aliecs-release.tgz","images":images}
+          pathlib.Path("peer-bundle/release-request.json").write_text(json.dumps(request,indent=2)+"\n",encoding="utf-8")
+          PY
+      - name: Upload small control bundle to aliecs
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.ECS_HOST }}
+          username: ${{ secrets.ECS_USER }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          source: "peer-bundle/release-request.json,peer-bundle/aliecs-release.tgz,peer-bundle/*.spdx.json"
+          target: "/tmp/peer-${{ github.sha }}"
+          strip_components: 1
+      - name: Stage on aliecs and wait for automatic txecs ACK
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ECS_HOST }}
+          username: ${{ secrets.ECS_USER }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          command_timeout: 45m
+          script: |
+            set -euo pipefail
+            request="/tmp/peer-${{ github.sha }}/release-request.json"
+            systemd-run --quiet --wait --collect \
+              --unit="peer-stage-${{ github.run_id }}-${{ github.run_attempt }}" \
+              --property=MemoryMax=256M --property=CPUWeight=100 --property=IOWeight=100 \
+              /usr/local/sbin/peer-release-stage "$request"
+            ack="/srv/peer-channel/acks/${{ needs.resolve-release.outputs.release_id }}.json"
+            for _ in $(seq 1 180); do
+              if [[ -s "$ack" ]]; then
+                python3 - "$ack" <<'PY'
+            import json,sys
+            data=json.load(open(sys.argv[1], encoding="utf-8"))
+            print(json.dumps(data, ensure_ascii=False))
+            if data.get("status") != "success": raise SystemExit(1)
+            PY
+                exit 0
+              fi
+              sleep 10
+            done
+            echo "txecs ACK timeout" >&2
+            exit 1
+
   mirror-third-party:
     needs: build-push
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.deploy_target == 'mirror-only' || inputs.deploy_target == 'sso-candidate' || inputs.deploy_target == 'business-cn' || inputs.deploy_target == 'business-candidate') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.deploy_target == 'mirror-only' || inputs.deploy_target == 'sso-candidate' || inputs.deploy_target == 'business-cn-tcr-fallback' || inputs.deploy_target == 'business-candidate') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -285,7 +419,7 @@ jobs:
       - resolve-release
       - build-push
       - mirror-third-party
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_target == 'business-cn' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_target == 'business-cn-tcr-fallback' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
