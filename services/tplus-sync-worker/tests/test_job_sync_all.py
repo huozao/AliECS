@@ -179,6 +179,54 @@ class JobSyncAllModuleIsolationTests(unittest.TestCase):
                 ctx.stop()
         self.assertEqual(0, result.exit_code)
         self.assertEqual([], result.failed_modules)
+        self.assertEqual([], result.failure_details)
+
+    def test_failure_details_carry_the_exception_message_not_just_the_module_name(self):
+        """2026-08-09 排障实录：模块名 + status=None 说明不了任何问题，
+        真因（Read timed out / read timeout=30）全在异常 message 里，而它被丢掉了，
+        只能靠手动复现才看得到。失败详情必须跟着结果一路带出去。"""
+        job = job_sync_all
+        boom = ChanjetAPIError(
+            "请求失败：HTTPSConnectionPool(host='openapi.chanjet.com', port=443): Read timed out. (read timeout=30)",
+            endpoint="/tplus/api/v2/bom/QueryPage",
+            status_code=None,
+        )
+        patches = self._patches(job, sync_bom=patch.object(job, "sync_bom", side_effect=boom))
+        contexts = list(patches.values())
+        for ctx in contexts:
+            ctx.start()
+        try:
+            result = job.run()
+        finally:
+            for ctx in reversed(contexts):
+                ctx.stop()
+
+        self.assertEqual(1, len(result.failure_details))
+        detail = result.failure_details[0]
+        self.assertEqual("bom", detail["module"])
+        self.assertEqual("ChanjetAPIError", detail["type"])
+        self.assertEqual("/tplus/api/v2/bom/QueryPage", detail["endpoint"])
+        self.assertIn("read timeout=30", detail["message"])
+
+    def test_log_stage_error_prints_the_exception_message(self):
+        job = job_sync_all
+        boom = ChanjetAPIError("请求失败：Read timed out. (read timeout=30)",
+                               endpoint="/tplus/api/v2/bom/QueryPage", status_code=None)
+        lines = []
+
+        class _Logger:
+            def error(self, fmt, *args):
+                lines.append(fmt % args)
+
+            def exception(self, fmt, *args):
+                lines.append(fmt % args)
+
+        job._log_stage_error(_Logger(), "bom", boom)
+        joined = "\n".join(lines)
+        self.assertIn("read timeout=30", joined)
+        # 原有措辞是 runbook 和历史日志的检索锚点，不能改掉
+        self.assertIn("API error: endpoint=/tplus/api/v2/bom/QueryPage status=None", joined)
+        self.assertIn("Module failed, continuing with the rest: module=bom", joined)
 
 
 if __name__ == "__main__":

@@ -21,9 +21,11 @@ def paginate_query(
     settings: Settings,
     base_payload: dict[str, Any] | None = None,
     timestamp: str | None = None,
+    page_size: int | None = None,
 ) -> list[Any]:
     logger = get_logger(f"tplus_datahub.{module_name}")
-    page_size = settings.default_page_size
+    # 不传就沿用全局默认，其他模块行为不变；只有重查询接口（BOM）需要单独压小。
+    page_size = page_size or settings.default_page_size
     page_index = 1
     rows_all: list[Any] = []
     run_timestamp = timestamp or now_timestamp()
@@ -60,6 +62,7 @@ def paginate_query_disabled_variants(
     annotate_missing_disabled: bool = False,
     dedupe_key_fields: tuple[str, ...] = ("ID", "Code"),
     extra_payload: dict[str, Any] | None = None,
+    page_size: int | None = None,
 ) -> list[Any]:
     run_timestamp = timestamp or now_timestamp()
     rows_all: list[Any] = []
@@ -72,6 +75,7 @@ def paginate_query_disabled_variants(
             settings=settings,
             base_payload={**(extra_payload or {}), "Disabled": disabled_value},
             timestamp=f"{run_timestamp}_{suffix}",
+            page_size=page_size,
         )
         if annotate_missing_disabled:
             rows = [_with_disabled_status(row, disabled_label) for row in rows]

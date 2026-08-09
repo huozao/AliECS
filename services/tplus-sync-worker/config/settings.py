@@ -36,6 +36,10 @@ class Settings:
     timeout_read: int
     output_dir: str
     data_dir: str
+    # BOM 单独一档：bom/QueryPage 每行要展开整棵子件树，耗时随 PageSize 超线性增长
+    # （2026-08-09 实测 500→38.5s 超过读超时，100→14.6s，50→约 6s）。
+    # 其余模块是扁平档案，继续用 default_page_size=500 才快。
+    bom_page_size: int = 50
 
     @property
     def timeout(self) -> tuple[int, int]:
@@ -77,6 +81,7 @@ def load_settings(env_file: str | Path = ".env", validate: bool = True) -> Setti
         timeout_read=_read_int("REQUEST_TIMEOUT_READ", 30),
         output_dir=os.getenv("OUTPUT_DIR", "output"),
         data_dir=os.getenv("DATA_DIR", "data"),
+        bom_page_size=_read_int("TPLUS_BOM_PAGE_SIZE", 50),
     )
 
     if validate:

@@ -285,12 +285,14 @@ def run_forever(
                 diff_summary = getattr(outcome, "diff_summary", None)
                 full_snapshot_id = getattr(outcome, "full_snapshot_id", None)
                 failed_modules = list(getattr(outcome, "failed_modules", []) or [])
+                failure_details = list(getattr(outcome, "failure_details", []) or [])
             else:
                 last_exit_code = int(outcome or 0)
                 export_files = []
                 diff_summary = None
                 full_snapshot_id = None
                 failed_modules = []
+                failure_details = []
 
             if last_exit_code == 0:
                 logger.info("T+ sync run finished: run=%s status=success", run_count)
@@ -311,7 +313,9 @@ def run_forever(
                     detail_json={"run": run_count, "export_files": export_files,
                                  "diff_summary": diff_summary, "full_snapshot_id": full_snapshot_id,
                                  "failed_modules": failed_modules},
-                    error_json={},
+                    # 失败详情必须落库：只看 detail_json.failed_modules 只知道「bom 挂了」，
+                    # 不知道为什么挂（2026-08-09 的 read timeout=30 就是这么被埋了四天）。
+                    error_json={"modules": failure_details} if failure_details else {},
                 )
             except Exception:
                 logger.exception("Failed to record T+ sync run status: run=%s", run_count)
