@@ -72,14 +72,22 @@ txecs 127.0.0.1:11800 failover-proxy
 
 | 方向 | 形态 | 凭据/配置 | 本职用途 | 能否复用 |
 |---|---|---|---|---|
-| txecs → aliecs | SFTP，chroot 到 `/srv/peer-restic`（`ForceCommand internal-sftp -d /repos`、`AllowTcpForwarding no`、拿不到 shell） | txecs 侧 `/srv/business-cn/config/peer-backup.key`（render.sh 渲染）；aliecs 侧 `/etc/ssh/sshd_config.d/50-peer-restic.conf` | txecs 每日 Restic 备份写入 aliecs | **可以**。2026-08-05 实测 2.84 MB/s 稳定，已用于跨境冻结时的镜像旁路，见 `runbooks/deploy.md` |
+| aliecs ↔ txecs | `peer-channel` 受限本地转发 + Syncthing TLS；发布 aliecs→txecs、ACK 反向 | 复用 txecs 的 `peer-backup.key` 私钥，但使用独立 `peer-channel` 公钥身份；只准转发 aliecs loopback 18080/22000 | 主镜像发布、ACK、txecs→aliecs append-only Restic | **主路径**。无 shell/SFTP/任意端口转发；2026-08-09 已通过断线续传、哈希、备份、恢复和本地维护验收 |
+| txecs → aliecs | 旧 `restic-peer` SFTP，chroot 到 `/srv/peer-restic` | 同一把 txecs 私钥的独立 `restic-peer` 公钥身份 | 历史每日备份与手工镜像旁路 | **仅回退**。不再承载日常备份；身份和配置暂保留，删除须另行确认 |
 | webdock1 ↔ webdock2 | Restic over SFTP(:2222) + SMB | `webdock-peer-backup.enc.env` | 两机互为加密备份 | 未验证他用 |
 | webdock2 → txecs | SSH 反向隧道 11810 | infra roles | 生产业务隧道（bridge 主路） | 勿占用 |
 | webdock2 → aliecs | SSH 隧道 16090/16091 | infra roles | console 通道 | 勿占用 |
 
-**确认不存在的连接**（2026-08-05 实测，别再逐个试）：
+2026-08-09 对 peer-channel 做过 96 MiB 随机文件实测：传输中断开隧道 8 秒后自动
+续传，两端 SHA-256 一致；含故障窗口约 56 秒，等效 1.71 MiB/s。Syncthing 限制为
+`MemoryHigh=256M`、`MemoryMax=384M`，rest-server 为 `MemoryMax=128M`；这是上限，
+不是常驻占用承诺。
 
-- aliecs ↔ txecs **没有** SSH 互信，双向都是 `Permission denied (publickey)`（网络本身可达）。
+**确认不存在或不应假设存在的连接**：
+
+- aliecs ↔ txecs **没有管理员 shell 互信**。仅有 txecs 主动连接 aliecs 的
+  `peer-channel` 受限身份；它不能执行命令、SFTP、agent/X11/tunnel，也不能转发
+  声明外端口，不得当作通用 SSH 凭据。
 - txecs **没装 tailscale**，连不到 webdock1/webdock2 的 100.x 地址，因此
   **GitHub Actions 无法经 txecs 跳板触达 webdock**；webdock 侧只能主动外连。
 - txecs **没有持久的 TCR 凭据**，部署时由 CI 通过环境变量传入；`runtime.env` 里只有
@@ -117,7 +125,8 @@ txecs 127.0.0.1:11800 failover-proxy
 | txecs | `webdock-tunnel` | 生产隧道 11810/11811 + console 16101 | `Match User` 块，`PermitListen` 锁定这三个端口 |
 | txecs | `artifact-drop` | artifact 投递 | SFTP chroot，拿不到 shell |
 | txecs | `restic-peer` | 跨机备份接收 | SFTP chroot，拿不到 shell |
-| aliecs | `root` | **全部**：CI 部署、bridge/console/T+ 隧道、ProductCenter | 5733 次登录（2026-07-09~08-08 区间计数），`authorized_keys` 8 个 key |
+| aliecs | `root` | 人工/CI 管理、bridge/console/T+ 隧道、ProductCenter | 5733 次登录（2026-07-09~08-08 区间计数），历史取证时 `authorized_keys` 8 个 key |
+| aliecs | `peer-channel` | txecs→aliecs 备份和双向发布/ACK 传输 | 无 shell；仅 local forward 到 127.0.0.1:18080/22000 |
 
 **两条已踩过的红线**（2026-08-08 各拦下一次）：
 
@@ -181,8 +190,9 @@ GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会�
 - 主机重建入口：infra
   `roles/server/{common,tencent}`；age 私钥和 GitHub infra 只读 deploy
   key 是最小人工输入。
-- 应用部署：AliECS `release-deploy` 的独立 `business-cn` job；
-  `/srv/business-cn/current` 记录当前源码提交，镜像从 TCR 按 digest 拉取。
+- 应用部署：AliECS `release-deploy` 的 `business-cn` job；aliecs 从 GHCR 按 digest
+  导出后经 peer-channel 传入，txecs 校验、`docker load`、自动部署并回 ACK。
+  `/srv/business-cn/current` 记录当前源码提交；TCR 只作显式 fallback。
 - WebDock：`127.0.0.1:11800` 为 failover 入口，
   `11810←webdock2`、`11811←webdock1` 均已验证；当前响应头仍为
   `X-Webdock-Device: webdock2`、`X-Webdock-Route: primary`。
@@ -271,7 +281,7 @@ GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会�
 
 | GitHub 仓库 | 部署到 | 部署链路 |
 |---|---|---|
-| `huozao/AliECS` | aliecs + txecs | push main → 构建并同步 GHCR/TCR；txecs `business-cn` 为生产 job，AliECS `business-candidate` 只预拉同一镜像并启动空 PostgreSQL；bridge 已运行在 txecs；改动走 PR |
+| `huozao/AliECS` | aliecs + txecs | push main → GHCR 源制品 + SBOM；aliecs 按 digest 预拉并经 peer-channel 分发，txecs 自动校验/部署/ACK；TCR 异步镜像只作 fallback；改动走 PR |
 | `huozao/webdock` | webdock1 + webdock2 | CI 构建 sha-tag 镜像 → 各机手动拉取重启；两机应保持同 tag；小改可直推 main |
 | `huozao/infra`（私有） | aliecs + txecs + webdock1/2 主机层 | 角色、SOPS、nginx、隧道、bridge/edge 配置；在线设备按各自 remote/deploy key 同步 |
 
