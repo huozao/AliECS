@@ -312,8 +312,9 @@ jobs:
               source=f"ghcr.io/{os.environ['GITHUB_REPOSITORY_OWNER']}/{name}:{tag}"
               digest=subprocess.check_output(["regctl","image","digest","--platform","linux/amd64",source], text=True).strip()
               sbom=f"sbom-{name}.spdx.json"
-              source_sbom=pathlib.Path("peer-bundle/sboms")/sbom
-              if not source_sbom.is_file(): raise SystemExit(f"missing {source_sbom}")
+              matches=list(pathlib.Path("peer-bundle/sboms").glob(f"sbom-{name}-*.spdx.json"))
+              if len(matches) != 1: raise SystemExit(f"expected one SBOM for {name}, found {matches}")
+              source_sbom=matches[0]
               source_sbom.replace(pathlib.Path("peer-bundle")/sbom)
               images.append({"name":name,"source":source,"target":f"{os.environ['TCR_BASE']}/{name}:{tag}",
                              "digest":digest,"file":f"{name}.tar","sbom":sbom})
