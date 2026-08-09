@@ -14,6 +14,14 @@ push main（PR 合并）
   → docker compose up -d（内容没变的服务不重建容器）
   → 三个生产 worker 运行守卫 → healthcheck
   → 写 last-success-commit + 部署清单（commit/run/attempt/各镜像 digest）
+
+bridge 构建上下文变化（或手工选择 bridge-peer）
+  → aliecs 按 digest 从 GHCR 导出 openclaw-bridge + SPDX SBOM
+  → 同一个 Syncthing peer-channel 传到 txecs
+  → txecs 校验并 docker load
+  → 独立更新 /srv/internal-stack/release.env
+  → 重启 txecs-openclaw-bridge.service → /v1/models + 运行 digest 验证
+  → 失败只回滚 bridge；成功回传独立 ACK
 ```
 
 镜像流向（排障时先认清失败在哪一跳）：
@@ -24,9 +32,13 @@ GitHub Actions runner（美国） → GHCR（源制品 + SBOM attestation）
   → Syncthing 分块续传到 txecs
   → txecs 校验 release 清单后 docker load，以 TCR 名作为本地运行 tag，离线部署
 
-GitHub runner → TCR 仍异步镜像同一 digest，作为 `business-cn-tcr-fallback`，
-不再阻塞 peer-channel 主发布。
+GitHub runner → TCR 仍异步镜像同一 digest，作为 `business-cn-tcr-fallback` 和
+bridge 的手工 `bridge-cutover` fallback，不再阻塞 peer-channel 主发布。
 ```
+
+发布边界：日常只有一条物理镜像通道，但有两个逻辑部署单元。`business-cn` release 固定
+包含 6 个业务镜像；`openclaw-bridge` release 固定只含 1 个 bridge 镜像。两者各自维护
+release ID、运行状态、回滚和 ACK，避免 bridge 故障冻结业务部署，也避免业务部署重启消息咽喉。
 
 - runner→TCR 是跨境一跳，**只在真正需要实传新镜像时才会暴露问题**：tree hash 命中
   （target 已是同 digest）时秒过，所以「以前一直没事」往往只是没传过。两种失败形态：
@@ -98,7 +110,8 @@ aliecs ─docker save|gzip -1─> /srv/peer-restic/repos/transfer/   （root:755
 | workflow 显示 success，但生产没变（容器还是旧的 Up N days） | **`deploy-*` job 的结论是不是 `skipped`**，而不是只看 workflow 总结论 | ⚠️ `gh run rerun --failed` **只重跑 failed 的 job，skipped 的不会被拉起**。build 失败 → deploy 被 skip → 重跑后 build 转绿、workflow conclusion=success，部署却压根没执行（2026-08-04 实际踩到）。正确处置：`gh workflow run release-deploy.yml --ref main -f deploy_target=business-cn` 重跑完整一轮。判定成功必须落到 `deploy-business-cn` 的 job 结论 + `docker ps` 的容器启动时间，两个都看 |
 | `mirror-built-to-tcr` 失败或超时 | `stage-business-cn-peer` 和 txecs ACK 是否成功 | peer 成功则生产发布已完成，TCR 仅备用镜像缺一版；网络恢复后重跑 `mirror-only`。只有显式 `business-cn-tcr-fallback` 才被它阻塞 |
 | `stage-business-cn-peer` 等不到 ACK | aliecs `peer-syncthing`、txecs tunnel/syncthing/consume timer；两侧 `release.json` 与 ACK | 不手工跳过哈希门。先修同步；需止损时显式选择 `business-cn-tcr-fallback` |
-| 8 个 build-push 全 success，只有 `cutover-bridge / cutover` 失败，日志是 `ssh: handshake failed: EOF` | 本机 `ssh txecs` 同时也会间歇 `Connection closed`。查 `sudo journalctl -u ssh` 是否出现 `beginning MaxStartups throttling` / `drop connection`，再查 `sudo fail2ban-client status sshd` | txecs 公网 22 持续遭遇机会型自动扫描；来源 IP 多登记在腾讯云网段，但不能据此断言主机归属或是否已被入侵。2026-07-28 曾触发 `MaxStartups 10:30:100` 并丢弃合法连接；同日已启用 fail2ban sshd aggressive jail（5 次/10 分钟、封 24 小时），未放宽 `MaxStartups`。确认扫描源已被封且本机 SSH 稳定后，再用 `gh run rerun <id> --failed` 重跑。密码和 root 登录均关闭；成功登录还必须按用户、来源 IP、密钥指纹核对，不能只看 IP |
+| `stage-openclaw-bridge-peer` 等不到 ACK | 先按上一行查同一物理通道，再看 bridge release 的 ACK、`txecs-openclaw-bridge.service` 和 `/v1/models` | 修复后手工选择 `bridge-peer` 重发；紧急回退才使用 `bridge-cutover.yml` 的 TCR 路径。不要改成业务 release，也不要重启 business-cn |
+| 手工 TCR `bridge-cutover` 失败，日志是 `ssh: handshake failed: EOF` | 本机 `ssh txecs` 同时也会间歇 `Connection closed`。查 `sudo journalctl -u ssh` 是否出现 `beginning MaxStartups throttling` / `drop connection`，再查 `sudo fail2ban-client status sshd` | txecs 公网 22 持续遭遇机会型自动扫描；来源 IP 多登记在腾讯云网段，但不能据此断言主机归属或是否已被入侵。2026-07-28 曾触发 `MaxStartups 10:30:100` 并丢弃合法连接；同日已启用 fail2ban sshd aggressive jail（5 次/10 分钟、封 24 小时），未放宽 `MaxStartups`。确认扫描源已被封且本机 SSH 稳定后，再重跑 fallback。密码和 root 登录均关闭；成功登录还必须按用户、来源 IP、密钥指纹核对，不能只看 IP |
 
 ## 验证命令
 

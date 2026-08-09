@@ -22,6 +22,7 @@ on:
           - mirror-only
           - sso-candidate
           - business-cn
+          - bridge-peer
           - business-cn-tcr-fallback
           - business-candidate
           - edge-us
@@ -60,7 +61,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       # 比的是 bridge 构建上下文的 git tree hash，不是文件名列表——这与 build-push 的
-      # 内容寻址标签和 bridge-cutover 解析镜像用的是同一个量。tree hash 没变 → 镜像标签
+      # 内容寻址标签和 bridge peer release 解析镜像用的是同一个量。tree hash 没变 → 镜像标签
       # 就是同一个 → cutover 只是白重启一次咽喉服务，所以不触发。
       - name: Did the bridge build context actually change
         id: bridge
@@ -78,16 +79,16 @@ jobs:
             # 首推、force push、tag 推送等拿不到可比的前一个状态。bridge 是咽喉服务，
             # 拿不准时宁可不动，人工用 workflow_dispatch 补切。
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "- bridge: 无法与 \`${BEFORE:-<none>}\` 比对，跳过自动 cutover（需要时手工触发 bridge-cutover）" >> "$GITHUB_STEP_SUMMARY"
+            echo "- bridge: 无法与 \`${BEFORE:-<none>}\` 比对，跳过自动发布（需要时手工选择 bridge-peer）" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
           if [ "$CURRENT" = "$PREVIOUS" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "- bridge: 构建上下文未变（\`${CURRENT:0:12}\`），不触发 cutover" >> "$GITHUB_STEP_SUMMARY"
+            echo "- bridge: 构建上下文未变（\`${CURRENT:0:12}\`），不触发 peer 发布" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "- bridge: \`${PREVIOUS:0:12}\` → \`${CURRENT:0:12}\`，构建完成后自动 cutover" >> "$GITHUB_STEP_SUMMARY"
+            echo "- bridge: \`${PREVIOUS:0:12}\` → \`${CURRENT:0:12}\`，构建完成后自动走 peer 发布" >> "$GITHUB_STEP_SUMMARY"
           fi
 
   build-push:
@@ -229,18 +230,106 @@ jobs:
           target="docker://${TCR_BASE}/${{ matrix.image }}:${{ steps.tree.outputs.tag }}"
           timeout 25m skopeo copy --all --preserve-digests --retry-times 3 --authfile "$auth_file" "$source" "$target"
 
-  # 合并即上线，但只限 bridge 自己变了的那次合并；其余 main push 一概不碰咽喉服务。
-  # 回滚/重切仍走 bridge-cutover 的 workflow_dispatch 手工入口。
-  cutover-bridge:
+  # 与 6 个业务镜像共用物理 peer-channel，但保持独立 release、部署、回滚和 ACK。
+  # bridge-cutover.yml 保留为显式 TCR fallback，不再位于日常发布关键路径。
+  stage-openclaw-bridge-peer:
     needs:
       - resolve-release
       - build-push
-      - mirror-built-to-tcr
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.resolve-release.outputs.bridge_changed == 'true' && vars.TCR_BASE != '' }}
-    uses: ./.github/workflows/bridge-cutover.yml
-    with:
-      confirmation: CUTOVER_TXECS
-    secrets: inherit
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.resolve-release.outputs.bridge_changed == 'true') || (github.event_name == 'workflow_dispatch' && inputs.deploy_target == 'bridge-peer') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: sbom-openclaw-bridge-*
+          path: peer-bundle/sboms
+          merge-multiple: true
+      - name: Install pinned regctl
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o /tmp/regctl https://github.com/regclient/regclient/releases/download/v0.11.5/regctl-linux-amd64
+          echo 'c93aa7638749f5aaac1a8e01787321889c78f0101809bb2880343478d0ba0467  /tmp/regctl' | sha256sum -c -
+          sudo install -m 0755 /tmp/regctl /usr/local/bin/regctl
+      - name: Package bridge source and immutable release request
+        env:
+          TCR_BASE: ${{ vars.TCR_BASE }}
+          RELEASE_ID: bridge-${{ needs.resolve-release.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          : "${TCR_BASE:?TCR_BASE is required as the local runtime tag namespace}"
+          mkdir -p peer-bundle/release
+          git archive "$GITHUB_SHA" deploy/openclaw-bridge | tar -x -C peer-bundle/release
+          printf '%s\n' "$GITHUB_SHA" > peer-bundle/release/.source-commit
+          tar -C peer-bundle/release -czf peer-bundle/openclaw-bridge-release.tgz .
+          export BRIDGE_TAG="t-$(git rev-parse 'HEAD:deploy/openclaw-bridge' | cut -c1-12)"
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          name="openclaw-bridge"
+          tag=os.environ["BRIDGE_TAG"]
+          source=f"ghcr.io/{os.environ['GITHUB_REPOSITORY_OWNER']}/{name}:{tag}"
+          digest=subprocess.check_output(["regctl","image","digest","--platform","linux/amd64",source], text=True).strip()
+          matches=list(pathlib.Path("peer-bundle/sboms").glob("sbom-openclaw-bridge-*.spdx.json"))
+          if len(matches) != 1: raise SystemExit(f"expected one bridge SBOM, found {matches}")
+          matches[0].replace("peer-bundle/sbom-openclaw-bridge.spdx.json")
+          image={"name":name,"source":source,"target":f"{os.environ['TCR_BASE']}/{name}:{tag}",
+                 "digest":digest,"file":"openclaw-bridge.tar","sbom":"sbom-openclaw-bridge.spdx.json"}
+          request={"release_type":"openclaw-bridge","release_id":os.environ["RELEASE_ID"],
+                   "source_commit":os.environ["GITHUB_SHA"],
+                   "github_run_id":os.environ["GITHUB_RUN_ID"],"github_run_attempt":os.environ["GITHUB_RUN_ATTEMPT"],
+                   "bridge_version":f"sha-{os.environ['GITHUB_SHA'][:12]}@{os.environ['GITHUB_RUN_ID']}/{os.environ['GITHUB_RUN_ATTEMPT']}",
+                   "source_archive":"openclaw-bridge-release.tgz","images":[image]}
+          pathlib.Path("peer-bundle/release-request.json").write_text(json.dumps(request,indent=2)+"\n",encoding="utf-8")
+          PY
+      - name: Upload bridge control bundle to aliecs
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.ECS_HOST }}
+          username: ${{ secrets.ECS_USER }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          source: "peer-bundle/release-request.json,peer-bundle/openclaw-bridge-release.tgz,peer-bundle/sbom-openclaw-bridge.spdx.json"
+          target: "/tmp/peer-bridge-${{ github.sha }}"
+          strip_components: 1
+      - name: Stage bridge on aliecs and wait for independent txecs ACK
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ECS_HOST }}
+          username: ${{ secrets.ECS_USER }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          command_timeout: 45m
+          script: |
+            set -euo pipefail
+            release_id="bridge-${{ needs.resolve-release.outputs.release_id }}"
+            request="/tmp/peer-bridge-${{ github.sha }}/release-request.json"
+            systemd-run --quiet --wait --collect \
+              --unit="peer-stage-bridge-${{ github.run_id }}-${{ github.run_attempt }}" \
+              --property=MemoryMax=256M --property=CPUWeight=100 --property=IOWeight=100 \
+              /usr/local/sbin/peer-release-stage "$request"
+            ack="/srv/peer-channel/acks/${release_id}.json"
+            for _ in $(seq 1 180); do
+              if [[ -s "$ack" ]]; then
+                python3 - "$ack" <<'PY'
+            import json,sys
+            data=json.load(open(sys.argv[1], encoding="utf-8"))
+            print(json.dumps(data, ensure_ascii=False))
+            if data.get("release_type") != "openclaw-bridge" or data.get("status") != "success":
+                raise SystemExit(1)
+            PY
+                exit 0
+              fi
+              sleep 10
+            done
+            echo "txecs bridge ACK timeout" >&2
+            exit 1
 
   stage-business-cn-peer:
     needs:
@@ -318,7 +407,7 @@ jobs:
               source_sbom.replace(pathlib.Path("peer-bundle")/sbom)
               images.append({"name":name,"source":source,"target":f"{os.environ['TCR_BASE']}/{name}:{tag}",
                              "digest":digest,"file":f"{name}.tar","sbom":sbom})
-          request={"release_id":os.environ["RELEASE_ID"],"source_commit":os.environ["GITHUB_SHA"],
+          request={"release_type":"business-cn","release_id":os.environ["RELEASE_ID"],"source_commit":os.environ["GITHUB_SHA"],
                    "github_run_id":os.environ["GITHUB_RUN_ID"],"github_run_attempt":os.environ["GITHUB_RUN_ATTEMPT"],
                    "source_archive":"aliecs-release.tgz","images":images}
           pathlib.Path("peer-bundle/release-request.json").write_text(json.dumps(request,indent=2)+"\n",encoding="utf-8")
@@ -353,7 +442,8 @@ jobs:
             import json,sys
             data=json.load(open(sys.argv[1], encoding="utf-8"))
             print(json.dumps(data, ensure_ascii=False))
-            if data.get("status") != "success": raise SystemExit(1)
+            if data.get("release_type", "business-cn") != "business-cn" or data.get("status") != "success":
+                raise SystemExit(1)
             PY
                 exit 0
               fi

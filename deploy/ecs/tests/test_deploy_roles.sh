@@ -108,16 +108,19 @@ assert_contains "$MIRROR_IMAGES" 'auth_file="$auth_dir/auth.json"'
 assert_not_contains "$MIRROR_IMAGES" 'auth_file="$(mktemp)"'
 assert_contains "$BRIDGE_WORKFLOW" 'host: ${{ secrets.TENCENT_HOST }}'
 assert_contains "$BRIDGE_WORKFLOW" "inputs.confirmation == 'CUTOVER_TXECS'"
-# 手工入口必须保留：自动 cutover 之外还要能回滚、重切、切非 main 的 ref。
+# TCR 手工入口必须保留，用于 peer 主路径故障时回滚、重切或切非 main 的 ref。
 assert_contains "$BRIDGE_WORKFLOW" "  workflow_dispatch:"
 assert_contains "$BRIDGE_WORKFLOW" "  workflow_call:"
 
-# bridge 自动 cutover 只在 bridge 构建上下文的 tree hash 变了的 main push 上发生。
-assert_contains "$RELEASE_WORKFLOW" "  cutover-bridge:"
-assert_contains "$RELEASE_WORKFLOW" "uses: ./.github/workflows/bridge-cutover.yml"
-assert_contains "$RELEASE_WORKFLOW" "confirmation: CUTOVER_TXECS"
+# bridge 与业务镜像共用 peer 物理通道，但必须保持独立发布、服务和 ACK。
+assert_contains "$RELEASE_WORKFLOW" "  stage-openclaw-bridge-peer:"
+assert_contains "$RELEASE_WORKFLOW" '"release_type":"openclaw-bridge"'
+assert_contains "$RELEASE_WORKFLOW" 'data.get("release_type") != "openclaw-bridge"'
+assert_contains "$RELEASE_WORKFLOW" "inputs.deploy_target == 'bridge-peer'"
 assert_contains "$RELEASE_WORKFLOW" "needs.resolve-release.outputs.bridge_changed == 'true'"
 assert_contains "$RELEASE_WORKFLOW" 'CURRENT="$(git rev-parse "HEAD:deploy/openclaw-bridge")"'
+assert_not_contains "$RELEASE_WORKFLOW" "  cutover-bridge:"
+assert_contains "$RELEASE_WORKFLOW" '"release_type":"business-cn"'
 assert_contains "$BRIDGE_WORKFLOW" \
   'STATE_FILE=/srv/internal-stack/release.env'
 assert_contains "$BRIDGE_WORKFLOW" \
