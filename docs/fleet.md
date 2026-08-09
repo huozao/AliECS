@@ -94,6 +94,58 @@ txecs 127.0.0.1:11800 failover-proxy
 | txecs | 13.6 KB/s | 实质不可用，别把它当备选 |
 | GitHub runner → TCR | 劣化时 **0 B/s 冻结** | 判别与处置见 `runbooks/deploy.md` |
 
+## SSH 账户与认证姿态（改 sshd 前必读，改错直接断生产）
+
+> **本节两类内容，过期方式不同**：账户清单、红线、排序陷阱属**持久约束**，
+> 变化时应随改动更新本节；带具体数字的是 **2026-08-08 的取证快照**，只用来支撑
+> 当时的判断，不代表当前状态。要重新评估（比如再次考虑收紧 SSH）时**必须重新取证**，
+> 不要直接引用下面的数字：
+>
+> ```bash
+> # 各机真实登录账户与所用 key（换成目标设备）
+> ssh txecs 'sudo journalctl -u ssh --since "30 days ago" | \
+>   grep -oE "Accepted publickey for [a-z]+ from [0-9.]+" | awk "{print \$4}" | sort | uniq -c'
+> ssh txecs 'sudo sshd -T | grep -E "^(passwordauthentication|permitrootlogin|maxauthtries) "'
+> ssh txecs 'sudo fail2ban-client status sshd'
+> ```
+
+**各机实际登录账户**（2026-08-08 实测，别假设"只有一个管理员账户"）：
+
+| 设备 | 账户 | 用途 | 形态 |
+|---|---|---|---|
+| txecs | `ubuntu` | devbox 人工管理 + GitHub Actions 部署 | 唯一日常 shell 账户 |
+| txecs | `webdock-tunnel` | 生产隧道 11810/11811 + console 16101 | `Match User` 块，`PermitListen` 锁定这三个端口 |
+| txecs | `artifact-drop` | artifact 投递 | SFTP chroot，拿不到 shell |
+| txecs | `restic-peer` | 跨机备份接收 | SFTP chroot，拿不到 shell |
+| aliecs | `root` | **全部**：CI 部署、bridge/console/T+ 隧道、ProductCenter | 5733 次登录（2026-07-09~08-08 区间计数），`authorized_keys` 8 个 key |
+
+**两条已踩过的红线**（2026-08-08 各拦下一次）：
+
+- txecs **不能**设 `AllowUsers ubuntu` —— 会同时断掉 `webdock-tunnel`（生产 bridge 主路）、
+  `artifact-drop`、`restic-peer`。要写就必须四个账户全列，但那是个会随新账户增长的动态清单，
+  漏一个就静默断链，收益却接近零（挡掉的只有 root 和无 key 的系统账户）。
+- aliecs **不能**设 `PermitRootLogin no` —— 那台机器所有自动化都走 root key，设了等于全断。
+  它的正确值是 `prohibit-password`（在 `00-enable-login.conf`）。
+
+**因此 infra 的共享片段 `server/ssh/05-hardening.conf` 刻意只管
+`PasswordAuthentication` / `KbdInteractiveAuthentication`**；`PermitRootLogin` 与
+`MaxAuthTries` 由各 role 自己设（txecs 在 `40-business-cn.conf` 里 `MaxAuthTries 3`，
+因为各客户端都是 IdentitiesOnly 单 key；aliecs 保持默认 6，因为 root 下挂了 8 个 key）。
+
+**排序陷阱（sshd 是 first-match-wins）**：最先出现的关键字生效，`sshd_config.d/` 按文件名
+排序加载。txecs 的 `50-cloud-init.conf` 里带着 `PasswordAuthentication yes`，全靠
+`05-hardening.conf` 排在它前面压制——**新增 drop-in 时编号必须小于 40**，否则会掉进
+`40-business-cn.conf` 的 `Match` 块作用域，只对单个用户生效。改完必须用
+`sshd -T` 验生效值、`sshd -T -C user=webdock-tunnel` 验 Match 块没被污染。
+
+**IP 白名单不可行**——结论持久，依据是 2026-08-08 的快照（`2026-08-01~08-08` 区间计数）：
+devbox 家宽 IP 在这 7 天里就变过（`222.210.79.47` / `171.221.110.108`，同一把 key），
+GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会同时锁死自己和断掉 CI 部署。
+**结论不依赖具体数字**：只要家宽是动态 IP、CI 跑在公有云 runner 上，这条就成立；
+哪天改成固定 IP 或自建 runner，可以重新评估。
+当时的防护基线：key-only（`PasswordAuthentication no`）+ fail2ban（bantime 1 天，
+累计封 105 个），爆破 348 次/7 天属互联网背景水平、不是定向攻击。
+
 ## 设备档案
 
 ### aliecs（海外边界与 business-cn 隔离候选）
@@ -137,6 +189,12 @@ txecs 127.0.0.1:11800 failover-proxy
 - 公网边界：UFW 开放 80/443；Nginx 默认站点仍返回 444。`@`/`www`、
   `auth`/`lldap` 均在本机终止 TLS，Authelia/LLDAP 也在本机运行。无
   sing-box、mihomo 或任何第三方出海转发能力。
+- **DNS 直连、不经 Cloudflare 代理（2026-08-08 起）**：`@`/`www`/`auth`/`lldap`
+  四条记录已转灰云 DNS-only，公网直接解析到 `106.52.51.67`。
+  **排障时看到客户端直连源站 IP 是正常的，不是配置泄漏**；nginx 日志里的
+  `remote_addr` 现在就是真实客户端 IP（`cloudflare-realip.conf` 在灰云下不生效）。
+  改回橙云的完整步骤与代价见 infra `docs/runbooks/site-entry.md`「代理模式」。
+  只有 `erp` 仍指 aliecs `47.77.176.62`（本来就是灰云）。
 - 远程控制台：公网 `/console/*` 的 Authelia forward-auth 在本机完成；除
   `/console/devbox/desktop/` 外均反代回 AliECS 源站。devbox 那一路自 2026-08-03 起
   在本机终止（`127.0.0.1:16101` ← devbox 反向隧道，sshd `PermitListen` 与
