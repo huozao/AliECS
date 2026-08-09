@@ -78,6 +78,18 @@ txecs 127.0.0.1:11800 failover-proxy
 | webdock2 → txecs | SSH 反向隧道 11810 | infra roles | 生产业务隧道（bridge 主路） | 勿占用 |
 | webdock2 → aliecs | SSH 隧道 16090/16091 | infra roles | console 通道 | 勿占用 |
 
+`peer-channel` 是一条物理传输通道，不等于一个部署单元。当前在同一目录协议上承载两类
+互不连坐的 release：
+
+| release type | 镜像 | txecs 部署器 | 状态/回滚/ACK |
+|---|---|---|---|
+| `business-cn` | 6 个：public-web、admin-ui、backend-api、doc-sync-worker、tplus-sync-worker、mcp-coding-server | `deploy-role.sh business-cn` | `/srv/business-cn/current`；业务栈整体回滚；独立 ACK |
+| `openclaw-bridge` | 1 个：openclaw-bridge | `txecs-openclaw-bridge.service` | `/srv/internal-stack/release.env`；只回滚 bridge；独立 ACK |
+
+因此“6+1”只是服务生命周期边界，不是两条网络线路。两类 release 都由 aliecs 从 GHCR
+按 digest 导出，经同一个 Syncthing 通道送到 txecs，并在 txecs 自动部署；任一类失败不会
+触发另一类重启或回滚。TCR 镜像继续异步保留，`bridge-cutover.yml` 只作手工备用。
+
 2026-08-09 对 peer-channel 做过 96 MiB 随机文件实测：传输中断开隧道 8 秒后自动
 续传，两端 SHA-256 一致；含故障窗口约 56 秒，等效 1.71 MiB/s。Syncthing 限制为
 `MemoryHigh=256M`、`MemoryMax=384M`，rest-server 为 `MemoryMax=128M`；这是上限，
@@ -175,7 +187,7 @@ GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会�
   转发端口永不释放、隧道无限重连。配置由 `infra` 的 `server/ssh/10-tunnel-keepalive.conf`
   统一下发，`roles/server/{tencent,aliecs-edge}/verify.sh` 各有断言。查：`sshd -T | grep clientalive`。
 - 远程控制台（2026-07-04，`https://hydwang.xyz/console/`）：nginx `/console/*` 七路 location（认证=Authelia `two_factor` + lldap `console_admins` 组，成对 deny 兜底；**VNC 层免密设计**，2FA 是唯一闸门）；本机组件 ttyd 7681（unit `ttyd-console`，⚠️ apt 自带 `ttyd.service` 抢端口须 disable）、webtop 3000 按需启停（`/opt/aliecs/aliecs-temp-desktop.sh`，2G 内存用完必须 stop）；ECS `authorized_keys` permitlisten 新增四条 160xx（16080/16081←webdock1、16090/16091←webdock2，与生产 118xx 隔离）。⚠️ 2026-08-03 起 `/console/devbox/desktop/` 已改为在 txecs 本地终止，不再回源本机；AliECS 侧对应的 16101 location 与 authorized_keys 条目**刻意保留**，仅作回滚路径，不再有流量。详见 infra `console/README.md`。
-- 部署：push AliECS main → release-deploy 自动构建部署业务镜像；bridge 镜像同流程构建，且当 `deploy/openclaw-bridge/**` 的内容树 hash 变了时，release-deploy 构建完自动调用 `bridge-cutover`（自动解析 digest、验证并失败回滚）。bridge 没变的合并完全不碰它；回滚/重切/切非 main ref 仍走 `bridge-cutover` 的手工 `workflow_dispatch`（填 `CUTOVER_TXECS`）。
+- 部署：push AliECS main → release-deploy 构建镜像；获授权后业务 6 镜像选择 `business-cn`。当 `deploy/openclaw-bridge/**` 的内容树 hash 变化时，bridge 自动走同一 peer-channel，但使用独立 release、systemd 切换、失败回滚和 ACK；bridge 没变的合并不碰它。手工重发选 `bridge-peer`；TCR 回滚才用 `bridge-cutover` 的 `workflow_dispatch`（填 `CUTOVER_TXECS`）。
 - 排障：`docker ps`、bridge 日志 `docker logs openclaw-bridge`、部署尖峰时 health 告警多为瞬时（2G 内存超卖）。
 
 ### txecs（腾讯云 business-cn 生产主栈）
@@ -193,6 +205,9 @@ GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会�
 - 应用部署：AliECS `release-deploy` 的 `business-cn` job；aliecs 从 GHCR 按 digest
   导出后经 peer-channel 传入，txecs 校验、`docker load`、自动部署并回 ACK。
   `/srv/business-cn/current` 记录当前源码提交；TCR 只作显式 fallback。
+- bridge 部署：同一个 peer-channel 的 `openclaw-bridge` release；txecs 校验、离线加载后
+  只更新 `/srv/internal-stack/release.env` 并重启 `txecs-openclaw-bridge.service`，健康检查
+  或运行 digest 不符会自动恢复旧 state。它不调用 business-cn 部署器，也不重启 6 个业务镜像。
 - WebDock：`127.0.0.1:11800` 为 failover 入口，
   `11810←webdock2`、`11811←webdock1` 均已验证；当前响应头仍为
   `X-Webdock-Device: webdock2`、`X-Webdock-Route: primary`。
@@ -299,7 +314,7 @@ GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会�
 - **`release-meta.env` / bridge `webdock.env` / openclaw `.env` / webdock 两节点 `.env` 都是渲染产物，不要在主机上直接长期修改**（应急热改后必须回灌 sops 源，否则下次 render 覆盖）。
 - 设备侧同步通道：各机本地 bare 仓（aliecs `/root/infra.git`、webdock1/2 `~/infra.git`），由 devbox `git push device-*` 推送（设备未配 GitHub 私仓访问；三把备用 deploy 公钥已生成在各机 `~/.ssh/github_infra_deploy.pub`，需要时人工添加）。
 - aliecs `/root/infra` 自 2026-07-02 起是真 git 克隆（旧手工拷贝备份在 `/root/infra.legacy-20260702`）。
-- bridge 换镜像：改 `deploy/openclaw-bridge/**` 并合入 main 即自动 cutover（release-deploy 构建后调用 `bridge-cutover`，失败自动回滚）；回滚/重切用 `bridge-cutover` 的手工 `workflow_dispatch`。运行状态在 `/root/infra/server/release.env`；禁止登机手改版本。
+- bridge 换镜像：改 `deploy/openclaw-bridge/**` 并合入 main 后自动生成独立 peer release，txecs 自动校验/切换/回滚/ACK；手工重发选 `release-deploy` 的 `bridge-peer`。`bridge-cutover` 仅为 TCR 手工备用。运行状态在 `/srv/internal-stack/release.env`；禁止登机手改版本。
 
 ## 新增设备流程
 
