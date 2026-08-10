@@ -97,6 +97,36 @@ aliecs ─docker save|gzip -1─> /srv/peer-restic/repos/transfer/   （root:755
 - 旧 `VYYYYMMDDNNN`/semver 仅保留历史兼容，不再为每次 main 部署生成。
 - `FORCE_MIGRATIONS=1` 强制跑迁移。
 
+## 触发语义：push 只构建，部署必须手工 dispatch（2026-08-10 复核 `release-deploy.yml`）
+
+`on.push`（main，忽略 `*.md` / `docs/**`）只跑 `resolve-release` + `build-push` +
+`mirror-built-to-tcr`。**所有业务部署 job 都要求 `workflow_dispatch`**——PR 合并进 main
+不会部署任何东西，workflow 报 `Success` 只代表镜像构建成功。
+
+| job | 触发条件（2026-08-10 实读） | 是什么 |
+|---|---|---|
+| `stage-business-cn-peer` | dispatch + `deploy_target=business-cn` | **业务主路径**：aliecs 拉 GHCR → Syncthing → txecs |
+| `deploy-business-cn` | dispatch + `deploy_target=business-cn-tcr-fallback` | ⚠️ **名字骗人**：TCR 回退路径。走主路径部署时它**永远 skipped**，据此判断会把成功的部署误判成没部署 |
+| `prepare-business-candidate` | dispatch + `deploy_target=business-candidate` | 候选环境 |
+| `stage-openclaw-bridge-peer` | push 且 bridge 上下文变化，或 dispatch + `bridge-peer` | bridge 独立发布单元 |
+| `mirror-built-to-tcr` | `vars.TCR_BASE != ''`，**push 也跑** | 异步备用镜像，失败不阻塞主发布 |
+
+部署命令：`gh workflow run release-deploy.yml --ref main -f deploy_target=business-cn`
+
+**2026-08-10 实际踩到**：PR #288 合并后 run #376 显示 `Success`、7 个 `build-push` 全绿，
+据此报告"已部署"是错的——`stage-business-cn-peer` 压根没被触发。取证发现四个容器仍是
+`Up 24 hours`、`curl https://hydwang.xyz/tplus-sync/ | grep -c manualFullSyncBtn` 返回 0。
+手工 dispatch 后 `stage-business-cn-peer` success，容器才全部重建、镜像 tag 全变。
+同一轮里 `mirror-built-to-tcr (backend-api)` 仍 failure，生产不受影响（见上方 TCR 说明）。
+
+**判定部署成功的唯一可靠方式**（顺序不可省）：
+
+```bash
+gh run view <run-id> --json jobs --jq '.jobs[] | select(.name|test("stage-business-cn-peer")) | .conclusion'
+ssh txecs "sudo docker ps --format '{{.Names}}\t{{.Status}}\t{{.Image}}'"   # 启动时间要变新、tag 要变
+curl -s https://hydwang.xyz/<改动页面> | grep -c '<本次新增的标记>'            # 外部实证
+```
+
 ## 症状表
 
 | 症状 | 先查 | 处置 |
@@ -107,7 +137,7 @@ aliecs ─docker save|gzip -1─> /srv/peer-restic/repos/transfer/   （root:755
 | backend unhealthy | healthcheck `start_period: 300s` 内属正常；healthz 对可选探测必须容错（惰性目录事故 PR#106） | 等 start_period；真不健康看 `docker logs` |
 | 部署后页面没变 | 内容寻址：内容没变的服务标签不变、容器不重建 | 确认改动落在对应构建上下文目录内 |
 | txecs 的三个 worker 同时 Exited(137)，随后部署仍不启动 | `sudo grep -E '^(P0_MODE|TPLUS_BOM_WRITE_ENABLED)=' /srv/business-cn/config/runtime.env` | 正式 `business-cn` workflow 必须用 infra 的 production profile：`P0_MODE=false`、`TPLUS_BOM_WRITE_ENABLED=true`。P0 profile 会主动停 worker，只用于隔离阶段 |
-| workflow 显示 success，但生产没变（容器还是旧的 Up N days） | **`deploy-*` job 的结论是不是 `skipped`**，而不是只看 workflow 总结论 | ⚠️ `gh run rerun --failed` **只重跑 failed 的 job，skipped 的不会被拉起**。build 失败 → deploy 被 skip → 重跑后 build 转绿、workflow conclusion=success，部署却压根没执行（2026-08-04 实际踩到）。正确处置：`gh workflow run release-deploy.yml --ref main -f deploy_target=business-cn` 重跑完整一轮。判定成功必须落到 `deploy-business-cn` 的 job 结论 + `docker ps` 的容器启动时间，两个都看 |
+| workflow 显示 success，但生产没变（容器还是旧的 Up N days） | 先看**是不是 push 触发的**（push 不部署，见上方「触发语义」）；再看 `stage-business-cn-peer` 的结论 | 两种成因：①（2026-08-10）push/合并根本不触发部署，需手工 dispatch；②（2026-08-04）`gh run rerun --failed` **只重跑 failed 的 job，skipped 的不会被拉起**，build 失败 → deploy 被 skip → 重跑后 build 转绿、conclusion=success、部署却没执行。两者处置相同：`gh workflow run release-deploy.yml --ref main -f deploy_target=business-cn` 跑完整一轮。⚠️ 判据是 `stage-business-cn-peer`，**不是 `deploy-business-cn`**（后者是 TCR fallback，主路径下恒为 skipped） |
 | `mirror-built-to-tcr` 失败或超时 | `stage-business-cn-peer` 和 txecs ACK 是否成功 | peer 成功则生产发布已完成，TCR 仅备用镜像缺一版；网络恢复后重跑 `mirror-only`。只有显式 `business-cn-tcr-fallback` 才被它阻塞 |
 | `stage-business-cn-peer` 等不到 ACK | aliecs `peer-syncthing`、txecs tunnel/syncthing/consume timer；两侧 `release.json` 与 ACK | 不手工跳过哈希门。先修同步；需止损时显式选择 `business-cn-tcr-fallback` |
 | `stage-openclaw-bridge-peer` 等不到 ACK | 先按上一行查同一物理通道，再看 bridge release 的 ACK、`txecs-openclaw-bridge.service` 和 `/v1/models` | 修复后手工选择 `bridge-peer` 重发；紧急回退才使用 `bridge-cutover.yml` 的 TCR 路径。不要改成业务 release，也不要重启 business-cn |
