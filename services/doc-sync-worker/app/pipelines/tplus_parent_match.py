@@ -1,6 +1,6 @@
 """把 T+ 当前有效物料清单的父件名称核对回企微「标准型号0117」，异常推飞书群。
 
-只写「父件名称 / T+匹配状态 / T+核对时间」三列。
+只写「父件名称 / T+匹配状态 / T+核对时间 / T+停用」四列。
 父件编码是这张表当物料清单执行标准时的主键，**失联时只标状态、绝不自动改编码**：
 名称是描述性字段，改错代价小；编码判错会顺着执行链扩散。
 
@@ -30,26 +30,32 @@ F_PARENT_CODE = "父件编码"
 F_PARENT_NAME = "父件名称"
 F_MATCH_STATUS = "T+匹配状态"
 F_CHECKED_AT = "T+核对时间"
+F_DISABLED = "T+停用"
 F_MODEL = "型号"
-MANAGED_FIELDS = (F_PARENT_NAME, F_MATCH_STATUS, F_CHECKED_AT)
+MANAGED_FIELDS = (F_PARENT_NAME, F_MATCH_STATUS, F_CHECKED_AT, F_DISABLED)
 
 STATUS_OK = "一致"
 STATUS_RENAMED = "名称已更新"
 STATUS_MISSING = "编码失联"
 STATUS_NO_CODE = "无父件编码"
 
+# 停用状态是独立的一列，不并进 T+匹配状态：停用件仍在 T+ 里，编码照样有效，
+# 和「编码失联」是两回事，混一列会让人按失联去查一个其实还在的编码。
+DISABLED_YES = "停用"
+DISABLED_NO = "启用"
+
 _BEIJING = timezone(timedelta(hours=8))
 
 _ACTIVE_BOM_SQL = """
 SELECT DISTINCT ON (raw_json->>'Code')
-       raw_json->>'Code', raw_json->>'Name', raw_json->>'Version'
+       raw_json->>'Code', raw_json->>'Name', raw_json->>'Version', raw_json->>'Disabled'
 FROM tplus_bom_records
 WHERE missing_since IS NULL AND coalesce(raw_json->>'Code', '') <> ''
 ORDER BY raw_json->>'Code', raw_json->>'UpdateDate' DESC
 """
 
 _ACTIVE_INVENTORY_SQL = """
-SELECT raw_json->>'Code', raw_json->>'Name'
+SELECT raw_json->>'Code', raw_json->>'Name', raw_json->>'Disabled'
 FROM tplus_inventory_records
 WHERE missing_since IS NULL AND coalesce(raw_json->>'Code', '') <> ''
   AND raw_json->'InventoryClass'->>'Code' = '06'
@@ -74,6 +80,7 @@ class MatchResult:
     ok: int = 0
     renamed: list[tuple[str, str, str, str]] = field(default_factory=list)
     missing: list[tuple[str, str]] = field(default_factory=list)
+    disabled: list[tuple[str, str]] = field(default_factory=list)
     no_code: int = 0
     updates: list[dict[str, Any]] = field(default_factory=list)
     created_fields: list[str] = field(default_factory=list)
@@ -94,15 +101,28 @@ def text_cell(value: str) -> list[dict[str, str]]:
     return [{"type": "text", "text": value}]
 
 
-def load_active_bom() -> dict[str, tuple[str, str]]:
-    """T+ 有效父件：BOM 记录优先，纯存货档案（暂无 BOM）兜底，避免新建父件被误判失联。"""
+def disabled_flag(value: Any) -> bool:
+    """T+ 的 Disabled 经 jsonb->>' 取出来是 'True'/'False' 文本，不是布尔。"""
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"true", "1"}
+
+
+def load_active_bom() -> dict[str, tuple[str, str, bool]]:
+    """T+ 有效父件：BOM 记录优先，纯存货档案（暂无 BOM）兜底，避免新建父件被误判失联。
+
+    第三个元素是 T+ 里的停用标记：BOM 父件取 BOM 单的 Disabled，纯存货父件取存货档案的。
+    """
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(_ACTIVE_BOM_SQL)
-            bom = {str(row[0]): (str(row[1] or ""), str(row[2] or "")) for row in cur.fetchall()}
+            bom = {
+                str(row[0]): (str(row[1] or ""), str(row[2] or ""), disabled_flag(row[3]))
+                for row in cur.fetchall()
+            }
             cur.execute(_ACTIVE_INVENTORY_SQL)
-            for code, name in cur.fetchall():
-                bom.setdefault(str(code), (str(name or ""), ""))
+            for code, name, disabled in cur.fetchall():
+                bom.setdefault(str(code), (str(name or ""), "", disabled_flag(disabled)))
             return bom
 
 
@@ -128,7 +148,7 @@ def ensure_fields(client: WeComSmartsheetClient, docid: str, sheet_id: str) -> l
     return missing
 
 
-def plan_updates(records: list[dict[str, Any]], bom: dict[str, tuple[str, str]], checked_at: str) -> MatchResult:
+def plan_updates(records: list[dict[str, Any]], bom: dict[str, tuple[str, str, bool]], checked_at: str) -> MatchResult:
     result = MatchResult(checked_at=checked_at)
     for record in records:
         values = record.get("values") or {}
@@ -140,6 +160,9 @@ def plan_updates(records: list[dict[str, Any]], bom: dict[str, tuple[str, str]],
         model = cell_text(values, F_MODEL)
         current_name = cell_text(values, F_PARENT_NAME)
         current_status = cell_text(values, F_MATCH_STATUS)
+        current_disabled = cell_text(values, F_DISABLED)
+        # 编码没匹配上时不猜停用状态，保留原值——否则失联行会被写成「启用」，读起来像确认过。
+        target_disabled = current_disabled
 
         if not code:
             status, target_name = STATUS_NO_CODE, current_name
@@ -153,6 +176,8 @@ def plan_updates(records: list[dict[str, Any]], bom: dict[str, tuple[str, str]],
                 result.missing.append((code, model))
             else:
                 target_name = hit[0]
+                # 停用不影响匹配判定：停用件仍在 T+ 里，编码有效，只是不该再投产。
+                target_disabled = DISABLED_YES if hit[2] else DISABLED_NO
                 if current_name and current_name != target_name:
                     status = STATUS_RENAMED
                     result.renamed.append((code, model, current_name, target_name))
@@ -165,6 +190,11 @@ def plan_updates(records: list[dict[str, Any]], bom: dict[str, tuple[str, str]],
             changed[F_PARENT_NAME] = text_cell(target_name)
         if status != current_status:
             changed[F_MATCH_STATUS] = text_cell(status)
+        if target_disabled != current_disabled:
+            changed[F_DISABLED] = text_cell(target_disabled)
+            # 只报「本轮新变成停用」，不报存量：存量每轮都在，报了就是每天一条同样的告警。
+            if target_disabled == DISABLED_YES:
+                result.disabled.append((code, model))
         # 只有真的改了才盖时间戳：补建后全表上千行，每轮重写整表既无信息量又吃接口配额。
         if changed:
             changed[F_CHECKED_AT] = text_cell(checked_at)
@@ -172,7 +202,7 @@ def plan_updates(records: list[dict[str, Any]], bom: dict[str, tuple[str, str]],
     return result
 
 
-def plan_creates(records: list[dict[str, Any]], bom: dict[str, tuple[str, str]], checked_at: str) -> list[dict[str, Any]]:
+def plan_creates(records: list[dict[str, Any]], bom: dict[str, tuple[str, str, bool]], checked_at: str) -> list[dict[str, Any]]:
     """T+ 有、企微表没有的父件，补一行只带编码与名称的空白标准行。
 
     「型号」及 Lab/容差列一律留空——人工按「型号为空」筛出待补标准的行。
@@ -186,6 +216,7 @@ def plan_creates(records: list[dict[str, Any]], bom: dict[str, tuple[str, str]],
             F_PARENT_NAME: text_cell(bom[code][0]),
             F_MATCH_STATUS: text_cell(STATUS_OK),
             F_CHECKED_AT: text_cell(checked_at),
+            F_DISABLED: text_cell(DISABLED_YES if bom[code][2] else DISABLED_NO),
         }}
         for code in sorted(set(bom) - existing)
     ]
@@ -211,6 +242,12 @@ def build_alert(result: MatchResult) -> str:
             lines.append(f"  {code}｜{model or '-'}")
         if len(result.missing) > 20:
             lines.append(f"  …另有 {len(result.missing) - 20} 行")
+    if result.disabled:
+        lines.append(f"🚫 T+ 新增停用 {len(result.disabled)} 行（编码仍有效，不该再投产）：")
+        for code, model in result.disabled[:20]:
+            lines.append(f"  {code}｜{model or '-'}")
+        if len(result.disabled) > 20:
+            lines.append(f"  …另有 {len(result.disabled) - 20} 行")
     if result.created_rows:
         lines.append(f"🆕 按 T+ 补建 {len(result.created_rows)} 行（仅编码与名称，标准待人工补）：")
         for code in result.created_rows[:20]:
@@ -223,7 +260,8 @@ def build_alert(result: MatchResult) -> str:
             lines.append(f"  {msg}")
         if len(result.write_errors) > 10:
             lines.append(f"  …另有 {len(result.write_errors) - 10} 批")
-    if not result.renamed and not result.missing and not result.created_rows and not result.write_errors:
+    if not result.renamed and not result.missing and not result.disabled \
+            and not result.created_rows and not result.write_errors:
         lines.append("✅ 无异常。")
     return "\n".join(lines)
 
@@ -288,8 +326,8 @@ def run_tplus_parent_match(*, dry_run: bool = False, notify: bool = True) -> int
 
     print(
         f"[T+核对] 共 {result.total} 行 / 有编码 {result.with_code} / 一致 {result.ok} / "
-        f"改名 {len(result.renamed)} / 失联 {len(result.missing)} / 无编码 {result.no_code} / "
-        f"待补建 {len(result.created_rows)}"
+        f"改名 {len(result.renamed)} / 失联 {len(result.missing)} / 停用 {len(result.disabled)} / "
+        f"无编码 {result.no_code} / 待补建 {len(result.created_rows)}"
     )
     for code, model in result.missing:
         print(f"[T+核对] 失联 {code}｜{model}")
@@ -323,7 +361,8 @@ def run_tplus_parent_match(*, dry_run: bool = False, notify: bool = True) -> int
             result.write_errors.append(msg)
             result.exit_code = 1
 
-    if notify and (result.missing or result.renamed or result.created_fields or result.created_rows or result.write_errors):
+    if notify and (result.missing or result.renamed or result.disabled or result.created_fields
+                   or result.created_rows or result.write_errors):
         if not send_feishu_alert(build_alert(result)):
             print("[T+核对] 飞书告警未送达。")
             result.exit_code = 1

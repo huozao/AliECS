@@ -129,6 +129,58 @@ def ops_tplus_sync_config_put(
     return _sync_config_response(_read_sync_config_row())
 
 
+# 「立即全量同步」不在这里直接调 T+，而是排一条请求交给 tplus-sync-worker——
+# backend 不持有 T+ 凭据，全量也要跑一两分钟，HTTP 请求扛不住。
+# module='all' 是 worker 侧 fetch_next_full_request() 的分流依据；worker 跑完记账时
+# mode 写 'manual_full'，不会顶掉 fetch_last_scheduled_full_at() 的锚点相位。
+_ENQUEUE_FULL_SYNC_SQL = """
+    INSERT INTO integration_sync_requests(
+        provider, module, mode, target_json, priority, status, dedupe_key
+    )
+    VALUES ('chanjet', 'all', 'manual_full', '{}'::jsonb, 50, 'pending', %s)
+    RETURNING id
+    """
+
+# 排队中或正在跑的都算「已有一个」：全量是整轮重拉，连点两次没有意义，
+# 两个进程同时全量还会互相把对方本批未出现的记录标成 missing_since。
+_PENDING_FULL_SYNC_SQL = """
+    SELECT id, status FROM integration_sync_requests
+    WHERE provider = 'chanjet' AND module = 'all' AND status IN ('pending', 'running')
+    ORDER BY id DESC LIMIT 1
+    """
+
+
+@router.post("/v1/ops/tplus/full-sync")
+def ops_tplus_full_sync(user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    """把一次全量同步排进队列，由 tplus-sync-worker 在下个轮询周期（默认 30s）取走。"""
+    try:
+        with closing(_conn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(_PENDING_FULL_SYNC_SQL)
+                existing = cur.fetchone()
+                if existing:
+                    return {
+                        "queued": False,
+                        "request_id": int(existing[0]),
+                        "status": str(existing[1]),
+                        "message": "已有一次全量同步在排队或执行中，请等它跑完。",
+                    }
+                dedupe_key = f"manual-full-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{user.get('sub') or ''}"
+                cur.execute(_ENQUEUE_FULL_SYNC_SQL, (dedupe_key,))
+                request_id = int(cur.fetchone()[0])
+            conn.commit()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"排队全量同步失败：{type(exc).__name__}") from exc
+    return {
+        "queued": True,
+        "request_id": request_id,
+        "status": "pending",
+        "message": "已排队，worker 将在约 30 秒内开始，全量约需 1～2 分钟。",
+    }
+
+
 _DOC_SYNC_CONFIG_DEFAULTS = {"enabled": True, "interval_seconds": 86400, "anchor_time": "", "pull_paused": False}
 
 

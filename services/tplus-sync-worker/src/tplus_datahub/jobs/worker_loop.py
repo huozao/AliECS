@@ -10,6 +10,8 @@ from typing import Any
 from tplus_datahub.core.logger import get_logger
 from tplus_datahub.jobs.db_sync_requests import (
     fetch_last_scheduled_full_at,
+    fetch_next_full_request,
+    finish_full_request,
     fetch_next_bom_request,
     fetch_sync_config,
     finish_bom_request,
@@ -195,14 +197,62 @@ def _run_pending_db_bom_request(
     return exit_code
 
 
-def _sleep_with_manual_bom_polling(
+def _run_pending_db_full_request(
+    *,
+    fetch_db_full_request: Callable[..., dict | None],
+    finish_db_full_request: Callable[[int, str, int, dict], None],
+    sync_once: Callable[[], Any],
+    logger,
+) -> int | None:
+    """消费页面「立即全量同步」排的队。跑的是定时全量同一个 sync_once。
+
+    记账走 finish_db_full_request（mode='manual_full'），不碰 run_forever 的 last_full——
+    手动补一次不该顶掉当天的定时轮次。
+    """
+    if not _truthy(os.getenv("TPLUS_DB_SYNC_REQUESTS_ENABLED", "true")):
+        return None
+    request = fetch_db_full_request(limit=5)
+    if request is None:
+        return None
+    request_id = int(request["id"])
+    logger.info("DB T+ full sync request detected: id=%s", request_id)
+    try:
+        outcome = sync_once()
+    except Exception as exc:
+        logger.exception("DB T+ full sync failed with unexpected exception: id=%s", request_id)
+        finish_db_full_request(request_id, "failed", 1, {"error": str(exc), "source": "manual_full"})
+        return 1
+
+    if hasattr(outcome, "exit_code"):
+        exit_code = int(outcome.exit_code or 0)
+        detail = {
+            "source": "manual_full",
+            "export_files": list(getattr(outcome, "export_files", []) or []),
+            "diff_summary": getattr(outcome, "diff_summary", None),
+            "full_snapshot_id": getattr(outcome, "full_snapshot_id", None),
+            "failed_modules": list(getattr(outcome, "failed_modules", []) or []),
+            "failure_details": list(getattr(outcome, "failure_details", []) or []),
+        }
+    else:
+        exit_code = int(outcome or 0)
+        detail = {"source": "manual_full"}
+    status = "success" if exit_code == 0 else "failed"
+    logger.info("DB T+ full sync finished: id=%s status=%s exit_code=%s", request_id, status, exit_code)
+    finish_db_full_request(request_id, status, exit_code, detail)
+    return exit_code
+
+
+def _sleep_with_request_polling(
     *,
     interval_seconds: int,
     sleep: Callable[[int], None],
+    sync_once: Callable[[], Any],
     sync_bom_once: Callable[[], int | None],
     sync_bom_request_once: Callable[[dict], int | None],
     fetch_db_bom_request: Callable[..., dict | None],
     finish_db_bom_request: Callable[[int, str, int, dict], None],
+    fetch_db_full_request: Callable[..., dict | None],
+    finish_db_full_request: Callable[[int, str, int, dict], None],
     logger,
 ) -> int | None:
     poll_seconds = min(_read_positive_int("TPLUS_SYNC_POLL_SECONDS", 30), interval_seconds)
@@ -223,6 +273,14 @@ def _sleep_with_manual_bom_polling(
         )
         if db_exit_code is not None:
             last_manual_exit_code = db_exit_code
+        full_exit_code = _run_pending_db_full_request(
+            fetch_db_full_request=fetch_db_full_request,
+            finish_db_full_request=finish_db_full_request,
+            sync_once=sync_once,
+            logger=logger,
+        )
+        if full_exit_code is not None:
+            last_manual_exit_code = full_exit_code
     return last_manual_exit_code
 
 
@@ -232,6 +290,14 @@ def _default_fetch_db_bom_request(limit: int = 5) -> dict | None:
 
 def _default_finish_db_bom_request(request_id: int, status: str, exit_code: int, detail: dict) -> None:
     finish_bom_request(request_id, status, exit_code, detail)
+
+
+def _default_fetch_db_full_request(limit: int = 5) -> dict | None:
+    return fetch_next_full_request(limit=limit)
+
+
+def _default_finish_db_full_request(request_id: int, status: str, exit_code: int, detail: dict) -> None:
+    finish_full_request(request_id, status, exit_code, detail)
 
 
 def run_forever(
@@ -244,6 +310,8 @@ def run_forever(
     ),
     fetch_db_bom_request: Callable[..., dict | None] = _default_fetch_db_bom_request,
     finish_db_bom_request: Callable[[int, str, int, dict], None] = _default_finish_db_bom_request,
+    fetch_db_full_request: Callable[..., dict | None] = _default_fetch_db_full_request,
+    finish_db_full_request: Callable[[int, str, int, dict], None] = _default_finish_db_full_request,
     record_sync_run: Callable[..., int | None] = record_tplus_sync_run_if_configured,
     read_sync_config: Callable[[], dict | None] = _default_read_sync_config,
     read_last_full: Callable[[], Any | None] = fetch_last_scheduled_full_at,
@@ -338,13 +406,16 @@ def run_forever(
             else interval_seconds
         )
         logger.info("T+ sync worker sleeping: seconds=%s", wait_seconds)
-        manual_exit_code = _sleep_with_manual_bom_polling(
+        manual_exit_code = _sleep_with_request_polling(
             interval_seconds=wait_seconds,
             sleep=sleep,
+            sync_once=sync_once,
             sync_bom_once=sync_bom_once,
             sync_bom_request_once=sync_bom_request_once,
             fetch_db_bom_request=fetch_db_bom_request,
             finish_db_bom_request=finish_db_bom_request,
+            fetch_db_full_request=fetch_db_full_request,
+            finish_db_full_request=finish_db_full_request,
             logger=logger,
         )
         if manual_exit_code is not None:
