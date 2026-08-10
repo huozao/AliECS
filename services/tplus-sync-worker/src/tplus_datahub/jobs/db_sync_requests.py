@@ -24,29 +24,43 @@ def connect_if_configured() -> Any | None:
     return psycopg.connect(database_url, connect_timeout=3)
 
 
-def fetch_next_bom_request(conn: Any | None = None, limit: int = 5) -> dict[str, Any] | None:
+# BOM 回写请求与整轮全量请求共用 integration_sync_requests，靠 module 分流：
+# 'bom' 是 BOM builder 提交的写回，'all' 是页面上「立即全量同步」排的队。
+# 两条队列各取各的，取错会把回写请求当全量跑（或反过来）。
+_NEXT_BOM_REQUEST_SQL = """
+    SELECT id, mode, target_json, reason_event_id
+    FROM integration_sync_requests
+    WHERE provider = 'chanjet'
+      AND module = 'bom'
+      AND status = 'pending'
+    ORDER BY priority ASC, requested_at ASC, id ASC
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED
+    """
+
+_NEXT_FULL_REQUEST_SQL = """
+    SELECT id, mode, target_json, reason_event_id
+    FROM integration_sync_requests
+    WHERE provider = 'chanjet'
+      AND module = 'all'
+      AND status = 'pending'
+    ORDER BY priority ASC, requested_at ASC, id ASC
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED
+    """
+
+
+def _fetch_next_request(sql: str, conn: Any | None, limit: int) -> dict[str, Any] | None:
     if conn is None:
         owned_conn = connect_if_configured()
         if owned_conn is None:
             return None
         with closing(owned_conn):
-            return fetch_next_bom_request(owned_conn, limit=limit)
+            return _fetch_next_request(sql, owned_conn, limit)
 
     with conn.transaction():
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, mode, target_json, reason_event_id
-                FROM integration_sync_requests
-                WHERE provider = 'chanjet'
-                  AND module = 'bom'
-                  AND status = 'pending'
-                ORDER BY priority ASC, requested_at ASC, id ASC
-                LIMIT 1
-                FOR UPDATE SKIP LOCKED
-                """,
-                (),
-            )
+            cur.execute(sql, ())
             row = cur.fetchone()
             if not row:
                 return None
@@ -65,6 +79,15 @@ def fetch_next_bom_request(conn: Any | None = None, limit: int = 5) -> dict[str,
                 (request["id"],),
             )
             return request
+
+
+def fetch_next_bom_request(conn: Any | None = None, limit: int = 5) -> dict[str, Any] | None:
+    return _fetch_next_request(_NEXT_BOM_REQUEST_SQL, conn, limit)
+
+
+def fetch_next_full_request(conn: Any | None = None, limit: int = 5) -> dict[str, Any] | None:
+    """页面「立即全量同步」排的队；worker 在睡眠轮询里消费。"""
+    return _fetch_next_request(_NEXT_FULL_REQUEST_SQL, conn, limit)
 
 
 def fetch_sync_config(provider: str = "chanjet", conn: Any | None = None) -> dict[str, Any] | None:
@@ -113,6 +136,46 @@ def fetch_last_scheduled_full_at(provider: str = "chanjet", conn: Any | None = N
         )
         row = cur.fetchone()
         return row[0] if row else None
+
+
+# mode 写死 'manual_full'，绝不能是 'scheduled_full'：fetch_last_scheduled_full_at() 按
+# mode='scheduled_full' 取锚点相位，手动跑一次若记成定时，worker 会认为"这个周期已经跑过"，
+# 当晚锚点那轮直接判未到期被整轮跳过——手动补一次反而顶掉了当天的定时同步。
+# module 仍是 'all'：doc-sync 的 tplus_parent_match 事件触发按 module IN ('all','bom')
+# AND status='success' 抬水位，手动全量成功后企微「标准型号0117」核对要能跟着触发。
+_RECORD_FULL_RUN_SQL = """
+    INSERT INTO integration_sync_runs(provider, module, mode, status, finished_at, row_count, exit_code, detail_json, error_json)
+    VALUES ('chanjet', 'all', 'manual_full', %s, NOW(), 0, %s, %s, %s)
+    RETURNING id
+    """
+
+
+def finish_full_request(request_id: int, status: str, exit_code: int, detail: dict[str, Any]) -> None:
+    """手动全量跑完的记账：写一条 integration_sync_runs，再回填请求行。"""
+    conn = connect_if_configured()
+    if conn is None:
+        return
+    error_json = {"modules": detail.get("failure_details") or []} if detail.get("failure_details") else {}
+    with closing(conn):
+        with conn.cursor() as cur:
+            cur.execute(
+                _RECORD_FULL_RUN_SQL,
+                (status, exit_code, Jsonb(detail), Jsonb(error_json)),
+            )
+            run_id = int(cur.fetchone()[0])
+            cur.execute(
+                """
+                UPDATE integration_sync_requests
+                SET status = %s,
+                    finished_at = NOW(),
+                    sync_run_id = %s,
+                    error_json = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                """,
+                (status, run_id, Jsonb(error_json), request_id),
+            )
+        conn.commit()
 
 
 def finish_bom_request(request_id: int, status: str, exit_code: int, detail: dict[str, Any]) -> None:

@@ -237,6 +237,74 @@ class WorkerLoopTests(unittest.TestCase):
         self.assertEqual(calls[2], ("finish", 7, "success", 0, "incremental"))
         self.assertEqual(calls[3], ("full",))
 
+    def test_run_forever_consumes_db_full_request_between_scheduled_runs(self):
+        """页面「立即全量同步」排的队，worker 应在睡眠轮询里捡起来，跑的是同一个全量。"""
+        old_interval = os.environ.get("TPLUS_SYNC_INTERVAL_SECONDS")
+        old_poll = os.environ.get("TPLUS_SYNC_POLL_SECONDS")
+        old_db_enabled = os.environ.get("TPLUS_DB_SYNC_REQUESTS_ENABLED")
+        calls = []
+        requests = [{"id": 9, "mode": "manual_full", "target_json": {}}]
+
+        def fake_fetch_full(limit=5):
+            return requests.pop(0) if requests else None
+
+        def fake_finish_full(request_id, status, exit_code, detail):
+            calls.append(("finish_full", request_id, status, exit_code))
+
+        os.environ["TPLUS_SYNC_INTERVAL_SECONDS"] = "2"
+        os.environ["TPLUS_SYNC_POLL_SECONDS"] = "1"
+        os.environ["TPLUS_DB_SYNC_REQUESTS_ENABLED"] = "true"
+        try:
+            result = run_forever(
+                sync_once=lambda: calls.append(("full",)) or 0,
+                fetch_db_full_request=fake_fetch_full,
+                finish_db_full_request=fake_finish_full,
+                sleep=lambda _seconds: None,
+                max_runs=2,
+            )
+        finally:
+            for key, value in {
+                "TPLUS_SYNC_INTERVAL_SECONDS": old_interval,
+                "TPLUS_SYNC_POLL_SECONDS": old_poll,
+                "TPLUS_DB_SYNC_REQUESTS_ENABLED": old_db_enabled,
+            }.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        self.assertEqual(result, 0)
+        # 定时全量 → 睡眠中捡到手动请求 → 再跑一次同样的全量 → 记账 → 下一轮定时全量
+        self.assertEqual(calls[0], ("full",))
+        self.assertEqual(calls[1], ("full",))
+        self.assertEqual(calls[2], ("finish_full", 9, "success", 0))
+        self.assertEqual(calls[3], ("full",))
+
+    def test_failed_manual_full_is_recorded_as_failed(self):
+        old_poll = os.environ.get("TPLUS_SYNC_POLL_SECONDS")
+        old_interval = os.environ.get("TPLUS_SYNC_INTERVAL_SECONDS")
+        calls = []
+        requests = [{"id": 9, "mode": "manual_full", "target_json": {}}]
+        os.environ["TPLUS_SYNC_INTERVAL_SECONDS"] = "2"
+        os.environ["TPLUS_SYNC_POLL_SECONDS"] = "1"
+        try:
+            run_forever(
+                sync_once=lambda: 3,
+                fetch_db_full_request=lambda limit=5: requests.pop(0) if requests else None,
+                finish_db_full_request=lambda rid, status, code, detail: calls.append((status, code)),
+                sleep=lambda _seconds: None,
+                max_runs=2,  # max_runs=1 在进入睡眠轮询前就 return，请求根本不会被消费
+            )
+        finally:
+            for key, value in {"TPLUS_SYNC_INTERVAL_SECONDS": old_interval,
+                               "TPLUS_SYNC_POLL_SECONDS": old_poll}.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        self.assertEqual(calls, [("failed", 3)])
+
 
     def test_scheduled_run_records_export_files_from_result(self):
         import tplus_datahub.jobs.worker_loop as wl

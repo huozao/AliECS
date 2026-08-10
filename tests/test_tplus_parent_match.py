@@ -33,7 +33,7 @@ class _FakeWeComClient:
 
     def get_fields(self, docid, sheet_id):
         self.calls.append("get_fields")
-        return {"fields": [{"field_title": name} for name in ("父件名称", "T+匹配状态", "T+核对时间")]}
+        return {"fields": [{"field_title": name} for name in ("父件名称", "T+匹配状态", "T+核对时间", "T+停用")]}
 
     def add_fields(self, docid, sheet_id, fields):
         self.calls.append("add_fields")
@@ -104,15 +104,65 @@ class TplusParentMatchTests(unittest.TestCase):
 
     def test_matched_row_fills_parent_name_from_tplus(self) -> None:
         records = [{"record_id": "r1", "values": {"父件编码": _cells("40000019"), "型号": _cells("0539-ABS耐候玄武灰")}}]
-        result = self._plan(records, {"40000019": ("0539-耐候ABS  玄武灰色母", "20250208")})
+        result = self._plan(records, {"40000019": ("0539-耐候ABS  玄武灰色母", "20250208", False)})
         self.assertEqual(result.ok, 1)
         self.assertEqual(result.updates[0]["values"]["父件名称"], _cells("0539-耐候ABS  玄武灰色母"))
         self.assertEqual(result.updates[0]["values"]["T+匹配状态"], _cells("一致"))
 
+    def test_enabled_parent_writes_enabled_into_the_disabled_column(self) -> None:
+        records = [{"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("甲")}}]
+        result = self._plan(records, {"A": ("甲", "v1", False)})
+        self.assertEqual(result.updates[0]["values"]["T+停用"], _cells("启用"))
+
+    def test_disabled_parent_writes_disabled_into_the_disabled_column(self) -> None:
+        records = [{"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("甲")}}]
+        result = self._plan(records, {"A": ("甲", "v1", True)})
+        self.assertEqual(result.updates[0]["values"]["T+停用"], _cells("停用"))
+
+    def test_disabled_parent_is_still_a_match_not_a_missing_code(self) -> None:
+        """停用 ≠ 编码没了：停用件仍在 T+ 里，不能标失联，也不该进 missing 告警。"""
+        records = [{"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("甲")}}]
+        result = self._plan(records, {"A": ("甲", "v1", True)})
+        self.assertEqual(result.missing, [])
+        self.assertEqual(result.ok, 1)
+        self.assertEqual(result.updates[0]["values"]["T+匹配状态"], _cells("一致"))
+
+    def test_newly_disabled_parents_are_collected_for_the_alert(self) -> None:
+        records = [
+            {"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("甲")}},
+            {"record_id": "r2", "values": {"父件编码": _cells("B"), "父件名称": _cells("乙"), "型号": _cells("M2")}},
+        ]
+        result = self._plan(records, {"A": ("甲", "v1", False), "B": ("乙", "v2", True)})
+        self.assertEqual(result.disabled, [("B", "M2")])
+
+    def test_already_disabled_parents_are_not_realerted_every_run(self) -> None:
+        """存量停用件每轮都在，报了就是每天一条一模一样的告警。"""
+        records = [{"record_id": "r1", "values": {
+            "父件编码": _cells("B"), "父件名称": _cells("乙"),
+            "T+匹配状态": _cells("一致"), "T+停用": _cells("停用")}}]
+        result = self._plan(records, {"B": ("乙", "v2", True)})
+        self.assertEqual(result.disabled, [])
+
+    def test_row_already_marked_disabled_produces_no_write(self) -> None:
+        """新列同样走「只有真变了才写」，否则停用件每轮都被重写一次。"""
+        records = [{"record_id": "r1", "values": {
+            "父件编码": _cells("A"), "父件名称": _cells("甲"),
+            "T+匹配状态": _cells("一致"), "T+停用": _cells("停用")}}]
+        result = self._plan(records, {"A": ("甲", "v1", True)})
+        self.assertEqual(result.updates, [])
+
+    def test_disabled_state_flip_carries_the_checked_at_stamp(self) -> None:
+        records = [{"record_id": "r1", "values": {
+            "父件编码": _cells("A"), "父件名称": _cells("甲"),
+            "T+匹配状态": _cells("一致"), "T+停用": _cells("启用")}}]
+        result = self._plan(records, {"A": ("甲", "v1", True)})
+        self.assertEqual(result.updates[0]["values"]["T+停用"], _cells("停用"))
+        self.assertEqual(result.updates[0]["values"]["T+核对时间"], _cells("2026-08-04 03:00"))
+
     def test_renamed_row_is_updated_and_reported(self) -> None:
         records = [{"record_id": "r1", "values": {
             "父件编码": _cells("06000002"), "型号": _cells("乌金灰"), "父件名称": _cells("9001-cscscs")}}]
-        result = self._plan(records, {"06000002": ("HYD-9721乌金灰 改性", "260720")})
+        result = self._plan(records, {"06000002": ("HYD-9721乌金灰 改性", "260720", False)})
         self.assertEqual(len(result.renamed), 1)
         self.assertEqual(result.renamed[0][2:], ("9001-cscscs", "HYD-9721乌金灰 改性"))
         self.assertEqual(result.updates[0]["values"]["T+匹配状态"], _cells("名称已更新"))
@@ -121,7 +171,7 @@ class TplusParentMatchTests(unittest.TestCase):
         """编码是执行主键，失联时只标状态——自动改主键判错会顺着执行链扩散。"""
         records = [{"record_id": "r1", "values": {
             "父件编码": _cells("HYD-6800新"), "型号": _cells("HYD-6800墨绿"), "父件名称": _cells("HYD-6800墨绿色母")}}]
-        result = self._plan(records, {"HYD-6800X": ("HYD-6800墨绿色母", "20250816")})
+        result = self._plan(records, {"HYD-6800X": ("HYD-6800墨绿色母", "20250816", False)})
         self.assertEqual(result.missing, [("HYD-6800新", "HYD-6800墨绿")])
         values = result.updates[0]["values"]
         self.assertNotIn("父件编码", values)
@@ -138,21 +188,22 @@ class TplusParentMatchTests(unittest.TestCase):
     def test_unchanged_row_produces_no_write_at_all(self) -> None:
         """全表每天重写核对时间，在补建后会变成上千行的无效写入。"""
         records = [{"record_id": "r1", "values": {
-            "父件编码": _cells("40000019"), "父件名称": _cells("已经对了"), "T+匹配状态": _cells("一致")}}]
-        result = self._plan(records, {"40000019": ("已经对了", "v1")})
+            "父件编码": _cells("40000019"), "父件名称": _cells("已经对了"),
+            "T+匹配状态": _cells("一致"), "T+停用": _cells("启用")}}]
+        result = self._plan(records, {"40000019": ("已经对了", "v1", False)})
         self.assertEqual(result.updates, [])
         self.assertEqual(result.ok, 1)
 
     def test_changed_row_still_carries_the_checked_at_stamp(self) -> None:
         records = [{"record_id": "r1", "values": {
             "父件编码": _cells("40000019"), "父件名称": _cells("旧名"), "T+匹配状态": _cells("一致")}}]
-        result = self._plan(records, {"40000019": ("新名", "v1")})
+        result = self._plan(records, {"40000019": ("新名", "v1", False)})
         self.assertEqual(result.updates[0]["values"]["T+核对时间"], _cells("2026-08-04 03:00"))
         self.assertEqual(result.updates[0]["values"]["父件名称"], _cells("新名"))
 
     def test_creates_rows_for_bom_codes_absent_from_the_sheet(self) -> None:
         records = [{"record_id": "r1", "values": {"父件编码": _cells("A")}}]
-        creates = self._creates(records, {"A": ("甲", "v1"), "B": ("乙", "v2")})
+        creates = self._creates(records, {"A": ("甲", "v1", False), "B": ("乙", "v2", False)})
         self.assertEqual(len(creates), 1)
         self.assertEqual(creates[0]["values"]["父件编码"], _cells("B"))
         self.assertEqual(creates[0]["values"]["父件名称"], _cells("乙"))
@@ -161,22 +212,26 @@ class TplusParentMatchTests(unittest.TestCase):
 
     def test_created_rows_leave_model_and_standard_columns_empty(self) -> None:
         """型号留空是人工筛选待补标准行的唯一依据，不能顺手填上。"""
-        creates = self._creates([], {"B": ("乙", "v2")})
-        self.assertEqual(set(creates[0]["values"]), {"父件编码", "父件名称", "T+匹配状态", "T+核对时间"})
+        creates = self._creates([], {"B": ("乙", "v2", False)})
+        self.assertEqual(set(creates[0]["values"]), {"父件编码", "父件名称", "T+匹配状态", "T+核对时间", "T+停用"})
+
+    def test_created_rows_carry_the_disabled_column(self) -> None:
+        creates = self._creates([], {"B": ("乙", "v2", True)})
+        self.assertEqual(creates[0]["values"]["T+停用"], _cells("停用"))
 
     def test_creates_nothing_when_every_bom_code_already_has_a_row(self) -> None:
         records = [{"record_id": "r1", "values": {"父件编码": _cells("A")}}]
-        self.assertEqual(self._creates(records, {"A": ("甲", "v1")}), [])
+        self.assertEqual(self._creates(records, {"A": ("甲", "v1", False)}), [])
 
     def test_blank_code_rows_do_not_suppress_creation(self) -> None:
         """表里有一行只填了型号没填编码，不能因此认为 T+ 的编码已存在。"""
         records = [{"record_id": "r1", "values": {"型号": _cells("只有型号")}}]
-        creates = self._creates(records, {"A": ("甲", "v1")})
+        creates = self._creates(records, {"A": ("甲", "v1", False)})
         self.assertEqual(len(creates), 1)
         self.assertEqual(creates[0]["values"]["父件编码"], _cells("A"))
 
     def test_creates_are_sorted_by_code_for_stable_batches(self) -> None:
-        creates = self._creates([], {"C": ("丙", "v"), "A": ("甲", "v"), "B": ("乙", "v")})
+        creates = self._creates([], {"C": ("丙", "v", False), "A": ("甲", "v", False), "B": ("乙", "v", False)})
         codes = [item["values"]["父件编码"][0]["text"] for item in creates]
         self.assertEqual(codes, ["A", "B", "C"])
 
@@ -185,7 +240,7 @@ class TplusParentMatchTests(unittest.TestCase):
             {"record_id": "r1", "values": {"父件编码": _cells("A"), "型号": _cells("甲")}},
             {"record_id": "r2", "values": {"父件编码": _cells("B"), "型号": _cells("乙"), "父件名称": _cells("旧名")}},
         ]
-        result = self._plan(records, {"B": ("新名", "v1")})
+        result = self._plan(records, {"B": ("新名", "v1", False)})
         text = self.module.build_alert(result)
         self.assertIn("编码失联 1 行", text)
         self.assertIn("未自动改编码", text)
@@ -194,8 +249,21 @@ class TplusParentMatchTests(unittest.TestCase):
 
     def test_alert_says_no_problem_when_everything_matches(self) -> None:
         records = [{"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("甲")}}]
-        text = self.module.build_alert(self._plan(records, {"A": ("甲", "v1")}))
+        text = self.module.build_alert(self._plan(records, {"A": ("甲", "v1", False)}))
         self.assertIn("✅ 无异常。", text)
+
+    def test_alert_reports_disabled_parents(self) -> None:
+        records = [{"record_id": "r1", "values": {
+            "父件编码": _cells("B"), "型号": _cells("乙"), "父件名称": _cells("甲")}}]
+        text = self.module.build_alert(self._plan(records, {"B": ("甲", "v1", True)}))
+        self.assertIn("T+ 新增停用 1 行", text)
+        self.assertIn("B｜乙", text)
+        self.assertNotIn("✅ 无异常。", text)
+
+    def test_alert_stays_quiet_when_nothing_is_disabled(self) -> None:
+        records = [{"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("甲")}}]
+        text = self.module.build_alert(self._plan(records, {"A": ("甲", "v1", False)}))
+        self.assertNotIn("已停用", text)
 
     def test_alert_reports_created_rows(self) -> None:
         result = self._plan([], {})
@@ -216,7 +284,7 @@ class TplusParentMatchTests(unittest.TestCase):
     def test_dry_run_makes_no_write_calls_behaviorally(self) -> None:
         """行为断言，防止字符串检查失效——就算 add_records 被抽进辅助函数，这条仍能拦住。"""
         records = [{"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("旧名")}}]
-        bom = {"A": ("新名", "v1"), "B": ("乙", "v2")}
+        bom = {"A": ("新名", "v1", False), "B": ("乙", "v2", False)}
         fake_client, mock_send_feishu_alert = self._patch_run(bom=bom, records=records)
 
         exit_code = self.module.run_tplus_parent_match(dry_run=True, notify=True)
@@ -229,7 +297,7 @@ class TplusParentMatchTests(unittest.TestCase):
 
     def test_ensure_fields_runs_before_both_write_loops(self) -> None:
         records = [{"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("旧名")}}]
-        bom = {"A": ("新名", "v1"), "B": ("乙", "v2")}
+        bom = {"A": ("新名", "v1", False), "B": ("乙", "v2", False)}
         fake_client, _ = self._patch_run(bom=bom, records=records)
 
         self.module.run_tplus_parent_match(notify=False)
@@ -242,7 +310,7 @@ class TplusParentMatchTests(unittest.TestCase):
 
     def test_notify_false_never_calls_feishu_alert(self) -> None:
         records = [{"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("旧名")}}]
-        bom = {"A": ("新名", "v1")}
+        bom = {"A": ("新名", "v1", False)}
         _, mock_send_feishu_alert = self._patch_run(bom=bom, records=records)
 
         self.module.run_tplus_parent_match(notify=False)
@@ -251,7 +319,7 @@ class TplusParentMatchTests(unittest.TestCase):
 
     def test_write_batch_error_does_not_break_remaining_batches_and_still_notifies(self) -> None:
         """某批补建失败必须继续写剩余批次，而不是 break；且失败要能被人看到（推飞书）。"""
-        bom = {f"CODE{i:04d}": (f"NAME{i}", "v1") for i in range(250)}  # 250 行 -> add_records 拆成 2 批（200+50）
+        bom = {f"CODE{i:04d}": (f"NAME{i}", "v1", False) for i in range(250)}  # 250 行 -> add_records 拆成 2 批（200+50）
         fake_client, mock_send_feishu_alert = self._patch_run(bom=bom, records=[], fail_add_batches={1})
 
         exit_code = self.module.run_tplus_parent_match(notify=True)
@@ -266,6 +334,11 @@ class TplusParentMatchTests(unittest.TestCase):
         self.assertIn("missing_since IS NULL", self.module._ACTIVE_BOM_SQL)
         self.assertIn("DISTINCT ON (raw_json->>'Code')", self.module._ACTIVE_BOM_SQL)
 
+    def test_both_active_queries_select_the_disabled_flag(self) -> None:
+        """停用状态直接取自 T+ 原始行，不另建映射表。"""
+        self.assertIn("'Disabled'", self.module._ACTIVE_BOM_SQL)
+        self.assertIn("'Disabled'", self.module._ACTIVE_INVENTORY_SQL)
+
     def test_active_inventory_query_covers_inventory_only_parents(self) -> None:
         self.assertIn("tplus_inventory_records", self.module._ACTIVE_INVENTORY_SQL)
         self.assertIn("missing_since IS NULL", self.module._ACTIVE_INVENTORY_SQL)
@@ -274,7 +347,7 @@ class TplusParentMatchTests(unittest.TestCase):
         self.assertIn("'06'", self.module._ACTIVE_INVENTORY_SQL)
     def test_managed_fields_never_include_the_parent_code(self) -> None:
         self.assertNotIn(self.module.F_PARENT_CODE, self.module.MANAGED_FIELDS)
-        self.assertEqual(self.module.MANAGED_FIELDS, ("父件名称", "T+匹配状态", "T+核对时间"))
+        self.assertEqual(self.module.MANAGED_FIELDS, ("父件名称", "T+匹配状态", "T+核对时间", "T+停用"))
 
     def test_bom_watermark_sql_covers_both_real_writers(self) -> None:
         """integration_sync_runs 有两个真实写入点：module='bom'（BOM builder 回写，
@@ -355,7 +428,7 @@ class TplusParentMatchTests(unittest.TestCase):
         """get_records() 命中网络/权限故障时，同一层必须捕获，且不能走到写入分支。"""
         class _FailingClient:
             def get_fields(self, docid, sheet_id):
-                return {"fields": [{"field_title": n} for n in ("父件名称", "T+匹配状态", "T+核对时间")]}
+                return {"fields": [{"field_title": n} for n in ("父件名称", "T+匹配状态", "T+核对时间", "T+停用")]}
 
             def add_fields(self, docid, sheet_id, fields):
                 raise AssertionError("不应走到 add_fields")
@@ -372,7 +445,7 @@ class TplusParentMatchTests(unittest.TestCase):
         credential = SimpleNamespace(corpid="c", secret="s")
         with patch.object(self.module, "wecom_credentials", return_value=[credential]), \
                 patch.object(self.module, "resolve_source", return_value=("doc1", "sheet1")), \
-                patch.object(self.module, "load_active_bom", return_value={"A": ("甲", "v1")}), \
+                patch.object(self.module, "load_active_bom", return_value={"A": ("甲", "v1", False)}), \
                 patch.object(self.module, "WeComSmartsheetClient", return_value=_FailingClient()), \
                 patch.object(self.module, "send_feishu_alert") as mock_send:
             exit_code = self.module.run_tplus_parent_match(notify=True)
@@ -394,7 +467,7 @@ class TplusParentMatchTests(unittest.TestCase):
         """send_feishu_alert() 吞异常返回 False 时，调用方不能把返回值丢掉——否则写失败+告警失败
         同时发生时这一轮补建完全无声，要等次日兜底轮。"""
         records = [{"record_id": "r1", "values": {"父件编码": _cells("A")}}]
-        bom = {"A": ("甲", "v1"), "B": ("乙", "v2")}  # B 触发 created_rows，进而触发 notify 分支
+        bom = {"A": ("甲", "v1", False), "B": ("乙", "v2", False)}  # B 触发 created_rows，进而触发 notify 分支
         fake_client, mock_send_feishu_alert = self._patch_run(bom=bom, records=records)
         mock_send_feishu_alert.return_value = False
 
@@ -417,7 +490,7 @@ class TplusParentMatchTests(unittest.TestCase):
 
     def test_write_batch_runtime_error_does_not_break_remaining_batches_and_still_notifies(self) -> None:
         """企微客户端网络层失败抛裸 RuntimeError（非 WeComApiError），同样不能中断批次或吞掉告警。"""
-        bom = {f"CODE{i:04d}": (f"NAME{i}", "v1") for i in range(250)}  # 250 行 -> add_records 拆成 2 批（200+50）
+        bom = {f"CODE{i:04d}": (f"NAME{i}", "v1", False) for i in range(250)}  # 250 行 -> add_records 拆成 2 批（200+50）
         fake_client, mock_send_feishu_alert = self._patch_run(bom=bom, records=[], fail_add_batches=set())
         original_add_records = fake_client.add_records
 

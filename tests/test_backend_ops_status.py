@@ -79,6 +79,32 @@ class BackendOpsStatusTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             SyncConfigUpdate(enabled=False, interval_hours=200)  # > 168h 拒绝
 
+    def test_manual_full_sync_route_exists_as_post(self) -> None:
+        methods = [
+            getattr(route, "methods", set())
+            for route in self.app.routes
+            if getattr(route, "path", "") == "/v1/ops/tplus/full-sync"
+        ]
+        self.assertTrue(methods, "缺少 POST /v1/ops/tplus/full-sync")
+        self.assertIn("POST", methods[0])
+
+    def test_manual_full_sync_enqueues_the_all_module_not_bom(self) -> None:
+        """module 走错分流，worker 的 fetch_next_full_request() 就永远取不到这条请求。"""
+        from app.routers.ops import _ENQUEUE_FULL_SYNC_SQL
+
+        self.assertIn("'all'", _ENQUEUE_FULL_SYNC_SQL)
+        self.assertIn("'manual_full'", _ENQUEUE_FULL_SYNC_SQL)
+        self.assertNotIn("'bom'", _ENQUEUE_FULL_SYNC_SQL)
+        self.assertNotIn("scheduled_full", _ENQUEUE_FULL_SYNC_SQL)
+
+    def test_manual_full_sync_dedupes_against_running_not_just_pending(self) -> None:
+        """只查 pending 的话，worker 取走那一刻起就能再排一条，两个全量会互相标 missing_since。"""
+        from app.routers.ops import _PENDING_FULL_SYNC_SQL
+
+        self.assertIn("'pending'", _PENDING_FULL_SYNC_SQL)
+        self.assertIn("'running'", _PENDING_FULL_SYNC_SQL)
+        self.assertIn("module = 'all'", _PENDING_FULL_SYNC_SQL)
+
     def test_doc_sync_config_get_returns_defaults_without_database(self) -> None:
         result = self._call_get("/v1/ops/doc-sync/sync-config")
         self.assertTrue(result["enabled"])

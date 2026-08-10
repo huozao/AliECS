@@ -30,9 +30,10 @@
         <p class="muted" style="margin-top:8px">执行时刻按<b>北京时间</b>，留空＝不固定（跑完睡一个间隔，时刻会逐日漂移）。设为 02:00 + 间隔 24 小时＝每天凌晨 2 点同步，避开白天工作时段。</p>
       </section>
       <section class="band">
-        <h2>T+ 同步</h2>
+        <div class="row" style="justify-content:space-between"><h2 style="margin:0">T+ 同步</h2><button id="manualFullSyncBtn" class="btn primary" type="button">立即全量同步</button></div>
         <p class="muted">统一时间线：每次同步(执行)按 <b>#编号</b> 列出，与配方页「同步 #N」对应；含本次变化与产出的全量 BOM Excel(可下载核对)。来源：手动同步、定时同步、订阅变更同步。</p>
-        <div class="row" style="gap:8px;margin-bottom:10px"><span class="chip degraded">手动同步</span><span class="chip ok">定时同步</span><span class="chip warning">订阅变更同步</span></div>
+        <p class="muted">「立即全量同步」排一条请求给 worker，约 30 秒内开始、1～2 分钟跑完，完成后本表会多一行「手动同步」。它不影响定时同步的执行时刻。</p>
+        <div class="row" style="gap:8px;margin-bottom:10px"><span class="chip degraded">手动同步</span><span class="chip ok">定时同步</span><span class="chip warning">订阅变更同步</span><span id="manualFullSyncStatus" class="muted"></span></div>
         <div id="tplusTimeline"></div><div id="tplusTimelinePager" class="row" style="gap:10px;align-items:center;margin-top:8px"></div>
       </section>
     </div>
@@ -95,6 +96,30 @@
         $('syncConfigStatus').textContent='已保存，下次循环生效。';
         showSuccess('定时同步设置已保存。');
       }catch(e){$('syncConfigStatus').textContent='';showError('保存失败：'+esc(e.message));}
+    }
+    // 排队后不能只提示一句就完事：worker 最长要等一个轮询周期(30s)才开始，全量本身再跑 1~2 分钟，
+    // 立刻刷新时间线是空的。按 30s/90s/150s 三次补刷，覆盖「开始」和「跑完」两个时点。
+    let manualFullSyncTimers=[];
+    function scheduleTimelineRefresh(delays){
+      manualFullSyncTimers.forEach(clearTimeout);
+      manualFullSyncTimers=delays.map((ms)=>setTimeout(()=>{loadTplusTimeline().catch(()=>{});},ms));
+    }
+    async function triggerManualFullSync(){
+      const btn=$('manualFullSyncBtn');
+      btn.disabled=true;btn.textContent='排队中…';
+      $('manualFullSyncStatus').textContent='';
+      try{
+        const data=await api('/v1/ops/tplus/full-sync',{method:'POST'});
+        $('manualFullSyncStatus').textContent=data.message||'已排队。';
+        if(data.queued){showSuccess(data.message||'已排队。');}else{showError(data.message||'已有一次在排队。');}
+        scheduleTimelineRefresh([30000,90000,150000]);
+        loadTplusTimeline().catch(()=>{});
+      }catch(e){
+        $('manualFullSyncStatus').textContent='';
+        showError('排队失败：'+esc(e.message));
+      }finally{
+        btn.disabled=false;btn.textContent='立即全量同步';
+      }
     }
     const ssoLogin=()=>{location.href=`${API_BASE}/v1/auth/oidc/login?rd=${encodeURIComponent(location.pathname+location.search)}`;};
     function syncOriginLabel(item){
@@ -211,6 +236,7 @@
     }
     refreshBtn.onclick=()=>loadTplusTimeline();
     saveSyncConfigBtn.onclick=()=>saveSyncConfig().catch((e)=>showError(e.message));
+    manualFullSyncBtn.onclick=()=>triggerManualFullSync().catch((e)=>showError(e.message));
     closeModalBtn.onclick=closeModal;detailModal.onclick=(event)=>{if(event.target===detailModal)closeModal();};
     loginBtn.onclick=ssoLogin;
     logoutBtn.onclick=()=>{clearAuthToken();applyGate(null);showSuccess('已退出登录。');};

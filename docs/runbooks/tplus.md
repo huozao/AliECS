@@ -42,6 +42,7 @@
 | BOM builder 保存报错 | T+ 报错透传（PR#186） | 委外=IsMadeRequest / 虚拟件=IsPhantom；T+ 请求 body 须 `{"request":{}}` |
 | BOM builder 读分类/单位 502、worker `openToken已失效`(403 code=50107) | openToken 续期链路（下方） | 迁移/停机把畅捷通消息地址打成「不再发送」，token 6 天后到期（2026-08-04） |
 | 定时全量里只有 bom 模块挂、报 `status=None body=`，其他模块全正常 | worker 日志 `API error detail:` 那行的 message；BOM 的 PageSize | **服务端慢查询撞读超时**。`bom/QueryPage` 每行要展开整棵子件树，耗时随 PageSize 超线性（2026-08-09 实测 219 行：5→2.1s / 20→3.4s / 100→14.6s / **500→38.5s**），而 `REQUEST_TIMEOUT_READ=30`。已拆出 BOM 专用 `TPLUS_BOM_PAGE_SIZE`（默认 50，单页 7~11s）。**不要调大读超时或加重试**——前者数据再长还会撞，后者对确定性超时只是每轮多耗几十秒 |
+| 定时全量**每天同一时刻**失败、`error_json` 里 bom/inventory 都是 `status=999 EXERROR0001 网络异常`，白天手动跑却全通 | 失败时刻的分布：`SELECT to_char(started_at AT TIME ZONE 'Asia/Shanghai','MM-DD HH24:MI'), status FROM integration_sync_runs WHERE module='all' ORDER BY id DESC LIMIT 20;` | **T+ 服务端那侧在该时段不可用**，不是我们的链路。`EXERROR0001` 是畅捷通云网关转发不到 T+ 服务器时返回的。`inventory`（扁平档案，正常 9s）也一起挂就能排除慢查询超时。2026-08-06~08-10 连续 5 天 02:01 全挂、08-01~08-03 连续 3 天 23:30 全挂，而 12:22 / 18:38 / 07:3x 全部成功；08-10 09:08 白天只读探测三接口全 200。**处置是把执行时刻挪到 T+ 可用的时段**，不是改代码。凌晨不可用的具体原因与窗口边界至今未取证 |
 | `/formula/colors/` 冒出一批「编码失联」，但父件在 T+ 里确实存在 | worker 日志 `Module failed, continuing with the rest: module=inventory`；`integration_sync_runs` 最后一条 `scheduled_full` 的 `detail_json.failed_modules` | 存货档案**只在定时全量里落库**（`job_sync_all` → `persist_inventory_records`）。纯存货父件（无 BOM）全靠它匹配；那一轮没跑成，页面就误判失联（2026-08-07 实测 41 条） |
 
 ## 定时全量的失败边界与告警
@@ -50,7 +51,9 @@
   失败模块名进 `SyncAllResult.failed_modules` → `integration_sync_runs.detail_json.failed_modules`。
   退出码取第一个失败模块的码（配置错 2 / 接口错 3 / 其他同步错 4 / 未知 1）。
   历史反例：2026-08-07 18:00 BOM 接口超时，拆分前整轮 abort，存货跟着不落库。
-- **失败仍不重试**：worker 记完账就睡到下一个锚点（约 24h）。要立刻补，用手动全量或重启 worker。
+- **失败仍不重试**：worker 记完账就睡到下一个锚点（约 24h）。要立刻补，见下方「手动全量同步」。
+  注意**重启容器补不了**——设了锚点后 worker 启动会读上次 `scheduled_full` 的时刻判断是否到期，
+  白天重启不会补跑（这是防止每次部署都在白天全量的既有设计）。
 - **失败详情看 `integration_sync_runs.error_json`**：结构是 `{"modules": [{module, type, message, endpoint, status}]}`。
   `message` 是唯一能看出真因的字段——`status=None body=` 三个字段全空时，
   `read timeout=30` 只在 message 里。2026-08-09 之前 `error_json` 恒为 `{}`，
@@ -63,6 +66,26 @@
   失败、`failed_modules` 非空、或超过 2 天没有成功记录都推飞书；同一轮按 `finished_at` 去重只报一次。
   复用 openToken 告警那组凭据（`OPS_ALERT_FEISHU_*`，回退 `VERSION_DIGEST_FEISHU_*`），无新增密钥。
   开关 `TPLUS_SYNC_ALERT_ENABLED`（默认 1）、间隔 `TPLUS_SYNC_ALERT_INTERVAL_SECONDS`（默认 3600）。
+
+## 手动全量同步（补跑缺口）
+
+`/tplus-sync/` 页面右上「立即全量同步」按钮 → `POST /v1/ops/tplus/full-sync` → 往
+`integration_sync_requests` 排一条 `provider='chanjet' module='all' mode='manual_full'` 的 pending 请求
+→ worker 在睡眠轮询（`TPLUS_SYNC_POLL_SECONDS`，默认 30s）里取走，跑的是定时全量同一个
+`job_sync_all.run()`。约 30s 内开始，全量本身 1~2 分钟。
+
+- **记账 mode 是 `manual_full`，不是 `scheduled_full`**：`fetch_last_scheduled_full_at()` 按
+  `mode='scheduled_full'` 取锚点相位，手动这次若记成定时，worker 会认为本周期已经跑过，
+  **当晚锚点那轮会被整轮跳过**——手动补一次反而顶掉了当天的定时同步。改任一侧的 mode 前先读这条。
+- 时间线上显示成「手动同步」，靠 `syncOriginLabel()` 的兜底分支（非 scheduled_full、无 reason_event_id）。
+- 连点无效：pending **或 running** 时接口直接返回 `queued=false`。两个全量并行会互相把对方本批
+  未出现的记录标成 `missing_since`。
+- 手动全量成功后 `module='all' AND status='success'` 水位上涨，会连带触发 doc-sync 的
+  `tplus_parent_match`（企微「标准型号0117」核对补建）。
+- **告警不受手动影响**：`tplus-full-sync-watcher` 只看最后一轮 `scheduled_full`，手动跑成功
+  不会让「超过 2 天没成功」的飞书告警闭嘴。这是当前有意的取舍。
+- 兜底（页面/接口都不可用时）直接进容器跑，`mode` 会记成 `scheduled_full`，会影响锚点，慎用：
+  `ssh txecs 'sudo docker exec business-cn-tplus-sync-worker-1 python -m tplus_datahub.jobs.job_sync_all'`
 
 ## openToken 续期链路（整条 T+ 的命门）
 

@@ -44,6 +44,17 @@ class TplusSyncFrontendTests(unittest.TestCase):
     def test_has_back_link_to_health(self) -> None:
         self.assertIn('href="/health/"', self.html)
 
+    def test_has_manual_full_sync_button_and_endpoint(self) -> None:
+        self.assertIn('id="manualFullSyncBtn"', self.html)
+        self.assertIn("function triggerManualFullSync(", self.html)
+        self.assertIn("/v1/ops/tplus/full-sync", self.html)
+        self.assertIn("manualFullSyncBtn.onclick", self.html)
+
+    def test_manual_full_sync_refreshes_timeline_after_worker_picks_it_up(self) -> None:
+        """worker 最长等一个轮询周期(30s)才开始、全量再跑 1~2 分钟，立刻刷新只会看到空的。"""
+        self.assertIn("scheduleTimelineRefresh(", self.html)
+        self.assertIn("[30000,90000,150000]", self.html)
+
     def test_has_sync_config_card(self) -> None:
         self.assertIn('id="syncConfigCard"', self.html)
         self.assertIn('id="syncEnabled"', self.html)
