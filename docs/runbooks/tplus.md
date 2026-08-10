@@ -67,7 +67,7 @@
   复用 openToken 告警那组凭据（`OPS_ALERT_FEISHU_*`，回退 `VERSION_DIGEST_FEISHU_*`），无新增密钥。
   开关 `TPLUS_SYNC_ALERT_ENABLED`（默认 1）、间隔 `TPLUS_SYNC_ALERT_INTERVAL_SECONDS`（默认 3600）。
 
-## 手动全量同步（补跑缺口）
+## 手动全量同步（补跑缺口，2026-08-10 上线，PR#288）
 
 `/tplus-sync/` 页面右上「立即全量同步」按钮 → `POST /v1/ops/tplus/full-sync` → 往
 `integration_sync_requests` 排一条 `provider='chanjet' module='all' mode='manual_full'` 的 pending 请求
@@ -86,6 +86,12 @@
   不会让「超过 2 天没成功」的飞书告警闭嘴。这是当前有意的取舍。
 - 兜底（页面/接口都不可用时）直接进容器跑，`mode` 会记成 `scheduled_full`，会影响锚点，慎用：
   `ssh txecs 'sudo docker exec business-cn-tplus-sync-worker-1 python -m tplus_datahub.jobs.job_sync_all'`
+
+**2026-08-10 上线当晚实测**（run #539）：点按钮 → `all` / `manual_full` / success / exit_code 0，
+补掉 08-05 起的 5 天缺口。同时验证锚点未被污染——事后
+`SELECT started_at FROM integration_sync_runs WHERE mode='scheduled_full' ORDER BY started_at DESC LIMIT 1`
+返回的仍是 17:51 那轮 `scheduled_full`，不是 19:29 的 `manual_full`，当晚 01:00 的定时轮次不受影响。
+改动 mode 语义后请重跑这条 SQL 复核。
 
 ## openToken 续期链路（整条 T+ 的命门）
 
