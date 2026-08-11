@@ -254,6 +254,7 @@ def _sleep_with_request_polling(
     fetch_db_full_request: Callable[..., dict | None],
     finish_db_full_request: Callable[[int, str, int, dict], None],
     logger,
+    should_wake: Callable[[], bool] | None = None,
 ) -> int | None:
     poll_seconds = min(_read_positive_int("TPLUS_SYNC_POLL_SECONDS", 30), interval_seconds)
     remaining = interval_seconds
@@ -281,6 +282,11 @@ def _sleep_with_request_polling(
         )
         if full_exit_code is not None:
             last_manual_exit_code = full_exit_code
+        # 睡眠时长是进睡前一次性算好的，中途改调度不会自动生效——不在这里热读，
+        # 改一次执行时刻最长要等一整个周期（2026-08-11 实测：改 01:00 后当晚整轮没跑）。
+        if should_wake is not None and should_wake():
+            logger.info("T+ schedule target moved earlier, replanning sleep: remaining=%s", remaining)
+            break
     return last_manual_exit_code
 
 
@@ -400,14 +406,36 @@ def run_forever(
 
         # 睡到下一个锚点，而不是固定睡一个周期——固定睡会把睡眠期内的锚点整轮跳过，
         # 醒来时刻又变成新的相位，锚点永远收敛不了（2026-08-05 生产实测）。
+        sleep_started_at = now()
         wait_seconds = (
-            _seconds_until_next_due(now(), last_full, interval_seconds, anchor_time)
+            _seconds_until_next_due(sleep_started_at, last_full, interval_seconds, anchor_time)
             if enabled and anchor_time
             else interval_seconds
         )
+        planned_due = sleep_started_at + timedelta(seconds=wait_seconds)
         logger.info("T+ sync worker sleeping: seconds=%s", wait_seconds)
+
+        def _schedule_target_moved_earlier(_last_full=last_full, _planned=planned_due) -> bool:
+            """睡眠中每个轮询片热读一次调度配置：目标时刻被改早了就退出睡眠，让主循环
+            按新配置重新规划。不热读的话，改一次执行时刻最长要等一整个周期才生效
+            （2026-08-11 实测：改成 01:00 后当晚整轮没跑，连失败记录都没有）。
+
+            判据必须是「目标时刻提前了」而不是「到期时刻已过」——全量自己跑过了锚点
+            才结束时，到期时刻同样是过去式，按后者会当场空转重跑。
+            关掉定时不算改早：不跑就是不跑，没必要把 worker 叫起来。"""
+            live_enabled, live_interval, live_anchor = _resolve_sync_config(read_sync_config)
+            if not live_enabled or not live_anchor:
+                return False
+            current_now = now()
+            live_target = current_now + timedelta(
+                seconds=_seconds_until_next_due(current_now, _last_full, live_interval, live_anchor)
+            )
+            # 30 秒容差：等待秒数取整会有个位数抖动，而配置最小粒度是分钟，不会误判。
+            return live_target < _planned - timedelta(seconds=30)
+
         manual_exit_code = _sleep_with_request_polling(
             interval_seconds=wait_seconds,
+            should_wake=_schedule_target_moved_earlier,
             sleep=sleep,
             sync_once=sync_once,
             sync_bom_once=sync_bom_once,
