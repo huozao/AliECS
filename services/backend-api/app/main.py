@@ -13,6 +13,7 @@ from app.core import _request_logger
 from app.logging_utils import log_event
 from app.routers.auth_admin import router as auth_admin_router
 from app.routers.auth_oidc import router as auth_oidc_router
+from app.routers.clash_profile import router as clash_profile_router
 from app.routers.couple import router as couple_router
 from app.routers.exports import router as exports_router
 from app.routers.formula_colors import router as formula_colors_router
@@ -33,6 +34,7 @@ app = FastAPI(title="AliECS Backend API", version="0.4.0")
 app.include_router(webhooks_router)
 app.include_router(ops_router)
 app.include_router(backups_router)
+app.include_router(clash_profile_router)
 app.include_router(versions_router)
 app.include_router(gold_spread_alerts_router)
 app.include_router(auth_admin_router)

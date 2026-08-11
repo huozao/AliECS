@@ -227,7 +227,7 @@ class ClashProfileRenderTests(unittest.TestCase):
 
 - [ ] **Step 6: 跑测试确认失败**
 
-Run: `python -m unittest tests.test_clash_profile_render -v`
+Run: `python -m unittest discover -s tests -p "test_clash_profile_render.py" -v`
 Expected: FAIL，`ModuleNotFoundError: No module named 'app.clash_profile'`
 
 - [ ] **Step 7: 写实现**
@@ -357,7 +357,7 @@ def render_profile(self_nodes: list[dict], providers: list[dict]) -> str:
 
 - [ ] **Step 8: 跑测试确认通过**
 
-Run: `python -m unittest tests.test_clash_profile_render -v`
+Run: `python -m unittest discover -s tests -p "test_clash_profile_render.py" -v`
 Expected: 10 个用例全部 PASS
 
 - [ ] **Step 9: 提交**
@@ -490,7 +490,7 @@ class ClashProfileEnvTests(unittest.TestCase):
 
 - [ ] **Step 3: 跑测试确认失败**
 
-Run: `python -m unittest tests.test_clash_profile_router -v`
+Run: `python -m unittest discover -s tests -p "test_clash_profile_router.py" -v`
 Expected: FAIL，`ModuleNotFoundError: No module named 'app.routers.clash_profile'`
 
 - [ ] **Step 4: 写路由**
@@ -643,7 +643,7 @@ app.include_router(clash_profile_router)
 
 - [ ] **Step 6: 跑测试确认通过**
 
-Run: `python -m unittest tests.test_clash_profile_router -v`
+Run: `python -m unittest discover -s tests -p "test_clash_profile_router.py" -v`
 Expected: 7 个用例全部 PASS
 
 - [ ] **Step 7: 跑全量测试确认没打破别的**
@@ -695,7 +695,7 @@ Modify `tests/test_admin_frontend.py`，在 `AdminFrontendTests` 类里追加：
 
 - [ ] **Step 2: 跑测试确认失败**
 
-Run: `python -m unittest tests.test_admin_frontend -v`
+Run: `python -m unittest discover -s tests -p "test_admin_frontend.py" -v`
 Expected: 新增的两个用例 FAIL，其余 PASS
 
 - [ ] **Step 3: 加导航按钮**
@@ -854,7 +854,7 @@ Modify `services/admin-ui/index.html`，在 `<nav id="secNav" class="secnav">` �
 
 - [ ] **Step 7: 跑测试确认通过**
 
-Run: `python -m unittest tests.test_admin_frontend -v`
+Run: `python -m unittest discover -s tests -p "test_admin_frontend.py" -v`
 Expected: 全部 PASS
 
 - [ ] **Step 8: 检查内联脚本语法**
@@ -910,7 +910,7 @@ CLASH_SELF_NODES_JSON=[{"name":"example","type":"vless","server":"203.0.113.10",
 
 - [ ] **Step 3: 导航文档记录功能入口**
 
-`docs/project-navigation.md` 与 `docs/project-ai-map.md` 各加一条：人类叫法「Clash 配置 / 订阅合并」→ 代码位置 `services/backend-api/app/clash_profile/` + `services/backend-api/app/routers/clash_profile.py` + admin-ui `sec-clash-profile` 区块；验证命令 `python -m unittest tests.test_clash_profile_render`。
+`docs/project-navigation.md` 与 `docs/project-ai-map.md` 各加一条：人类叫法「Clash 配置 / 订阅合并」→ 代码位置 `services/backend-api/app/clash_profile/` + `services/backend-api/app/routers/clash_profile.py` + admin-ui `sec-clash-profile` 区块；验证命令 `python -m unittest discover -s tests -p "test_clash_profile_render.py"`。
 
 - [ ] **Step 4: AGENTS.md 增加 public 仓约束**
 
