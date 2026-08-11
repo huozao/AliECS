@@ -12,7 +12,8 @@
   backend-api → business-cn-tplus-write-worker-1（独立写消费者）→ T+
 ```
 
-- 定时同步配置在 DB：`integration_sync_config(provider='chanjet')`，页面 `/tplus-sync/` 顶部可改，worker 每轮热读。
+- 定时同步配置在 DB：`integration_sync_config(provider='chanjet')`，页面 `/tplus-sync/` 顶部可改，
+  worker 每轮热读，**睡眠中途也热读**（2026-08-11 起，见下方「改调度何时生效」）。
 - 调度语义：`interval_seconds` 是周期，`anchor_time` 是执行时刻（**北京时间 HH:MM**，容器内是 UTC）。
   - `anchor_time` 留空 = 跑完睡一个周期，触发时刻逐日漂移（每轮漂几十秒），是旧的默认行为。
   - 设了锚点 = 相位对齐到 `{锚点 + k*周期}`，并且**容器重建后不会在白天补跑全量**——
@@ -21,6 +22,15 @@
   - **睡眠时长也必须按锚点算**（`_seconds_until_next_due`）。PR#267 只在醒来后判断到期、
     却仍睡固定一个周期，结果睡眠期内的锚点被整轮跳过、醒来时刻又成了新相位，锚点永远收敛不了
     （2026-08-05 实测：08-04 18:38 跑完睡 86400 秒，08-05 02:00 那次直接没跑）。
+  - **改调度何时生效**（2026-08-11 修，PR#290）：睡眠总长在进睡那一刻算定，分片循环里只递减。
+    改配置若不在睡眠中热读，「下一轮生效」在 24h 周期下就等于**最长等一整天**。现在每个轮询片
+    （`TPLUS_SYNC_POLL_SECONDS`，默认 30s）重算一次目标时刻，发现被改早了就退出睡眠、由主循环
+    按新配置重新规划——所以改完执行时刻，到点即跑，不必重启容器。
+    判据是**「目标时刻提前了」而不是「到期时刻已过」**：全量自己跑过了锚点才结束时，
+    到期时刻同样是过去式，按后者会当场空转重跑（`test_overrunning_full_sync_does_not_busy_loop` 守这条）。
+    关掉定时不算改早，不会把 worker 叫醒。
+    ⚠️ **doc-sync-worker 的 `worker_loop.py` 仍是老结构**（`remaining` 进睡前算定，中途不重算），
+    改 `/exports/` 那条线的执行时刻依旧要等一整个周期或重启容器。
 - 每次全量快照有变化就写一条 `integration_reconciliation_diffs` 明细，`status` 只区分
   `needs_review`/`informational`；`/tplus-sync/` 的「详情」因此总能回看本次变化。
   `/health/` 的告警计数只数 `needs_review`，不受 informational 影响。
@@ -38,6 +48,7 @@
 | 关了开关后重启 worker，之后不同步 | — | 已知行为：disabled 后重启会 sleep 一整轮；等下轮或重建 worker |
 | 同步跑在白天 / 时刻逐日漂移 | `/tplus-sync/` 的「执行时刻」是否留空 | 留空=相对间隔会漂；填北京时间 HH:MM 即锚定（如 02:00） |
 | 设了执行时刻，那个点却没跑 | `integration_sync_runs` 里最后一条 `scheduled_full` 的 `started_at`，再对 worker 日志的 `sleeping: seconds=` | 睡眠时长没按锚点算就会整轮跳过（已修，见上）。确认修复是否生效：日志里跑完后的 `seconds=` 应是"到下一个锚点"的秒数，不是 86400 |
+| 刚改完执行时刻，当晚那个点**一条记录都没有**（不是 failed，是根本没有） | worker 日志里 `T+ sync run started: run=1 anchor=` 那行显示的是**改之前**的锚点；此后到现在无任何日志 | worker 还在按旧配置睡。2026-08-11 实测：08-10 17:51 那轮按旧锚点 15:00 算出睡到 08-11 15:00，19:28 改成 01:00 后它没醒，08-11 01:00 整轮没跑。**PR#290 已修**（睡眠中热读）；若跑的是旧镜像，重启 worker 容器可立即按新配置重算 |
 | timeline 页 500 | tz-aware vs naive 比较 | 已修 36b032a；同类改动注意时区 |
 | BOM builder 保存报错 | T+ 报错透传（PR#186） | 委外=IsMadeRequest / 虚拟件=IsPhantom；T+ 请求 body 须 `{"request":{}}` |
 | BOM builder 读分类/单位 502、worker `openToken已失效`(403 code=50107) | openToken 续期链路（下方） | 迁移/停机把畅捷通消息地址打成「不再发送」，token 6 天后到期（2026-08-04） |

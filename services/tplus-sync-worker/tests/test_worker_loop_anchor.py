@@ -3,8 +3,10 @@
 锚点时刻按北京时间解释（容器内是 UTC）；不设锚点时保持"跑完睡一个周期"的原行为。
 """
 
+import os
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest import mock
 
 from tplus_datahub.jobs.worker_loop import (
     BEIJING,
@@ -192,6 +194,106 @@ class RunForeverAnchorTests(unittest.TestCase):
             max_runs=1,
         )
         self.assertEqual(calls, ["sync"])
+
+
+class ScheduleHotReloadTests(unittest.TestCase):
+    """睡眠中途改调度配置必须即时生效。
+
+    2026-08-11 生产实测：08-10 17:51 那轮按当时的锚点 15:00 算出「睡到 08-11 15:00」，
+    19:28 把锚点改成 01:00 之后 worker 仍在睡，08-11 01:00 那轮整轮没跑——时间线上
+    连一条失败记录都没有。根因是睡眠总长只在进入睡眠时算一次，分片循环里只递减。
+    """
+
+    def _run(self, *, config_at, last_full, start, max_runs=2, poll="600"):
+        calls = []
+        sleeps = []
+        clock = [start]
+
+        def now():
+            return clock[0]
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            clock[0] = clock[0] + timedelta(seconds=seconds)
+
+        # 生产是 30 秒一片；测试放大到 600 秒只为少转几十圈，唤醒语义不变。
+        with mock.patch.dict(os.environ, {"TPLUS_SYNC_POLL_SECONDS": poll}):
+            run_forever(
+                sync_once=lambda: calls.append(now()) or 0,
+                read_sync_config=lambda: config_at(clock[0]),
+                read_last_full=lambda: last_full,
+                now=now,
+                sleep=sleep,
+                max_runs=max_runs,
+            )
+        return calls, sleeps
+
+    def test_anchor_moved_earlier_mid_sleep_wakes_at_new_anchor(self):
+        changed_at = _beijing(2026, 8, 10, 19, 28)
+
+        def config_at(t):
+            return {
+                "enabled": True,
+                "interval_seconds": 86400,
+                "anchor_time": "01:00" if t >= changed_at else "15:00",
+            }
+
+        # 3 轮：第 1 轮按旧锚点睡下 → 改配置后退出睡眠、第 2 轮重新规划睡到 01:00 → 第 3 轮跑。
+        calls, _sleeps = self._run(
+            config_at=config_at,
+            last_full=_beijing(2026, 8, 10, 17, 51),
+            start=_beijing(2026, 8, 10, 17, 55),
+            max_runs=3,
+        )
+        self.assertEqual(len(calls), 1, "改成 01:00 后必须在 01:00 那轮跑，而不是睡到 15:00")
+        self.assertGreaterEqual(calls[0], _beijing(2026, 8, 11, 1))
+        self.assertLess(calls[0] - _beijing(2026, 8, 11, 1), timedelta(seconds=600))
+
+    def test_interval_shortened_mid_sleep_wakes_early(self):
+        """改的是间隔而不是时刻，同样要即时生效。"""
+        changed_at = _beijing(2026, 8, 5, 5)
+
+        def config_at(t):
+            return {
+                "enabled": True,
+                "interval_seconds": 43200 if t >= changed_at else 86400,
+                "anchor_time": "02:00",
+            }
+
+        calls, _sleeps = self._run(
+            config_at=config_at,
+            last_full=_beijing(2026, 8, 5, 2),
+            start=_beijing(2026, 8, 5, 3),
+            max_runs=3,
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertGreaterEqual(calls[0], _beijing(2026, 8, 5, 14))
+        self.assertLess(calls[0] - _beijing(2026, 8, 5, 14), timedelta(seconds=600))
+
+    def test_unchanged_config_still_sleeps_the_full_span(self):
+        """热读不能把正常睡眠打断成空转——配置没动就必须睡满到锚点。"""
+        calls, sleeps = self._run(
+            config_at=lambda _t: {"enabled": True, "interval_seconds": 86400, "anchor_time": "02:00"},
+            last_full=_beijing(2026, 8, 5, 2),
+            start=_beijing(2026, 8, 5, 14),
+        )
+        self.assertEqual(sum(sleeps), 12 * 3600)
+        self.assertEqual(len(calls), 1)
+
+    def test_disabling_mid_sleep_does_not_wake_early(self):
+        """关掉定时只是不跑，不该把 worker 提前叫醒。"""
+        off_at = _beijing(2026, 8, 5, 20)
+
+        def config_at(t):
+            return {"enabled": t < off_at, "interval_seconds": 86400, "anchor_time": "02:00"}
+
+        calls, sleeps = self._run(
+            config_at=config_at,
+            last_full=_beijing(2026, 8, 5, 2),
+            start=_beijing(2026, 8, 5, 14),
+        )
+        self.assertEqual(sum(sleeps), 12 * 3600)
+        self.assertEqual(calls, [])
 
 
 if __name__ == "__main__":
