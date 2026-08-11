@@ -43,6 +43,21 @@ class AdminFrontendTests(unittest.TestCase):
         self.assertIn('throw new Error("当前页面不可用。");', self.html)
         self.assertNotIn("当前账号没有 admin.access 权限", self.html)
 
+    def test_clash_profile_panel_is_present(self) -> None:
+        self.assertIn('data-target="sec-clash-profile"', self.html)
+        self.assertIn('id="sec-clash-profile"', self.html)
+        self.assertIn('id="clashProviderBody"', self.html)
+        self.assertIn('id="clashDownloadBtn"', self.html)
+        self.assertIn('id="clashCopyBtn"', self.html)
+        self.assertIn('api("/v1/admin/clash-profile/providers")', self.html)
+        self.assertIn("async function loadClashProviders()", self.html)
+        self.assertIn("function renderClashProviders()", self.html)
+
+    def test_clash_profile_urls_are_masked_by_default(self) -> None:
+        # 订阅 URL 含机场分配的 token，列表默认打码，点开才显示。
+        self.assertIn("function maskSubscriptionUrl(", self.html)
+        self.assertIn("clashProfile:{items:[],revealed:{}}", self.html)
+
 
 if __name__ == "__main__":
     unittest.main()
