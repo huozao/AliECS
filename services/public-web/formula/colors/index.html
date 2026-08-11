@@ -97,7 +97,7 @@
   import CameraControls from 'camera-controls';
   CameraControls.install({THREE});
 
-  // 真实数据来自企微智能表格「标准型号0117」，经 doc-sync 落库后由 backend 提供；
+  // 真实数据来自企微智能表格「色粉使用记录表 / 标准型号0117」，经 doc-sync 落库后由 backend 提供；
   // mock-data.js 保留为参考示例，只在切到该数据源时才动态加载。
   const API_BASE=location.port==='8080'?'http://localhost:8000':'/api';
   const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
@@ -680,7 +680,7 @@
   function updateDatasetMetaUi(){
     const synced=datasetMeta.last_sync_at?new Date(datasetMeta.last_sync_at).toLocaleString('zh-CN'):'未知';
     $('datasetBadge').textContent=`企微智能表格 · ${enriched.length} 个型号`;
-    $('datasetSubtitle').textContent=`数据源：${datasetMeta.document||'标准型号0117'} / ${datasetMeta.sheet||''}　同步于 ${synced}`;
+    $('datasetSubtitle').textContent=`数据源：${datasetMeta.document||'色粉使用记录表'} / ${datasetMeta.sheet||''}　同步于 ${synced}`;
     $('datasetNote').textContent=datasetMeta.code_missing?`⚠ ${datasetMeta.code_missing} 个父件编码在 T+ 已失联`:'近邻按 ΔE00 排序';
   }
   async function loadMock(){

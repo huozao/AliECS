@@ -142,7 +142,7 @@ def fetch_last_scheduled_full_at(provider: str = "chanjet", conn: Any | None = N
 # mode='scheduled_full' 取锚点相位，手动跑一次若记成定时，worker 会认为"这个周期已经跑过"，
 # 当晚锚点那轮直接判未到期被整轮跳过——手动补一次反而顶掉了当天的定时同步。
 # module 仍是 'all'：doc-sync 的 tplus_parent_match 事件触发按 module IN ('all','bom')
-# AND status='success' 抬水位，手动全量成功后企微「标准型号0117」核对要能跟着触发。
+# AND status='success' 抬水位，手动全量成功后企微「色粉使用记录表 / 标准型号0117」核对要能跟着触发。
 _RECORD_FULL_RUN_SQL = """
     INSERT INTO integration_sync_runs(provider, module, mode, status, finished_at, row_count, exit_code, detail_json, error_json)
     VALUES ('chanjet', 'all', 'manual_full', %s, NOW(), 0, %s, %s, %s)

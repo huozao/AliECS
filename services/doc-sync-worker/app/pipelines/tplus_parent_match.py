@@ -1,4 +1,4 @@
-"""把 T+ 当前有效物料清单的父件名称核对回企微「标准型号0117」，异常推飞书群。
+"""把 T+ 当前有效物料清单的父件名称核对回企微「色粉使用记录表 / 标准型号0117」，异常推飞书群。
 
 只写「父件名称 / T+匹配状态 / T+核对时间 / T+停用」四列。
 父件编码是这张表当物料清单执行标准时的主键，**失联时只标状态、绝不自动改编码**：
@@ -23,8 +23,11 @@ from app.storage.postgres import connect
 
 SOURCE_PROVIDER = "wecom"
 SOURCE_PROFILE = os.getenv("TPLUS_PARENT_MATCH_WECOM_PROFILE", "COMPANY_A")
-SOURCE_DOCUMENT = os.getenv("TPLUS_PARENT_MATCH_DOCUMENT", "标准型号0117")
-SOURCE_SHEET = os.getenv("TPLUS_PARENT_MATCH_SHEET", "标准型号规格&月统计")
+# 2026-08-11 从文档「标准型号0117」/ 表「标准型号规格&月统计」迁到这里，与 backend 的
+# formula_colors.py 必须保持同一对名字。⚠️ 新文档里「标准型号011」（少个 7）和
+# 「标准型号规格&月统计」（与旧表同名但缺 9 个字段）都能匹配成功却是错的源。
+SOURCE_DOCUMENT = os.getenv("TPLUS_PARENT_MATCH_DOCUMENT", "色粉使用记录表")
+SOURCE_SHEET = os.getenv("TPLUS_PARENT_MATCH_SHEET", "标准型号0117")
 
 F_PARENT_CODE = "父件编码"
 F_PARENT_NAME = "父件名称"
