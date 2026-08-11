@@ -78,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
 
     match_parser = subparsers.add_parser(
         "tplus-parent-match",
-        help="用 T+ 当前有效物料清单核对「标准型号0117」的父件名称，异常推飞书群",
+        help="用 T+ 当前有效物料清单核对「色粉使用记录表 / 标准型号0117」的父件名称，异常推飞书群",
     )
     match_parser.add_argument("--dry-run", action="store_true", help="只统计并打印，不写表也不推送。")
     match_parser.add_argument("--no-notify", action="store_true", help="写表但不推飞书。")

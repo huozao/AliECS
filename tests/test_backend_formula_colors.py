@@ -94,9 +94,17 @@ class FormulaColorsParsingTests(unittest.TestCase):
         self.assertIn("InventoryClass", self.module._RECORD_SQL)
         self.assertIn("'06'", self.module._RECORD_SQL)
     def test_source_is_located_by_document_and_sheet_name(self) -> None:
-        self.assertEqual(self.module.SOURCE_DOCUMENT, "标准型号0117")
-        self.assertEqual(self.module.SOURCE_SHEET, "标准型号规格&月统计")
+        self.assertEqual(self.module.SOURCE_DOCUMENT, "色粉使用记录表")
+        self.assertEqual(self.module.SOURCE_SHEET, "标准型号0117")
         self.assertNotIn("20120", self.module._SOURCE_SQL)
+        self.assertNotIn("20673", self.module._SOURCE_SQL)
+
+    def test_source_sheet_is_not_one_of_the_lookalikes(self) -> None:
+        """同一文档里「标准型号011」少个 7 却同样 323 行 32 字段，
+        「标准型号规格&月统计」与旧表同名却只有 157 行、缺 9 个关键字段。
+        两者都能匹配成功，但都是错的源，所以把正确值钉死在这里。"""
+        self.assertNotEqual(self.module.SOURCE_SHEET, "标准型号011")
+        self.assertNotEqual(self.module.SOURCE_SHEET, "标准型号规格&月统计")
 
     def test_refresh_enqueues_sheet_sync_request(self) -> None:
         self.assertIn("INSERT INTO sync_requests", self.module._ENQUEUE_SQL)

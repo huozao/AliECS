@@ -1,4 +1,4 @@
-"""标准型号色彩：企微智能表格「标准型号0117」的客户标准 Lab 与内控容差，配 T+ 当前有效 BOM 的父件名称。
+"""标准型号色彩：企微智能表格「色粉使用记录表 / 标准型号0117」的客户标准 Lab 与内控容差，配 T+ 当前有效 BOM 的父件名称。
 
 数据来自 doc-sync 已同步的 external_records，本模块只读，不调用企业微信接口。
 """
@@ -17,10 +17,14 @@ from app.core import _conn, require_login, require_permission
 router = APIRouter(prefix="/v1/formula", tags=["formula-colors"])
 
 # doc-sync 登记的文档与子表名；换表时只改这两个常量，不要硬编码 source_id。
+# 2026-08-11 从文档「标准型号0117」/ 表「标准型号规格&月统计」迁到这里（迁移前 323 行，
+# 迁移后逐值校验零差异）。⚠️ 新文档里还有两个名字极像的表，写错一个字符就会静默切错源：
+#   「标准型号011」        —— 只差末尾一个 7，同样 323 行 32 字段
+#   「标准型号规格&月统计」—— 与旧表同名，但只有 157 行且缺 9 个关键字段（含父件名称/T+*）
 SOURCE_PROVIDER = "wecom"
 SOURCE_PROFILE = "COMPANY_A"
-SOURCE_DOCUMENT = "标准型号0117"
-SOURCE_SHEET = "标准型号规格&月统计"
+SOURCE_DOCUMENT = "色粉使用记录表"
+SOURCE_SHEET = "标准型号0117"
 
 F_MODEL = "型号"
 F_PARENT_CODE = "父件编码"

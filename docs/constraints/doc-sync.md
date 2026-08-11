@@ -31,8 +31,18 @@ docker compose -f local/docker-compose.local.yml config
 - 设计文档：`docs/doc-sync-design.md`。
 - T+ 父件核对（2026-08-04）：`app/pipelines/tplus_parent_match.py`，每天全量同步后随 `run-loop` 跑一次，
   也可手动 `python -m app.main tplus-parent-match [--dry-run] [--no-notify]`。
-  它按 `tplus_bom_records` 中 `missing_since IS NULL` 的记录，把父件名称核对回企微「标准型号0117」的
-  「父件名称 / T+匹配状态 / T+核对时间 / T+停用」四列。
+  它按 `tplus_bom_records` 中 `missing_since IS NULL` 的记录，把父件名称核对回企微
+  「色粉使用记录表 / 标准型号0117」的「父件名称 / T+匹配状态 / T+核对时间 / T+停用」四列。
+  **2026-08-11 换源**：原为文档「标准型号0117」/ 表「标准型号规格&月统计」（doc 级 20106、sheet 20120），
+  现为文档「色粉使用记录表」/ 表「标准型号0117」（doc 级 20671、sheet 20673，docid `dcq9175J3FV_pbFvuN…`）。
+  换源前逐值校验：两边各 323 行、键集合零差异、16 个关键字段值全等，原表 29 个字段一个不缺。
+  ⚠️ **新文档里有两个能匹配成功却是错的表**：「标准型号011」（少个 7，同样 323 行 32 字段）、
+  「标准型号规格&月统计」（与旧表同名，只有 157 行且缺父件名称/T+* 等 9 个字段）。
+  源由 `(document_name, sheet_name)` 定位而非 docid，**写错一个字符会静默切错源**，
+  `tests/test_backend_formula_colors.py` 已把正确值和这两个陷阱钉死。
+  旧源保持 active 继续同步但不再被任何程序读写，回滚 = 改回两处常量重新部署，数据零损失。
+  换源同时要改的是 backend `app/routers/formula_colors.py` 与本管道的两个常量，
+  **两者必须同一对名字**，改一个漏一个会让页面和写回指向不同的表。
   2026-08-10 起加了 `T+停用` 列（取值 `停用`/`启用`，源是 T+ 原始行的 `Disabled`，BOM 父件取 BOM 单的、
   纯存货父件取存货档案的）。**停用不参与失联判定**——停用件仍在 T+ 里、编码有效，和「编码失联」
   是两回事，混一列会让人按失联去查一个其实还在的编码。告警只报**本轮新变成停用**的行，
