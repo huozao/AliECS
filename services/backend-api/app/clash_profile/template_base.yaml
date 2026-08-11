@@ -1,0 +1,179 @@
+
+mixed-port: 7897
+allow-lan: false
+mode: rule
+log-level: warning
+ipv6: false
+tcp-concurrent: true
+unified-delay: true
+find-process-mode: strict
+
+profile:
+  store-selected: true
+  store-fake-ip: true
+
+sniffer:
+  enable: true
+  sniff:
+    HTTP:
+      ports: [80, 8080-8880]
+      override-destination: true
+    TLS:
+      ports: [443, 8443]
+    QUIC:
+      ports: [443, 8443]
+
+dns:
+  enable: true
+  ipv6: false
+  respect-rules: true
+  prefer-h3: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  use-hosts: true
+  use-system-hosts: true
+
+  # 用来解析下面这些 DoH 域名本身，避免启动阶段出现依赖问题
+  default-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+
+  fake-ip-filter:
+    - "*.lan"
+    - "*.local"
+    - "localhost.ptlogin2.qq.com"
+    - "+.msftconnecttest.com"
+    - "+.msftncsi.com"
+
+  # 国内 DNS：负责直连域名，速度更稳
+  nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+
+  # 境外 DNS：通过代理查询，减少污染
+  fallback:
+    - https://1.1.1.1/dns-query#节点选择
+    - https://dns.google/dns-query#节点选择
+
+  # 对特定国外站点强制使用境外 DNS
+  nameserver-policy:
+    "+.youtube.com":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+    "+.googlevideo.com":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+    "+.ytimg.com":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+    "+.google.com":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+    "+.gstatic.com":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+    "+.googleapis.com":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+    "+.withgoogle.com":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+    "+.openai.com":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+    "+.chatgpt.com":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+    "+.oaistatic.com":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+    "+.oaiusercontent.com":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+    "+.auth.openai.com":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+    "+.cloudflare.com":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+    "+.challenges.cloudflare.com":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+    "+.github.com":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+    "+.githubusercontent.com":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+    "+.githubassets.com":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+    "+.github.dev":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+    "+.raw.githubusercontent.com":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+    "+.jetbrains.com":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+    "+.jetbrains.space":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+    "+.intellij.net":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+    "+.gcr.io":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+    "+.pkg.dev":
+      - https://1.1.1.1/dns-query#节点选择
+      - https://dns.google/dns-query#节点选择
+
+  # 哪些域名/结果直接优先采用 fallback
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+    ipcidr:
+      - 240.0.0.0/4
+    domain:
+      - "+.google.com"
+      - "+.youtube.com"
+      - "+.googlevideo.com"
+      - "+.ytimg.com"
+      - "+.gstatic.com"
+      - "+.googleapis.com"
+      - "+.withgoogle.com"
+      - "+.openai.com"
+      - "+.chatgpt.com"
+      - "+.oaistatic.com"
+      - "+.oaiusercontent.com"
+      - "+.auth.openai.com"
+      - "+.cloudflare.com"
+      - "+.challenges.cloudflare.com"
+      - "+.github.com"
+      - "+.githubusercontent.com"
+      - "+.githubassets.com"
+      - "+.github.dev"
+      - "+.raw.githubusercontent.com"
+      - "+.jetbrains.com"
+      - "+.jetbrains.space"
+      - "+.intellij.net"
+      - "+.gcr.io"
+      - "+.pkg.dev"
+
+  # 解析代理服务器域名时优先用国内 DNS，避免死循环
+  proxy-server-nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+
+tun:
+  enable: true
+  stack: mixed
+  auto-route: true
+  auto-detect-interface: true
+  strict-route: true
+  dns-hijack:
+    - "any:53"
+    - "tcp://any:53"
+
