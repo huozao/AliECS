@@ -332,4 +332,15 @@ DB 那半由「业务数据不搬」覆盖；文件那半平台只**读** mtime 
 
 ## 12. 实施记录
 
-（待填）
+| 阶段 | 日期 | PR | 验证结论 |
+|---|---|---|---|
+| P0 建表 + 抽 common 前端资产 | 2026-08-12 | [#294](https://github.com/huozao/AliECS/pull/294) | `unittest discover -s tests` 646 项全绿（基线 640）；两页 smoke 通过：`admin.css` 生效（`.btn` 圆角 999px）、`window.AliECSAdmin` 13 个契约字段齐、**零 pageerror 零 console error**、SSO 跳转正常；`check_navigation.py` 通过。**迁移未在真实 Postgres 上跑过**（本地 Docker daemon 未启动），靠 CI `migration-dry-run` 兜底 |
+
+P1 接手须知：
+
+- `sync_jobs` 四表已建但**完全空表**，无任何代码读写。P1 的 worker 双写是第一个写入方。
+- 前端共享资产的对外契约见 `services/public-web/common/admin-auth.js` 末尾的
+  `global.AliECSAdmin = {...}`，P2 的 `/sync/` 页直接按它调用。`applyGate(me, onAdmin)`
+  的 DOM id 契约是 `loginBtn` / `logoutBtn` / `adminContent` / `gateHint` / `refreshBtn`（可选）。
+- 计划文档里写的 `python -m unittest tests.<module>` 在本仓跑不通（`tests/` 无
+  `__init__.py`），正确写法是 `python -m unittest discover -s tests -p "test_xxx.py"`。
