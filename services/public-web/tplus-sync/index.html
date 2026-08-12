@@ -45,30 +45,15 @@
     </div>
   </div>
   <script src="/common/toast.js"></script>
+  <script src="/common/admin-auth.js"></script>
   <script>
-    const API_BASE=location.port==='8080'?'http://localhost:8000':'/api';
-    const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
-    const token=()=>AUTH_KEYS.map((key)=>localStorage.getItem(key)||'').find(Boolean)||'';
-    const fmtTime=(value)=>value?new Date(value).toLocaleString():'-';
-    const chip=(status)=>`<span class="chip ${status||'degraded'}">${status||'unknown'}</span>`;
-    const esc=(value)=>String(value??'').replace(/[&<>"']/g,(char)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-    function authHeaders(){const headers={'Content-Type':'application/json'};const t=token();if(t)headers.Authorization=`Bearer ${t}`;return headers;}
-    async function api(path,opt={}){
-      const response=await fetch(`${API_BASE}${path}`,{...opt,headers:Object.assign(authHeaders(),opt.headers||{})});
-      const text=await response.text();
-      let data={};
-      if(text){try{data=JSON.parse(text)}catch{data={raw:text}}}
-      if(!response.ok)throw new Error(data.detail||`HTTP ${response.status}`);
-      return data;
-    }
+    const {API_BASE, token, api, fetchMe, isAdminUser, esc, fmtTime, chip, clearAuthToken, ssoLogin} = AliECSAdmin;
     const $=(id)=>document.getElementById(id);
-    const clearAuthToken=()=>AUTH_KEYS.forEach((k)=>localStorage.removeItem(k));
+    // onclick 内联调用需要挂到 window；失败提示由调用方负责（共享版只抛不弹）。
+    window.downloadExport=(url,name)=>AliECSAdmin.downloadExport(url,name).catch((e)=>showError(`下载失败：${e.message}`));
     function showError(t){AliECSToast.show(t,'error');}
     function showSuccess(t){AliECSToast.show(t,'success');}
     function clearMessage(){AliECSToast.hide();}
-    async function fetchMe(){if(!token())return null;try{return await api('/v1/auth/me');}catch{return null;}}
-    const isAdminUser=(me)=>!!me&&(((me.roles||[]).includes('admin'))||((me.permissions||[]).includes('admin.access')));
-    function applyGate(me){const admin=isAdminUser(me);$('loginBtn').classList.toggle('hidden',admin);$('logoutBtn').classList.toggle('hidden',!token());$('adminContent').classList.toggle('hidden',!admin);$('gateHint').classList.toggle('hidden',admin);$('refreshBtn').classList.toggle('hidden',!admin);if(admin){loadSyncConfig();loadTplusTimeline();}}
     async function loadSyncConfig(){
       try{
         const c=await api('/v1/ops/tplus/sync-config');
@@ -118,7 +103,6 @@
         btn.disabled=false;btn.textContent='立即全量同步';
       }
     }
-    const ssoLogin=()=>{location.href=`${API_BASE}/v1/auth/oidc/login?rd=${encodeURIComponent(location.pathname+location.search)}`;};
     function syncOriginLabel(item){
       const mode=String((item&&item.mode)||'').toLowerCase();
       if(mode==='scheduled_full')return '<span class="chip ok">定时同步</span>';
@@ -220,24 +204,13 @@
         await loadTplusTimeline();
       }catch(error){openModal(`差异处理失败 #${id}`,`<div class="attention critical"><strong>处理失败</strong><br/>${error.message}</div>`);}
     }
-    async function downloadExport(url,name){
-      try{
-        const response=await fetch(`${API_BASE}${url}`,{headers:authHeaders()});
-        if(!response.ok){let detail=`HTTP ${response.status}`;try{detail=(await response.json()).detail||detail;}catch{}throw new Error(detail);}
-        const blob=await response.blob();
-        const disposition=response.headers.get('Content-Disposition')||'';
-        const match=disposition.match(/filename\*=UTF-8''([^;]+)/);
-        const fileName=match?decodeURIComponent(match[1]):(name&&name.endsWith('.xlsx')?name:`${name||'export'}.xlsx`);
-        const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=fileName;document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(a.href);
-      }catch(error){showError(`下载失败：${error.message}`);}
-    }
     refreshBtn.onclick=()=>loadTplusTimeline();
     saveSyncConfigBtn.onclick=()=>saveSyncConfig().catch((e)=>showError(e.message));
     manualFullSyncBtn.onclick=()=>triggerManualFullSync().catch((e)=>showError(e.message));
     closeModalBtn.onclick=closeModal;detailModal.onclick=(event)=>{if(event.target===detailModal)closeModal();};
     loginBtn.onclick=ssoLogin;
-    logoutBtn.onclick=()=>{clearAuthToken();applyGate(null);showSuccess('已退出登录。');};
-    (async()=>{applyGate(await fetchMe());})();
+    logoutBtn.onclick=()=>{clearAuthToken();AliECSAdmin.applyGate(null);showSuccess('已退出登录。');};
+    (async()=>{AliECSAdmin.applyGate(await fetchMe(),()=>{loadSyncConfig();loadTplusTimeline();});})();
   </script>
 </body>
 </html>

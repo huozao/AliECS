@@ -18,7 +18,9 @@ class ExportsFrontendTests(unittest.TestCase):
         self.assertIn("/v1/exports/catalog", self.html)
 
     def test_has_download_export(self) -> None:
-        self.assertIn("function downloadExport(", self.html)
+        # downloadExport 已抽到 /common/admin-auth.js，页面只保留挂载与错误提示。
+        self.assertIn('<script src="/common/admin-auth.js"></script>', self.html)
+        self.assertIn("window.downloadExport=", self.html)
 
     def test_has_copy_export_doc(self) -> None:
         self.assertIn("function copyExportDoc(", self.html)
