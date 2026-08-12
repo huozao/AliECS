@@ -249,6 +249,92 @@ def test_bridge_submits_async_job_then_polls_the_accepting_standby(monkeypatch):
     assert all(call[3] <= 30 for call in calls)
 
 
+def test_bridge_emits_job_lifecycle_progress_during_poll(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setattr(bridge.time, "sleep", lambda _seconds: None)
+    updates = []
+
+    class FakeResponse:
+        headers = {"X-Webdock-Route": "primary", "X-Webdock-Device": "webdock2"}
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload).encode()
+
+    responses = iter(
+        [
+            FakeResponse(
+                {
+                    "job_id": "job-progress",
+                    "status": "running",
+                    "progress": {"schema_version": 1, "phase": "processing", "stop_present": True},
+                }
+            ),
+            FakeResponse(
+                {
+                    "job_id": "job-progress",
+                    "status": "running",
+                    "progress": {
+                        "schema_version": 1,
+                        "phase": "finalizing",
+                        "server_terminal_observed": True,
+                    },
+                }
+            ),
+            FakeResponse(
+                {
+                    "job_id": "job-progress",
+                    "status": "succeeded",
+                    "result": {"choices": [{"message": {"content": "done"}}]},
+                }
+            ),
+        ]
+    )
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", lambda *_args, **_kwargs: next(responses))
+
+    result = bridge.call_webdock(
+        {"messages": [{"role": "user", "content": "hello"}]},
+        progress_callback=updates.append,
+    )
+
+    assert result.reply == "done"
+    assert [item["phase"] for item in updates] == ["processing", "finalizing"]
+
+
+def test_processing_card_progress_callback_patches_only_changed_phase(monkeypatch):
+    bridge = load_bridge()
+    patched = []
+    monkeypatch.setattr(bridge, "feishu_tenant_access_token", lambda: "token")
+    monkeypatch.setattr(
+        bridge,
+        "feishu_patch_card",
+        lambda message_id, card, token: patched.append((message_id, card, token)),
+    )
+    callback = bridge.processing_card_progress_callback(
+        {"feishu_placeholder_msg_id": "om_progress"}
+    )
+
+    callback({"schema_version": 1, "phase": "processing", "elapsed_seconds": 12})
+    callback({"schema_version": 1, "phase": "processing", "elapsed_seconds": 20})
+    callback({"schema_version": 1, "phase": "finalizing", "elapsed_seconds": 21})
+
+    assert len(patched) == 2
+    assert all(item[0] == "om_progress" and item[2] == "token" for item in patched)
+    rendered = json.dumps([item[1] for item in patched], ensure_ascii=False)
+    assert "ChatGPT 页面正在处理" in rendered
+    assert "正在读取最终结果" in rendered
+    assert "stop_present" not in rendered
+
+
 def test_bridge_falls_back_to_sync_when_async_job_endpoint_is_absent(monkeypatch):
     bridge = load_bridge()
     monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
@@ -3389,7 +3475,7 @@ def test_build_reply_sends_placeholder_then_patches_answer(monkeypatch):
     monkeypatch.setattr(bridge, "send_processing_card",
                         lambda details, text: events.append(("placeholder", text)) or "om_ph")
     monkeypatch.setattr(bridge, "call_webdock",
-                        lambda body: bridge.WebDockResult("成都今天多云 18~27℃", {}))
+                        lambda body, **_kwargs: bridge.WebDockResult("成都今天多云 18~27℃", {}))
     monkeypatch.setattr(bridge, "feishu_patch_card",
                         lambda mid, card, tok: events.append(("patch", mid)))
     monkeypatch.setattr(bridge, "feishu_send_interactive_message",
@@ -3416,7 +3502,7 @@ def test_build_reply_second_message_uses_remind_text(monkeypatch):
     # 第一条卡住在 webdock 里, 制造 overlap
     gate = threading.Event()
 
-    def slow_webdock(body):
+    def slow_webdock(body, **_kwargs):
         gate.wait(2.0)
         return bridge.WebDockResult("ans", {})
 
@@ -3424,7 +3510,7 @@ def test_build_reply_second_message_uses_remind_text(monkeypatch):
     t1 = threading.Thread(target=lambda: bridge.build_reply(_feishu_body("Q1", "om_u1")))
     t1.start()
     time.sleep(0.2)                                   # 确保 t1 已进入 inflight
-    monkeypatch.setattr(bridge, "call_webdock", lambda body: bridge.WebDockResult("ans2", {}))
+    monkeypatch.setattr(bridge, "call_webdock", lambda body, **_kwargs: bridge.WebDockResult("ans2", {}))
     bridge.build_reply(_feishu_body("Q2", "om_u2"))   # overlap
     gate.set()
     t1.join(3.0)
@@ -3438,7 +3524,7 @@ def test_build_reply_patches_placeholder_with_fallback_on_empty(monkeypatch):
     monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("app", "sec"))
     monkeypatch.setattr(bridge, "feishu_tenant_access_token", lambda: "tok")
     monkeypatch.setattr(bridge, "send_processing_card", lambda details, text: "om_ph")
-    monkeypatch.setattr(bridge, "call_webdock", lambda body: bridge.WebDockResult("", {}))
+    monkeypatch.setattr(bridge, "call_webdock", lambda body, **_kwargs: bridge.WebDockResult("", {}))
     patched = {}
     monkeypatch.setattr(bridge, "feishu_patch_card",
                         lambda mid, card, tok: patched.update(mid=mid, card=card))
@@ -3469,7 +3555,7 @@ def test_build_reply_replaces_no_reply_with_trailer_on_feishu(monkeypatch):
     monkeypatch.setattr(bridge, "feishu_app_credentials", lambda: ("app", "sec"))
     monkeypatch.setattr(bridge, "feishu_tenant_access_token", lambda: "tok")
     monkeypatch.setattr(bridge, "send_processing_card", lambda d, t: "om_ph")
-    monkeypatch.setattr(bridge, "call_webdock", lambda body: bridge.WebDockResult("答案", {}))
+    monkeypatch.setattr(bridge, "call_webdock", lambda body, **_kwargs: bridge.WebDockResult("答案", {}))
     monkeypatch.setattr(bridge, "feishu_patch_card", lambda mid, card, tok: None)  # patch ok -> NO_REPLY
     monkeypatch.setattr(bridge, "build_feishu_trailer", lambda details: "TRAILER")
     out = bridge.build_reply(_feishu_body("天气"))

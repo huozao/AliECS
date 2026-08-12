@@ -15,6 +15,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Condition, Lock, Thread
@@ -2977,6 +2978,49 @@ def send_processing_card(details: dict[str, Any], text: str) -> str | None:
         return None
 
 
+def lifecycle_progress_text(progress: dict[str, Any]) -> str:
+    """Render only the stable lifecycle phase; never expose probe internals."""
+    phase = str(progress.get("phase") or "")
+    labels = {
+        "queued": "任务已进入 WebDock 队列",
+        "submitting": "正在向 ChatGPT 提交任务",
+        "processing": "ChatGPT 页面正在处理",
+        "finalizing": "ChatGPT 已完成服务器处理，正在读取最终结果",
+    }
+    return labels.get(phase, "")
+
+
+def processing_card_progress_callback(
+    details: dict[str, Any],
+) -> Callable[[dict[str, Any]], None]:
+    """Build a best-effort phase updater for one Feishu placeholder card."""
+    placeholder_id = str(details.get("feishu_placeholder_msg_id") or "").strip()
+    last_phase = ""
+
+    def update(progress: dict[str, Any]) -> None:
+        nonlocal last_phase
+        if not placeholder_id or progress.get("schema_version") != 1:
+            return
+        phase = str(progress.get("phase") or "")
+        text = lifecycle_progress_text(progress)
+        if not text or phase == last_phase:
+            return
+        last_phase = phase
+        try:
+            auth_token = feishu_tenant_access_token()
+            if not auth_token:
+                return
+            feishu_patch_card(
+                placeholder_id,
+                build_feishu_card([("text", text)], footer=""),
+                auth_token,
+            )
+        except Exception as exc:
+            log_line(f"processing card progress patch failed: {exc}")
+
+    return update
+
+
 class _PlaceholderRotation:
     """占位卡轮播状态：lock 串行化轮播 patch 与终局 patch，cancelled 置位后轮播立即停。"""
 
@@ -3863,13 +3907,38 @@ def _submit_async_job(
         time.sleep(min(webdock_job_poll_seconds(), remaining))
 
 
-def _async_webdock(outbound: dict[str, Any], request_id: str, started: float) -> WebDockResult:
+def _async_webdock(
+    outbound: dict[str, Any],
+    request_id: str,
+    started: float,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> WebDockResult:
     deadline = started + webdock_timeout()
     submitted, route, device = _submit_async_job(outbound, request_id, deadline)
     job_id = str(submitted.get("job_id") or "").strip()
     poll_url = webdock_jobs_url(route) + "/" + urllib.parse.quote(job_id, safe="")
     state = submitted
     while True:
+        progress = state.get("progress")
+        if progress_callback is not None and isinstance(progress, dict):
+            safe_progress = {
+                key: progress[key]
+                for key in (
+                    "schema_version",
+                    "phase",
+                    "elapsed_seconds",
+                    "stop_present",
+                    "status_component_present",
+                    "action_row_present",
+                    "server_terminal_observed",
+                    "last_server_activity_age_seconds",
+                )
+                if key in progress
+            }
+            try:
+                progress_callback(safe_progress)
+            except Exception as exc:
+                log_line(f"webdock progress callback failed: {exc}")
         status = str(state.get("status") or "")
         if status == "succeeded":
             payload = state.get("result")
@@ -3904,12 +3973,16 @@ def _async_webdock(outbound: dict[str, Any], request_id: str, started: float) ->
             continue
 
 
-def call_webdock(body: dict[str, Any]) -> WebDockResult:
+def call_webdock(
+    body: dict[str, Any],
+    *,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> WebDockResult:
     outbound = build_webdock_body(body)
     request_id = str((outbound.get("metadata") or {}).get("request_id") or "").strip()
     started = time.monotonic()
     try:
-        return _async_webdock(outbound, request_id, started)
+        return _async_webdock(outbound, request_id, started, progress_callback)
     except _AsyncJobsUnavailable:
         return _sync_webdock(outbound, request_id, started)
 
@@ -3995,7 +4068,15 @@ def build_reply(body: dict[str, Any]) -> str:
                     start_placeholder_rotation(placeholder_id, text)
             trace_stage(write_details, "webdock_call_start", started)
             call_started = time.monotonic()
-            result = call_webdock(batched_body)
+            progress_callback = (
+                processing_card_progress_callback(write_details)
+                if write_details.get("feishu_placeholder_msg_id")
+                else None
+            )
+            if progress_callback is None:
+                result = call_webdock(batched_body)
+            else:
+                result = call_webdock(batched_body, progress_callback=progress_callback)
             webdock_call_ms = int((time.monotonic() - call_started) * 1000)
             trace_stage(write_details, "webdock_call_end", started, webdock_call_ms=webdock_call_ms)
             reply, response_metadata = unpack_webdock_result(result)

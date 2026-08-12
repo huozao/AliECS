@@ -12,7 +12,7 @@
   → 反向隧道（webdock 设备 webdock-ecs-tunnel.service 的 ssh -R）
   → WebDock API :18000（webdock2 主 / webdock1 备）
   → Chrome / ChatGPT 网页
-  ← GET /v1/chat/jobs/{job_id}（固定原接单节点，短轮询）
+  ← GET /v1/chat/jobs/{job_id}（固定原接单节点，短轮询；`progress` 驱动处理卡片阶段更新）
 ```
 
 主备判定权威：txecs `/etc/default/webdock-failover-proxy`；实际来源看响应头 `X-Webdock-Device` / `X-Webdock-Route`。
