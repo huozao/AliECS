@@ -1646,15 +1646,70 @@ class WeComDynamicPlatformSyncTests(WorkerImportTestCase):
 
 
 class FeishuManualSyncTests(WorkerImportTestCase):
+    class _PlatformWriter:
+        def __init__(self, events: list[tuple]) -> None:
+            self.events = events
+            self.started: list[dict] = []
+            self.steps: list[dict] = []
+            self.finished: list[dict] = []
+
+        def start_run(self, **kwargs: object) -> int:
+            run_id = 100 + len(self.started)
+            self.started.append({"run_id": run_id, **kwargs})
+            self.events.append(("platform_start", run_id))
+            return run_id
+
+        def upsert_step(self, run_id: int, seq: int, name: str, status: str, **kwargs: object) -> None:
+            step = {"run_id": run_id, "seq": seq, "name": name, "status": status, **kwargs}
+            self.steps.append(step)
+            self.events.append(("platform_step", run_id, seq, status))
+            if status in ("success", "failed"):
+                self.events.append(("platform_step_terminal", run_id, seq, status))
+
+        def finish_run(self, run_id: int, **kwargs: object) -> None:
+            from app.storage.sync_job_platform import classify_error
+
+            self.finished.append({"run_id": run_id, "error_kind": classify_error(kwargs.get("error")), **kwargs})
+            self.events.append(("platform_finish", run_id, kwargs["status"]))
+
+        def successful_step_names(self) -> list[str]:
+            return [step["name"] for step in self.steps if step["status"] == "success"]
+
+    class _RaisingPlatformWriter(_PlatformWriter):
+        def __init__(self, events: list[tuple], stage: str) -> None:
+            super().__init__(events)
+            self.stage = stage
+
+        def start_run(self, **kwargs: object) -> int:
+            if self.stage == "start":
+                raise RuntimeError("platform start failed")
+            return super().start_run(**kwargs)
+
+        def upsert_step(self, run_id: int, seq: int, name: str, status: str, **kwargs: object) -> None:
+            if self.stage == "step":
+                raise RuntimeError("platform step failed")
+            super().upsert_step(run_id, seq, name, status, **kwargs)
+
+        def finish_run(self, run_id: int, **kwargs: object) -> None:
+            if self.stage == "finish":
+                raise RuntimeError("platform finish failed")
+            super().finish_run(run_id, **kwargs)
+
     class _Store:
         """sync_feishu_source 所需的最小 FakeStore。"""
 
-        def __init__(self, source: dict) -> None:
+        def __init__(self, source: dict, writer_stage: str = "") -> None:
             self.source = source
             self.runs: list[dict] = []
             self.finished: dict | None = None
             self.sources: list[dict] = []
-            self.sync_jobs = WeComManualSyncTests.FakePlatformWriter()
+            self.synced_source_ids: list[int] = []
+            self.events: list[tuple] = []
+            self.sync_jobs = (
+                FeishuManualSyncTests._RaisingPlatformWriter(self.events, writer_stage)
+                if writer_stage
+                else FeishuManualSyncTests._PlatformWriter(self.events)
+            )
 
         def get_source(self, source_id: int) -> dict | None:
             return dict(self.source) if source_id == self.source["id"] else None
@@ -1665,6 +1720,7 @@ class FeishuManualSyncTests(WorkerImportTestCase):
 
         def finish_run(self, run_id: int, status: str, counts: dict, error_json: list) -> None:
             self.finished = {"run_id": run_id, "status": status, "counts": dict(counts), "errors": list(error_json)}
+            self.events.append(("legacy_finish", status))
 
         def ensure_source(self, **kwargs: object) -> int:
             self.sources.append(dict(kwargs))
@@ -1682,6 +1738,7 @@ class FeishuManualSyncTests(WorkerImportTestCase):
             return UpsertDecision(action="create", should_write=True)
 
         def mark_source_synced(self, source_id: int) -> None:
+            self.synced_source_ids.append(source_id)
             return None
 
     class _Client:
@@ -1694,7 +1751,7 @@ class FeishuManualSyncTests(WorkerImportTestCase):
         def get_records(self, app_token: str, table_id: str, view_id: str = "") -> dict:
             return {"records": [{"record_id": f"rec_{table_id}", "fields": {}}], "page_count": 1}
 
-    def _run(self, source: dict, client: object | None = None) -> tuple:
+    def _run(self, source: dict, client: object | None = None, writer_stage: str = "") -> tuple:
         import unittest.mock as mock
 
         from app.pipelines import sync_feishu_full as module
@@ -1705,7 +1762,7 @@ class FeishuManualSyncTests(WorkerImportTestCase):
             app_secret = "s"
             api_base = "https://open.feishu.cn/open-apis"
 
-        store = self._Store(source)
+        store = self._Store(source, writer_stage=writer_stage)
         with mock.patch.object(module, "credentials_for_profile", return_value=[Cred()]), mock.patch.object(
             module, "FeishuBitableClient", return_value=client or self._Client()
         ):
@@ -1730,8 +1787,11 @@ class FeishuManualSyncTests(WorkerImportTestCase):
     def _run_doc_with_one_failed_table(self) -> tuple:
         class FailingClient(self._Client):
             def get_records(self, app_token: str, table_id: str, view_id: str = "") -> dict:
-                if table_id == "tbl_b":
-                    raise RuntimeError("HTTP 429 too many requests")
+                if table_id == "tbl_a":
+                    raise RuntimeError(
+                        "HTTP 429 too many requests app_token=bascn_fake "
+                        "Authorization: Bearer token-value access_token=token-x raw-failure-marker"
+                    )
                 return super().get_records(app_token, table_id, view_id)
 
         return self._run(
@@ -1795,15 +1855,55 @@ class FeishuManualSyncTests(WorkerImportTestCase):
         store, (status, run_id, _detail) = self._run(self._table_source())
 
         self.assertEqual(("success", 42), (status, run_id))
-        self.assertEqual("feishu.doc.9", store.sync_jobs.started[0]["job_key"])
-        self.assertEqual({"table": "sync_runs", "id": 42}, store.sync_jobs.started[0]["legacy_ref"])
+        started = store.sync_jobs.started[0]
+        self.assertEqual("feishu.doc.9", started["job_key"])
+        self.assertEqual(9, started["source_id"])
+        self.assertEqual("manual", started["trigger"])
+        self.assertEqual({"table": "sync_runs", "id": 42}, started["legacy_ref"])
         self.assertEqual(["token", "fetch_page", "normalize", "upsert"], store.sync_jobs.successful_step_names())
+        fetch_page = next(step for step in store.sync_jobs.steps if step["name"] == "fetch_page" and step["status"] == "success")
+        self.assertEqual((1, "1"), (fetch_page["items"], fetch_page["message"]))
+        finished = store.sync_jobs.finished[0]
+        self.assertEqual(("success", 1, 1), (finished["status"], finished["row_count"], finished["changed_count"]))
 
     def test_feishu_partial_maps_to_platform_partial(self) -> None:
         store, (status, _run_id, _detail) = self._run_doc_with_one_failed_table()
 
         self.assertEqual("partial_failed", status)
-        self.assertEqual("partial", store.sync_jobs.finished[-1]["status"])
+        self.assertEqual([2], store.synced_source_ids)
+        started_by_source = {item["source_id"]: item["run_id"] for item in store.sync_jobs.started}
+        finished_by_run = {item["run_id"]: item for item in store.sync_jobs.finished}
+        failed = finished_by_run[started_by_source[1]]
+        succeeded = finished_by_run[started_by_source[2]]
+        self.assertEqual("partial", failed["status"])
+        self.assertEqual("success", succeeded["status"])
+        self.assertNotIn("bascn_fake", str(failed["error"]))
+        self.assertNotIn("token-value", str(failed["error"]))
+        self.assertNotIn("token-x", str(failed["error"]))
+        self.assertNotIn("raw-failure-marker", str(failed["error"]))
+        self.assertNotIn("bascn_fake", str(failed["detail_json"]))
+        self.assertNotIn("raw-failure-marker", str(failed["detail_json"]))
+        legacy_index = next(index for index, event in enumerate(store.events) if event[0] == "legacy_finish")
+        failed_step_index = next(
+            index
+            for index, event in enumerate(store.events)
+            if event == ("platform_step_terminal", started_by_source[1], 3, "failed")
+        )
+        failed_run_index = next(
+            index
+            for index, event in enumerate(store.events)
+            if event == ("platform_finish", started_by_source[1], "partial")
+        )
+        self.assertLess(legacy_index, failed_step_index)
+        self.assertLess(legacy_index, failed_run_index)
+
+    def test_feishu_platform_writer_failures_do_not_change_legacy_success(self) -> None:
+        for stage in ("start", "step", "finish"):
+            with self.subTest(stage=stage):
+                store, (status, run_id, _detail) = self._run(self._table_source(), writer_stage=stage)
+
+                self.assertEqual(("success", 42), (status, run_id))
+                self.assertEqual("success", store.finished["status"])
 
     def test_non_feishu_source_fails_without_run(self) -> None:
         from app.pipelines.sync_feishu_full import sync_feishu_source
