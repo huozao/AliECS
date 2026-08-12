@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -22,8 +23,13 @@ class SyncJobPlatformMigrationTests(unittest.TestCase):
 
     def test_is_rerunnable(self) -> None:
         # 迁移按文件名排序全量扫过，必须可重复执行。
-        self.assertNotIn("CREATE TABLE sync_", self.sql)
-        self.assertNotIn("CREATE INDEX idx_sync_job", self.sql)
+        # 用正则同时覆盖 CREATE TABLE / CREATE INDEX / CREATE UNIQUE INDEX：
+        # 字符串子串断言 "CREATE INDEX idx_sync_job" 匹配不到
+        # "CREATE UNIQUE INDEX idx_sync_job_alerts_open"（中间的 UNIQUE 打断了子串），会漏检。
+        self.assertNotRegex(
+            self.sql,
+            r"CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX)\s+(?!IF NOT EXISTS)",
+        )
 
     def test_job_key_is_unique(self) -> None:
         self.assertIn("job_key TEXT NOT NULL UNIQUE", self.sql)
