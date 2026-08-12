@@ -85,21 +85,42 @@ legacy_ref JSONB          -- {table:'integration_sync_runs', id:123}，双写期
 ```
 run_id, seq, name(token|list_sheets|fetch_page|normalize|upsert|writeback)
 status, started_at, finished_at, items, message
-INDEX (run_id, seq)
+UNIQUE INDEX (run_id, seq)
 ```
+
+索引唯一是有意的：P1 按 `(run_id, seq)` upsert 步骤状态（running → success/failed），
+不唯一就没有冲突键，只能先查后写，并发下会插出重复步骤。
 
 保留策略：成功 run 的 steps 保留 30 天，失败 run 保留 90 天。清理挂在 notifier 同一个 loop 里。
 
 ### `sync_job_alerts` — 告警状态机
 
 ```
-job_id, alert_kind(failed|stale|credential_expiring|artifact_stale)
-state(open|resolved), first_seen_at, last_notified_at, notify_count, resolved_at
+job_id, run_id(可空，FK → sync_job_runs ON DELETE SET NULL)
+alert_kind(failed|stale|credential_expiring|artifact_stale)
+state(open|resolved) CHECK 焊死, first_seen_at, last_notified_at, notify_count, resolved_at
 payload_json
 UNIQUE partial index (job_id, alert_kind) WHERE state='open'
 ```
 
 那条 partial unique index 就是防刷屏的根：一个作业一种告警，同时只可能有一条 open。
+
+抢占的确定写法（偏索引必须带谓词才能完成 index inference，写成
+`ON CONFLICT (job_id, alert_kind)` 不带 `WHERE` 会直接报 42P10）：
+
+```sql
+INSERT INTO sync_job_alerts (job_id, run_id, alert_kind, payload_json)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (job_id, alert_kind) WHERE state = 'open' DO NOTHING
+RETURNING id;          -- 返回 0 行 = 抢占失败 = 已有人推过，本次不推
+```
+
+不要用无 target 的 `ON CONFLICT DO NOTHING`：它会吞掉本表**任何**唯一索引的冲突。
+
+`state` 由 `CHECK (state IN ('open','resolved'))` 焊死——去重正确性完全骑在这个字面量上，
+写成 `'OPEN'` 不报错、只会静默绕过偏索引导致同一告警无限刷屏。
+
+`run_id` 可空是有意的：`artifact_stale`、长时间没跑这类新鲜度告警本就没有对应的 run。
 
 ### 4.1 两条边界
 
@@ -332,4 +353,15 @@ DB 那半由「业务数据不搬」覆盖；文件那半平台只**读** mtime 
 
 ## 12. 实施记录
 
-（待填）
+| 阶段 | 日期 | PR | 验证结论 |
+|---|---|---|---|
+| P0 建表 + 抽 common 前端资产 | 2026-08-12 | [#294](https://github.com/huozao/AliECS/pull/294) | `unittest discover -s tests` 646 项全绿（基线 640）；两页 smoke 通过：`admin.css` 生效（`.btn` 圆角 999px）、`window.AliECSAdmin` 13 个契约字段齐、**零 pageerror 零 console error**、SSO 跳转正常；`check_navigation.py` 通过；迁移 0048 由 CI `migration-dry-run` 在 postgres:16-alpine 上实际执行，全 job 日志零 ERROR/FATAL。**未验证重复执行**（CI 只在全新库上跑一遍，`psql` 未带 `ON_ERROR_STOP`，可重复性目前只有 `IF NOT EXISTS` 与文本断言两层保障） |
+
+P1 接手须知：
+
+- `sync_jobs` 四表已建但**完全空表**，无任何代码读写。P1 的 worker 双写是第一个写入方。
+- 前端共享资产的对外契约见 `services/public-web/common/admin-auth.js` 末尾的
+  `global.AliECSAdmin = {...}`，P2 的 `/sync/` 页直接按它调用。`applyGate(me, onAdmin)`
+  的 DOM id 契约是 `loginBtn` / `logoutBtn` / `adminContent` / `gateHint` / `refreshBtn`（可选）。
+- 计划文档里写的 `python -m unittest tests.<module>` 在本仓跑不通（`tests/` 无
+  `__init__.py`），正确写法是 `python -m unittest discover -s tests -p "test_xxx.py"`。

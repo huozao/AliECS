@@ -4,10 +4,7 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>AliECS · T+ 同步时间线</title>
-  <style>
-    :root{--bg:#f7f5f0;--panel:#fffdf8;--text:#25211b;--muted:#766f63;--line:#e7dfd0;--good:#3f7a4c;--warn:#a46b1f;--bad:#a6423a;--primary:#6f5e46;--shadow:0 12px 30px rgba(69,56,38,.08)}
-    *{box-sizing:border-box}.hidden{display:none!important}body{margin:0;background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui}.wrap{max-width:1180px;margin:0 auto;padding:20px 18px 56px}.topbar{display:flex;justify-content:space-between;gap:14px;align-items:center;background:rgba(255,253,248,.94);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px;padding:16px 18px;margin-bottom:16px}h1{margin:0;font-size:30px}.subtitle{margin:6px 0 0;color:var(--muted)}.actions{display:flex;gap:8px;flex-wrap:wrap}.btn,button{border:0;border-radius:999px;padding:9px 13px;background:#e8dfcf;color:var(--text);font-weight:650;text-decoration:none;cursor:pointer}.btn.primary{background:var(--primary);color:#fff}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.band,.panel{background:rgba(255,253,248,.94);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:16px;padding:16px;margin-bottom:14px}.clickable{cursor:pointer}.metric{font-size:30px;font-weight:800;margin-top:8px}.muted{color:var(--muted)}.chip{display:inline-flex;align-items:center;border-radius:999px;padding:5px 9px;font-size:12px;font-weight:750}.ok{background:#dfeee3;color:var(--good)}.degraded,.warning{background:#f4ead8;color:var(--warn)}.critical,.failed{background:#f5d7d3;color:var(--bad)}table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}th,td{border-bottom:1px solid var(--line);padding:9px 10px;text-align:left;font-size:13px;vertical-align:top}th{background:#f2eadc}.list{display:grid;gap:8px}.attention{border-left:4px solid var(--warn);padding:8px 10px;background:#fff;border-radius:8px}.attention.critical{border-left-color:var(--bad)}.modal{position:fixed;inset:0;background:rgba(30,22,12,.28);display:none;align-items:center;justify-content:center;padding:16px}.modal.show{display:flex}.modal-panel{width:min(860px,100%);max-height:88vh;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px}pre{white-space:pre-wrap;word-break:break-word;background:#f7f5f0;border:1px solid var(--line);border-radius:12px;padding:12px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}textarea{width:100%;min-height:76px;border:1px solid var(--line);border-radius:12px;padding:10px 12px;font:inherit}@media (max-width:900px){.grid{grid-template-columns:1fr}.topbar{align-items:flex-start;flex-direction:column}}
-  </style>
+  <link rel="stylesheet" href="/common/admin.css"/>
 </head>
 <body>
   <div class="wrap">
@@ -48,30 +45,15 @@
     </div>
   </div>
   <script src="/common/toast.js"></script>
+  <script src="/common/admin-auth.js"></script>
   <script>
-    const API_BASE=location.port==='8080'?'http://localhost:8000':'/api';
-    const AUTH_KEYS=['aliecs_auth_token','portal_token','admin_token'];
-    const token=()=>AUTH_KEYS.map((key)=>localStorage.getItem(key)||'').find(Boolean)||'';
-    const fmtTime=(value)=>value?new Date(value).toLocaleString():'-';
-    const chip=(status)=>`<span class="chip ${status||'degraded'}">${status||'unknown'}</span>`;
-    const esc=(value)=>String(value??'').replace(/[&<>"']/g,(char)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-    function authHeaders(){const headers={'Content-Type':'application/json'};const t=token();if(t)headers.Authorization=`Bearer ${t}`;return headers;}
-    async function api(path,opt={}){
-      const response=await fetch(`${API_BASE}${path}`,{...opt,headers:Object.assign(authHeaders(),opt.headers||{})});
-      const text=await response.text();
-      let data={};
-      if(text){try{data=JSON.parse(text)}catch{data={raw:text}}}
-      if(!response.ok)throw new Error(data.detail||`HTTP ${response.status}`);
-      return data;
-    }
+    const {API_BASE, token, api, fetchMe, isAdminUser, esc, fmtTime, chip, clearAuthToken, ssoLogin} = AliECSAdmin;
     const $=(id)=>document.getElementById(id);
-    const clearAuthToken=()=>AUTH_KEYS.forEach((k)=>localStorage.removeItem(k));
+    // onclick 内联调用需要挂到 window；失败提示由调用方负责（共享版只抛不弹）。
+    window.downloadExport=(url,name)=>AliECSAdmin.downloadExport(url,name).catch((e)=>showError(`下载失败：${e.message}`));
     function showError(t){AliECSToast.show(t,'error');}
     function showSuccess(t){AliECSToast.show(t,'success');}
     function clearMessage(){AliECSToast.hide();}
-    async function fetchMe(){if(!token())return null;try{return await api('/v1/auth/me');}catch{return null;}}
-    const isAdminUser=(me)=>!!me&&(((me.roles||[]).includes('admin'))||((me.permissions||[]).includes('admin.access')));
-    function applyGate(me){const admin=isAdminUser(me);$('loginBtn').classList.toggle('hidden',admin);$('logoutBtn').classList.toggle('hidden',!token());$('adminContent').classList.toggle('hidden',!admin);$('gateHint').classList.toggle('hidden',admin);$('refreshBtn').classList.toggle('hidden',!admin);if(admin){loadSyncConfig();loadTplusTimeline();}}
     async function loadSyncConfig(){
       try{
         const c=await api('/v1/ops/tplus/sync-config');
@@ -121,7 +103,6 @@
         btn.disabled=false;btn.textContent='立即全量同步';
       }
     }
-    const ssoLogin=()=>{location.href=`${API_BASE}/v1/auth/oidc/login?rd=${encodeURIComponent(location.pathname+location.search)}`;};
     function syncOriginLabel(item){
       const mode=String((item&&item.mode)||'').toLowerCase();
       if(mode==='scheduled_full')return '<span class="chip ok">定时同步</span>';
@@ -223,24 +204,13 @@
         await loadTplusTimeline();
       }catch(error){openModal(`差异处理失败 #${id}`,`<div class="attention critical"><strong>处理失败</strong><br/>${error.message}</div>`);}
     }
-    async function downloadExport(url,name){
-      try{
-        const response=await fetch(`${API_BASE}${url}`,{headers:authHeaders()});
-        if(!response.ok){let detail=`HTTP ${response.status}`;try{detail=(await response.json()).detail||detail;}catch{}throw new Error(detail);}
-        const blob=await response.blob();
-        const disposition=response.headers.get('Content-Disposition')||'';
-        const match=disposition.match(/filename\*=UTF-8''([^;]+)/);
-        const fileName=match?decodeURIComponent(match[1]):(name&&name.endsWith('.xlsx')?name:`${name||'export'}.xlsx`);
-        const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=fileName;document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(a.href);
-      }catch(error){showError(`下载失败：${error.message}`);}
-    }
     refreshBtn.onclick=()=>loadTplusTimeline();
     saveSyncConfigBtn.onclick=()=>saveSyncConfig().catch((e)=>showError(e.message));
     manualFullSyncBtn.onclick=()=>triggerManualFullSync().catch((e)=>showError(e.message));
     closeModalBtn.onclick=closeModal;detailModal.onclick=(event)=>{if(event.target===detailModal)closeModal();};
     loginBtn.onclick=ssoLogin;
-    logoutBtn.onclick=()=>{clearAuthToken();applyGate(null);showSuccess('已退出登录。');};
-    (async()=>{applyGate(await fetchMe());})();
+    logoutBtn.onclick=()=>{clearAuthToken();AliECSAdmin.applyGate(null);showSuccess('已退出登录。');};
+    (async()=>{AliECSAdmin.applyGate(await fetchMe(),()=>{loadSyncConfig();loadTplusTimeline();});})();
   </script>
 </body>
 </html>

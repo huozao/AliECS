@@ -46,6 +46,11 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 第二个参数会展开进 `fetch` 的 init；漏掉它会把 POST 悄悄降级成 GET。
 生产热更新可 `docker cp`；HTML 已加 no-cache 头。验证：JS 语法检查 + 浏览器 smoke。
 
+⚠️ `exports/` 与 `tplus-sync/` 两页已改为引用共享资产 `common/admin.css` + `common/admin-auth.js`
+（后者导出 `window.AliECSAdmin`，页面内联脚本第一条语句就解构它）。**热更新必须成对拷贝**：
+只 `docker cp` 一个 `index.html` 而不带 `common/`，会让内联脚本在第一行抛 `ReferenceError` 中止，
+整页 onclick 全不绑定、登录闸门失效。镜像整体部署是原子的，只有 `docker cp` 这条路径有此风险。
+
 ## services/admin-ui
 
 管理后台（`index.html` 内联脚本）。改后必须做前端可执行性验证（语法/作用域错误 + 核心入口点击触发网络请求）。
