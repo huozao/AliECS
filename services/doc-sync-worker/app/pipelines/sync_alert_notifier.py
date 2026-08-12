@@ -11,7 +11,6 @@ from typing import Any, Callable
 from urllib.parse import quote
 
 from app.providers.feishu import FeishuBitableClient, credentials_for_profile
-from app.storage.sync_job_platform import safe_error_message
 
 try:
     from psycopg.types.json import Jsonb
@@ -181,6 +180,7 @@ def build_alert_text(event: str, alert: dict[str, Any], *, now: datetime) -> str
 def send_feishu_text(chat_id: str, text: str) -> bool:
     if not str(chat_id or "").strip():
         return False
+    client = None
     try:
         profile = os.getenv("SYNC_ALERT_FEISHU_PROFILE", "COMPANY_A").strip() or "COMPANY_A"
         credentials = credentials_for_profile(profile)
@@ -207,6 +207,12 @@ def send_feishu_text(chat_id: str, text: str) -> bool:
     except Exception as exc:
         print(f"[sync-alert] feishu send failed: {type(exc).__name__}")
         return False
+    finally:
+        if client is not None:
+            try:
+                client.session.close()
+            except Exception:
+                pass
 
 
 def _positive_env_seconds(name: str, fallback: int) -> int:
@@ -243,6 +249,10 @@ def _live_artifacts(pattern: str) -> list[dict[str, Any]]:
     return artifacts
 
 
+def _sanitized_error_message(value: Any) -> str:
+    return "[REDACTED]" if str(value or "").strip() else ""
+
+
 def _alert_conditions(
     state: dict[str, Any], *, now: datetime, artifact_grace_seconds: int
 ) -> dict[str, dict[str, Any]]:
@@ -262,7 +272,7 @@ def _alert_conditions(
             **base_payload,
             "status": str(latest_run.get("status")),
             "error_kind": _normalized_error_kind(latest_run.get("error_kind")),
-            "error_message": safe_error_message(latest_run.get("error_message")),
+            "error_message": _sanitized_error_message(latest_run.get("error_message")),
             "consecutive_failures": int(state.get("consecutive_failures") or 0),
         }
 
@@ -332,6 +342,24 @@ def _safe_send(
         return False
 
 
+def _alert_has_recovered(
+    alert: dict[str, Any], conditions: dict[str, dict[str, Any]], state: dict[str, Any]
+) -> bool:
+    alert_kind = str(alert.get("alert_kind") or "")
+    if alert_kind != "failed":
+        return alert_kind not in conditions
+    alert_run_id = alert.get("run_id")
+    latest_success = state.get("latest_success")
+    if alert_run_id is None or not isinstance(latest_success, dict):
+        return False
+    success_run_id = latest_success.get("id")
+    return (
+        type(alert_run_id) is int
+        and type(success_run_id) is int
+        and success_run_id > alert_run_id
+    )
+
+
 def run_notifier_once(
     *, repository=None, sender=None, now=None
 ) -> dict[str, int]:
@@ -361,6 +389,7 @@ def run_notifier_once(
     try:
         states = repository.load_job_states()
         result["checked"] = len(states)
+        contexts: list[dict[str, Any]] = []
         for state in states:
             job = state["job"]
             if not job.get("enabled", True) or not job.get("alert_enabled", True):
@@ -375,9 +404,23 @@ def run_notifier_once(
             open_by_kind = {
                 str(alert.get("alert_kind")): alert for alert in open_alerts
             }
+            contexts.append({
+                "state": state,
+                "job": job,
+                "chat_id": chat_id,
+                "conditions": conditions,
+                "open_by_kind": open_by_kind,
+                "resolved_kinds": set(),
+            })
 
+        for context in contexts:
+            state = context["state"]
+            job = context["job"]
+            chat_id = context["chat_id"]
+            conditions = context["conditions"]
+            open_by_kind = context["open_by_kind"]
             for alert_kind, alert in open_by_kind.items():
-                if alert_kind in conditions:
+                if not _alert_has_recovered(alert, conditions, state):
                     continue
                 recovery_payload = {
                     "job_key": str(job.get("job_key") or ""),
@@ -393,33 +436,47 @@ def run_notifier_once(
                     ),
                 ):
                     result["resolved"] += 1
+                    context["resolved_kinds"].add(alert_kind)
 
-            due_alerts: list[tuple[int, bool]] = []
+        due_alerts: list[tuple[int, bool, str, dict[str, Any]]] = []
+        for context in contexts:
+            state = context["state"]
+            job = context["job"]
+            chat_id = context["chat_id"]
+            conditions = context["conditions"]
+            open_by_kind = context["open_by_kind"]
+            resolved_kinds = context["resolved_kinds"]
             latest_run = state.get("latest_run")
             run_id = int(latest_run["id"]) if isinstance(latest_run, dict) and latest_run.get("id") is not None else None
             for alert_kind, payload in conditions.items():
                 existing = open_by_kind.get(alert_kind)
-                if existing is not None:
-                    due_alerts.append((int(existing["id"]), int(existing.get("notify_count") or 0) > 0))
+                if existing is not None and alert_kind not in resolved_kinds:
+                    due_alerts.append((
+                        int(existing["id"]),
+                        int(existing.get("notify_count") or 0) > 0,
+                        chat_id,
+                        payload,
+                    ))
                     continue
                 alert_id = repository.claim_alert(
                     job, run_id if alert_kind == "failed" else None, alert_kind, payload
                 )
                 if alert_id is not None:
                     result["opened"] += 1
-                    due_alerts.append((int(alert_id), False))
+                    due_alerts.append((int(alert_id), False, chat_id, payload))
 
-            for alert_id, is_escalation in due_alerts:
-                event = "escalate" if is_escalation else "open"
-                if repository.deliver_due(
-                    alert_id,
-                    lambda delivered, cid=chat_id, alert_event=event: _safe_send(
-                        send, cid, alert_event, delivered, current
-                    ),
-                ):
-                    result["notified"] += 1
-                    if is_escalation:
-                        result["escalated"] += 1
+        for alert_id, is_escalation, chat_id, payload in due_alerts:
+            event = "escalate" if is_escalation else "open"
+            if repository.deliver_due(
+                alert_id,
+                lambda delivered, cid=chat_id, alert_event=event: _safe_send(
+                    send, cid, alert_event, delivered, current
+                ),
+                payload=payload,
+            ):
+                result["notified"] += 1
+                if is_escalation:
+                    result["escalated"] += 1
 
         result["cleaned"] = int(repository.cleanup_steps() or 0)
         return result
@@ -493,7 +550,12 @@ class SyncAlertRepository:
             result.update(payload)
         return result
 
-    def deliver_due(self, alert_id: int, sender: Callable[[dict[str, Any]], bool]) -> bool:
+    def deliver_due(
+        self,
+        alert_id: int,
+        sender: Callable[[dict[str, Any]], bool],
+        payload: dict[str, Any] | None = None,
+    ) -> bool:
         cutoff = self.now_fn() - timedelta(seconds=self.escalation_seconds)
         try:
             with self.conn.cursor() as cur:
@@ -505,19 +567,23 @@ class SyncAlertRepository:
                 if last_notified_at is not None and last_notified_at >= cutoff:
                     self.conn.rollback()
                     return False
-                if not sender(self._sender_alert(alert)):
+                current_payload = payload if payload is not None else alert.get("payload_json")
+                if not isinstance(current_payload, dict):
+                    current_payload = {}
+                if not sender(self._sender_alert(alert, current_payload)):
                     self.conn.rollback()
                     return False
                 cur.execute(
                     """
                     UPDATE sync_job_alerts
-                    SET last_notified_at = NOW(),
+                    SET payload_json = %s,
+                        last_notified_at = NOW(),
                         notify_count = notify_count + 1
                     WHERE id = %s
                       AND state = 'open'
                       AND (last_notified_at IS NULL OR last_notified_at < %s)
                     """,
-                    (alert_id, cutoff),
+                    (Jsonb(current_payload), alert_id, cutoff),
                 )
             self.conn.commit()
             return True

@@ -402,6 +402,36 @@ class SyncAlertRepositoryTests(unittest.TestCase):
             [param for _, params in self.conn.committed for param in (params or ())],
         )
 
+    def test_delivery_sends_and_persists_current_payload_under_the_row_lock(self) -> None:
+        self.conn.rows = [self._open_alert(NOW - timedelta(hours=7))]
+        current_payload = {
+            "status": "failed",
+            "error_kind": "auth",
+            "consecutive_failures": 4,
+        }
+        delivered: list[dict[str, Any]] = []
+
+        self.assertTrue(self.repo.deliver_due(
+            91, lambda alert: delivered.append(alert) is None, payload=current_payload
+        ))
+
+        self.assertEqual("auth", delivered[0]["error_kind"])
+        self.assertEqual(4, delivered[0]["consecutive_failures"])
+        update_params = self.conn.committed[-1][1]
+        stored = getattr(update_params[0], "obj", getattr(update_params[0], "value", None))
+        self.assertEqual(current_payload, stored)
+        self.assertIn("payload_json = %s", self.conn.committed[-1][0])
+
+    def test_failed_delivery_does_not_persist_current_payload(self) -> None:
+        self.conn.rows = [self._open_alert(NOW - timedelta(hours=7))]
+
+        self.assertFalse(self.repo.deliver_due(
+            91, lambda _: False, payload={"error_kind": "auth"}
+        ))
+
+        self.assertEqual(1, self.conn.rollback_count)
+        self.assertNotIn("payload_json = %s", self.conn.committed_sql())
+
     def test_second_connection_skips_locked_alert_until_first_sender_returns(self) -> None:
         backend = SharedAlertBackend()
         first_conn = SharedAlertConnection(backend)
@@ -555,8 +585,10 @@ class InMemoryAlertRepository:
         self.alerts: dict[int, dict[str, Any]] = {}
         self.next_id = 1
         self.cleanup_calls = 0
+        self.events: list[str] = []
 
     def load_job_states(self) -> list[dict[str, Any]]:
+        self.events.append("load")
         result = []
         for state in self.states:
             item = dict(state)
@@ -570,6 +602,7 @@ class InMemoryAlertRepository:
     def claim_alert(
         self, job: dict[str, Any], run_id: int | None, alert_kind: str, payload: dict[str, Any]
     ) -> int | None:
+        self.events.append(f"claim:{job['id']}:{alert_kind}")
         if any(
             alert["job_id"] == job["id"] and alert["alert_kind"] == alert_kind and alert["state"] == "open"
             for alert in self.alerts.values()
@@ -590,7 +623,8 @@ class InMemoryAlertRepository:
         }
         return alert_id
 
-    def deliver_due(self, alert_id: int, sender) -> bool:
+    def deliver_due(self, alert_id: int, sender, payload: dict[str, Any] | None = None) -> bool:
+        self.events.append(f"deliver:{alert_id}")
         alert = self.alerts[alert_id]
         if alert["state"] != "open":
             return False
@@ -599,14 +633,19 @@ class InMemoryAlertRepository:
             return False
         delivered = dict(alert)
         delivered.update(alert["payload_json"])
+        if payload is not None:
+            delivered.update(payload)
         if not sender(delivered):
             return False
         alert["last_notified_at"] = self.now_fn()
         alert["notify_count"] += 1
+        if payload is not None:
+            alert["payload_json"] = dict(payload)
         return True
 
     def resolve_alert(self, alert_id: int, payload: dict[str, Any], sender) -> bool:
         alert = self.alerts[alert_id]
+        self.events.append(f"resolve:{alert['job_id']}:{alert['alert_kind']}")
         delivered = dict(alert)
         delivered.update(alert["payload_json"])
         delivered.update(payload)
@@ -617,6 +656,7 @@ class InMemoryAlertRepository:
         return True
 
     def cleanup_steps(self) -> int:
+        self.events.append("cleanup")
         self.cleanup_calls += 1
         return 3
 
@@ -668,14 +708,18 @@ class SyncAlertOrchestrationTests(unittest.TestCase):
         error_kind: str | None = None,
         error_message: str | None = None,
         latest_success_at: datetime | None = None,
+        latest_success_id: int | None = None,
         latest_success_detail: dict[str, Any] | None = None,
+        consecutive_failures: int | None = None,
     ) -> dict[str, int]:
         if latest_success_at is None and status == "success":
             latest_success_at = self.now
         latest_success = None
         if latest_success_at is not None:
             latest_success = {
-                "id": max(1, run_id - 1),
+                "id": latest_success_id if latest_success_id is not None else (
+                    run_id if status == "success" else max(1, run_id - 1)
+                ),
                 "started_at": latest_success_at,
                 "finished_at": latest_success_at,
                 "detail_json": latest_success_detail or {},
@@ -692,7 +736,9 @@ class SyncAlertOrchestrationTests(unittest.TestCase):
                 "detail_json": {},
             },
             "latest_success": latest_success,
-            "consecutive_failures": 1 if status in {"failed", "partial"} else 0,
+            "consecutive_failures": consecutive_failures if consecutive_failures is not None else (
+                1 if status in {"failed", "partial"} else 0
+            ),
             "open_alerts": [],
         }]
         return self.notifier.run_notifier_once(
@@ -733,6 +779,61 @@ class SyncAlertOrchestrationTests(unittest.TestCase):
             result, "resolved", "escalated", "notified"
         ))
         self.assertIn("同步已恢复", self.sent[-1][1])
+
+    def test_failed_alert_stays_open_through_running_and_old_success_until_new_success(self) -> None:
+        self.run_with_latest(status="failed", run_id=10, error_kind="network")
+        initial_send_count = len(self.sent)
+
+        running = self.run_with_latest(status="running", run_id=11)
+        self.assertEqual(0, running["resolved"])
+        self.assertEqual(initial_send_count, len(self.sent))
+        self.assertEqual("open", self.repository.alerts[1]["state"])
+
+        old_success = self.run_with_latest(
+            status="running", run_id=11,
+            latest_success_at=self.now - timedelta(hours=1), latest_success_id=9,
+        )
+        self.assertEqual(0, old_success["resolved"])
+        self.assertEqual(initial_send_count, len(self.sent))
+        self.assertEqual("open", self.repository.alerts[1]["state"])
+
+        new_success = self.run_with_latest(status="success", run_id=12)
+        self.assertEqual(1, new_success["resolved"])
+        self.assertEqual("resolved", self.repository.alerts[1]["state"])
+
+    def test_escalation_uses_latest_error_and_failure_count(self) -> None:
+        self.run_with_latest(
+            status="failed", run_id=10, error_kind="network", consecutive_failures=1
+        )
+        self.advance(hours=6, seconds=1)
+
+        result = self.run_with_latest(
+            status="failed", run_id=11, error_kind="auth", consecutive_failures=4
+        )
+
+        self.assertEqual(1, result["escalated"])
+        self.assertIn("凭据过期(auth)", self.sent[-1][1])
+        self.assertIn("连续失败 4 次", self.sent[-1][1])
+        self.assertEqual("auth", self.repository.alerts[1]["payload_json"]["error_kind"])
+        self.assertEqual(4, self.repository.alerts[1]["payload_json"]["consecutive_failures"])
+
+    def test_failed_error_payload_redacts_secrets_paths_and_traceback(self) -> None:
+        error = (
+            "token=raw-token secret=raw-secret external_doc_id=raw-doc "
+            "Authorization: Bearer raw-auth C:\\private\\dump.txt /srv/private/dump.txt\n"
+            "Traceback (most recent call last): raw-trace"
+        )
+
+        self.run_with_latest(
+            status="failed", run_id=10, error_kind="unknown", error_message=error
+        )
+
+        payload = repr(self.repository.alerts[1]["payload_json"])
+        for forbidden in (
+            "raw-token", "raw-secret", "raw-doc", "raw-auth",
+            "C:\\private\\dump.txt", "/srv/private/dump.txt", "Traceback", "raw-trace",
+        ):
+            self.assertNotIn(forbidden, payload)
 
     def test_stale_opens_then_resolves_inside_sla(self) -> None:
         self.job["freshness_sla_seconds"] = 3600
@@ -876,6 +977,59 @@ class SyncAlertOrchestrationTests(unittest.TestCase):
         self.assertEqual(21600, self.repository.escalation_seconds)
         self.assertEqual(300, predicate.call_args.kwargs["grace_seconds"])
 
+    def test_all_jobs_resolve_before_any_claim_and_all_claim_before_delivery(self) -> None:
+        first_job = dict(self.job)
+        second_job = {**self.job, "id": 8, "job_key": "wecom.doc.18", "display_name": "台账"}
+        self.repository.claim_alert(first_job, None, "stale", {
+            "job_key": first_job["job_key"], "display_name": first_job["display_name"]
+        })
+        self.repository.claim_alert(second_job, 20, "failed", {
+            "job_key": second_job["job_key"], "display_name": second_job["display_name"]
+        })
+        self.repository.states = [
+            {
+                "job": first_job,
+                "latest_run": {
+                    "id": 11, "status": "failed", "started_at": self.now,
+                    "finished_at": self.now, "error_kind": "network",
+                    "error_message": "timeout", "detail_json": {},
+                },
+                "latest_success": {
+                    "id": 10, "started_at": self.now, "finished_at": self.now,
+                    "detail_json": {},
+                },
+                "consecutive_failures": 1,
+                "open_alerts": [],
+            },
+            {
+                "job": second_job,
+                "latest_run": {
+                    "id": 21, "status": "success", "started_at": self.now,
+                    "finished_at": self.now, "error_kind": None,
+                    "error_message": None, "detail_json": {},
+                },
+                "latest_success": {
+                    "id": 21, "started_at": self.now, "finished_at": self.now,
+                    "detail_json": {},
+                },
+                "consecutive_failures": 0,
+                "open_alerts": [],
+            },
+        ]
+        self.repository.events.clear()
+
+        self.notifier.run_notifier_once(
+            repository=self.repository, sender=self.sender, now=self.now
+        )
+
+        phases = [event.split(":", 1)[0] for event in self.repository.events]
+        resolve_indexes = [index for index, phase in enumerate(phases) if phase == "resolve"]
+        claim_indexes = [index for index, phase in enumerate(phases) if phase == "claim"]
+        deliver_indexes = [index for index, phase in enumerate(phases) if phase == "deliver"]
+        self.assertLess(max(resolve_indexes), min(claim_indexes))
+        self.assertLess(max(claim_indexes), min(deliver_indexes))
+        self.assertEqual("cleanup", phases[-1])
+
 
 class FeishuAlertSenderTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -920,6 +1074,7 @@ class FeishuAlertSenderTests(unittest.TestCase):
                 "content": json.dumps({"text": "同步异常"}, ensure_ascii=False),
             },
         )
+        client.session.close.assert_called_once_with()
 
     def test_sender_exception_log_contains_only_exception_type(self) -> None:
         credential = mock.Mock(app_id="app", app_secret="secret", api_base="https://feishu.invalid")
@@ -935,6 +1090,20 @@ class FeishuAlertSenderTests(unittest.TestCase):
         self.assertIn("RuntimeError", output.getvalue())
         self.assertNotIn("synthetic-secret", output.getvalue())
         self.assertNotIn("oc_sensitive", output.getvalue())
+        client.session.close.assert_called_once_with()
+
+    def test_session_close_exception_does_not_escape_or_change_success(self) -> None:
+        credential = mock.Mock(app_id="app", app_secret="secret", api_base="https://feishu.invalid")
+        client = mock.Mock()
+        client._headers.return_value = {"Authorization": "Bearer tenant"}
+        client.session.close.side_effect = RuntimeError("close failed")
+        with mock.patch.object(
+            self.notifier, "credentials_for_profile", return_value=[credential]
+        ), mock.patch.object(
+            self.notifier, "FeishuBitableClient", return_value=client
+        ):
+            self.assertTrue(self.notifier.send_feishu_text("oc_alert", "hello"))
+        client.session.close.assert_called_once_with()
 
     def test_credential_loader_exception_is_safely_reported(self) -> None:
         output = io.StringIO()
