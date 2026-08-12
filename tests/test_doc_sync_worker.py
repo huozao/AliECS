@@ -1424,6 +1424,223 @@ class WeComManualSyncTests(WorkerImportTestCase):
         self.assertEqual("success", store.finished["status"])
 
 
+class WeComDynamicPlatformSyncTests(WorkerImportTestCase):
+    class _Writer:
+        def __init__(self, events: list[tuple]) -> None:
+            self.events = events
+            self.started: list[dict] = []
+            self.steps: list[dict] = []
+            self.finished: list[dict] = []
+
+        def start_run(self, **kwargs: object) -> int:
+            run_id = 100 + len(self.started)
+            self.started.append({"run_id": run_id, **kwargs})
+            self.events.append(("platform_start", run_id))
+            return run_id
+
+        def upsert_step(self, run_id: int, seq: int, name: str, status: str, **kwargs: object) -> None:
+            step = {"run_id": run_id, "seq": seq, "name": name, "status": status, **kwargs}
+            self.steps.append(step)
+            self.events.append(("platform_step", run_id, seq, status))
+            if status in ("success", "failed"):
+                self.events.append(("platform_step_terminal", run_id, seq, status))
+
+        def finish_run(self, run_id: int, **kwargs: object) -> None:
+            from app.storage.sync_job_platform import classify_error
+
+            self.finished.append({"run_id": run_id, "error_kind": classify_error(kwargs.get("error")), **kwargs})
+            self.events.append(("platform_finish", run_id, kwargs["status"]))
+
+    class _RaisingWriter(_Writer):
+        def __init__(self, events: list[tuple], stage: str) -> None:
+            super().__init__(events)
+            self.stage = stage
+
+        def start_run(self, **kwargs: object) -> int:
+            if self.stage == "start":
+                raise RuntimeError("platform start failed")
+            return super().start_run(**kwargs)
+
+        def upsert_step(self, run_id: int, seq: int, name: str, status: str, **kwargs: object) -> None:
+            if self.stage == "step":
+                raise RuntimeError("platform step failed")
+            super().upsert_step(run_id, seq, name, status, **kwargs)
+
+        def finish_run(self, run_id: int, **kwargs: object) -> None:
+            if self.stage == "finish":
+                raise RuntimeError("platform finish failed")
+            super().finish_run(run_id, **kwargs)
+
+    class _Store:
+        def __init__(self, *, failing_sheet: str = "", writer_stage: str = "") -> None:
+            self.events: list[tuple] = []
+            self.sync_jobs = (
+                WeComDynamicPlatformSyncTests._RaisingWriter(self.events, writer_stage)
+                if writer_stage
+                else WeComDynamicPlatformSyncTests._Writer(self.events)
+            )
+            self.failing_sheet = failing_sheet
+            self.finished: dict | None = None
+            self.sources: list[dict] = []
+
+        def get_source(self, source_id: int) -> dict | None:
+            return {
+                "id": 70,
+                "provider": "wecom",
+                "env_profile": "COMPANY_A",
+                "source_name": "生产点检表",
+                "external_doc_id": "dc_parent",
+                "external_sheet_id": "",
+                "source_url": "",
+                "sheet_name": "",
+            } if source_id == 70 else None
+
+        def start_run(self, provider: str, env_profile: str, mode: str) -> int:
+            return 42
+
+        def finish_run(self, run_id: int, status: str, counts: dict, error_json: list) -> None:
+            self.finished = {"run_id": run_id, "status": status, "counts": dict(counts), "errors": list(error_json)}
+            self.events.append(("legacy_finish", status))
+
+        def ensure_source(self, **kwargs: object) -> int:
+            self.sources.append(dict(kwargs))
+            return 101 if kwargs["external_sheet_id"] == "sheet_a" else 102
+
+        def get_doc_modified(self, provider: str, env_profile: str, docid: str) -> str:
+            return ""
+
+        def replace_fields(self, source_id: int, fields: list) -> dict:
+            return {"field_1": "名称"}
+
+        def upsert_record(self, source_id: int, snapshot: object) -> object:
+            from app.storage.postgres import UpsertDecision
+
+            return UpsertDecision(action="create", should_write=True)
+
+        def mark_source_synced(self, source_id: int) -> None:
+            return None
+
+        def disable_missing_sheets(self, provider: str, env_profile: str, docid: str, sheet_ids: list) -> int:
+            return 0
+
+        def upsert_doc_source(self, **kwargs: object) -> None:
+            return None
+
+        def list_registry_doc_sources(self, provider: str, env_profile: str) -> list[dict]:
+            return []
+
+        def close(self) -> None:
+            return None
+
+    class _Client:
+        def __init__(self, failing_sheet: str = "") -> None:
+            self.failing_sheet = failing_sheet
+
+        def get_doc_base(self, docid: str) -> dict:
+            return {"doc_name": "生产点检表", "modify_time": "1"}
+
+        def get_sheets(self, docid: str) -> list[dict]:
+            return [{"sheet_id": "sheet_a", "title": "A表"}, {"sheet_id": "sheet_b", "title": "B表"}]
+
+        def get_fields(self, docid: str, sheet_id: str) -> dict:
+            return {"fields": [{"field_id": "field_1", "field_title": "名称"}]}
+
+        def get_records(self, docid: str, sheet_id: str) -> dict:
+            if sheet_id == self.failing_sheet:
+                raise RuntimeError("access_token=secret-value docid=dc_sensitive")
+            if self.failing_sheet == "normalize" and sheet_id == "sheet_b":
+                return {"records": [{"record_id": "rec_bad", "values": {"field_1": {"bad": {1}}}}], "page_count": 1}
+            return {"records": [{"record_id": f"rec_{sheet_id}", "values": {"field_1": sheet_id}}], "page_count": 1}
+
+    @staticmethod
+    def _credential() -> object:
+        class Credential:
+            corpid = "corp"
+            secret = "secret"
+            label = "test"
+
+        return Credential()
+
+    def _manual_doc(self, store: object) -> tuple:
+        import unittest.mock as mock
+
+        from app.pipelines import sync_wecom_full as module
+
+        with mock.patch.object(module, "credentials_for_profile", return_value=[self._credential()]), mock.patch.object(
+            module, "WeComSmartsheetClient", return_value=self._Client(store.failing_sheet)
+        ):
+            return module.sync_wecom_source(store, source_id=70, mode="manual")
+
+    def test_doc_manual_records_two_dynamic_jobs_before_finishing_them_after_legacy(self) -> None:
+        store = self._Store()
+
+        status, run_id, _detail = self._manual_doc(store)
+
+        self.assertEqual(("success", 42), (status, run_id))
+        self.assertEqual(["wecom.doc.101", "wecom.doc.102"], [item["job_key"] for item in store.sync_jobs.started])
+        self.assertEqual([101, 102], [item["source_id"] for item in store.sync_jobs.started])
+        self.assertEqual(["manual", "manual"], [item["trigger"] for item in store.sync_jobs.started])
+        self.assertEqual([{"table": "sync_runs", "id": 42}] * 2, [item["legacy_ref"] for item in store.sync_jobs.started])
+        for platform_run_id, sheet_name in ((100, "A表"), (101, "B表")):
+            steps = [step for step in store.sync_jobs.steps if step["run_id"] == platform_run_id and step["status"] == "success"]
+            self.assertEqual([(1, "token", 1, ""), (2, "list_sheets", 2, ""), (3, "fetch_page", 1, sheet_name), (4, "normalize", 1, sheet_name), (5, "upsert", 1, sheet_name)], [(step["seq"], step["name"], step["items"], step["message"]) for step in steps])
+        self.assertEqual([(1, 1), (1, 1)], [(item["row_count"], item["changed_count"]) for item in store.sync_jobs.finished])
+        normalize_success = next(index for index, event in enumerate(store.events) if event == ("platform_step", 100, 4, "success"))
+        upsert_running = next(index for index, event in enumerate(store.events) if event == ("platform_step", 100, 5, "running"))
+        self.assertLess(normalize_success, upsert_running)
+        legacy_index = next(index for index, event in enumerate(store.events) if event[0] == "legacy_finish")
+        self.assertTrue(all(index > legacy_index for index, event in enumerate(store.events) if event[0] == "platform_finish"))
+
+    def test_full_schedule_partial_defers_failed_dynamic_terminal_and_redacts_error(self) -> None:
+        import unittest.mock as mock
+
+        from app.pipelines import sync_wecom_full as module
+        from app.providers.wecom import WeComDocSource
+
+        store = self._Store(failing_sheet="sheet_b")
+        with mock.patch.object(module, "open_store", return_value=store), mock.patch.object(
+            module, "env_profiles", return_value=["COMPANY_A"]
+        ), mock.patch.object(module, "credentials_for_profile", return_value=[self._credential()]), mock.patch.object(
+            module, "discover_profile_sources", return_value=[WeComDocSource("COMPANY_A", "dc_parent", "生产点检表", "")]
+        ), mock.patch.object(module, "WeComSmartsheetClient", return_value=self._Client("sheet_b")):
+            self.assertEqual(1, module.run_sync_wecom_full())
+
+        self.assertEqual("partial_failed", store.finished["status"])
+        self.assertEqual(["schedule", "schedule"], [item["trigger"] for item in store.sync_jobs.started])
+        self.assertEqual(["success", "partial"], [item["status"] for item in store.sync_jobs.finished])
+        failed_step = next(step for step in store.sync_jobs.steps if step["run_id"] == 101 and step["status"] == "failed")
+        self.assertEqual((3, "fetch_page", 0, "B表"), (failed_step["seq"], failed_step["name"], failed_step["items"], failed_step["message"]))
+        partial = store.sync_jobs.finished[1]
+        self.assertEqual("auth", partial["error_kind"])
+        self.assertNotIn("secret-value", str(partial["error"]))
+        self.assertNotIn("dc_sensitive", str(partial["error"]))
+        legacy_index = next(index for index, event in enumerate(store.events) if event[0] == "legacy_finish")
+        failed_step_index = next(index for index, event in enumerate(store.events) if event == ("platform_step_terminal", 101, 3, "failed"))
+        self.assertGreater(failed_step_index, legacy_index)
+        terminal_indexes = [index for index, event in enumerate(store.events) if event[0] in {"platform_step_terminal", "platform_finish"}]
+        self.assertTrue(all(index > legacy_index for index in terminal_indexes if store.events[index][0] == "platform_finish"))
+
+    def test_dynamic_writer_failures_are_fail_open_for_each_stage(self) -> None:
+        for stage in ("start", "step", "finish"):
+            with self.subTest(stage=stage):
+                store = self._Store(writer_stage=stage)
+
+                status, run_id, _detail = self._manual_doc(store)
+
+                self.assertEqual(("success", 42), (status, run_id))
+                self.assertEqual("success", store.finished["status"])
+
+    def test_normalize_failure_keeps_its_sheet_message_and_never_starts_upsert(self) -> None:
+        store = self._Store(failing_sheet="normalize")
+
+        status, run_id, _detail = self._manual_doc(store)
+
+        self.assertEqual(("partial_failed", 42), (status, run_id))
+        failed_step = next(step for step in store.sync_jobs.steps if step["run_id"] == 101 and step["status"] == "failed")
+        self.assertEqual((4, "normalize", 0, "B表"), (failed_step["seq"], failed_step["name"], failed_step["items"], failed_step["message"]))
+        self.assertFalse(any(step["run_id"] == 101 and step["seq"] == 5 for step in store.sync_jobs.steps))
+
+
 class FeishuManualSyncTests(WorkerImportTestCase):
     class _Store:
         """sync_feishu_source 所需的最小 FakeStore。"""
