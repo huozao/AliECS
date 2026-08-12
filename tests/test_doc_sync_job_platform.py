@@ -1,19 +1,45 @@
 from __future__ import annotations
 
+import importlib.util
 import sys
 import unittest
 from pathlib import Path
+from typing import Any
 
 
 WORKER_ROOT = Path(__file__).resolve().parents[1] / "services" / "doc-sync-worker"
-sys.path.insert(0, str(WORKER_ROOT))
+WRITER_PATH = WORKER_ROOT / "app" / "storage" / "sync_job_platform.py"
 
-from app.storage.sync_job_platform import (  # noqa: E402
-    SyncJobPlatformWriter,
-    classify_error,
-    platform_writer_for,
-    safe_error_message,
-)
+
+def _load_writer_module() -> Any:
+    old_path = list(sys.path)
+    old_app_modules = {
+        name: module
+        for name, module in sys.modules.items()
+        if name == "app" or name.startswith("app.")
+    }
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "_doc_sync_job_platform_unit", WRITER_PATH
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"cannot load sync job writer from {WRITER_PATH}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        sys.path[:] = old_path
+        for name in tuple(sys.modules):
+            if (name == "app" or name.startswith("app.")) and name not in old_app_modules:
+                sys.modules.pop(name, None)
+        sys.modules.update(old_app_modules)
+
+
+writer_module = _load_writer_module()
+SyncJobPlatformWriter = writer_module.SyncJobPlatformWriter
+classify_error = writer_module.classify_error
+platform_writer_for = writer_module.platform_writer_for
+safe_error_message = writer_module.safe_error_message
 
 
 class FakeCursor:
@@ -69,6 +95,27 @@ class FailingRollbackConn(FailingConn):
 class SyncJobPlatformWriterTests(unittest.TestCase):
     def setUp(self) -> None:
         self.conn = FakeConn()
+
+    def test_isolated_loader_preserves_import_state(self):
+        old_path = list(sys.path)
+        old_app_modules = {
+            name: module
+            for name, module in sys.modules.items()
+            if name == "app" or name.startswith("app.")
+        }
+
+        loaded = _load_writer_module()
+
+        self.assertIsNotNone(loaded.SyncJobPlatformWriter)
+        self.assertEqual(old_path, sys.path)
+        self.assertEqual(
+            old_app_modules,
+            {
+                name: module
+                for name, module in sys.modules.items()
+                if name == "app" or name.startswith("app.")
+            },
+        )
 
     def test_job_upsert_refreshes_updated_at_without_overwriting_operator_fields(self):
         writer = SyncJobPlatformWriter(self.conn)
