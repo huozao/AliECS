@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -32,7 +33,14 @@ _ALERT_KIND_LABELS = {
 
 
 def error_kind_label(error_kind: str | None) -> str:
-    return ERROR_KIND_LABELS.get(str(error_kind or "unknown"), ERROR_KIND_LABELS["unknown"])
+    return ERROR_KIND_LABELS[_normalized_error_kind(error_kind)]
+
+
+def _normalized_error_kind(error_kind: object) -> str:
+    candidate = str(error_kind or "unknown")
+    if candidate in ERROR_KIND_LABELS:
+        return candidate
+    return "unknown"
 
 
 def _credential_result(
@@ -61,11 +69,17 @@ def _decode_jwt_expiration(token: str) -> float | None:
     try:
         payload_part = parts[1] + "=" * (-len(parts[1]) % 4)
         payload = json.loads(base64.urlsafe_b64decode(payload_part.encode("ascii")))
+        if not isinstance(payload, dict):
+            return None
         exp = payload.get("exp")
         if isinstance(exp, bool) or not isinstance(exp, (int, float)):
             return None
-        return float(exp)
-    except (UnicodeEncodeError, ValueError, TypeError, json.JSONDecodeError):
+        expiration_epoch = float(exp)
+        if not math.isfinite(expiration_epoch):
+            return None
+        datetime.fromtimestamp(expiration_epoch, tz=timezone.utc)
+        return expiration_epoch
+    except (OSError, OverflowError, UnicodeEncodeError, ValueError, TypeError, json.JSONDecodeError):
         return None
 
 
@@ -134,7 +148,7 @@ def build_alert_text(event: str, alert: dict[str, Any], *, now: datetime) -> str
 
     lines = [title, f"{summary}：{display_name}"]
     if summary == "同步失败":
-        error_kind = str(alert.get("error_kind") or "unknown")
+        error_kind = _normalized_error_kind(alert.get("error_kind"))
         lines.append(f"原因：{error_kind_label(error_kind)}({error_kind})")
     failures = alert.get("consecutive_failures")
     if isinstance(failures, int) and failures > 0:

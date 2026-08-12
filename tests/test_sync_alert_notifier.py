@@ -85,6 +85,26 @@ class SyncAlertNotifierTests(unittest.TestCase):
                 if token:
                     self.assertNotIn(token, str(status))
 
+    def test_credential_status_rejects_non_object_payload_and_non_finite_expiration(self) -> None:
+        invalid_tokens = (
+            make_unsigned_jwt([]),
+            make_unsigned_jwt({"exp": float("inf")}),
+        )
+        for token in invalid_tokens:
+            with self.subTest(token_kind=type(token).__name__), token_file(token) as path:
+                status = self.notifier.credential_status(path, now=NOW)
+                self.assertEqual(
+                    {
+                        "configured": True,
+                        "ok": False,
+                        "expired": False,
+                        "expires_at": None,
+                        "remaining_hours": None,
+                        "message": "凭据格式无效",
+                    },
+                    status,
+                )
+
     def test_artifact_requires_a_material_gap(self) -> None:
         started = NOW
         self.assertFalse(self.notifier.artifact_is_stale(started, [{"mtime_epoch": started.timestamp() - 300}]))
@@ -123,6 +143,17 @@ class SyncAlertNotifierTests(unittest.TestCase):
         self.assertIn("凭据过期(auth)", text)
         self.assertIn("连续失败 3 次", text)
         self.assertIn("https://hydwang.xyz/sync/?job=wecom.doc.17", text)
+
+    def test_unknown_error_kind_is_normalized_before_rendering(self) -> None:
+        text = self.notifier.build_alert_text("open", {
+            "alert_kind": "failed",
+            "job_key": "wecom.doc.17",
+            "display_name": "企微·点检表",
+            "error_kind": "traceback: synthetic-secret",
+        }, now=NOW)
+
+        self.assertIn("未知错误(unknown)", text)
+        self.assertNotIn("traceback: synthetic-secret", text)
 
     def test_alert_titles_and_messages_do_not_leak_external_values(self) -> None:
         alert = {
