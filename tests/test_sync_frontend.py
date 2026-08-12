@@ -123,8 +123,9 @@ class SyncFrontendTests(unittest.TestCase):
             const esc=(value)=>String(value??'').replace(/[&<>"']/g,(char)=>({
               '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;',
             }[char]));
+            const toasts=[];
             const context={console,Promise,URLSearchParams,location:{search:'',pathname:'/sync/'},
-              document:{getElementById:element},AliECSToast:{show(){}},
+              document:{getElementById:element},AliECSToast:{show(text,type){toasts.push({text,type});}},
               AliECSAdmin:{api,fetchMe:async()=>null,esc,fmtTime:(value)=>value||'-',
                 chip:(value)=>`<span>${value}</span>`,clearAuthToken(){},ssoLogin(){},applyGate(){}},
               setTimeout,clearTimeout};
@@ -180,6 +181,30 @@ class SyncFrontendTests(unittest.TestCase):
                   await new Promise((resolve)=>setTimeout(resolve,0));
                   if(vm.runInContext('state.offset',context)!==20)throw new Error('offset advanced twice');
                   if(elements.timelineNextBtn.disabled)throw new Error('pager did not recover after latest response');
+                })().catch((error)=>{console.error(error.stack||error);process.exitCode=1;});
+                """
+            )
+        )
+
+    def test_failed_next_page_keeps_committed_rows_offset_and_pager(self) -> None:
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                (async()=>{
+                  vm.runInContext("state.runs=[{id:1,display_name:'page-one',job_key:'page-one',provider:'wecom',trigger:'manual',status:'success',started_at:'2026-08-12T00:00:00Z',duration_seconds:1,row_count:1,changed_count:0,error_label:'',error_message:''}];state.total=100;state.offset=0;renderTimeline()",context);
+                  elements.timelineNextBtn.onclick();
+                  if(pending.length!==1)throw new Error(`expected 1 request, got ${pending.length}`);
+                  if(!pending[0].path.includes('offset=20'))throw new Error(`wrong request: ${pending[0].path}`);
+                  pending[0].reject(new Error('page failed'));
+                  await pending[0].promise.catch(()=>{});
+                  await new Promise((resolve)=>setTimeout(resolve,0));
+                  if(!elements.timelineList.innerHTML.includes('page-one'))throw new Error('committed rows changed');
+                  if(vm.runInContext('state.offset',context)!==0)throw new Error('failed request committed offset');
+                  if(!elements.timelinePageInfo.textContent.includes('第 1/5 页'))throw new Error(`wrong page: ${elements.timelinePageInfo.textContent}`);
+                  if(elements.timelinePageInfo.textContent.includes('加载中'))throw new Error('loading label did not clear');
+                  if(vm.runInContext('state.timelineLoading',context)!==false)throw new Error('loading state did not recover');
+                  if(!elements.timelinePrevBtn.disabled||elements.timelineNextBtn.disabled)throw new Error('pager state does not match page one');
+                  if(toasts.length!==1)throw new Error(`expected 1 toast, got ${toasts.length}`);
                 })().catch((error)=>{console.error(error.stack||error);process.exitCode=1;});
                 """
             )

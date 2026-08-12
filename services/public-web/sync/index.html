@@ -165,9 +165,8 @@
 
     async function loadOverview(){state.overview=await api('/v1/sync/overview');renderOverview();}
     async function loadAlerts(){const d=await api('/v1/sync/alerts?state=open&limit=50&offset=0');state.alerts=d.items||[];renderAlerts();}
-    async function loadTimeline(){
+    async function loadTimeline(requestOffset=state.offset){
       const requestId=++state.timelineRequestId;
-      const requestOffset=state.offset;
       const params=new URLSearchParams({limit:String(state.limit),offset:String(requestOffset)});
       if($('providerFilter').value)params.set('provider',$('providerFilter').value);
       if($('statusFilter').value)params.set('status',$('statusFilter').value);
@@ -192,7 +191,7 @@
       }
     }
     async function loadAll(){await loadOverview();await Promise.all([loadAlerts(),loadTimeline()]);}
-    function reloadTimelineFromStart(){state.offset=0;loadTimeline().catch((error)=>AliECSToast.show(`时间线加载失败：${error.message}`,'error'));}
+    function reloadTimelineFromStart(){loadTimeline(0).catch((error)=>AliECSToast.show(`时间线加载失败：${error.message}`,'error'));}
 
     $('providerFilter').onchange=reloadTimelineFromStart;
     $('statusFilter').onchange=reloadTimelineFromStart;
@@ -201,13 +200,11 @@
       if(state.timelineLoading)return;
       const offset=Math.max(0,state.offset-state.limit);
       if(offset===state.offset)return;
-      state.offset=offset;
-      loadTimeline().catch((error)=>AliECSToast.show(`时间线加载失败：${error.message}`,'error'));
+      loadTimeline(offset).catch((error)=>AliECSToast.show(`时间线加载失败：${error.message}`,'error'));
     };
     $('timelineNextBtn').onclick=()=>{
       if(state.timelineLoading||state.offset+state.limit>=state.total)return;
-      state.offset+=state.limit;
-      loadTimeline().catch((error)=>AliECSToast.show(`时间线加载失败：${error.message}`,'error'));
+      loadTimeline(state.offset+state.limit).catch((error)=>AliECSToast.show(`时间线加载失败：${error.message}`,'error'));
     };
     refreshBtn.onclick=()=>loadAll().catch((error)=>AliECSToast.show(`同步中心加载失败：${error.message}`,'error'));
     loginBtn.onclick=ssoLogin;
