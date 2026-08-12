@@ -353,6 +353,36 @@ def ensure_bitable_app_anchor(
     )
 
 
+def _start_platform_run(
+    store: Any,
+    *,
+    source_id: int,
+    source_name: str,
+    legacy_run_id: int | None,
+    mode: str,
+) -> Any:
+    """Start an optional Feishu platform run without changing the legacy path."""
+    from app.pipelines.sync_wecom_full import _PlatformRun
+    from app.storage.sync_job_platform import platform_writer_for
+
+    if legacy_run_id is None:
+        return _PlatformRun(None, None)
+    try:
+        writer = platform_writer_for(store)
+        run_id = writer.start_run(
+            job_key=f"feishu.doc.{source_id}",
+            kind="pull",
+            provider="feishu",
+            display_name=str(source_name or source_id),
+            source_id=source_id,
+            trigger="manual" if mode == "manual" else "schedule",
+            legacy_ref={"table": "sync_runs", "id": legacy_run_id},
+        )
+        return _PlatformRun(writer, run_id)
+    except Exception:  # noqa: BLE001 - observability must not alter the legacy result.
+        return _PlatformRun(None, None)
+
+
 def _sync_bitable_records(
     store: Any,
     client: FeishuBitableClient,
@@ -362,22 +392,41 @@ def _sync_bitable_records(
     view_id: str,
     counts: dict[str, int],
     source_name: str = "",
+    platform_run: Any | None = None,
 ) -> None:
+    if platform_run:
+        platform_run.step(3, "fetch_page", "running")
     fields = client.list_fields(app_token, table_id)
     field_titles = store.replace_fields(source_id, fields)
     records_response = client.get_records(app_token, table_id, view_id=view_id)
     records = records_response.get("records") or []
+    page_count = str(records_response.get("page_count", 1))
+    if platform_run:
+        platform_run.step(3, "fetch_page", "success", items=len(records), message=page_count)
+        platform_run.step(4, "normalize", "running", message=source_name)
     counts["sheet_count"] += 1
     counts["record_count"] += len(records)
     print(
         f"[飞书同步] table_id={table_id} 完整拉取 {len(records)} 条，"
         f"分页 {records_response.get('page_count', 1)} 页。"
     )
+    normalized_records = []
     for record in records:
         if not isinstance(record, dict):
             continue
         snapshot = build_record_snapshot(record, field_titles)
+        normalized_records.append(snapshot)
+        if platform_run:
+            platform_run.set_current_progress(len(normalized_records), source_name)
+
+    if platform_run:
+        platform_run.step(4, "normalize", "success", items=len(normalized_records), message=source_name)
+        platform_run.step(5, "upsert", "running", message=source_name)
+
+    for index, snapshot in enumerate(normalized_records, start=1):
         decision = store.upsert_record(source_id, snapshot)
+        if platform_run:
+            platform_run.set_current_progress(index, source_name)
         if sync_managed_contact_from_row(store, source_name, snapshot.normalized_json):
             counts["managed_contact_count"] = counts.get("managed_contact_count", 0) + 1
         if decision.action == "create":
@@ -385,6 +434,8 @@ def _sync_bitable_records(
         elif decision.action == "update":
             counts["updated_count"] += 1
     store.mark_source_synced(source_id)
+    if platform_run:
+        platform_run.step(5, "upsert", "success", items=len(normalized_records), message=source_name)
 
 
 def sync_feishu_source(store: Any, source_id: int, mode: str = "manual") -> tuple[str, int | None, dict[str, Any]]:
@@ -409,10 +460,23 @@ def sync_feishu_source(store: Any, source_id: int, mode: str = "manual") -> tupl
     }
     errors: list[dict[str, Any]] = []
     status = "failed"
+    failure: Exception | None = None
+    platform_outcomes: list[Any] = []
+    platform_run = None if not source["external_sheet_id"] else _start_platform_run(
+        store,
+        source_id=int(source["id"]),
+        source_name=str(source.get("source_name") or source_id),
+        legacy_run_id=run_id,
+        mode=mode,
+    )
     try:
+        if platform_run:
+            platform_run.step(1, "token", "running")
         credentials = credentials_for_profile(profile)
         if not credentials:
             raise RuntimeError(f"{profile} 缺少 FEISHU_{profile}_APP_ID 或 FEISHU_{profile}_APP_SECRET。")
+        if platform_run:
+            platform_run.step(1, "token", "success", items=1)
         credential = credentials[0]
         client = FeishuBitableClient(
             app_id=credential.app_id,
@@ -431,7 +495,19 @@ def sync_feishu_source(store: Any, source_id: int, mode: str = "manual") -> tupl
             )
             counts["source_count"] = len(pairs)
             for table_source_id, table_source in pairs:
+                table_platform_run = _start_platform_run(
+                    store,
+                    source_id=table_source_id,
+                    source_name=compose_source_name(
+                        table_source.document_name or source.get("source_name") or "", table_source.sheet_name
+                    ),
+                    legacy_run_id=run_id,
+                    mode=mode,
+                )
+                table_platform_run.step(1, "token", "success", items=1)
+                table_platform_run.step(2, "list_sheets", "success", items=len(pairs))
                 try:
+                    before_counts = dict(counts)
                     _sync_bitable_records(
                         store,
                         client,
@@ -441,11 +517,25 @@ def sync_feishu_source(store: Any, source_id: int, mode: str = "manual") -> tupl
                         table_source.view_id,
                         counts,
                         source_name=table_source.sheet_name,
+                        platform_run=table_platform_run,
+                    )
+                    table_platform_run.queue_outcome(
+                        {
+                            "record_count": counts["record_count"] - before_counts.get("record_count", 0),
+                            "created_count": counts["created_count"] - before_counts.get("created_count", 0),
+                            "updated_count": counts["updated_count"] - before_counts.get("updated_count", 0),
+                            "error_count": 0,
+                        }
                     )
                 except Exception as exc:  # noqa: BLE001 - 单表失败不拖垮整簿
                     counts["error_count"] += 1
                     errors.append({"source_id": table_source_id, "table_id": table_source.table_id, "error": str(exc)})
+                    from app.pipelines.sync_wecom_full import _platform_error
+
+                    table_platform_run.queue_outcome({"error_count": 1}, error=_platform_error(exc))
+                platform_outcomes.append(table_platform_run)
         else:
+            before_counts = dict(counts)
             _sync_bitable_records(
                 store,
                 client,
@@ -455,14 +545,34 @@ def sync_feishu_source(store: Any, source_id: int, mode: str = "manual") -> tupl
                 "",
                 counts,
                 source_name=str(source.get("sheet_name") or source.get("source_name") or ""),
+                platform_run=platform_run,
             )
+            if platform_run:
+                platform_run.queue_outcome(
+                    {
+                        "record_count": counts["record_count"] - before_counts.get("record_count", 0),
+                        "created_count": counts["created_count"] - before_counts.get("created_count", 0),
+                        "updated_count": counts["updated_count"] - before_counts.get("updated_count", 0),
+                        "error_count": 0,
+                    }
+                )
         status = "success" if counts["error_count"] == 0 else "partial_failed"
     except Exception as exc:  # noqa: BLE001
+        failure = exc
         counts["error_count"] += 1
         errors.append({"source_id": source_id, "error": str(exc)})
         status = "failed"
 
     store.finish_run(run_id, status=status, counts=counts, error_json=errors)
+    if platform_run:
+        if failure:
+            platform_run.fail_current()
+            from app.pipelines.sync_wecom_full import _platform_error
+
+            platform_run.queue_outcome({"error_count": 1}, error=_platform_error(failure))
+        platform_run.finish_after_legacy(status)
+    for table_platform_run in platform_outcomes:
+        table_platform_run.finish_after_legacy(status)
     return status, run_id, {"errors": errors, "counts": counts}
 
 
@@ -487,6 +597,7 @@ def run_sync_feishu_full(profiles_arg: str = "") -> int:
                 "error_count": 0,
             }
             errors: list[dict[str, Any]] = []
+            platform_outcomes: list[Any] = []
             try:
                 credentials = credentials_for_profile(profile)
                 sources = _merge_feishu_sources(
@@ -591,7 +702,19 @@ def run_sync_feishu_full(profiles_arg: str = "") -> int:
                             pairs.append((seed_id, seed))
                     counts["source_count"] += len(pairs)
                     for table_source_id, table_source in pairs:
+                        platform_run = _start_platform_run(
+                            store,
+                            source_id=table_source_id,
+                            source_name=compose_source_name(
+                                table_source.document_name or document_name, table_source.sheet_name
+                            ),
+                            legacy_run_id=run_id,
+                            mode="full",
+                        )
+                        platform_run.step(1, "token", "success", items=1)
+                        platform_run.step(2, "list_sheets", "success", items=len(pairs))
                         try:
+                            before_counts = dict(counts)
                             _sync_bitable_records(
                                 store,
                                 client,
@@ -601,12 +724,25 @@ def run_sync_feishu_full(profiles_arg: str = "") -> int:
                                 table_source.view_id,
                                 counts,
                                 source_name=table_source.sheet_name or table_source.source_name,
+                                platform_run=platform_run,
+                            )
+                            platform_run.queue_outcome(
+                                {
+                                    "record_count": counts["record_count"] - before_counts.get("record_count", 0),
+                                    "created_count": counts["created_count"] - before_counts.get("created_count", 0),
+                                    "updated_count": counts["updated_count"] - before_counts.get("updated_count", 0),
+                                    "error_count": 0,
+                                }
                             )
                         except Exception as exc:  # noqa: BLE001
                             counts["error_count"] += 1
                             errors.append(
                                 {"source_id": table_source_id, "table_id": table_source.table_id, "error": str(exc)}
                             )
+                            from app.pipelines.sync_wecom_full import _platform_error
+
+                            platform_run.queue_outcome({"error_count": 1}, error=_platform_error(exc))
+                        platform_outcomes.append(platform_run)
                 status = "success" if counts["error_count"] == 0 else "partial_failed"
             except Exception as exc:  # noqa: BLE001 - worker should persist one run row with diagnostics.
                 exit_code = 1
@@ -616,6 +752,8 @@ def run_sync_feishu_full(profiles_arg: str = "") -> int:
                 print(f"[飞书同步] {profile} 同步失败：{exc}")
 
             store.finish_run(run_id, status=status, counts=counts, error_json=errors)
+            for platform_run in platform_outcomes:
+                platform_run.finish_after_legacy(status)
             print(
                 f"[飞书同步] {profile} 完成：status={status} "
                 f"tables={counts['sheet_count']} records={counts['record_count']} "

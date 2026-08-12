@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from app.storage.sync_job_platform import SyncJobPlatformWriter
+
 try:
     import psycopg
     from psycopg.types.json import Jsonb
@@ -193,12 +195,14 @@ def utc_now() -> datetime:
 class PostgresDocSyncStore:
     def __init__(self, conn: Any) -> None:
         self.conn = conn
+        self.sync_jobs = SyncJobPlatformWriter(conn)
 
     @classmethod
     def open(cls) -> "PostgresDocSyncStore":
         return cls(connect())
 
     def close(self) -> None:
+        self.sync_jobs.close()
         self.conn.close()
 
     def start_run(self, provider: str, env_profile: str, mode: str) -> int:

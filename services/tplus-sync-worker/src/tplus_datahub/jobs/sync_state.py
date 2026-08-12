@@ -19,6 +19,12 @@ except Exception:  # pragma: no cover
     Jsonb = lambda value: value  # type: ignore
 
 
+def attach_legacy_ref(platform_run_id: int, legacy_run_id: int) -> None:
+    from tplus_datahub.jobs import sync_job_platform
+
+    sync_job_platform.attach_legacy_ref(platform_run_id, legacy_run_id)
+
+
 def snapshot_bom_rows(rows: list[Any]) -> dict[str, Any]:
     raw_records = _json_safe(rows)
     normalized = [_normalize_row(row) for row in raw_records]
@@ -139,6 +145,7 @@ def record_tplus_sync_run_if_configured(
     exit_code: int | None = None,
     detail_json: dict[str, Any] | None = None,
     error_json: dict[str, Any] | None = None,
+    platform_run_id: int | None = None,
 ) -> int | None:
     if psycopg is None:
         return None
@@ -169,9 +176,14 @@ def record_tplus_sync_run_if_configured(
                 )
                 run_id = int(cur.fetchone()[0])
             conn.commit()
-            return run_id
     except Exception:
         return None
+    if platform_run_id is not None:
+        try:
+            attach_legacy_ref(platform_run_id, run_id)
+        except Exception:  # noqa: BLE001 - legacy run 已提交，平台挂接必须 fail-open
+            print("[tplus] sync platform legacy attach failed")
+    return run_id
 
 
 def _latest_full_snapshot(conn: Any) -> dict[str, Any] | None:

@@ -356,10 +356,11 @@ DB 那半由「业务数据不搬」覆盖；文件那半平台只**读** mtime 
 | 阶段 | 日期 | PR | 验证结论 |
 |---|---|---|---|
 | P0 建表 + 抽 common 前端资产 | 2026-08-12 | [#294](https://github.com/huozao/AliECS/pull/294) | `unittest discover -s tests` 646 项全绿（基线 640）；两页 smoke 通过：`admin.css` 生效（`.btn` 圆角 999px）、`window.AliECSAdmin` 13 个契约字段齐、**零 pageerror 零 console error**、SSO 跳转正常；`check_navigation.py` 通过；迁移 0048 由 CI `migration-dry-run` 在 postgres:16-alpine 上实际执行，全 job 日志零 ERROR/FATAL。**未验证重复执行**（CI 只在全新库上跑一遍，`psql` 未带 `ON_ERROR_STOP`，可重复性目前只有 `IF NOT EXISTS` 与文本断言两层保障） |
+| P1 两个 worker 双写 runs/steps | 2026-08-12 | [#299](https://github.com/huozao/AliECS/pull/299) | 企微、飞书、`chanjet.full`、`tplus.parent_match` 已接入 fail-open 双写并保留 legacy 写入；根 unittest 705 项 exit 0（3 skipped），T+ 子项目 158 项全绿，PostgreSQL 16 全迁移集成 1 项通过且测试数据清理为 0；导航与 Compose config 通过；全分支终审无 open Critical/Important。生产部署证据在 PR 合并后回填。 |
 
-P1 接手须知：
+P2 接手须知：
 
-- `sync_jobs` 四表已建但**完全空表**，无任何代码读写。P1 的 worker 双写是第一个写入方。
+- P1 已让两个 worker 双写 `sync_jobs` / `sync_job_runs` / `sync_job_steps`；P2 只读这些表，旧 `sync_runs` / `integration_sync_runs` 仍是业务写入真源，禁止在 P2 改写或删除 legacy 链路。
 - 前端共享资产的对外契约见 `services/public-web/common/admin-auth.js` 末尾的
   `global.AliECSAdmin = {...}`，P2 的 `/sync/` 页直接按它调用。`applyGate(me, onAdmin)`
   的 DOM id 契约是 `loginBtn` / `logoutBtn` / `adminContent` / `gateHint` / `refreshBtn`（可选）。

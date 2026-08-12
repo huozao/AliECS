@@ -59,6 +59,51 @@ class _FakeWeComClient:
         return {"errcode": 0}
 
 
+class _RecordingPlatform:
+    def __init__(self) -> None:
+        self.started: list[dict] = []
+        self.steps: list[dict] = []
+        self.finished: list[dict] = []
+        self.closed = False
+
+    def start_run(self, **kwargs):
+        self.started.append(kwargs)
+        return 77
+
+    def upsert_step(self, run_id, seq, name, status, *, items=0, message=""):
+        self.steps.append({
+            "run_id": run_id, "seq": seq, "name": name, "status": status,
+            "items": items, "message": message,
+        })
+
+    def finish_run(self, run_id, **kwargs):
+        self.finished.append({"run_id": run_id, **kwargs})
+
+    def close(self):
+        self.closed = True
+
+
+class _RaisingPlatform(_RecordingPlatform):
+    def __init__(self, stage: str) -> None:
+        super().__init__()
+        self.stage = stage
+
+    def start_run(self, **kwargs):
+        if self.stage == "start":
+            raise RuntimeError("platform unavailable")
+        return super().start_run(**kwargs)
+
+    def upsert_step(self, *args, **kwargs):
+        if self.stage == "step":
+            raise RuntimeError("platform unavailable")
+        return super().upsert_step(*args, **kwargs)
+
+    def finish_run(self, *args, **kwargs):
+        if self.stage == "finish":
+            raise RuntimeError("platform unavailable")
+        return super().finish_run(*args, **kwargs)
+
+
 class TplusParentMatchTests(unittest.TestCase):
     def setUp(self) -> None:
         self._old_sys_path = list(sys.path)
@@ -101,6 +146,184 @@ class TplusParentMatchTests(unittest.TestCase):
             self.addCleanup(p.stop)
         mock_send_feishu_alert = mocks[-1]
         return fake_client, mock_send_feishu_alert
+
+    @staticmethod
+    def _terminal_steps(platform):
+        return [step for step in platform.steps if step["status"] in ("success", "failed")]
+
+    def test_platform_records_the_fixed_parent_match_lifecycle(self) -> None:
+        records = [{"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("旧名")}}]
+        platform = _RecordingPlatform()
+        self._patch_run(bom={"A": ("新名", "v1", False), "B": ("乙", "v1", False)}, records=records)
+
+        exit_code = self.module.run_tplus_parent_match(platform=platform, trigger="schedule")
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual([{
+            "job_key": "tplus.parent_match", "kind": "reconcile", "provider": "chanjet",
+            "display_name": "T+ 父件核对", "source_id": None, "trigger": "schedule", "legacy_ref": {},
+        }], platform.started)
+        self.assertEqual([
+            (1, "load_source", "success", 1, ""),
+            (2, "fetch_page", "success", 1, ""),
+            (3, "normalize", "success", 1, ""),
+            (4, "writeback", "success", 2, ""),
+            (5, "notify", "success", 1, ""),
+        ], [(step["seq"], step["name"], step["status"], step["items"], step["message"])
+           for step in self._terminal_steps(platform)])
+        self.assertEqual(("success", 1, 2), (
+            platform.finished[0]["status"], platform.finished[0]["row_count"], platform.finished[0]["changed_count"],
+        ))
+
+    def test_platform_marks_wecom_read_failure_as_failed_network_without_secret(self) -> None:
+        platform = _RecordingPlatform()
+        credential = SimpleNamespace(corpid="c", secret="s")
+        failure = RuntimeError("connection reset Authorization: Bearer secret-value")
+        with patch.object(self.module, "wecom_credentials", return_value=[credential]), \
+                patch.object(self.module, "resolve_source", side_effect=failure), \
+                patch.object(self.module, "send_feishu_alert"):
+            exit_code = self.module.run_tplus_parent_match(platform=platform)
+
+        self.assertEqual(1, exit_code)
+        failed = self._terminal_steps(platform)
+        self.assertEqual((1, "load_source", "failed", 0),
+                         (failed[-1]["seq"], failed[-1]["name"], failed[-1]["status"], failed[-1]["items"]))
+        self.assertNotIn("secret-value", failed[-1]["message"])
+        self.assertEqual("failed", platform.finished[0]["status"])
+        self.assertIn("connection reset", str(platform.finished[0]["error"]))
+        from app.storage.sync_job_platform import classify_error, safe_error_message
+        self.assertEqual("network", classify_error(platform.finished[0]["error"]))
+        self.assertNotIn("secret-value", safe_error_message(platform.finished[0]["error"]))
+
+    def test_platform_records_partial_writeback_as_partial(self) -> None:
+        platform = _RecordingPlatform()
+        bom = {f"CODE{i:04d}": (f"NAME{i}", "v1", False) for i in range(250)}
+        self._patch_run(bom=bom, records=[], fail_add_batches={1})
+
+        exit_code = self.module.run_tplus_parent_match(platform=platform)
+
+        self.assertEqual(1, exit_code)
+        writeback = [step for step in self._terminal_steps(platform) if step["name"] == "writeback"]
+        self.assertEqual([(4, "failed", 250, "write failure")], [
+            (step["seq"], step["status"], step["items"], step["message"]) for step in writeback
+        ])
+        self.assertEqual("partial", platform.finished[0]["status"])
+        self.assertEqual(50, platform.finished[0]["changed_count"])
+
+    def test_dry_run_records_writeback_without_writing(self) -> None:
+        platform = _RecordingPlatform()
+        records = [{"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("旧名")}}]
+        self._patch_run(bom={"A": ("新名", "v1", False), "B": ("乙", "v1", False)}, records=records)
+
+        exit_code = self.module.run_tplus_parent_match(dry_run=True, notify=True, platform=platform)
+
+        self.assertEqual(0, exit_code)
+        writeback = next(step for step in self._terminal_steps(platform) if step["name"] == "writeback")
+        self.assertEqual(("success", 2, "dry-run"), (writeback["status"], writeback["items"], writeback["message"]))
+        self.assertEqual(("success", 0), (platform.finished[0]["status"], platform.finished[0]["changed_count"]))
+
+    def test_notify_disabled_is_recorded_without_sending(self) -> None:
+        platform = _RecordingPlatform()
+        records = [{"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("旧名")}}]
+        _, send = self._patch_run(bom={"A": ("新名", "v1", False)}, records=records)
+
+        self.assertEqual(0, self.module.run_tplus_parent_match(notify=False, platform=platform))
+
+        send.assert_not_called()
+        notify = next(step for step in self._terminal_steps(platform) if step["name"] == "notify")
+        self.assertEqual(("success", 0, "disabled"), (notify["status"], notify["items"], notify["message"]))
+
+    def test_platform_failures_do_not_change_parent_match_result_and_owned_writer_closes(self) -> None:
+        records = [{"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("旧名")}}]
+        for stage in ("start", "step", "finish"):
+            with self.subTest(stage=stage):
+                self._patch_run(bom={"A": ("新名", "v1", False)}, records=records)
+                self.assertEqual(0, self.module.run_tplus_parent_match(platform=_RaisingPlatform(stage)))
+        owned = _RecordingPlatform()
+        self._patch_run(bom={"A": ("新名", "v1", False)}, records=records)
+        with patch.object(self.module, "open_owned", return_value=owned):
+            self.assertEqual(0, self.module.run_tplus_parent_match())
+        self.assertTrue(owned.closed)
+
+    def test_unknown_normalize_error_fails_the_running_step_before_the_run(self) -> None:
+        platform = _RecordingPlatform()
+        records = [{"record_id": "r1", "values": {"父件编码": _cells("A")}}]
+        self._patch_run(bom={"A": ("甲", "v1", False)}, records=records)
+        failure = ValueError("Authorization: Bearer secret-value normalize failed")
+
+        with patch.object(self.module, "plan_updates", side_effect=failure):
+            with self.assertRaisesRegex(ValueError, "normalize failed"):
+                self.module.run_tplus_parent_match(platform=platform)
+
+        terminal = self._terminal_steps(platform)
+        self.assertEqual((3, "normalize", "failed", 0),
+                         (terminal[-1]["seq"], terminal[-1]["name"], terminal[-1]["status"], terminal[-1]["items"]))
+        self.assertNotIn("secret-value", terminal[-1]["message"])
+        self.assertEqual("failed", platform.finished[-1]["status"])
+
+    def test_owned_platform_open_and_close_failures_do_not_change_legacy_result(self) -> None:
+        records = [{"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("旧名")}}]
+        self._patch_run(bom={"A": ("新名", "v1", False)}, records=records)
+        with patch.object(self.module, "open_owned", side_effect=RuntimeError("platform unavailable")):
+            self.assertEqual(0, self.module.run_tplus_parent_match())
+
+        class _CloseFailingPlatform(_RecordingPlatform):
+            def close(self):
+                self.closed = True
+                raise RuntimeError("platform close failed")
+
+        owned = _CloseFailingPlatform()
+        self._patch_run(bom={"A": ("新名", "v1", False)}, records=records)
+        with patch.object(self.module, "open_owned", return_value=owned):
+            self.assertEqual(0, self.module.run_tplus_parent_match())
+        self.assertTrue(owned.closed)
+
+    def test_owned_writer_closes_when_business_error_preserves_original_exception(self) -> None:
+        owned = _RecordingPlatform()
+        records = [{"record_id": "r1", "values": {"父件编码": _cells("A")}}]
+        self._patch_run(bom={"A": ("甲", "v1", False)}, records=records)
+        with patch.object(self.module, "open_owned", return_value=owned), \
+                patch.object(self.module, "plan_updates", side_effect=ValueError("normalize failed")):
+            with self.assertRaisesRegex(ValueError, "normalize failed"):
+                self.module.run_tplus_parent_match()
+        self.assertTrue(owned.closed)
+
+    def test_direct_call_uses_manual_trigger_by_default(self) -> None:
+        platform = _RecordingPlatform()
+        self._patch_run(bom={"A": ("甲", "v1", False)}, records=[])
+
+        self.assertEqual(0, self.module.run_tplus_parent_match(platform=platform))
+
+        self.assertEqual("manual", platform.started[0]["trigger"])
+
+    def test_worker_default_full_sync_uses_schedule_trigger(self) -> None:
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+        from app.pipelines import worker_loop
+
+        calls: list[dict] = []
+        with patch.object(worker_loop, "_maybe_start_group_listener"), \
+                patch.object(worker_loop, "run_sync_wecom_full", return_value=0), \
+                patch.object(worker_loop, "run_backfill_images", return_value=SimpleNamespace(
+                    target_count=0, scanned_count=0, updated_count=0, error_count=0,
+                )), \
+                patch.object(worker_loop, "run_sync_feishu_full", return_value=0), \
+                patch.object(worker_loop, "run_enqueue_daily_structure_backup_jobs", return_value=0), \
+                patch.object(worker_loop, "run_pending_structure_backup_jobs", return_value=0), \
+                patch.object(worker_loop, "run_tplus_parent_match", side_effect=lambda **kwargs: calls.append(kwargs) or 0), \
+                patch.object(worker_loop, "run_pending_sync_requests", return_value=0), \
+                patch.object(worker_loop, "run_write_rnd_records", return_value=0), \
+                patch.object(worker_loop, "run_backfill_if_bom_synced", return_value=(None, False)):
+            self.assertEqual(0, worker_loop.run_worker_loop(
+                sleep=lambda _seconds: None,
+                max_cycles=1,
+                schedule_reader=lambda: {"enabled": True, "interval_seconds": 60, "anchor_time": ""},
+                config_puller=lambda: "noop",
+                now_fn=lambda: datetime(2026, 8, 12, 1, 0, tzinfo=timezone.utc),
+                last_full_reader=lambda: None,
+            ))
+
+        self.assertEqual([{"trigger": "schedule"}], calls)
 
     def test_matched_row_fills_parent_name_from_tplus(self) -> None:
         records = [{"record_id": "r1", "values": {"父件编码": _cells("40000019"), "型号": _cells("0539-ABS耐候玄武灰")}}]
@@ -273,14 +496,6 @@ class TplusParentMatchTests(unittest.TestCase):
         self.assertIn("A", text)
         self.assertNotIn("✅ 无异常。", text)
 
-    def test_dry_run_never_calls_add_records(self) -> None:
-        """dry-run 是确认补建量级的唯一手段，误写会直接把上千行灌进生产表。"""
-        import inspect
-        source = inspect.getsource(self.module.run_tplus_parent_match)
-        head, _, tail = source.partition("if dry_run:")
-        self.assertTrue(tail, "run_tplus_parent_match 必须保留 dry_run 分支")
-        self.assertNotIn("add_records", head)
-
     def test_dry_run_makes_no_write_calls_behaviorally(self) -> None:
         """行为断言，防止字符串检查失效——就算 add_records 被抽进辅助函数，这条仍能拦住。"""
         records = [{"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("旧名")}}]
@@ -383,7 +598,7 @@ class TplusParentMatchTests(unittest.TestCase):
         watermark, ran = self.module.run_backfill_if_bom_synced(old)
         self.assertEqual(watermark, new)
         self.assertTrue(ran)
-        self.assertEqual(len(calls), 1)
+        self.assertEqual([{"trigger": "event"}], calls)
 
     def test_flat_watermark_does_not_retrigger(self) -> None:
         from datetime import datetime, timezone

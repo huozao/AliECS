@@ -1196,6 +1196,7 @@ class FeishuBitableSyncTests(WorkerImportTestCase):
             def __init__(self) -> None:
                 self.sources: list[dict] = []
                 self.finished: dict | None = None
+                self.sync_jobs = WeComManualSyncTests.FakePlatformWriter()
 
             def list_bitable_sources(self, provider: str, env_profile: str) -> list[dict]:
                 return [
@@ -1255,6 +1256,9 @@ class FeishuBitableSyncTests(WorkerImportTestCase):
         self.assertEqual(0, exit_code)
         self.assertEqual("success", store.finished["status"])
         self.assertEqual(2, store.finished["counts"]["sheet_count"])
+        self.assertEqual(["feishu.doc.1", "feishu.doc.2"], [run["job_key"] for run in store.sync_jobs.started])
+        self.assertEqual(["schedule", "schedule"], [run["trigger"] for run in store.sync_jobs.started])
+        self.assertEqual(["success", "success"], [run["status"] for run in store.sync_jobs.finished])
         registered = {item["external_sheet_id"] for item in store.sources}
         self.assertIn("tbl_new", registered)
 
@@ -1295,15 +1299,417 @@ class FeishuBitableErrorTests(WorkerImportTestCase):
         self.assertNotIn("tenant-token", error)
 
 
+class WeComManualSyncTests(WorkerImportTestCase):
+    class FakePlatformWriter:
+        def __init__(self) -> None:
+            self.started: list[dict] = []
+            self.steps: list[dict] = []
+            self.finished: list[dict] = []
+
+        def start_run(self, **kwargs: object) -> int:
+            self.started.append(dict(kwargs))
+            return 99
+
+        def upsert_step(self, run_id: int, seq: int, name: str, status: str, **kwargs: object) -> None:
+            self.steps.append({"run_id": run_id, "seq": seq, "name": name, "status": status, **kwargs})
+
+        def finish_run(self, run_id: int, **kwargs: object) -> None:
+            from app.storage.sync_job_platform import classify_error
+
+            self.finished.append(
+                {"run_id": run_id, "error_kind": classify_error(kwargs.get("error")), **kwargs}
+            )
+
+        def successful_step_names(self) -> list[str]:
+            return [step["name"] for step in self.steps if step["status"] == "success"]
+
+    class RaisingPlatformWriter:
+        def start_run(self, **kwargs: object) -> int:
+            raise RuntimeError("platform unavailable")
+
+        def upsert_step(self, *args: object, **kwargs: object) -> None:
+            raise RuntimeError("platform unavailable")
+
+        def finish_run(self, *args: object, **kwargs: object) -> None:
+            raise RuntimeError("platform unavailable")
+
+    class _Store:
+        def __init__(self) -> None:
+            self.sync_jobs = WeComManualSyncTests.FakePlatformWriter()
+            self.finished: dict | None = None
+
+        def get_source(self, source_id: int) -> dict | None:
+            if source_id != 17:
+                return None
+            return {
+                "id": 17,
+                "provider": "wecom",
+                "env_profile": "COMPANY_A",
+                "source_name": "点检表 / 点检计划",
+                "external_doc_id": "dc_test",
+                "external_sheet_id": "sheet_test",
+                "source_url": "",
+                "sheet_name": "点检计划",
+            }
+
+        def start_run(self, provider: str, env_profile: str, mode: str) -> int:
+            return 42
+
+        def finish_run(self, run_id: int, status: str, counts: dict, error_json: list) -> None:
+            self.finished = {"run_id": run_id, "status": status, "counts": dict(counts), "errors": list(error_json)}
+
+        def replace_fields(self, source_id: int, fields: list) -> dict:
+            return {"field_1": "名称"}
+
+        def upsert_record(self, source_id: int, snapshot: object) -> object:
+            from app.storage.postgres import UpsertDecision
+
+            return UpsertDecision(action="create", should_write=True)
+
+        def mark_source_synced(self, source_id: int) -> None:
+            return None
+
+    class _Client:
+        def get_fields(self, docid: str, sheet_id: str) -> dict:
+            return {"fields": [{"field_id": "field_1", "field_title": "名称"}]}
+
+        def get_records(self, docid: str, sheet_id: str) -> dict:
+            return {"records": [{"record_id": "rec_1", "values": {"field_1": "点检项"}}], "page_count": 1}
+
+    @staticmethod
+    def _credential() -> object:
+        class Credential:
+            corpid = "corp"
+            secret = "secret"
+            label = "test"
+
+        return Credential()
+
+    def _run(self, store: object, credentials: list[object] | None = None) -> tuple:
+        import unittest.mock as mock
+
+        from app.pipelines import sync_wecom_full as module
+
+        with mock.patch.object(
+            module, "credentials_for_profile", return_value=[self._credential()] if credentials is None else credentials
+        ), mock.patch.object(module, "WeComSmartsheetClient", return_value=self._Client()):
+            return module.sync_wecom_source(store, source_id=17, mode="manual")
+
+    def test_wecom_manual_source_writes_running_steps_and_success(self) -> None:
+        store = self._Store()
+
+        status, legacy_run_id, _detail = self._run(store)
+
+        self.assertEqual("success", status)
+        self.assertEqual(42, legacy_run_id)
+        self.assertEqual("wecom.doc.17", store.sync_jobs.started[0]["job_key"])
+        self.assertEqual("manual", store.sync_jobs.started[0]["trigger"])
+        self.assertEqual({"table": "sync_runs", "id": 42}, store.sync_jobs.started[0]["legacy_ref"])
+        self.assertEqual(["token", "fetch_page", "normalize", "upsert"], store.sync_jobs.successful_step_names())
+        self.assertEqual("success", store.sync_jobs.finished[0]["status"])
+
+    def test_wecom_failure_finishes_platform_run_without_hiding_legacy_failure(self) -> None:
+        failing_store = self._Store()
+
+        status, legacy_run_id, _detail = self._run(failing_store, credentials=[])
+
+        self.assertEqual("failed", status)
+        self.assertEqual(42, legacy_run_id)
+        self.assertEqual("failed", failing_store.sync_jobs.finished[0]["status"])
+        self.assertEqual("auth", failing_store.sync_jobs.finished[0]["error_kind"])
+
+    def test_wecom_platform_writer_failure_does_not_change_legacy_result(self) -> None:
+        store = self._Store()
+        store.sync_jobs = self.RaisingPlatformWriter()
+
+        status, legacy_run_id, _detail = self._run(store)
+
+        self.assertEqual(("success", 42), (status, legacy_run_id))
+        self.assertEqual("success", store.finished["status"])
+
+
+class WeComDynamicPlatformSyncTests(WorkerImportTestCase):
+    class _Writer:
+        def __init__(self, events: list[tuple]) -> None:
+            self.events = events
+            self.started: list[dict] = []
+            self.steps: list[dict] = []
+            self.finished: list[dict] = []
+
+        def start_run(self, **kwargs: object) -> int:
+            run_id = 100 + len(self.started)
+            self.started.append({"run_id": run_id, **kwargs})
+            self.events.append(("platform_start", run_id))
+            return run_id
+
+        def upsert_step(self, run_id: int, seq: int, name: str, status: str, **kwargs: object) -> None:
+            step = {"run_id": run_id, "seq": seq, "name": name, "status": status, **kwargs}
+            self.steps.append(step)
+            self.events.append(("platform_step", run_id, seq, status))
+            if status in ("success", "failed"):
+                self.events.append(("platform_step_terminal", run_id, seq, status))
+
+        def finish_run(self, run_id: int, **kwargs: object) -> None:
+            from app.storage.sync_job_platform import classify_error
+
+            self.finished.append({"run_id": run_id, "error_kind": classify_error(kwargs.get("error")), **kwargs})
+            self.events.append(("platform_finish", run_id, kwargs["status"]))
+
+    class _RaisingWriter(_Writer):
+        def __init__(self, events: list[tuple], stage: str) -> None:
+            super().__init__(events)
+            self.stage = stage
+
+        def start_run(self, **kwargs: object) -> int:
+            if self.stage == "start":
+                raise RuntimeError("platform start failed")
+            return super().start_run(**kwargs)
+
+        def upsert_step(self, run_id: int, seq: int, name: str, status: str, **kwargs: object) -> None:
+            if self.stage == "step":
+                raise RuntimeError("platform step failed")
+            super().upsert_step(run_id, seq, name, status, **kwargs)
+
+        def finish_run(self, run_id: int, **kwargs: object) -> None:
+            if self.stage == "finish":
+                raise RuntimeError("platform finish failed")
+            super().finish_run(run_id, **kwargs)
+
+    class _Store:
+        def __init__(self, *, failing_sheet: str = "", writer_stage: str = "") -> None:
+            self.events: list[tuple] = []
+            self.sync_jobs = (
+                WeComDynamicPlatformSyncTests._RaisingWriter(self.events, writer_stage)
+                if writer_stage
+                else WeComDynamicPlatformSyncTests._Writer(self.events)
+            )
+            self.failing_sheet = failing_sheet
+            self.finished: dict | None = None
+            self.sources: list[dict] = []
+
+        def get_source(self, source_id: int) -> dict | None:
+            return {
+                "id": 70,
+                "provider": "wecom",
+                "env_profile": "COMPANY_A",
+                "source_name": "生产点检表",
+                "external_doc_id": "dc_parent",
+                "external_sheet_id": "",
+                "source_url": "",
+                "sheet_name": "",
+            } if source_id == 70 else None
+
+        def start_run(self, provider: str, env_profile: str, mode: str) -> int:
+            return 42
+
+        def finish_run(self, run_id: int, status: str, counts: dict, error_json: list) -> None:
+            self.finished = {"run_id": run_id, "status": status, "counts": dict(counts), "errors": list(error_json)}
+            self.events.append(("legacy_finish", status))
+
+        def ensure_source(self, **kwargs: object) -> int:
+            self.sources.append(dict(kwargs))
+            return 101 if kwargs["external_sheet_id"] == "sheet_a" else 102
+
+        def get_doc_modified(self, provider: str, env_profile: str, docid: str) -> str:
+            return ""
+
+        def replace_fields(self, source_id: int, fields: list) -> dict:
+            return {"field_1": "名称"}
+
+        def upsert_record(self, source_id: int, snapshot: object) -> object:
+            from app.storage.postgres import UpsertDecision
+
+            return UpsertDecision(action="create", should_write=True)
+
+        def mark_source_synced(self, source_id: int) -> None:
+            return None
+
+        def disable_missing_sheets(self, provider: str, env_profile: str, docid: str, sheet_ids: list) -> int:
+            return 0
+
+        def upsert_doc_source(self, **kwargs: object) -> None:
+            return None
+
+        def list_registry_doc_sources(self, provider: str, env_profile: str) -> list[dict]:
+            return []
+
+        def close(self) -> None:
+            return None
+
+    class _Client:
+        def __init__(self, failing_sheet: str = "") -> None:
+            self.failing_sheet = failing_sheet
+
+        def get_doc_base(self, docid: str) -> dict:
+            return {"doc_name": "生产点检表", "modify_time": "1"}
+
+        def get_sheets(self, docid: str) -> list[dict]:
+            return [{"sheet_id": "sheet_a", "title": "A表"}, {"sheet_id": "sheet_b", "title": "B表"}]
+
+        def get_fields(self, docid: str, sheet_id: str) -> dict:
+            return {"fields": [{"field_id": "field_1", "field_title": "名称"}]}
+
+        def get_records(self, docid: str, sheet_id: str) -> dict:
+            if sheet_id == self.failing_sheet:
+                raise RuntimeError("access_token=secret-value docid=dc_sensitive")
+            if self.failing_sheet == "normalize" and sheet_id == "sheet_b":
+                return {"records": [{"record_id": "rec_bad", "values": {"field_1": {"bad": {1}}}}], "page_count": 1}
+            return {"records": [{"record_id": f"rec_{sheet_id}", "values": {"field_1": sheet_id}}], "page_count": 1}
+
+    @staticmethod
+    def _credential() -> object:
+        class Credential:
+            corpid = "corp"
+            secret = "secret"
+            label = "test"
+
+        return Credential()
+
+    def _manual_doc(self, store: object) -> tuple:
+        import unittest.mock as mock
+
+        from app.pipelines import sync_wecom_full as module
+
+        with mock.patch.object(module, "credentials_for_profile", return_value=[self._credential()]), mock.patch.object(
+            module, "WeComSmartsheetClient", return_value=self._Client(store.failing_sheet)
+        ):
+            return module.sync_wecom_source(store, source_id=70, mode="manual")
+
+    def test_doc_manual_records_two_dynamic_jobs_before_finishing_them_after_legacy(self) -> None:
+        store = self._Store()
+
+        status, run_id, _detail = self._manual_doc(store)
+
+        self.assertEqual(("success", 42), (status, run_id))
+        self.assertEqual(["wecom.doc.101", "wecom.doc.102"], [item["job_key"] for item in store.sync_jobs.started])
+        self.assertEqual([101, 102], [item["source_id"] for item in store.sync_jobs.started])
+        self.assertEqual(["manual", "manual"], [item["trigger"] for item in store.sync_jobs.started])
+        self.assertEqual([{"table": "sync_runs", "id": 42}] * 2, [item["legacy_ref"] for item in store.sync_jobs.started])
+        for platform_run_id, sheet_name in ((100, "A表"), (101, "B表")):
+            steps = [step for step in store.sync_jobs.steps if step["run_id"] == platform_run_id and step["status"] == "success"]
+            self.assertEqual([(1, "token", 1, ""), (2, "list_sheets", 2, ""), (3, "fetch_page", 1, sheet_name), (4, "normalize", 1, sheet_name), (5, "upsert", 1, sheet_name)], [(step["seq"], step["name"], step["items"], step["message"]) for step in steps])
+        self.assertEqual([(1, 1), (1, 1)], [(item["row_count"], item["changed_count"]) for item in store.sync_jobs.finished])
+        normalize_success = next(index for index, event in enumerate(store.events) if event == ("platform_step", 100, 4, "success"))
+        upsert_running = next(index for index, event in enumerate(store.events) if event == ("platform_step", 100, 5, "running"))
+        self.assertLess(normalize_success, upsert_running)
+        legacy_index = next(index for index, event in enumerate(store.events) if event[0] == "legacy_finish")
+        self.assertTrue(all(index > legacy_index for index, event in enumerate(store.events) if event[0] == "platform_finish"))
+
+    def test_full_schedule_partial_defers_failed_dynamic_terminal_and_redacts_error(self) -> None:
+        import unittest.mock as mock
+
+        from app.pipelines import sync_wecom_full as module
+        from app.providers.wecom import WeComDocSource
+
+        store = self._Store(failing_sheet="sheet_b")
+        with mock.patch.object(module, "open_store", return_value=store), mock.patch.object(
+            module, "env_profiles", return_value=["COMPANY_A"]
+        ), mock.patch.object(module, "credentials_for_profile", return_value=[self._credential()]), mock.patch.object(
+            module, "discover_profile_sources", return_value=[WeComDocSource("COMPANY_A", "dc_parent", "生产点检表", "")]
+        ), mock.patch.object(module, "WeComSmartsheetClient", return_value=self._Client("sheet_b")):
+            self.assertEqual(1, module.run_sync_wecom_full())
+
+        self.assertEqual("partial_failed", store.finished["status"])
+        self.assertEqual(["schedule", "schedule"], [item["trigger"] for item in store.sync_jobs.started])
+        self.assertEqual(["success", "partial"], [item["status"] for item in store.sync_jobs.finished])
+        failed_step = next(step for step in store.sync_jobs.steps if step["run_id"] == 101 and step["status"] == "failed")
+        self.assertEqual((3, "fetch_page", 0, "B表"), (failed_step["seq"], failed_step["name"], failed_step["items"], failed_step["message"]))
+        partial = store.sync_jobs.finished[1]
+        self.assertEqual("auth", partial["error_kind"])
+        self.assertNotIn("secret-value", str(partial["error"]))
+        self.assertNotIn("dc_sensitive", str(partial["error"]))
+        legacy_index = next(index for index, event in enumerate(store.events) if event[0] == "legacy_finish")
+        failed_step_index = next(index for index, event in enumerate(store.events) if event == ("platform_step_terminal", 101, 3, "failed"))
+        self.assertGreater(failed_step_index, legacy_index)
+        terminal_indexes = [index for index, event in enumerate(store.events) if event[0] in {"platform_step_terminal", "platform_finish"}]
+        self.assertTrue(all(index > legacy_index for index in terminal_indexes if store.events[index][0] == "platform_finish"))
+
+    def test_dynamic_writer_failures_are_fail_open_for_each_stage(self) -> None:
+        for stage in ("start", "step", "finish"):
+            with self.subTest(stage=stage):
+                store = self._Store(writer_stage=stage)
+
+                status, run_id, _detail = self._manual_doc(store)
+
+                self.assertEqual(("success", 42), (status, run_id))
+                self.assertEqual("success", store.finished["status"])
+
+    def test_normalize_failure_keeps_its_sheet_message_and_never_starts_upsert(self) -> None:
+        store = self._Store(failing_sheet="normalize")
+
+        status, run_id, _detail = self._manual_doc(store)
+
+        self.assertEqual(("partial_failed", 42), (status, run_id))
+        failed_step = next(step for step in store.sync_jobs.steps if step["run_id"] == 101 and step["status"] == "failed")
+        self.assertEqual((4, "normalize", 0, "B表"), (failed_step["seq"], failed_step["name"], failed_step["items"], failed_step["message"]))
+        self.assertFalse(any(step["run_id"] == 101 and step["seq"] == 5 for step in store.sync_jobs.steps))
+
+
 class FeishuManualSyncTests(WorkerImportTestCase):
+    class _PlatformWriter:
+        def __init__(self, events: list[tuple]) -> None:
+            self.events = events
+            self.started: list[dict] = []
+            self.steps: list[dict] = []
+            self.finished: list[dict] = []
+
+        def start_run(self, **kwargs: object) -> int:
+            run_id = 100 + len(self.started)
+            self.started.append({"run_id": run_id, **kwargs})
+            self.events.append(("platform_start", run_id))
+            return run_id
+
+        def upsert_step(self, run_id: int, seq: int, name: str, status: str, **kwargs: object) -> None:
+            step = {"run_id": run_id, "seq": seq, "name": name, "status": status, **kwargs}
+            self.steps.append(step)
+            self.events.append(("platform_step", run_id, seq, status))
+            if status in ("success", "failed"):
+                self.events.append(("platform_step_terminal", run_id, seq, status))
+
+        def finish_run(self, run_id: int, **kwargs: object) -> None:
+            from app.storage.sync_job_platform import classify_error
+
+            self.finished.append({"run_id": run_id, "error_kind": classify_error(kwargs.get("error")), **kwargs})
+            self.events.append(("platform_finish", run_id, kwargs["status"]))
+
+        def successful_step_names(self) -> list[str]:
+            return [step["name"] for step in self.steps if step["status"] == "success"]
+
+    class _RaisingPlatformWriter(_PlatformWriter):
+        def __init__(self, events: list[tuple], stage: str) -> None:
+            super().__init__(events)
+            self.stage = stage
+
+        def start_run(self, **kwargs: object) -> int:
+            if self.stage == "start":
+                raise RuntimeError("platform start failed")
+            return super().start_run(**kwargs)
+
+        def upsert_step(self, run_id: int, seq: int, name: str, status: str, **kwargs: object) -> None:
+            if self.stage == "step":
+                raise RuntimeError("platform step failed")
+            super().upsert_step(run_id, seq, name, status, **kwargs)
+
+        def finish_run(self, run_id: int, **kwargs: object) -> None:
+            if self.stage == "finish":
+                raise RuntimeError("platform finish failed")
+            super().finish_run(run_id, **kwargs)
+
     class _Store:
         """sync_feishu_source 所需的最小 FakeStore。"""
 
-        def __init__(self, source: dict) -> None:
+        def __init__(self, source: dict, writer_stage: str = "") -> None:
             self.source = source
             self.runs: list[dict] = []
             self.finished: dict | None = None
             self.sources: list[dict] = []
+            self.synced_source_ids: list[int] = []
+            self.events: list[tuple] = []
+            self.sync_jobs = (
+                FeishuManualSyncTests._RaisingPlatformWriter(self.events, writer_stage)
+                if writer_stage
+                else FeishuManualSyncTests._PlatformWriter(self.events)
+            )
 
         def get_source(self, source_id: int) -> dict | None:
             return dict(self.source) if source_id == self.source["id"] else None
@@ -1314,6 +1720,7 @@ class FeishuManualSyncTests(WorkerImportTestCase):
 
         def finish_run(self, run_id: int, status: str, counts: dict, error_json: list) -> None:
             self.finished = {"run_id": run_id, "status": status, "counts": dict(counts), "errors": list(error_json)}
+            self.events.append(("legacy_finish", status))
 
         def ensure_source(self, **kwargs: object) -> int:
             self.sources.append(dict(kwargs))
@@ -1331,6 +1738,7 @@ class FeishuManualSyncTests(WorkerImportTestCase):
             return UpsertDecision(action="create", should_write=True)
 
         def mark_source_synced(self, source_id: int) -> None:
+            self.synced_source_ids.append(source_id)
             return None
 
     class _Client:
@@ -1343,7 +1751,7 @@ class FeishuManualSyncTests(WorkerImportTestCase):
         def get_records(self, app_token: str, table_id: str, view_id: str = "") -> dict:
             return {"records": [{"record_id": f"rec_{table_id}", "fields": {}}], "page_count": 1}
 
-    def _run(self, source: dict) -> tuple:
+    def _run(self, source: dict, client: object | None = None, writer_stage: str = "") -> tuple:
         import unittest.mock as mock
 
         from app.pipelines import sync_feishu_full as module
@@ -1354,12 +1762,53 @@ class FeishuManualSyncTests(WorkerImportTestCase):
             app_secret = "s"
             api_base = "https://open.feishu.cn/open-apis"
 
-        store = self._Store(source)
+        store = self._Store(source, writer_stage=writer_stage)
         with mock.patch.object(module, "credentials_for_profile", return_value=[Cred()]), mock.patch.object(
-            module, "FeishuBitableClient", return_value=self._Client()
+            module, "FeishuBitableClient", return_value=client or self._Client()
         ):
             result = module.sync_feishu_source(store, source_id=source["id"], mode="manual")
         return store, result
+
+    @staticmethod
+    def _table_source() -> dict:
+        return {
+            "id": 9,
+            "provider": "feishu",
+            "env_profile": "COMPANY_A",
+            "source_name": "飞书 ChatGPT 会话管理台 / 消息日志表",
+            "source_type": "bitable_table",
+            "external_doc_id": "bascn_console",
+            "external_sheet_id": "tbl_messages",
+            "source_url": "",
+            "status": "active",
+            "sheet_name": "消息日志表",
+        }
+
+    def _run_doc_with_one_failed_table(self) -> tuple:
+        class FailingClient(self._Client):
+            def get_records(self, app_token: str, table_id: str, view_id: str = "") -> dict:
+                if table_id == "tbl_a":
+                    raise RuntimeError(
+                        "HTTP 429 too many requests app_token=bascn_fake "
+                        "Authorization: Bearer token-value access_token=token-x raw-failure-marker"
+                    )
+                return super().get_records(app_token, table_id, view_id)
+
+        return self._run(
+            {
+                "id": 1619,
+                "provider": "feishu",
+                "env_profile": "COMPANY_A",
+                "source_name": "飞书 ChatGPT 会话管理台",
+                "source_type": "smartsheet_doc",
+                "external_doc_id": "bascn_console",
+                "external_sheet_id": "",
+                "source_url": "",
+                "status": "active",
+                "sheet_name": "",
+            },
+            client=FailingClient(),
+        )
 
     def test_doc_level_request_rescans_and_syncs_all_tables(self) -> None:
         store, (status, run_id, detail) = self._run(
@@ -1401,6 +1850,60 @@ class FeishuManualSyncTests(WorkerImportTestCase):
         self.assertEqual("success", status)
         self.assertEqual(0, len(store.sources))  # 单表请求不重扫
         self.assertEqual(1, store.finished["counts"]["sheet_count"])
+
+    def test_feishu_table_request_dual_writes_with_legacy_ref(self) -> None:
+        store, (status, run_id, _detail) = self._run(self._table_source())
+
+        self.assertEqual(("success", 42), (status, run_id))
+        started = store.sync_jobs.started[0]
+        self.assertEqual("feishu.doc.9", started["job_key"])
+        self.assertEqual(9, started["source_id"])
+        self.assertEqual("manual", started["trigger"])
+        self.assertEqual({"table": "sync_runs", "id": 42}, started["legacy_ref"])
+        self.assertEqual(["token", "fetch_page", "normalize", "upsert"], store.sync_jobs.successful_step_names())
+        fetch_page = next(step for step in store.sync_jobs.steps if step["name"] == "fetch_page" and step["status"] == "success")
+        self.assertEqual((1, "1"), (fetch_page["items"], fetch_page["message"]))
+        finished = store.sync_jobs.finished[0]
+        self.assertEqual(("success", 1, 1), (finished["status"], finished["row_count"], finished["changed_count"]))
+
+    def test_feishu_partial_maps_to_platform_partial(self) -> None:
+        store, (status, _run_id, _detail) = self._run_doc_with_one_failed_table()
+
+        self.assertEqual("partial_failed", status)
+        self.assertEqual([2], store.synced_source_ids)
+        started_by_source = {item["source_id"]: item["run_id"] for item in store.sync_jobs.started}
+        finished_by_run = {item["run_id"]: item for item in store.sync_jobs.finished}
+        failed = finished_by_run[started_by_source[1]]
+        succeeded = finished_by_run[started_by_source[2]]
+        self.assertEqual("partial", failed["status"])
+        self.assertEqual("success", succeeded["status"])
+        self.assertNotIn("bascn_fake", str(failed["error"]))
+        self.assertNotIn("token-value", str(failed["error"]))
+        self.assertNotIn("token-x", str(failed["error"]))
+        self.assertNotIn("raw-failure-marker", str(failed["error"]))
+        self.assertNotIn("bascn_fake", str(failed["detail_json"]))
+        self.assertNotIn("raw-failure-marker", str(failed["detail_json"]))
+        legacy_index = next(index for index, event in enumerate(store.events) if event[0] == "legacy_finish")
+        failed_step_index = next(
+            index
+            for index, event in enumerate(store.events)
+            if event == ("platform_step_terminal", started_by_source[1], 3, "failed")
+        )
+        failed_run_index = next(
+            index
+            for index, event in enumerate(store.events)
+            if event == ("platform_finish", started_by_source[1], "partial")
+        )
+        self.assertLess(legacy_index, failed_step_index)
+        self.assertLess(legacy_index, failed_run_index)
+
+    def test_feishu_platform_writer_failures_do_not_change_legacy_success(self) -> None:
+        for stage in ("start", "step", "finish"):
+            with self.subTest(stage=stage):
+                store, (status, run_id, _detail) = self._run(self._table_source(), writer_stage=stage)
+
+                self.assertEqual(("success", 42), (status, run_id))
+                self.assertEqual("success", store.finished["status"])
 
     def test_non_feishu_source_fails_without_run(self) -> None:
         from app.pipelines.sync_feishu_full import sync_feishu_source

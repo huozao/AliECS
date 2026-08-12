@@ -15,6 +15,12 @@ except Exception:  # pragma: no cover
     Jsonb = lambda value: value  # type: ignore
 
 
+def attach_legacy_ref(platform_run_id: int, legacy_run_id: int) -> None:
+    from tplus_datahub.jobs import sync_job_platform
+
+    sync_job_platform.attach_legacy_ref(platform_run_id, legacy_run_id)
+
+
 def connect_if_configured() -> Any | None:
     if psycopg is None:
         return None
@@ -176,6 +182,12 @@ def finish_full_request(request_id: int, status: str, exit_code: int, detail: di
                 (status, run_id, Jsonb(error_json), request_id),
             )
         conn.commit()
+    platform_run_id = detail.get("platform_run_id")
+    if platform_run_id is not None:
+        try:
+            attach_legacy_ref(int(platform_run_id), run_id)
+        except Exception:  # noqa: BLE001 - legacy run/request 已提交，挂接只是附加可观测性
+            print("[tplus] sync platform legacy attach failed")
 
 
 def finish_bom_request(request_id: int, status: str, exit_code: int, detail: dict[str, Any]) -> None:
