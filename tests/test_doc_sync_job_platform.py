@@ -28,6 +28,7 @@ class FakeCursor:
 
     def execute(self, sql: str, params=None) -> None:
         self.conn.sql.append(sql)
+        self.conn.params.append(params)
 
     def fetchone(self):
         return (31,)
@@ -36,6 +37,7 @@ class FakeCursor:
 class FakeConn:
     def __init__(self) -> None:
         self.sql: list[str] = []
+        self.params: list[object] = []
         self.commits = 0
         self.rollback_count = 0
         self.closed = 0
@@ -56,6 +58,12 @@ class FakeConn:
 class FailingConn(FakeConn):
     def cursor(self) -> FakeCursor:
         raise RuntimeError("database unavailable")
+
+
+class FailingRollbackConn(FailingConn):
+    def rollback(self) -> None:
+        self.rollback_count += 1
+        raise RuntimeError("rollback failed")
 
 
 class SyncJobPlatformWriterTests(unittest.TestCase):
@@ -95,6 +103,55 @@ class SyncJobPlatformWriterTests(unittest.TestCase):
         safe = safe_error_message(RuntimeError("Authorization: Bearer secret-value"))
         self.assertNotIn("secret-value", safe)
         self.assertLessEqual(len(safe), 500)
+
+    def test_error_redaction_handles_json_dict_and_query_value_forms(self):
+        for raw in (
+            '{"access_token": "secret-value"}',
+            "{'corpsecret': 'secret-value'}",
+            '{"Authorization": "Bearer secret-value"}',
+            "app secret = secret-value?query=1",
+        ):
+            with self.subTest(raw=raw):
+                safe = safe_error_message(RuntimeError(raw))
+                self.assertNotIn("secret-value", safe)
+                self.assertLessEqual(len(safe), 500)
+
+    def test_platform_failure_stays_fail_open_when_rollback_or_logger_fails(self):
+        for conn, logger in (
+            (FailingRollbackConn(), print),
+            (FailingConn(), lambda _: (_ for _ in ()).throw(RuntimeError("logger failed"))),
+        ):
+            with self.subTest(conn=type(conn).__name__):
+                result = SyncJobPlatformWriter(conn, logger=logger).start_run(
+                    job_key="wecom.doc.17", kind="pull", provider="wecom",
+                    display_name="点检表", source_id=17, trigger="manual", legacy_ref={},
+                )
+                self.assertIsNone(result)
+
+    def test_invalid_platform_boundary_inputs_do_not_write_sql(self):
+        invalid_starts = (
+            {"job_key": "wecom.doc.17", "source_id": None, "legacy_ref": {}},
+            {"job_key": "wecom.doc.17", "source_id": 18, "legacy_ref": {}},
+            {"job_key": "chanjet.full", "source_id": 17, "legacy_ref": {}},
+            {"job_key": "wecom.doc.17", "source_id": 17, "legacy_ref": {"table": "sync_runs", "id": "91"}},
+        )
+        for values in invalid_starts:
+            with self.subTest(values=values):
+                conn = FakeConn()
+                result = SyncJobPlatformWriter(conn, logger=lambda _: None).start_run(
+                    kind="pull", provider="wecom", display_name="点检表", trigger="manual", **values,
+                )
+                self.assertIsNone(result)
+                self.assertEqual([], conn.sql)
+                self.assertEqual([], conn.params)
+
+    def test_invalid_run_or_step_status_does_not_write_sql(self):
+        conn = FakeConn()
+        writer = SyncJobPlatformWriter(conn, logger=lambda _: None)
+        writer.finish_run(31, status="queued", row_count=0, changed_count=0, error=None, detail_json={})
+        writer.upsert_step(31, 2, "fetch_page", "partial")
+        self.assertEqual([], conn.sql)
+        self.assertEqual([], conn.params)
 
     def test_close_only_closes_an_owned_connection(self):
         unowned = FakeConn()

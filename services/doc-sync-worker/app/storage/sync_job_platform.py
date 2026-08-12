@@ -11,11 +11,16 @@ except ModuleNotFoundError:  # pragma: no cover - pure unit tests do not require
             self.value = value
 
 
-_ERROR_KINDS = {"auth", "rate_limit", "network", "schema", "write", "unknown"}
+_RUN_STATUSES = {"running", "success", "partial", "failed"}
+_STEP_STATUSES = {"running", "success", "failed"}
+_LEGACY_TABLES = {"sync_runs", "integration_sync_runs"}
+_TPLUS_JOB_KEYS = {"chanjet.full", "tplus.parent_match"}
+_DOCUMENT_JOB_KEY = re.compile(r"^(?:wecom|feishu)\.doc\.(\d+)$")
 _SECRET_PATTERN = re.compile(
-    r"(?i)\b(access[_ -]?token|corpsecret|app[_ -]?secret)\b\s*(?:=|:)\s*[^\s,;]+"
+    r"(?i)(?P<key>[\"']?(?:access[_ -]?token|corpsecret|app[_ -]?secret|authorization)[\"']?)"
+    r"\s*(?P<separator>[:=])\s*"
+    r"(?P<value>[\"'](?:bearer\s+)?[^\"']*[\"']|(?:bearer\s+)?[^\s,;}\]]+)"
 )
-_AUTHORIZATION_PATTERN = re.compile(r"(?i)\bauthorization\b\s*:\s*[^\s,;]+(?:\s+[^\s,;]+)?")
 
 
 def classify_error(exc: BaseException | str | None) -> str:
@@ -40,8 +45,9 @@ def classify_error(exc: BaseException | str | None) -> str:
 
 def safe_error_message(exc: BaseException | str | None) -> str:
     message = str(exc or "")
-    message = _AUTHORIZATION_PATTERN.sub("Authorization: [REDACTED]", message)
-    message = _SECRET_PATTERN.sub(lambda match: f"{match.group(1)}=[REDACTED]", message)
+    message = _SECRET_PATTERN.sub(
+        lambda match: f"{match.group('key')}{match.group('separator')} [REDACTED]", message
+    )
     return message[:500]
 
 
@@ -55,9 +61,37 @@ class SyncJobPlatformWriter:
         try:
             return write()
         except Exception:
-            self.conn.rollback()
-            self.logger(f"sync job platform write failed: {operation}")
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            try:
+                self.logger(f"sync job platform write failed: {operation}")
+            except Exception:
+                pass
             return None
+
+    @staticmethod
+    def _validate_legacy_ref(legacy_ref: dict[str, Any]) -> None:
+        if legacy_ref == {}:
+            return
+        if (
+            set(legacy_ref) == {"table", "id"}
+            and legacy_ref.get("table") in _LEGACY_TABLES
+            and type(legacy_ref.get("id")) is int
+        ):
+            return
+        raise ValueError("invalid legacy reference")
+
+    @staticmethod
+    def _validate_start(job_key: str, source_id: int | None, legacy_ref: dict[str, Any]) -> None:
+        SyncJobPlatformWriter._validate_legacy_ref(legacy_ref)
+        document_job = _DOCUMENT_JOB_KEY.fullmatch(job_key)
+        if document_job:
+            if type(source_id) is not int or source_id <= 0 or int(document_job.group(1)) != source_id:
+                raise ValueError("invalid document source")
+        elif job_key in _TPLUS_JOB_KEYS and source_id is not None:
+            raise ValueError("invalid tplus source")
 
     def start_run(
         self,
@@ -71,6 +105,7 @@ class SyncJobPlatformWriter:
         legacy_ref: dict[str, Any],
     ) -> int | None:
         def write() -> int:
+            self._validate_start(job_key, source_id, legacy_ref)
             with self.conn.cursor() as cur:
                 cur.execute(
                     """
@@ -105,6 +140,8 @@ class SyncJobPlatformWriter:
         self, run_id: int, seq: int, name: str, status: str, *, items: int = 0, message: str = ""
     ) -> None:
         def write() -> None:
+            if status not in _STEP_STATUSES:
+                raise ValueError("invalid step status")
             with self.conn.cursor() as cur:
                 cur.execute(
                     """
@@ -141,6 +178,8 @@ class SyncJobPlatformWriter:
         detail_json: dict[str, Any],
     ) -> None:
         def write() -> None:
+            if status not in _RUN_STATUSES:
+                raise ValueError("invalid run status")
             with self.conn.cursor() as cur:
                 cur.execute(
                     """
