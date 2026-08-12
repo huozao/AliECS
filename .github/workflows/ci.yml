@@ -134,6 +134,12 @@ jobs:
             PGPASSWORD=aliecs psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U aliecs -d aliecs -f "$f"
           done
 
+      - name: Run sync job platform integration test
+        env:
+          DATABASE_URL: postgresql://aliecs:aliecs@127.0.0.1:5432/aliecs
+          SYNC_JOB_PLATFORM_INTEGRATION: "1"
+        run: python -m unittest discover -s tests -p "test_sync_job_platform_integration.py" -v
+
       - name: Run backend smoke test
         env:
           DATABASE_URL: postgresql://aliecs:aliecs@127.0.0.1:5432/aliecs

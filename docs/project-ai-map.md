@@ -29,12 +29,14 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 ## services/doc-sync-worker
 
 企微智能表格 + 飞书多维表 → Postgres 的独立 worker。约束必读：`docs/constraints/doc-sync.md`。
-输出表：`external_sources/fields/records`、`sync_runs`、`sync_requests`。
+输出表：`external_sources/fields/records`、`sync_runs`、`sync_requests`、`sync_jobs/runs/steps`。
+统一同步作业双写入口：`app/storage/sync_job_platform.py`。
 
 ## services/tplus-sync-worker
 
 畅捷通 T+ 只读拉取（BOM/存货/价格）。排障：`docs/runbooks/tplus.md`。
-测试要 `PYTHONPATH="src;."` 且 CI 不覆盖，改动必须本地跑。
+统一同步作业双写入口：`src/tplus_datahub/jobs/sync_job_platform.py`。
+测试要 `PYTHONPATH="src;."`；根 CI 同时运行子项目 unittest。
 
 ## services/public-web
 
