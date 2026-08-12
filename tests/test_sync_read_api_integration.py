@@ -51,7 +51,9 @@ class SyncReadPostgresIntegrationTests(unittest.TestCase):
             self.skipTest("PostgreSQL integration requires DATABASE_URL")
 
         self.conn = psycopg.connect(database_url, connect_timeout=5)
-        self.job_key = f"ci.p2.{uuid.uuid4().hex}"
+        self.fixture_token = uuid.uuid4().hex
+        self.job_key = ""
+        self.source_id: int | None = None
         self.job_id: int | None = None
         self.success_run_id: int | None = None
         self.failed_run_id: int | None = None
@@ -60,14 +62,31 @@ class SyncReadPostgresIntegrationTests(unittest.TestCase):
         with self.conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO sync_jobs(
-                    job_key, kind, provider, display_name, schedule,
-                    freshness_sla_seconds, alert_enabled
+                INSERT INTO external_sources(
+                    provider, env_profile, source_name, source_type,
+                    external_doc_id, external_sheet_id
                 )
-                VALUES (%s, 'pull', 'ci', 'P2 read integration', %s, 3600, TRUE)
+                VALUES ('wecom', 'ci', %s, 'smartsheet', %s, %s)
                 RETURNING id
                 """,
-                (self.job_key, Jsonb({"kind": "integration"})),
+                (
+                    f"P2 read integration {self.fixture_token}",
+                    f"ci-doc-{self.fixture_token}",
+                    f"ci-sheet-{self.fixture_token}",
+                ),
+            )
+            self.source_id = int(cur.fetchone()[0])
+            self.job_key = f"wecom.doc.{self.source_id}"
+            cur.execute(
+                """
+                INSERT INTO sync_jobs(
+                    job_key, kind, provider, display_name, schedule,
+                    freshness_sla_seconds, alert_enabled, source_id
+                )
+                VALUES (%s, 'pull', 'wecom', 'P2 read integration', %s, 3600, TRUE, %s)
+                RETURNING id
+                """,
+                (self.job_key, Jsonb({"kind": "integration"}), self.source_id),
             )
             self.job_id = int(cur.fetchone()[0])
             cur.execute(
@@ -170,6 +189,10 @@ class SyncReadPostgresIntegrationTests(unittest.TestCase):
                 remaining = int(cur.fetchone()[0])
             if remaining != 0:
                 raise AssertionError(f"P2 integration fixture cleanup left job id {self.job_id}")
+        if self.source_id is not None:
+            with self.conn.cursor() as cur:
+                cur.execute("DELETE FROM external_sources WHERE id = %s", (self.source_id,))
+            self.conn.commit()
         self.conn.close()
 
     def test_reads_overview_timeline_detail_and_alerts(self) -> None:
@@ -179,6 +202,7 @@ class SyncReadPostgresIntegrationTests(unittest.TestCase):
             overview = sync_read.overview(self.conn, now=NOW)
             item = next(row for row in overview["items"] if row["job_key"] == self.job_key)
             self.assertEqual("failed", item["last_run"]["status"])
+            self.assertEqual(self.source_id, item["source_id"])
             self.assertEqual("fresh", item["freshness"]["state"])
             self.assertEqual(1, item["open_alert_count"])
 

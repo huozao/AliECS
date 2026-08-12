@@ -72,6 +72,11 @@ class SyncFrontendTests(unittest.TestCase):
         self.assertIn("params.set('job_key'", self.html)
         self.assertIn("state.offset", self.html)
 
+    def test_uses_real_p1_trigger_and_provider_literals(self) -> None:
+        for marker in ("manual:'手动'", "schedule:'定时'", "event:'订阅变更'"):
+            self.assertIn(marker, self.html)
+        self.assertNotIn('<option value="tplus">', self.html)
+
     def test_renders_unmonitored_and_explicit_empty_alert_state(self) -> None:
         self.assertIn("unmonitored", self.html)
         self.assertIn("未监控", self.html)
@@ -175,7 +180,7 @@ class SyncFrontendTests(unittest.TestCase):
                 steps:[{seq:1,name:options.stepName||'fetch',status:options.stepStatus||status,
                   started_at:'2026-08-12T00:00:00Z',finished_at:finished,items:3,
                   message:options.stepMessage||null,duration_seconds:999}],
-                reconciliation_id:null};
+                reconciliation_id:options.reconciliationId??null};
             }
             """
         ) + scenario
@@ -203,6 +208,94 @@ class SyncFrontendTests(unittest.TestCase):
                   if(!elements.timelineList.innerHTML.includes('newer-page'))throw new Error('latest result missing');
                   if(elements.timelineList.innerHTML.includes('older-page'))throw new Error('older response overwrote latest');
                   if(!elements.timelinePageInfo.textContent.includes('第 3/5 页'))throw new Error(`wrong page: ${elements.timelinePageInfo.textContent}`);
+                })().catch((error)=>{console.error(error.stack||error);process.exitCode=1;});
+                """
+            )
+        )
+
+    def test_refresh_commits_only_latest_overview_alerts_and_timeline_batch(self) -> None:
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                (async()=>{
+                  elements.refreshBtn.onclick();
+                  elements.refreshBtn.onclick();
+                  await Promise.resolve();
+                  if(pending.length!==6)throw new Error(`loadAll must start 3 parallel reads per refresh, got ${pending.length}`);
+                  const overview=(jobs)=>({summary:{jobs},items:[]});
+                  const alerts=(name)=>({items:[{display_name:name,job_key:name,provider:'wecom',alert_kind:'failed',first_seen_at:'x',notify_count:1}]});
+                  pending[3].resolve(overview(2));pending[4].resolve(alerts('new-alert'));pending[5].resolve({items:[run('new-run')],total:1});
+                  await Promise.resolve();await Promise.resolve();
+                  pending[0].resolve(overview(1));pending[1].resolve(alerts('old-alert'));pending[2].resolve({items:[run('old-run')],total:1});
+                  await Promise.resolve();await Promise.resolve();
+                  if(vm.runInContext('state.overview.summary.jobs',context)!==2)throw new Error('stale overview committed');
+                  if(!elements.alertList.innerHTML.includes('new-alert')||elements.alertList.innerHTML.includes('old-alert'))throw new Error('stale alerts committed');
+                  if(!elements.timelineList.innerHTML.includes('new-run')||elements.timelineList.innerHTML.includes('old-run'))throw new Error('stale timeline committed');
+                  if(toasts.length!==0)throw new Error(`stale batch emitted ${toasts.length} toast(s)`);
+                })().catch((error)=>{console.error(error.stack||error);process.exitCode=1;});
+                """
+            )
+        )
+
+    def test_stale_refresh_errors_do_not_toast_over_latest_batch(self) -> None:
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                (async()=>{
+                  elements.refreshBtn.onclick();elements.refreshBtn.onclick();
+                  await Promise.resolve();
+                  pending[3].resolve({summary:{jobs:2},items:[]});pending[4].resolve({items:[]});pending[5].resolve({items:[],total:0});
+                  await Promise.resolve();await Promise.resolve();
+                  pending[0].reject(new Error('old overview failed'));pending[1].reject(new Error('old alerts failed'));pending[2].reject(new Error('old timeline failed'));
+                  await Promise.resolve();await Promise.resolve();
+                  if(vm.runInContext('state.overview.summary.jobs',context)!==2)throw new Error('latest batch was disturbed');
+                  if(toasts.length!==0)throw new Error(`stale errors emitted ${toasts.length} toast(s)`);
+                })().catch((error)=>{console.error(error.stack||error);process.exitCode=1;});
+                """
+            )
+        )
+
+    def test_real_schedule_and_event_triggers_render_chinese_labels(self) -> None:
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                (()=>{
+                  const scheduled=run('scheduled-run');scheduled.trigger='schedule';
+                  const event=run('event-run');event.trigger='event';
+                  context.fixtureRuns=[scheduled,event];
+                  vm.runInContext('state.runs=fixtureRuns;renderTimeline()',context);
+                  const body=elements.timelineList.innerHTML;
+                  if(!body.includes('定时')||!body.includes('订阅变更'))throw new Error(`real trigger labels missing: ${body}`);
+                  if(body.includes('>schedule<')||body.includes('>event<'))throw new Error(`raw P1 trigger leaked: ${body}`);
+                })();
+                """
+            )
+        )
+
+    def test_logout_invalidates_all_late_successes_and_errors_and_clears_admin_state(self) -> None:
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                (async()=>{
+                  vm.runInContext("state.overview={summary:{jobs:7},items:[]};state.alerts=[{display_name:'secret',job_key:'secret',provider:'wecom',alert_kind:'failed'}];state.runs=[{id:1,display_name:'secret-run',job_key:'secret',provider:'wecom',trigger:'manual',status:'success'}];state.total=1;renderOverview();renderAlerts();renderTimeline()",context);
+                  const overview=vm.runInContext('loadOverview()',context).catch(()=>{});
+                  const alerts=vm.runInContext('loadAlerts()',context).catch(()=>{});
+                  const timeline=vm.runInContext('loadTimeline()',context).catch(()=>{});
+                  const detailRequest=vm.runInContext('openRunDetail(8)',context).catch(()=>{});
+                  if(pending.length!==4)throw new Error(`expected four in-flight reads, got ${pending.length}`);
+                  elements.logoutBtn.onclick();
+                  pending[0].resolve({summary:{jobs:99},items:[]});
+                  pending[1].reject(new Error('late alerts error'));
+                  pending[2].resolve({items:[run('late-run')],total:1});
+                  pending[3].reject(new Error('late detail error'));
+                  await Promise.all([overview,alerts,timeline,detailRequest]);
+                  const snapshot=vm.runInContext('({overview:state.overview,alerts:state.alerts,runs:state.runs,total:state.total,loading:state.timelineLoading,openRunId})',context);
+                  if(snapshot.overview!==null||snapshot.alerts.length||snapshot.runs.length||snapshot.total!==0||snapshot.loading||snapshot.openRunId!==null)throw new Error(`logout retained admin state: ${JSON.stringify(snapshot)}`);
+                  for(const id of ['syncSummary','jobList','alertList','timelineList','runDetailBody']){
+                    if(elements[id].innerHTML)throw new Error(`logout retained ${id} DOM`);
+                  }
+                  if(elements.runDrawer.classList.contains('show')||timers.size)throw new Error('logout retained detail UI/poll');
+                  if(toasts.length!==1||toasts[0].text!=='已退出登录。')throw new Error(`late request emitted toast: ${JSON.stringify(toasts)}`);
                 })().catch((error)=>{console.error(error.stack||error);process.exitCode=1;});
                 """
             )
@@ -279,6 +372,74 @@ class SyncFrontendTests(unittest.TestCase):
             )
         )
 
+    def test_detail_fetches_and_renders_structured_reconciliation_safely(self) -> None:
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                (async()=>{
+                  const opened=vm.runInContext('openRunDetail(7)',context);
+                  pending[0].resolve(detail(7,'success',{name:'T+ run',reconciliationId:44}));
+                  await new Promise((resolve)=>setImmediate(resolve));
+                  if(pending.length!==2||pending[1].path!=='/v1/ops/reconciliation/44')throw new Error(`read-only reconciliation GET missing: ${pending.map(x=>x.path)}`);
+                  pending[1].resolve({id:44,status:'needs_review',severity:'warning',summary:'<summary>',diff_json:{
+                    added:[{parent_code:'P<1>',parent_name:'新增',version:'1',child_code:'C1',child_name:'<img src=x onerror=1>',unit:'kg',quantity:2,disabled:false}],
+                    removed:[{parent_code:'P2',parent_name:'删除',version:'2',child_code:'C2',child_name:'旧件',unit:'kg',quantity:1,disabled:true}],
+                    changed:[{key:{parent_code:'P3',version:'3',child_code:'C3'},changed_fields:['quantity','<script>'],before:{quantity:1,child_name:'old'},after:{quantity:2,child_name:'new'}}]
+                  }});
+                  await opened;
+                  const body=elements.runDetailBody.innerHTML;
+                  for(const expected of ['变化明细','needs_review','warning','&lt;summary&gt;','新增子件','删除子件','字段变化','P&lt;1&gt;','&lt;img src=x onerror=1&gt;','&lt;script&gt;']){
+                    if(!body.includes(expected))throw new Error(`missing reconciliation field ${expected}: ${body}`);
+                  }
+                  for(const leaked of ['<summary>','<img src=x onerror=1>','<script>','原始 JSON']){
+                    if(body.includes(leaked))throw new Error(`unsafe/raw reconciliation leaked: ${leaked}`);
+                  }
+                })().catch((error)=>{console.error(error.stack||error);process.exitCode=1;});
+                """
+            )
+        )
+
+    def test_stale_reconciliation_cannot_overwrite_newer_run_detail(self) -> None:
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                (async()=>{
+                  const first=vm.runInContext('openRunDetail(1)',context);
+                  pending[0].resolve(detail(1,'success',{name:'old-run',reconciliationId:11}));
+                  await new Promise((resolve)=>setImmediate(resolve));
+                  if(pending[1].path!=='/v1/ops/reconciliation/11')throw new Error('old reconciliation read missing');
+                  const second=vm.runInContext('openRunDetail(2)',context);
+                  pending[2].resolve(detail(2,'success',{name:'new-run'}));
+                  await second;
+                  pending[1].resolve({status:'needs_review',severity:'critical',summary:'old-diff',diff_json:{added:[],removed:[],changed:[]}});
+                  await first;
+                  const body=elements.runDetailBody.innerHTML;
+                  if(!body.includes('new-run')||body.includes('old-run')||body.includes('old-diff'))throw new Error('stale reconciliation overwrote current detail');
+                  if(toasts.length!==0)throw new Error('stale reconciliation emitted toast');
+                })().catch((error)=>{console.error(error.stack||error);process.exitCode=1;});
+                """
+            )
+        )
+
+    def test_reconciliation_read_failure_keeps_run_and_steps_visible(self) -> None:
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                (async()=>{
+                  const opened=vm.runInContext('openRunDetail(9)',context);
+                  pending[0].resolve(detail(9,'success',{name:'kept-run',stepName:'kept-step',reconciliationId:91}));
+                  await new Promise((resolve)=>setImmediate(resolve));
+                  pending[1].reject(new Error('<private database error>'));
+                  await opened;
+                  const body=elements.runDetailBody.innerHTML;
+                  for(const expected of ['kept-run','kept-step','差异明细读取失败'])if(!body.includes(expected))throw new Error(`missing ${expected}: ${body}`);
+                  if(body.includes('private database error'))throw new Error('raw reconciliation error leaked');
+                  if(toasts.length!==0)throw new Error('optional reconciliation failure emitted toast');
+                })().catch((error)=>{console.error(error.stack||error);process.exitCode=1;});
+                """
+            )
+        )
+
     def test_closing_drawer_invalidates_late_detail_response(self) -> None:
         self._run_timeline_probe(
             textwrap.dedent(
@@ -350,14 +511,14 @@ class SyncFrontendTests(unittest.TestCase):
                   if(pending.length!==2||pending[1].path!=='/v1/sync/runs/3')throw new Error('poll request missing');
                   if(timers.size!==0)throw new Error('poll overlapped in-flight request');
                   pending[1].resolve(detail(3,'success'));
-                  await Promise.resolve();await Promise.resolve();
+                  await new Promise((resolve)=>setImmediate(resolve));
                   if(timers.size!==0)throw new Error('terminal run kept polling');
-                  if(pending.length!==4)throw new Error(`terminal refresh missing: ${pending.length}`);
-                  if(pending[2].path!=='/v1/sync/overview'||!pending[3].path.startsWith('/v1/sync/runs?')){
+                  if(pending.length!==5)throw new Error(`terminal refresh missing: ${pending.length}`);
+                  if(pending[2].path!=='/v1/sync/overview'||!pending[3].path.startsWith('/v1/sync/alerts?')||!pending[4].path.startsWith('/v1/sync/runs?')){
                     throw new Error(`wrong terminal refresh: ${pending.slice(2).map((item)=>item.path)}`);
                   }
                   pending[2].resolve({summary:{},items:[]});
-                  pending[3].resolve({items:[],total:0});
+                  pending[3].resolve({items:[],total:0});pending[4].resolve({items:[],total:0});
                   await Promise.resolve();await Promise.resolve();
                 })().catch((error)=>{console.error(error.stack||error);process.exitCode=1;});
                 """

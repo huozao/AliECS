@@ -85,6 +85,7 @@ SELECT
     j.freshness_sla_seconds,
     j.artifact_glob,
     j.alert_enabled,
+    j.source_id,
     latest.id,
     latest.trigger,
     latest.status,
@@ -125,21 +126,21 @@ ORDER BY j.provider ASC, j.display_name ASC, j.job_key ASC
 
 
 def _last_run(row: tuple[Any, ...]) -> dict[str, Any] | None:
-    if row[9] is None:
+    if row[10] is None:
         return None
     return {
-        "id": row[9],
-        "trigger": row[10],
-        "status": row[11],
-        "started_at": row[12],
-        "finished_at": row[13],
-        "row_count": row[14],
-        "changed_count": row[15],
-        "error_kind": row[16],
-        "error_label": error_kind_label(row[16]),
-        "error_message": row[17],
-        "detail_json": row[18] or {},
-        "legacy_ref": row[19] or {},
+        "id": row[10],
+        "trigger": row[11],
+        "status": row[12],
+        "started_at": row[13],
+        "finished_at": row[14],
+        "row_count": row[15],
+        "changed_count": row[16],
+        "error_kind": row[17],
+        "error_label": error_kind_label(row[17]),
+        "error_message": row[18],
+        "detail_json": row[19] or {},
+        "legacy_ref": row[20] or {},
     }
 
 
@@ -165,12 +166,12 @@ def overview(conn, *, now=None) -> dict[str, Any]:
     formula_artifact_loaded = False
 
     for row in rows:
-        freshness = classify_freshness(row[20], row[6], now=now)
+        freshness = classify_freshness(row[21], row[6], now=now)
         summary[freshness["state"]] += 1
         last_run = _last_run(row)
         if last_run and last_run["status"] in ("failed", "partial", "running"):
             summary[last_run["status"]] += 1
-        open_alert_count = int(row[21] or 0)
+        open_alert_count = int(row[22] or 0)
         summary["open_alerts"] += open_alert_count
 
         artifact = None
@@ -191,8 +192,9 @@ def overview(conn, *, now=None) -> dict[str, Any]:
                 "freshness_sla_seconds": row[6],
                 "artifact_glob": row[7],
                 "alert_enabled": row[8],
+                "source_id": row[9],
                 "last_run": last_run,
-                "last_success_at": row[20],
+                "last_success_at": row[21],
                 "freshness": freshness,
                 "next_expected_at": None,
                 "open_alert_count": open_alert_count,

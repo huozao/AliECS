@@ -250,6 +250,7 @@ def overview_row(
     sla_seconds: int | None,
     error_kind: str | None = None,
     open_alert_count: int = 0,
+    source_id: int | None = 17,
 ) -> tuple[Any, ...]:
     has_run = status is not None
     return (
@@ -262,6 +263,7 @@ def overview_row(
         sla_seconds,
         None,
         True,
+        source_id,
         91 if has_run else None,
         "schedule" if has_run else None,
         status,
@@ -365,6 +367,7 @@ class OverviewReadTests(SyncReadTestCase):
         )
         self.assertEqual(4, len(result["items"]))
         self.assertEqual("凭据过期", result["items"][0]["last_run"]["error_label"])
+        self.assertEqual(17, result["items"][0]["source_id"])
         self.assertEqual({}, result["items"][0]["schedule"])
         self.assertIsNone(result["items"][0]["next_expected_at"])
         self.assertEqual("unmonitored", result["items"][3]["freshness"]["state"])
@@ -383,8 +386,29 @@ class OverviewReadTests(SyncReadTestCase):
         self.assertIn("status = 'success'", sql)
         self.assertIn("state = 'open'", sql)
         self.assertIn("GROUP BY job_id", sql)
+        self.assertIn("j.source_id", sql)
         self.assertNotIn("external_doc_id", sql)
         self.assertNotIn("alert_chat_id", sql)
+
+    def test_overview_preserves_null_source_pointer_without_exposing_document_id(self):
+        conn = FakeConnection(
+            [
+                overview_row(
+                    job_key="wecom.doc.17",
+                    provider="wecom",
+                    display_name="已删除来源的企微文档",
+                    status=None,
+                    last_success_at=None,
+                    sla_seconds=None,
+                    source_id=None,
+                )
+            ]
+        )
+
+        result = sync_read.overview(conn, now=NOW)
+
+        self.assertIsNone(result["items"][0]["source_id"])
+        self.assertNotIn("external_doc_id", result["items"][0])
 
 
 class AlertReadTests(SyncReadTestCase):

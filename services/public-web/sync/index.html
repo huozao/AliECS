@@ -57,7 +57,6 @@
               <option value="wecom">企微</option>
               <option value="feishu">飞书</option>
               <option value="chanjet">畅捷通</option>
-              <option value="tplus">T+</option>
             </select>
           </label>
           <label>状态
@@ -100,10 +99,10 @@
     const $=(id)=>document.getElementById(id);
     const state={overview:null,alerts:[],runs:[],limit:20,offset:0,total:0,timelineRequestId:0,timelineLoading:false};
     const initialJob=new URLSearchParams(location.search).get('job')||'';
-    let detailPollTimer=null,openRunId=null,detailGeneration=0;
+    let detailPollTimer=null,openRunId=null,detailGeneration=0,sessionGeneration=0,loadGeneration=0;
 
     const freshnessLabels={fresh:'新鲜',warning:'即将过期',stale:'已过期',never:'从未成功',unmonitored:'未监控'};
-    const triggerLabels={manual:'手动',scheduled:'定时',webhook:'订阅变更',unknown:'未知'};
+    const triggerLabels={manual:'手动',schedule:'定时',event:'订阅变更',scheduled:'定时',webhook:'订阅变更',unknown:'未知'};
 
     function statusChip(value){return chip(esc(value||'unknown'));}
     function showError(message){AliECSToast.show(message,'error');}
@@ -185,20 +184,52 @@
       if(!Number.isFinite(started)||!Number.isFinite(finished))return '-';
       return durationLabel(Math.max(0,(finished-started)/1000));
     }
+    function renderDiffItemRows(title,items){
+      const list=Array.isArray(items)?items:[];
+      const rows=list.map((item)=>`<tr><td>${esc(item&&item.parent_code)}</td><td>${esc(item&&item.parent_name)}</td><td>${esc(item&&item.version)}</td><td>${esc(item&&item.child_code)}</td><td>${esc(item&&item.child_name)}</td><td>${esc(item&&item.unit)}</td><td>${esc(item&&item.quantity)}</td><td>${esc(item&&item.disabled)}</td></tr>`).join('');
+      return `<h4>${esc(title)}（${list.length}）</h4><table><thead><tr><th>父件编码</th><th>父件名称</th><th>版本</th><th>子件编码</th><th>子件名称</th><th>单位</th><th>数量</th><th>停用</th></tr></thead><tbody>${rows||'<tr><td colspan="8" class="muted">无</td></tr>'}</tbody></table>`;
+    }
+    function renderChangedRows(items){
+      const list=Array.isArray(items)?items:[];
+      const rows=list.map((item)=>{
+        const key=item&&item.key||{},before=item&&item.before||{},after=item&&item.after||{};
+        const fields=Array.isArray(item&&item.changed_fields)?item.changed_fields.join(', '):'';
+        return `<tr><td>${esc(key.parent_code)}</td><td>${esc(key.version)}</td><td>${esc(key.child_code)}</td><td>${esc(fields)}</td><td>${esc(before.quantity)}</td><td>${esc(after.quantity)}</td><td>${esc(before.child_name)}</td><td>${esc(after.child_name)}</td></tr>`;
+      }).join('');
+      return `<h4>字段变化（${list.length}）</h4><table><thead><tr><th>父件编码</th><th>版本</th><th>子件编码</th><th>变化字段</th><th>原数量</th><th>新数量</th><th>原子件名</th><th>新子件名</th></tr></thead><tbody>${rows||'<tr><td colspan="8" class="muted">无</td></tr>'}</tbody></table>`;
+    }
+    function renderReconciliation(data){
+      if(data&&data.reconciliation_error)return '<div class="attention critical">差异明细读取失败</div>';
+      const reconciliation=data&&data.reconciliation;
+      if(!reconciliation)return '<div class="muted">暂无可用差异明细。</div>';
+      const diff=reconciliation.diff_json&&typeof reconciliation.diff_json==='object'?reconciliation.diff_json:{};
+      return `<div class="panel"><strong>${esc(reconciliation.summary||'差异校验')}</strong><div class="muted">状态 ${esc(reconciliation.status||'-')} · 严重度 ${esc(reconciliation.severity||'-')}</div></div>${renderDiffItemRows('新增子件',diff.added)}${renderDiffItemRows('删除子件',diff.removed)}${renderChangedRows(diff.changed)}`;
+    }
     function renderRunDetail(data){
       const run=data&&data.run?data.run:{};
       const error=run.error_message?`<div class="attention critical"><strong>${esc(run.error_label||'未知错误')}</strong><br/>${esc(run.error_message)}</div>`:'';
       const reconciliation=data&&data.reconciliation_id!=null
-        ?`<div class="muted">差异校验 #${esc(data.reconciliation_id)}</div>`:'';
+        ?`<h3>变化明细</h3>${renderReconciliation(data)}`:'';
       $('runDetailBody').innerHTML=`
-        <div class="panel"><strong>${esc(run.display_name||'-')}</strong><div class="muted">${esc(run.job_key||'-')} · ${esc(run.provider||'-')} · ${esc(triggerLabels[run.trigger]||run.trigger||'-')}</div><div class="row" style="margin-top:8px">${statusChip(run.status)}<span class="muted">开始 ${esc(fmtTime(run.started_at))} · 耗时 ${esc(durationLabel(run.duration_seconds))} · 行数 ${esc(run.row_count??'-')} · 变更 ${esc(run.changed_count??'-')}</span></div>${reconciliation}</div>
-        ${error}<h3>运行步骤</h3>${renderSteps(data&&data.steps?data.steps:[])}`;
+        <div class="panel"><strong>${esc(run.display_name||'-')}</strong><div class="muted">${esc(run.job_key||'-')} · ${esc(run.provider||'-')} · ${esc(triggerLabels[run.trigger]||run.trigger||'-')}</div><div class="row" style="margin-top:8px">${statusChip(run.status)}<span class="muted">开始 ${esc(fmtTime(run.started_at))} · 耗时 ${esc(durationLabel(run.duration_seconds))} · 行数 ${esc(run.row_count??'-')} · 变更 ${esc(run.changed_count??'-')}</span></div></div>
+        ${error}<h3>运行步骤</h3>${renderSteps(data&&data.steps?data.steps:[])}${reconciliation}`;
     }
     function stopDetailPolling(){
       if(detailPollTimer!==null){clearTimeout(detailPollTimer);detailPollTimer=null;}
     }
     function detailIsCurrent(generation,runId){
       return generation===detailGeneration&&openRunId===runId&&$('runDrawer').classList.contains('show');
+    }
+    async function loadReconciliation(data,generation,runId){
+      if(!data||data.reconciliation_id==null)return data;
+      try{
+        const reconciliation=await api(`/v1/ops/reconciliation/${data.reconciliation_id}`);
+        if(!detailIsCurrent(generation,runId))return null;
+        return {...data,reconciliation};
+      }catch(error){
+        if(!detailIsCurrent(generation,runId))return null;
+        return {...data,reconciliation_error:true};
+      }
     }
     function scheduleDetailPolling(generation,runId){
       stopDetailPolling();
@@ -215,8 +246,10 @@
       $('runDrawer').classList.add('show');
       $('runDetailBody').innerHTML='<div class="muted">加载运行详情…</div>';
       try{
-        const data=await api(`/v1/sync/runs/${runId}`);
+        let data=await api(`/v1/sync/runs/${runId}`);
         if(!detailIsCurrent(generation,runId))return;
+        data=await loadReconciliation(data,generation,runId);
+        if(!data||!detailIsCurrent(generation,runId))return;
         renderRunDetail(data);
         if(data.run&&data.run.status==='running')scheduleDetailPolling(generation,runId);
       }catch(error){
@@ -237,16 +270,15 @@
         return;
       }
       if(!detailIsCurrent(generation,runId))return;
+      data=await loadReconciliation(data,generation,runId);
+      if(!data||!detailIsCurrent(generation,runId))return;
       renderRunDetail(data);
       if(data.run&&data.run.status==='running'){
         scheduleDetailPolling(generation,runId);
         return;
       }
       stopDetailPolling();
-      await Promise.all([
-        loadOverview().catch((error)=>showError(`同步概况刷新失败：${error.message}`)),
-        loadTimeline().catch((error)=>showError(`时间线刷新失败：${error.message}`)),
-      ]);
+      await loadAll().catch((error)=>showError(`同步中心刷新失败：${error.message}`));
     }
     function closeRunDetail(){
       detailGeneration+=1;
@@ -256,9 +288,24 @@
       $('runDetailBody').innerHTML='';
     }
 
-    async function loadOverview(){state.overview=await api('/v1/sync/overview');renderOverview();}
-    async function loadAlerts(){const d=await api('/v1/sync/alerts?state=open&limit=50&offset=0');state.alerts=d.items||[];renderAlerts();}
-    async function loadTimeline(requestOffset=state.offset){
+    function beginLoad(){return {session:sessionGeneration,load:++loadGeneration};}
+    function currentLoad(){return {session:sessionGeneration,load:loadGeneration};}
+    function loadIsCurrent(generation){return generation.session===sessionGeneration&&generation.load===loadGeneration;}
+    async function loadOverview(generation=beginLoad()){
+      try{
+        const data=await api('/v1/sync/overview');
+        if(!loadIsCurrent(generation))return;
+        state.overview=data;renderOverview();
+      }catch(error){if(loadIsCurrent(generation))throw error;}
+    }
+    async function loadAlerts(generation=beginLoad()){
+      try{
+        const data=await api('/v1/sync/alerts?state=open&limit=50&offset=0');
+        if(!loadIsCurrent(generation))return;
+        state.alerts=data.items||[];renderAlerts();
+      }catch(error){if(loadIsCurrent(generation))throw error;}
+    }
+    async function loadTimeline(requestOffset=state.offset,generation=currentLoad()){
       const requestId=++state.timelineRequestId;
       const params=new URLSearchParams({limit:String(state.limit),offset:String(requestOffset)});
       if($('providerFilter').value)params.set('provider',$('providerFilter').value);
@@ -268,22 +315,25 @@
       renderTimelinePager(requestOffset,true);
       try{
         const d=await api(`/v1/sync/runs?${params}`);
-        if(requestId!==state.timelineRequestId)return;
+        if(requestId!==state.timelineRequestId||!loadIsCurrent(generation))return;
         state.offset=requestOffset;
         state.runs=d.items||[];
         state.total=d.total||0;
         renderTimeline();
       }catch(error){
-        if(requestId!==state.timelineRequestId)return;
+        if(requestId!==state.timelineRequestId||!loadIsCurrent(generation))return;
         throw error;
       }finally{
-        if(requestId===state.timelineRequestId){
+        if(requestId===state.timelineRequestId&&loadIsCurrent(generation)){
           state.timelineLoading=false;
           renderTimelinePager(state.offset,false);
         }
       }
     }
-    async function loadAll(){await loadOverview();await Promise.all([loadAlerts(),loadTimeline()]);}
+    async function loadAll(){
+      const generation=beginLoad();
+      await Promise.all([loadOverview(generation),loadAlerts(generation),loadTimeline(state.offset,generation)]);
+    }
     function reloadTimelineFromStart(){loadTimeline(0).catch((error)=>AliECSToast.show(`时间线加载失败：${error.message}`,'error'));}
 
     $('providerFilter').onchange=reloadTimelineFromStart;
@@ -303,9 +353,22 @@
     $('runDrawer').onclick=(event)=>{if(event.target===$('runDrawer'))closeRunDetail();};
     refreshBtn.onclick=()=>loadAll().catch((error)=>AliECSToast.show(`同步中心加载失败：${error.message}`,'error'));
     loginBtn.onclick=ssoLogin;
-    logoutBtn.onclick=()=>{closeRunDetail();clearAuthToken();AliECSAdmin.applyGate(null);AliECSToast.show('已退出登录。','success');};
+    function clearAdminData(){
+      state.overview=null;state.alerts=[];state.runs=[];state.offset=0;state.total=0;state.timelineLoading=false;
+      for(const id of ['syncSummary','jobList','alertList','timelineList','runDetailBody'])$(id).innerHTML='';
+      $('timelinePageInfo').textContent='';$('jobFilter').innerHTML='<option value="">全部</option>';
+      $('timelinePrevBtn').disabled=true;$('timelineNextBtn').disabled=true;
+    }
+    logoutBtn.onclick=()=>{
+      sessionGeneration+=1;loadGeneration+=1;state.timelineRequestId+=1;
+      closeRunDetail();clearAdminData();clearAuthToken();AliECSAdmin.applyGate(null);AliECSToast.show('已退出登录。','success');
+    };
     window.addEventListener('beforeunload',stopDetailPolling);
-    (async()=>{AliECSAdmin.applyGate(await fetchMe(),()=>{loadAll().catch((error)=>AliECSToast.show(`同步中心加载失败：${error.message}`,'error'));});})();
+    (async()=>{
+      const generation=sessionGeneration,me=await fetchMe();
+      if(generation!==sessionGeneration)return;
+      AliECSAdmin.applyGate(me,()=>{loadAll().catch((error)=>AliECSToast.show(`同步中心加载失败：${error.message}`,'error'));});
+    })();
   </script>
 </body>
 </html>
