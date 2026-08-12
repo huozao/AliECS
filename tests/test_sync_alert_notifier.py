@@ -27,6 +27,8 @@ class RecordingCursor:
         return None
 
     def execute(self, sql: str, params: tuple[object, ...] | None = None) -> None:
+        if self.conn.execute_error is not None:
+            raise self.conn.execute_error
         self.conn.pending.append((sql, params))
         self.rowcount = self.conn.rowcount
 
@@ -45,6 +47,7 @@ class RecordingConnection:
         self.committed: list[tuple[str, tuple[object, ...] | None]] = []
         self.commit_count = 0
         self.rollback_count = 0
+        self.execute_error: Exception | None = None
 
     def cursor(self) -> RecordingCursor:
         return RecordingCursor(self)
@@ -63,6 +66,90 @@ class RecordingConnection:
 
     def committed_sql(self) -> str:
         return "\n".join(sql for sql, _ in self.committed)
+
+
+class SharedAlertBackend:
+    def __init__(self) -> None:
+        self.open = True
+        self.locked = False
+        self.notify_count = 0
+        self.alert_id = 91
+
+    def row(self) -> tuple[Any, ...]:
+        return (self.alert_id, 7, 31, "failed", NOW - timedelta(hours=7), None, self.notify_count, {"status": "failed"})
+
+
+class SharedAlertCursor:
+    def __init__(self, conn: "SharedAlertConnection") -> None:
+        self.conn = conn
+        self.row: Any = None
+        self.rowcount = 0
+
+    def __enter__(self) -> "SharedAlertCursor":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def execute(self, sql: str, params: tuple[object, ...] | None = None) -> None:
+        self.conn.pending.append((sql, params))
+        if "FROM sync_job_alerts" in sql and "WHERE id = %s AND state = 'open'" in sql:
+            if "FOR UPDATE SKIP LOCKED" not in sql:
+                raise AssertionError("alert lock query must use FOR UPDATE SKIP LOCKED")
+            if self.conn.backend.open and not self.conn.backend.locked:
+                self.conn.backend.locked = True
+                self.conn.owns_lock = True
+                self.row = self.conn.backend.row()
+            else:
+                self.row = None
+        elif "INSERT INTO sync_job_alerts" in sql:
+            if self.conn.backend.open:
+                self.row = None
+            else:
+                self.conn.pending_open = True
+                self.row = (92,)
+        elif "SET state = 'resolved'" in sql:
+            self.conn.pending_resolved = True
+        elif "notify_count = notify_count + 1" in sql:
+            self.conn.pending_notify = True
+
+    def fetchone(self) -> Any:
+        return self.row
+
+
+class SharedAlertConnection:
+    def __init__(self, backend: SharedAlertBackend) -> None:
+        self.backend = backend
+        self.pending: list[tuple[str, tuple[object, ...] | None]] = []
+        self.committed: list[tuple[str, tuple[object, ...] | None]] = []
+        self.owns_lock = False
+        self.pending_open = False
+        self.pending_resolved = False
+        self.pending_notify = False
+
+    def cursor(self) -> SharedAlertCursor:
+        return SharedAlertCursor(self)
+
+    def commit(self) -> None:
+        if self.pending_resolved:
+            self.backend.open = False
+        if self.pending_open:
+            self.backend.open = True
+            self.backend.alert_id = 92
+        if self.pending_notify:
+            self.backend.notify_count += 1
+        self.committed.extend(self.pending)
+        self.pending.clear()
+        self._release()
+
+    def rollback(self) -> None:
+        self.pending.clear()
+        self._release()
+
+    def _release(self) -> None:
+        if self.owns_lock:
+            self.backend.locked = False
+            self.owns_lock = False
 
 
 def make_unsigned_jwt(payload: dict[str, object]) -> str:
@@ -312,17 +399,25 @@ class SyncAlertRepositoryTests(unittest.TestCase):
             [param for _, params in self.conn.committed for param in (params or ())],
         )
 
-    def test_two_connections_only_one_gets_the_locked_alert(self) -> None:
-        first = RecordingConnection([self._open_alert()])
-        second = RecordingConnection([None])
-        first_repo = self.notifier.SyncAlertRepository(first, now_fn=lambda: NOW)
-        second_repo = self.notifier.SyncAlertRepository(second, now_fn=lambda: NOW)
-        sent: list[int] = []
+    def test_second_connection_skips_locked_alert_until_first_sender_returns(self) -> None:
+        backend = SharedAlertBackend()
+        first_conn = SharedAlertConnection(backend)
+        second_conn = SharedAlertConnection(backend)
+        first_repo = self.notifier.SyncAlertRepository(first_conn, now_fn=lambda: NOW)
+        second_repo = self.notifier.SyncAlertRepository(second_conn, now_fn=lambda: NOW)
+        first_sends: list[int] = []
+        second_sends: list[int] = []
 
-        self.assertTrue(first_repo.deliver_due(91, lambda alert: sent.append(alert["id"]) is None))
-        self.assertFalse(second_repo.deliver_due(91, lambda alert: sent.append(alert["id"]) is None))
+        def first_sender(alert: dict[str, Any]) -> bool:
+            first_sends.append(alert["id"])
+            self.assertFalse(second_repo.deliver_due(91, lambda item: second_sends.append(item["id"]) is None))
+            self.assertTrue(backend.locked)
+            return True
 
-        self.assertEqual([91], sent)
+        self.assertTrue(first_repo.deliver_due(91, first_sender))
+        self.assertEqual([91], first_sends)
+        self.assertEqual([], second_sends)
+        self.assertEqual(1, backend.notify_count)
 
     def test_failed_delivery_rolls_back_for_next_poll(self) -> None:
         self.conn.rows = [self._open_alert()]
@@ -352,26 +447,90 @@ class SyncAlertRepositoryTests(unittest.TestCase):
         self.assertEqual(1, self.conn.rollback_count)
         self.assertNotIn("state = 'resolved'", self.conn.committed_sql())
 
-    def test_resolved_alert_allows_a_new_claim_of_the_same_kind(self) -> None:
-        self.conn.rows = [(92,)]
+    def test_resolved_alert_releases_shared_open_unique_constraint_for_new_claim(self) -> None:
+        backend = SharedAlertBackend()
+        conn = SharedAlertConnection(backend)
+        repo = self.notifier.SyncAlertRepository(conn, now_fn=lambda: NOW)
 
-        self.assertEqual(92, self.repo.claim_alert(self.job, 32, "failed", {"status": "failed"}))
+        self.assertTrue(repo.resolve_alert(91, {"status": "success"}, lambda _: True))
+        self.assertEqual(92, repo.claim_alert(self.job, 32, "failed", {"status": "failed"}))
+        self.assertTrue(backend.open)
 
-        self.assertIn("WHERE state = 'open'", self.conn.committed_sql())
-
-    def test_load_job_states_reads_only_sync_tables(self) -> None:
-        self.conn.rows = [[(7, "wecom.doc.17", "pull", "wecom", "点检表", True, NOW, "failed", 3, ["failed"])]]
+    def test_load_job_states_returns_task3_ready_nested_shape_and_commits_read_transaction(self) -> None:
+        latest_run_detail = {"phase": "fetch"}
+        latest_success_detail = {"rows": 8}
+        open_alerts = [{
+            "id": 91,
+            "run_id": 31,
+            "alert_kind": "failed",
+            "first_seen_at": NOW - timedelta(hours=7),
+            "last_notified_at": NOW - timedelta(hours=1),
+            "notify_count": 2,
+            "payload_json": {"status": "failed"},
+        }]
+        self.conn.rows = [[(
+            7, "wecom.doc.17", "wecom", "点检表", True, True, "oc_alerts", 3600, "exports/*.json",
+            31, "failed", NOW - timedelta(minutes=5), NOW - timedelta(minutes=4), "network", "timeout", latest_run_detail,
+            29, NOW - timedelta(hours=2), NOW - timedelta(hours=1), latest_success_detail,
+            3, open_alerts,
+        )]]
 
         states = self.repo.load_job_states()
 
-        self.assertEqual("wecom.doc.17", states[0]["job_key"])
-        self.assertEqual(3, states[0]["consecutive_failures"])
+        self.assertEqual([{
+            "job": {
+                "id": 7,
+                "job_key": "wecom.doc.17",
+                "provider": "wecom",
+                "display_name": "点检表",
+                "enabled": True,
+                "alert_enabled": True,
+                "alert_chat_id": "oc_alerts",
+                "freshness_sla_seconds": 3600,
+                "artifact_glob": "exports/*.json",
+            },
+            "latest_run": {
+                "id": 31,
+                "status": "failed",
+                "started_at": NOW - timedelta(minutes=5),
+                "finished_at": NOW - timedelta(minutes=4),
+                "error_kind": "network",
+                "error_message": "timeout",
+                "detail_json": latest_run_detail,
+            },
+            "latest_success": {
+                "id": 29,
+                "started_at": NOW - timedelta(hours=2),
+                "finished_at": NOW - timedelta(hours=1),
+                "detail_json": latest_success_detail,
+            },
+            "consecutive_failures": 3,
+            "open_alerts": open_alerts,
+        }], states)
+        self.assertEqual(1, self.conn.commit_count)
         sql = self.conn.joined_sql()
         self.assertIn("sync_jobs", sql)
         self.assertIn("sync_job_runs", sql)
         self.assertIn("sync_job_alerts", sql)
         self.assertNotIn("external_sources", sql)
         self.assertNotIn("external_doc_id", sql)
+
+    def test_load_job_states_rolls_back_and_reraises_query_errors(self) -> None:
+        self.conn.execute_error = RuntimeError("synthetic read failure")
+
+        with self.assertRaisesRegex(RuntimeError, "synthetic read failure"):
+            self.repo.load_job_states()
+
+        self.assertEqual(1, self.conn.rollback_count)
+
+    def test_nondefault_escalation_boundary_is_exclusive(self) -> None:
+        repo = self.notifier.SyncAlertRepository(self.conn, now_fn=lambda: NOW, escalation_seconds=12)
+        self.conn.rows = [self._open_alert(NOW - timedelta(seconds=12))]
+
+        self.assertFalse(repo.deliver_due(91, lambda _: self.fail("sender must not run at cutoff")))
+
+        self.conn.rows = [self._open_alert(NOW - timedelta(seconds=12, microseconds=1))]
+        self.assertTrue(repo.deliver_due(91, lambda _: True))
 
     def test_cleanup_uses_30_and_90_day_windows(self) -> None:
         self.conn.rowcount = 4

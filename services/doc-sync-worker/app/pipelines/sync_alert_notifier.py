@@ -288,73 +288,103 @@ class SyncAlertRepository:
             return False
 
     def load_job_states(self) -> list[dict[str, Any]]:
-        with self.conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    j.id,
-                    j.job_key,
-                    j.kind,
-                    j.provider,
-                    j.display_name,
-                    j.enabled,
-                    (
-                        SELECT success_run.finished_at
-                        FROM sync_job_runs success_run
-                        WHERE success_run.job_id = j.id AND success_run.status = 'success'
-                        ORDER BY success_run.finished_at DESC NULLS LAST, success_run.id DESC
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        j.id, j.job_key, j.provider, j.display_name, j.enabled,
+                        j.alert_enabled, j.alert_chat_id, j.freshness_sla_seconds, j.artifact_glob,
+                        latest_run.id, latest_run.status, latest_run.started_at, latest_run.finished_at,
+                        latest_run.error_kind, latest_run.error_message, latest_run.detail_json,
+                        latest_success.id, latest_success.started_at, latest_success.finished_at, latest_success.detail_json,
+                        COALESCE(
+                            (
+                                SELECT COUNT(*)
+                                FROM sync_job_runs failed_run
+                                WHERE failed_run.job_id = j.id
+                                  AND failed_run.status IN ('failed', 'partial')
+                                  AND failed_run.started_at > COALESCE(
+                                      latest_success.finished_at,
+                                      '-infinity'::timestamptz
+                                  )
+                            ),
+                            0
+                        ) AS consecutive_failures,
+                        COALESCE(open_alerts.items, '[]'::jsonb) AS open_alerts
+                    FROM sync_jobs j
+                    LEFT JOIN LATERAL (
+                        SELECT id, status, started_at, finished_at, error_kind, error_message, detail_json
+                        FROM sync_job_runs
+                        WHERE job_id = j.id
+                        ORDER BY started_at DESC, id DESC
                         LIMIT 1
-                    ) AS last_success_at,
-                    (
-                        SELECT latest_run.status
-                        FROM sync_job_runs latest_run
-                        WHERE latest_run.job_id = j.id
-                        ORDER BY latest_run.started_at DESC, latest_run.id DESC
+                    ) latest_run ON TRUE
+                    LEFT JOIN LATERAL (
+                        SELECT id, started_at, finished_at, detail_json
+                        FROM sync_job_runs
+                        WHERE job_id = j.id AND status = 'success'
+                        ORDER BY finished_at DESC NULLS LAST, id DESC
                         LIMIT 1
-                    ) AS latest_status,
-                    (
-                        SELECT COUNT(*)
-                        FROM sync_job_runs failed_run
-                        WHERE failed_run.job_id = j.id
-                          AND failed_run.status IN ('failed', 'partial')
-                          AND failed_run.started_at > COALESCE(
-                              (
-                                  SELECT MAX(previous_success.finished_at)
-                                  FROM sync_job_runs previous_success
-                                  WHERE previous_success.job_id = j.id
-                                    AND previous_success.status = 'success'
-                              ),
-                              '-infinity'::timestamptz
-                          )
-                    ) AS consecutive_failures,
-                    COALESCE(
-                        (
-                            SELECT array_agg(open_alert.alert_kind ORDER BY open_alert.id)
-                            FROM sync_job_alerts open_alert
-                            WHERE open_alert.job_id = j.id AND open_alert.state = 'open'
-                        ),
-                        ARRAY[]::text[]
-                    ) AS open_alerts
-                FROM sync_jobs j
-                ORDER BY j.id
-                """
-            )
-            rows = cur.fetchall()
-        return [
-            {
-                "id": row[0],
-                "job_key": row[1],
-                "kind": row[2],
-                "provider": row[3],
-                "display_name": row[4],
-                "enabled": row[5],
-                "last_success_at": row[6],
-                "latest_status": row[7],
-                "consecutive_failures": int(row[8]),
-                "open_alerts": list(row[9] or []),
-            }
-            for row in rows
-        ]
+                    ) latest_success ON TRUE
+                    LEFT JOIN LATERAL (
+                        SELECT jsonb_agg(
+                            jsonb_build_object(
+                                'id', open_alert.id,
+                                'run_id', open_alert.run_id,
+                                'alert_kind', open_alert.alert_kind,
+                                'first_seen_at', open_alert.first_seen_at,
+                                'last_notified_at', open_alert.last_notified_at,
+                                'notify_count', open_alert.notify_count,
+                                'payload_json', open_alert.payload_json
+                            )
+                            ORDER BY open_alert.id
+                        ) AS items
+                        FROM sync_job_alerts open_alert
+                        WHERE open_alert.job_id = j.id AND open_alert.state = 'open'
+                    ) open_alerts ON TRUE
+                    ORDER BY j.id
+                    """
+                )
+                rows = cur.fetchall()
+            states = [
+                {
+                    "job": {
+                        "id": row[0],
+                        "job_key": row[1],
+                        "provider": row[2],
+                        "display_name": row[3],
+                        "enabled": row[4],
+                        "alert_enabled": row[5],
+                        "alert_chat_id": row[6],
+                        "freshness_sla_seconds": row[7],
+                        "artifact_glob": row[8],
+                    },
+                    "latest_run": {
+                        "id": row[9],
+                        "status": row[10],
+                        "started_at": row[11],
+                        "finished_at": row[12],
+                        "error_kind": row[13],
+                        "error_message": row[14],
+                        "detail_json": row[15] or {},
+                    } if row[9] is not None else None,
+                    "latest_success": {
+                        "id": row[16],
+                        "started_at": row[17],
+                        "finished_at": row[18],
+                        "detail_json": row[19] or {},
+                    } if row[16] is not None else None,
+                    "consecutive_failures": int(row[20]),
+                    "open_alerts": list(row[21] or []),
+                }
+                for row in rows
+            ]
+            self.conn.commit()
+            return states
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def cleanup_steps(self) -> int:
         try:
