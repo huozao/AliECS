@@ -155,6 +155,8 @@ def run_worker_loop(
     except Exception:  # noqa: BLE001
         last_full = None
     last_pull_monotonic: float | None = None
+    # 终止 poll 已覆盖同一调度边界时，下一 outer cycle 不重复告警。
+    last_notified_poll_boundary: datetime | None = None
     cycles = 0
     while True:
         config = read_config()
@@ -173,7 +175,9 @@ def run_worker_loop(
                     f"anchor={anchor_time or '-'}）"
                 )
                 last_full = current
-                _notify_fail_open()
+                if last_notified_poll_boundary != due:
+                    _notify_fail_open()
+                last_notified_poll_boundary = None
                 try:
                     run_full()
                 except Exception as exc:  # noqa: BLE001
@@ -182,6 +186,7 @@ def run_worker_loop(
             else:
                 print(f"[文档同步循环] 上次全量未到期（下次 {due.isoformat()}），跳过启动全量。")
             remaining = max((due - current).total_seconds(), 0.0)
+        poll_boundary = due if enabled else None
         while remaining > 0:
             step = min(poll_seconds, remaining)
             sleep(step)
@@ -191,6 +196,8 @@ def run_worker_loop(
             except Exception as exc:  # noqa: BLE001
                 print(f"[文档同步循环] 消费手动请求异常：{exc}")
             _notify_fail_open()
+            if remaining <= 0:
+                last_notified_poll_boundary = poll_boundary
             mono = time.monotonic()
             if last_pull_monotonic is None or mono - last_pull_monotonic >= CONFIG_PULL_MIN_SECONDS:
                 last_pull_monotonic = mono

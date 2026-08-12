@@ -276,19 +276,85 @@ class WorkerLoopTests(WorkerImportTestCase):
         self.assertIn("RuntimeError", output.getvalue())
         self.assertNotIn("sensitive notifier detail", output.getvalue())
 
-    def test_injected_pipeline_without_notifier_keeps_notifier_noop(self) -> None:
+    def test_notifier_runs_at_most_once_on_the_poll_to_full_cycle_boundary(self) -> None:
+        import unittest.mock as mock
+        from collections import Counter
+        from datetime import datetime, timedelta, timezone
+
+        from app.pipelines import worker_loop as module
+
+        started = datetime(2026, 8, 12, tzinfo=timezone.utc)
+        clock = {"now": started}
+        events: list[tuple[int, str]] = []
+
+        def record(event: str) -> int:
+            elapsed = int((clock["now"] - started).total_seconds())
+            events.append((elapsed, event))
+            return 0
+
+        def advance(seconds: float) -> None:
+            clock["now"] += timedelta(seconds=seconds)
+            record("sleep")
+
+        with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}), \
+                mock.patch.object(module, "_maybe_start_group_listener"):
+            code = module.run_worker_loop(
+                full_sync=lambda: record("full"),
+                consume_requests=lambda: record("pending"),
+                notifier_once=lambda: record("notifier") or {},
+                sleep=advance,
+                max_cycles=2,
+                schedule_reader=self._one_minute_schedule,
+                config_puller=lambda: "noop",
+                now_fn=lambda: clock["now"],
+                last_full_reader=lambda: None,
+            )
+
+        notifier_times = [elapsed for elapsed, event in events if event == "notifier"]
+        self.assertEqual(0, code)
+        self.assertEqual([0, 30, 60, 90, 120], notifier_times)
+        self.assertEqual({0: 1, 30: 1, 60: 1, 90: 1, 120: 1}, dict(Counter(notifier_times)))
+        self.assertEqual([(0, "full"), (60, "full")], [event for event in events if event[1] == "full"])
+
+    def test_full_only_injection_without_notifier_keeps_notifier_noop(self) -> None:
         import unittest.mock as mock
 
         from app.pipelines import worker_loop as module
 
         with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}), \
+                mock.patch.object(module, "_maybe_start_group_listener"), \
+                mock.patch.object(module, "run_pending_sync_requests", return_value=0), \
+                mock.patch.object(module, "run_pending_structure_backup_jobs", return_value=0), \
+                mock.patch.object(module, "run_write_rnd_records", return_value=0), \
+                mock.patch.object(module, "run_backfill_if_bom_synced", return_value=(None, False)), \
                 mock.patch.object(module.sync_alert_notifier, "run_notifier_once") as default_notifier:
             code = module.run_worker_loop(
                 full_sync=lambda: 0,
-                consume_requests=lambda: 0,
                 sleep=lambda _seconds: None,
                 max_cycles=1,
                 schedule_reader=self._one_minute_schedule,
+                config_puller=lambda: "noop",
+                last_full_reader=lambda: None,
+            )
+
+        self.assertEqual(0, code)
+        default_notifier.assert_not_called()
+
+    def test_consume_only_injection_without_notifier_keeps_notifier_noop(self) -> None:
+        import unittest.mock as mock
+
+        from app.pipelines import worker_loop as module
+
+        with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}), \
+                mock.patch.object(module, "_maybe_start_group_listener"), \
+                mock.patch.object(module.sync_alert_notifier, "run_notifier_once") as default_notifier:
+            code = module.run_worker_loop(
+                consume_requests=lambda: 0,
+                sleep=lambda _seconds: None,
+                max_cycles=1,
+                schedule_reader=lambda: {
+                    "enabled": False, "interval_seconds": 60, "anchor_time": "", "pull_paused": False,
+                },
                 config_puller=lambda: "noop",
                 last_full_reader=lambda: None,
             )

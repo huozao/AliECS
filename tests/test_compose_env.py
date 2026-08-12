@@ -12,25 +12,58 @@ ALERT_ENV = (
     "SYNC_ARTIFACT_GRACE_SECONDS: ${SYNC_ARTIFACT_GRACE_SECONDS:-300}",
     "CHANJET_OPEN_TOKEN_FILE: /app/tplus-sync-requests/chanjet_open_token.txt",
 )
-READ_ONLY_VOLUMES = (
-    "tplus_sync_requests:/app/tplus-sync-requests:ro",
-    "tplus_sync_output:/app/tplus-output:ro",
-)
+TOKEN_VOLUME = "tplus_sync_requests:/app/tplus-sync-requests:ro"
 
 
 class DocWorkerComposeEnvTests(unittest.TestCase):
-    def _assert_doc_worker_contract(self, relative_path: str) -> None:
+    @staticmethod
+    def _service_block(compose: str, service: str) -> str:
+        lines = compose.splitlines()
+        start = lines.index(f"  {service}:") + 1
+        end = next(
+            (index for index in range(start, len(lines)) if lines[index].startswith("  ") and not lines[index].startswith("    ")),
+            len(lines),
+        )
+        return "\n".join(lines[start:end])
+
+    @staticmethod
+    def _volume_for_target(service_block: str, target: str) -> tuple[str, bool]:
+        for line in service_block.splitlines():
+            value = line.strip().removeprefix("- ")
+            parts = value.split(":")
+            if len(parts) >= 2 and parts[1] == target:
+                return parts[0], len(parts) >= 3 and parts[2] == "ro"
+        raise AssertionError(f"volume target not found: {target}")
+
+    def _assert_doc_worker_env(self, relative_path: str) -> tuple[str, str]:
         compose = (ROOT / relative_path).read_text(encoding="utf-8")
-        doc_worker = compose.split("  doc-sync-worker:", 1)[1].split("\n  tplus-sync-worker:", 1)[0]
-        for expected in (*ALERT_ENV, *READ_ONLY_VOLUMES):
+        doc_worker = self._service_block(compose, "doc-sync-worker")
+        for expected in (*ALERT_ENV, TOKEN_VOLUME):
             with self.subTest(path=relative_path, expected=expected):
                 self.assertIn(expected, doc_worker)
+        return compose, doc_worker
 
-    def test_local_doc_worker_has_alert_env_and_read_only_artifacts(self) -> None:
-        self._assert_doc_worker_contract("local/docker-compose.local.yml")
+    def test_local_doc_worker_reads_the_producer_bind_source_read_only(self) -> None:
+        relative_path = "local/docker-compose.local.yml"
+        compose, doc_worker = self._assert_doc_worker_env(relative_path)
+        producer = self._service_block(compose, "tplus-sync-worker")
+        producer_source, _producer_read_only = self._volume_for_target(producer, "/app/output")
+        consumer_source, consumer_read_only = self._volume_for_target(doc_worker, "/app/tplus-output")
 
-    def test_production_doc_worker_has_alert_env_and_read_only_artifacts(self) -> None:
-        self._assert_doc_worker_contract("deploy/ecs/compose.prod.yml")
+        compose_dir = (ROOT / relative_path).parent
+        self.assertEqual((compose_dir / producer_source).resolve(), (compose_dir / consumer_source).resolve())
+        self.assertTrue(consumer_read_only)
+
+    def test_production_doc_worker_reads_the_producer_named_volume_read_only(self) -> None:
+        relative_path = "deploy/ecs/compose.prod.yml"
+        compose, doc_worker = self._assert_doc_worker_env(relative_path)
+        producer = self._service_block(compose, "tplus-sync-worker")
+        producer_source, _producer_read_only = self._volume_for_target(producer, "/app/output")
+        consumer_source, consumer_read_only = self._volume_for_target(doc_worker, "/app/tplus-output")
+
+        self.assertEqual("tplus_sync_output", producer_source)
+        self.assertEqual(producer_source, consumer_source)
+        self.assertTrue(consumer_read_only)
 
     def test_deploy_current_env_forwards_all_alert_settings_serially(self) -> None:
         deploy = (ROOT / "deploy/ecs/deploy.sh").read_text(encoding="utf-8")

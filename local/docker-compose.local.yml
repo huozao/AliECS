@@ -136,7 +136,7 @@ services:
     volumes:
       - wecom_group_media:/app/wecom-group-media
       - tplus_sync_requests:/app/tplus-sync-requests:ro
-      - tplus_sync_output:/app/tplus-output:ro
+      - ../services/tplus-sync-worker/output:/app/tplus-output:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -187,6 +187,5 @@ volumes:
   pgdata:
   recipe_active_bom:
   tplus_sync_requests:
-  tplus_sync_output:
   uploads:
   wecom_group_media:
