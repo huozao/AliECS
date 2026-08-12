@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import base64
+import glob
 import json
 import math
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
+
+from app.providers.feishu import FeishuBitableClient, credentials_for_profile
+from app.storage.sync_job_platform import safe_error_message
 
 try:
     from psycopg.types.json import Jsonb
@@ -35,7 +40,8 @@ _EVENT_TITLES = {
 _ALERT_KIND_LABELS = {
     "failed": "同步失败",
     "stale": "同步延迟",
-    "credential": "凭据告警",
+    "credential_expiring": "凭据告警",
+    "artifact_stale": "产出物延迟",
 }
 
 
@@ -137,6 +143,11 @@ def artifact_is_stale(last_success_started_at, artifacts, *, grace_seconds=ARTIF
 
 
 def _format_time(value: Any) -> str | None:
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
     if not isinstance(value, datetime):
         return None
     if value.tzinfo is None:
@@ -165,6 +176,256 @@ def build_alert_text(event: str, alert: dict[str, Any], *, now: datetime) -> str
         lines.append(f"上次成功：{last_success_at}")
     lines.append(f"查看任务：https://hydwang.xyz/sync/?job={quote(job_key, safe='')}")
     return "\n".join(lines)
+
+
+def send_feishu_text(chat_id: str, text: str) -> bool:
+    if not str(chat_id or "").strip():
+        return False
+    try:
+        profile = os.getenv("SYNC_ALERT_FEISHU_PROFILE", "COMPANY_A").strip() or "COMPANY_A"
+        credentials = credentials_for_profile(profile)
+        if not credentials:
+            return False
+        credential = credentials[0]
+        client = FeishuBitableClient(
+            app_id=credential.app_id,
+            app_secret=credential.app_secret,
+            api_base=credential.api_base,
+        )
+        client._request_json(
+            "POST",
+            "/im/v1/messages",
+            headers=client._headers(),
+            params={"receive_id_type": "chat_id"},
+            json={
+                "receive_id": chat_id,
+                "msg_type": "text",
+                "content": json.dumps({"text": text}, ensure_ascii=False),
+            },
+        )
+        return True
+    except Exception as exc:
+        print(f"[sync-alert] feishu send failed: {type(exc).__name__}")
+        return False
+
+
+def _positive_env_seconds(name: str, fallback: int) -> int:
+    try:
+        value = int(os.getenv(name, "").strip())
+    except ValueError:
+        return fallback
+    return value if value > 0 else fallback
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _last_success_at(state: dict[str, Any]) -> datetime | None:
+    latest_success = state.get("latest_success")
+    if not isinstance(latest_success, dict):
+        return None
+    value = latest_success.get("finished_at") or latest_success.get("started_at")
+    return value if isinstance(value, datetime) else None
+
+
+def _live_artifacts(pattern: str) -> list[dict[str, Any]]:
+    artifacts: list[dict[str, Any]] = []
+    for matched in glob.glob(pattern):
+        path = Path(matched)
+        try:
+            if path.is_file():
+                artifacts.append({"name": path.name, "mtime_epoch": path.stat().st_mtime})
+        except OSError:
+            continue
+    return artifacts
+
+
+def _alert_conditions(
+    state: dict[str, Any], *, now: datetime, artifact_grace_seconds: int
+) -> dict[str, dict[str, Any]]:
+    job = state["job"]
+    latest_run = state.get("latest_run") if isinstance(state.get("latest_run"), dict) else None
+    latest_success = state.get("latest_success") if isinstance(state.get("latest_success"), dict) else None
+    last_success_at = _last_success_at(state)
+    base_payload = {
+        "job_key": str(job.get("job_key") or ""),
+        "display_name": str(job.get("display_name") or ""),
+        "last_success_at": _format_time(last_success_at),
+    }
+    conditions: dict[str, dict[str, Any]] = {}
+
+    if latest_run and latest_run.get("status") in {"failed", "partial"}:
+        conditions["failed"] = {
+            **base_payload,
+            "status": str(latest_run.get("status")),
+            "error_kind": _normalized_error_kind(latest_run.get("error_kind")),
+            "error_message": safe_error_message(latest_run.get("error_message")),
+            "consecutive_failures": int(state.get("consecutive_failures") or 0),
+        }
+
+    freshness_sla = job.get("freshness_sla_seconds")
+    if isinstance(freshness_sla, int) and not isinstance(freshness_sla, bool) and freshness_sla > 0:
+        stale = last_success_at is None or (
+            _as_utc(now) - _as_utc(last_success_at)
+        ).total_seconds() > freshness_sla
+        if stale:
+            conditions["stale"] = {
+                **base_payload,
+                "status": "stale",
+                "freshness_sla_seconds": freshness_sla,
+            }
+
+    artifact_pattern = str(job.get("artifact_glob") or "").strip()
+    if artifact_pattern:
+        snapshot_artifacts: list[dict[str, Any]] = []
+        if latest_success:
+            detail = latest_success.get("detail_json")
+            if isinstance(detail, dict) and isinstance(detail.get("artifacts"), list):
+                snapshot_artifacts = [item for item in detail["artifacts"] if isinstance(item, dict)]
+        artifacts = [*snapshot_artifacts, *_live_artifacts(artifact_pattern)]
+        success_started_at = latest_success.get("started_at") if latest_success else None
+        if artifact_is_stale(
+            success_started_at, artifacts, grace_seconds=artifact_grace_seconds
+        ):
+            conditions["artifact_stale"] = {
+                **base_payload,
+                "status": "artifact_stale",
+                "artifacts": [
+                    {
+                        "name": Path(str(item.get("name") or "")).name,
+                        "mtime_epoch": item.get("mtime_epoch"),
+                    }
+                    for item in artifacts
+                ],
+            }
+
+    if str(job.get("job_key") or "") == "chanjet.full":
+        token_path = os.getenv("CHANJET_OPEN_TOKEN_FILE", "").strip()
+        if token_path:
+            token = credential_status(token_path, now=now)
+            if not token["ok"]:
+                conditions["credential_expiring"] = {
+                    **base_payload,
+                    "status": "credential_expiring",
+                    "configured": bool(token["configured"]),
+                    "expired": bool(token["expired"]),
+                    "expires_at": _format_time(token["expires_at"]),
+                    "remaining_hours": token["remaining_hours"],
+                    "message": token["message"],
+                }
+
+    return conditions
+
+
+def _safe_send(
+    sender: Callable[[str, str], bool], chat_id: str, event: str, alert: dict[str, Any], now: datetime
+) -> bool:
+    if not chat_id:
+        return False
+    try:
+        return bool(sender(chat_id, build_alert_text(event, alert, now=now)))
+    except Exception as exc:
+        print(f"[sync-alert] sender failed: {type(exc).__name__}")
+        return False
+
+
+def run_notifier_once(
+    *, repository=None, sender=None, now=None
+) -> dict[str, int]:
+    current = _as_utc(now or datetime.now(timezone.utc))
+    escalation_seconds = _positive_env_seconds("SYNC_ALERT_ESCALATION_SECONDS", 21600)
+    artifact_grace_seconds = _positive_env_seconds("SYNC_ARTIFACT_GRACE_SECONDS", 300)
+    owned_connection = None
+    if repository is None:
+        from app.storage.postgres import connect
+
+        owned_connection = connect()
+        repository = SyncAlertRepository(
+            owned_connection, now_fn=lambda: current, escalation_seconds=escalation_seconds
+        )
+    else:
+        repository.escalation_seconds = escalation_seconds
+    send = sender or send_feishu_text
+    result = {
+        "checked": 0,
+        "opened": 0,
+        "resolved": 0,
+        "notified": 0,
+        "escalated": 0,
+        "cleaned": 0,
+    }
+
+    try:
+        states = repository.load_job_states()
+        result["checked"] = len(states)
+        for state in states:
+            job = state["job"]
+            if not job.get("enabled", True) or not job.get("alert_enabled", True):
+                continue
+            chat_id = str(job.get("alert_chat_id") or os.getenv("SYNC_ALERT_CHAT_ID", "")).strip()
+            conditions = _alert_conditions(
+                state, now=current, artifact_grace_seconds=artifact_grace_seconds
+            )
+            open_alerts = [
+                alert for alert in state.get("open_alerts", []) if isinstance(alert, dict)
+            ]
+            open_by_kind = {
+                str(alert.get("alert_kind")): alert for alert in open_alerts
+            }
+
+            for alert_kind, alert in open_by_kind.items():
+                if alert_kind in conditions:
+                    continue
+                recovery_payload = {
+                    "job_key": str(job.get("job_key") or ""),
+                    "display_name": str(job.get("display_name") or ""),
+                    "status": "recovered",
+                    "last_success_at": _format_time(_last_success_at(state)),
+                }
+                if repository.resolve_alert(
+                    int(alert["id"]),
+                    recovery_payload,
+                    lambda delivered, cid=chat_id: _safe_send(
+                        send, cid, "resolved", delivered, current
+                    ),
+                ):
+                    result["resolved"] += 1
+
+            due_alerts: list[tuple[int, bool]] = []
+            latest_run = state.get("latest_run")
+            run_id = int(latest_run["id"]) if isinstance(latest_run, dict) and latest_run.get("id") is not None else None
+            for alert_kind, payload in conditions.items():
+                existing = open_by_kind.get(alert_kind)
+                if existing is not None:
+                    due_alerts.append((int(existing["id"]), int(existing.get("notify_count") or 0) > 0))
+                    continue
+                alert_id = repository.claim_alert(
+                    job, run_id if alert_kind == "failed" else None, alert_kind, payload
+                )
+                if alert_id is not None:
+                    result["opened"] += 1
+                    due_alerts.append((int(alert_id), False))
+
+            for alert_id, is_escalation in due_alerts:
+                event = "escalate" if is_escalation else "open"
+                if repository.deliver_due(
+                    alert_id,
+                    lambda delivered, cid=chat_id, alert_event=event: _safe_send(
+                        send, cid, alert_event, delivered, current
+                    ),
+                ):
+                    result["notified"] += 1
+                    if is_escalation:
+                        result["escalated"] += 1
+
+        result["cleaned"] = int(repository.cleanup_steps() or 0)
+        return result
+    finally:
+        if owned_connection is not None:
+            owned_connection.close()
 
 
 class SyncAlertRepository:

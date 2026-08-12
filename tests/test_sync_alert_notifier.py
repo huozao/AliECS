@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -9,6 +11,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 
 WORKER_ROOT = Path(__file__).resolve().parents[1] / "services" / "doc-sync-worker"
@@ -542,6 +545,407 @@ class SyncAlertRepositoryTests(unittest.TestCase):
         self.assertIn("INTERVAL '30 days'", sql)
         self.assertIn("r.status <> 'success'", sql)
         self.assertIn("INTERVAL '90 days'", sql)
+
+
+class InMemoryAlertRepository:
+    def __init__(self, states: list[dict[str, Any]], *, now_fn) -> None:
+        self.states = states
+        self.now_fn = now_fn
+        self.escalation_seconds = 21600
+        self.alerts: dict[int, dict[str, Any]] = {}
+        self.next_id = 1
+        self.cleanup_calls = 0
+
+    def load_job_states(self) -> list[dict[str, Any]]:
+        result = []
+        for state in self.states:
+            item = dict(state)
+            item["open_alerts"] = [
+                dict(alert) for alert in self.alerts.values()
+                if alert["job_id"] == state["job"]["id"] and alert["state"] == "open"
+            ]
+            result.append(item)
+        return result
+
+    def claim_alert(
+        self, job: dict[str, Any], run_id: int | None, alert_kind: str, payload: dict[str, Any]
+    ) -> int | None:
+        if any(
+            alert["job_id"] == job["id"] and alert["alert_kind"] == alert_kind and alert["state"] == "open"
+            for alert in self.alerts.values()
+        ):
+            return None
+        alert_id = self.next_id
+        self.next_id += 1
+        self.alerts[alert_id] = {
+            "id": alert_id,
+            "job_id": job["id"],
+            "run_id": run_id,
+            "alert_kind": alert_kind,
+            "first_seen_at": self.now_fn(),
+            "last_notified_at": None,
+            "notify_count": 0,
+            "payload_json": dict(payload),
+            "state": "open",
+        }
+        return alert_id
+
+    def deliver_due(self, alert_id: int, sender) -> bool:
+        alert = self.alerts[alert_id]
+        if alert["state"] != "open":
+            return False
+        cutoff = self.now_fn() - timedelta(seconds=self.escalation_seconds)
+        if alert["last_notified_at"] is not None and alert["last_notified_at"] >= cutoff:
+            return False
+        delivered = dict(alert)
+        delivered.update(alert["payload_json"])
+        if not sender(delivered):
+            return False
+        alert["last_notified_at"] = self.now_fn()
+        alert["notify_count"] += 1
+        return True
+
+    def resolve_alert(self, alert_id: int, payload: dict[str, Any], sender) -> bool:
+        alert = self.alerts[alert_id]
+        delivered = dict(alert)
+        delivered.update(alert["payload_json"])
+        delivered.update(payload)
+        if alert["state"] != "open" or not sender(delivered):
+            return False
+        alert["state"] = "resolved"
+        alert["payload_json"] = dict(payload)
+        return True
+
+    def cleanup_steps(self) -> int:
+        self.cleanup_calls += 1
+        return 3
+
+
+class SyncAlertOrchestrationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._old_sys_path = list(sys.path)
+        self._old_env = os.environ.copy()
+        SyncAlertNotifierTests._clear_app_modules()
+        sys.path[:] = [item for item in sys.path if item != str(WORKER_ROOT)]
+        sys.path.insert(0, str(WORKER_ROOT))
+        from app.pipelines import sync_alert_notifier
+
+        self.notifier = sync_alert_notifier
+        self.now = NOW
+        self.sent: list[tuple[str, str]] = []
+        self.send_ok = True
+        self.job = {
+            "id": 7,
+            "job_key": "wecom.doc.17",
+            "provider": "wecom",
+            "display_name": "点检表",
+            "enabled": True,
+            "alert_enabled": True,
+            "alert_chat_id": "oc_job",
+            "freshness_sla_seconds": None,
+            "artifact_glob": None,
+        }
+        self.repository = InMemoryAlertRepository([], now_fn=lambda: self.now)
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._old_env)
+        SyncAlertNotifierTests._clear_app_modules()
+        sys.path[:] = self._old_sys_path
+
+    def sender(self, chat_id: str, text: str) -> bool:
+        self.sent.append((chat_id, text))
+        return self.send_ok
+
+    def advance(self, **delta: float) -> None:
+        self.now += timedelta(**delta)
+
+    def run_with_latest(
+        self,
+        *,
+        status: str,
+        run_id: int,
+        error_kind: str | None = None,
+        error_message: str | None = None,
+        latest_success_at: datetime | None = None,
+        latest_success_detail: dict[str, Any] | None = None,
+    ) -> dict[str, int]:
+        if latest_success_at is None and status == "success":
+            latest_success_at = self.now
+        latest_success = None
+        if latest_success_at is not None:
+            latest_success = {
+                "id": max(1, run_id - 1),
+                "started_at": latest_success_at,
+                "finished_at": latest_success_at,
+                "detail_json": latest_success_detail or {},
+            }
+        self.repository.states = [{
+            "job": dict(self.job),
+            "latest_run": {
+                "id": run_id,
+                "status": status,
+                "started_at": self.now,
+                "finished_at": self.now,
+                "error_kind": error_kind,
+                "error_message": error_message,
+                "detail_json": {},
+            },
+            "latest_success": latest_success,
+            "consecutive_failures": 1 if status in {"failed", "partial"} else 0,
+            "open_alerts": [],
+        }]
+        return self.notifier.run_notifier_once(
+            repository=self.repository, sender=self.sender, now=self.now
+        )
+
+    @staticmethod
+    def pick(result: dict[str, int], *keys: str) -> dict[str, int]:
+        return {key: result[key] for key in keys}
+
+    def test_failed_open_escalate_recover_and_reopen(self) -> None:
+        first = self.run_with_latest(
+            status="failed", run_id=10, error_kind="network",
+            error_message="timeout access_token=synthetic-secret",
+            latest_success_at=self.now - timedelta(hours=1),
+        )
+        self.assertEqual({"opened": 1, "notified": 1}, self.pick(first, "opened", "notified"))
+        payload = self.repository.alerts[1]["payload_json"]
+        self.assertEqual("network", payload["error_kind"])
+        self.assertEqual(1, payload["consecutive_failures"])
+        self.assertNotIn("synthetic-secret", repr(payload))
+        json.dumps(payload)
+
+        self.advance(hours=6)
+        self.assertEqual(0, self.run_with_latest(status="failed", run_id=10)["escalated"])
+        self.advance(seconds=1)
+        self.assertEqual(1, self.run_with_latest(status="failed", run_id=10)["escalated"])
+        self.assertEqual(1, self.run_with_latest(status="success", run_id=11)["resolved"])
+        self.assertEqual(1, self.run_with_latest(status="partial", run_id=12)["opened"])
+
+    def test_recovered_alert_past_escalation_threshold_only_resolves(self) -> None:
+        self.run_with_latest(status="failed", run_id=10, error_kind="network")
+        self.advance(hours=6, seconds=1)
+
+        result = self.run_with_latest(status="success", run_id=11)
+
+        self.assertEqual({"resolved": 1, "escalated": 0, "notified": 0}, self.pick(
+            result, "resolved", "escalated", "notified"
+        ))
+        self.assertIn("同步已恢复", self.sent[-1][1])
+
+    def test_stale_opens_then_resolves_inside_sla(self) -> None:
+        self.job["freshness_sla_seconds"] = 3600
+        result = self.run_with_latest(
+            status="success", run_id=10, latest_success_at=self.now - timedelta(hours=2)
+        )
+        self.assertEqual(1, result["opened"])
+        self.assertEqual("stale", self.repository.alerts[1]["alert_kind"])
+
+        result = self.run_with_latest(
+            status="success", run_id=11, latest_success_at=self.now - timedelta(minutes=30)
+        )
+        self.assertEqual(1, result["resolved"])
+
+    def test_artifact_snapshot_and_live_glob_open_then_resolve_without_path_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            artifact = Path(tmp) / "export.xlsx"
+            artifact.write_text("old", encoding="utf-8")
+            old_epoch = (self.now - timedelta(hours=2)).timestamp()
+            os.utime(artifact, (old_epoch, old_epoch))
+            self.job["artifact_glob"] = str(Path(tmp) / "*.xlsx")
+            snapshot = [{"name": str(artifact), "mtime_epoch": old_epoch}]
+
+            result = self.run_with_latest(
+                status="success", run_id=10, latest_success_at=self.now,
+                latest_success_detail={"artifacts": snapshot},
+            )
+            self.assertEqual(1, result["opened"])
+            self.assertEqual("artifact_stale", self.repository.alerts[1]["alert_kind"])
+            self.assertNotIn(tmp, repr(self.repository.alerts[1]["payload_json"]))
+
+            fresh_epoch = self.now.timestamp()
+            os.utime(artifact, (fresh_epoch, fresh_epoch))
+            result = self.run_with_latest(
+                status="success", run_id=11, latest_success_at=self.now,
+                latest_success_detail={"artifacts": snapshot},
+            )
+            self.assertEqual(1, result["resolved"])
+
+    def test_chanjet_token_expiring_opens_and_refresh_resolves_without_token_or_path(self) -> None:
+        self.job["job_key"] = "chanjet.full"
+        with tempfile.TemporaryDirectory() as tmp:
+            token_path = Path(tmp) / "open-token.txt"
+            os.environ["CHANJET_OPEN_TOKEN_FILE"] = str(token_path)
+            token_path.write_text(
+                make_unsigned_jwt({"exp": int((self.now + timedelta(days=3)).timestamp())}),
+                encoding="utf-8",
+            )
+            result = self.run_with_latest(status="success", run_id=10)
+            self.assertEqual(1, result["opened"])
+            self.assertEqual("credential_expiring", self.repository.alerts[1]["alert_kind"])
+            payload_text = repr(self.repository.alerts[1]["payload_json"])
+            self.assertNotIn(str(token_path), payload_text)
+            self.assertNotIn(token_path.read_text(encoding="utf-8"), payload_text)
+            json.dumps(self.repository.alerts[1]["payload_json"])
+
+            token_path.write_text(
+                make_unsigned_jwt({"exp": int((self.now + timedelta(days=5)).timestamp())}),
+                encoding="utf-8",
+            )
+            self.assertEqual(1, self.run_with_latest(status="success", run_id=11)["resolved"])
+
+    def test_alert_disabled_skips_all_conditions_but_still_cleans_up(self) -> None:
+        self.job["alert_enabled"] = False
+        result = self.run_with_latest(status="failed", run_id=10, error_kind="network")
+        self.assertEqual(0, result["opened"])
+        self.assertEqual({}, self.repository.alerts)
+        self.assertEqual(1, self.repository.cleanup_calls)
+        self.assertEqual(3, result["cleaned"])
+
+    def test_job_chat_overrides_global_and_failed_send_retries_next_poll(self) -> None:
+        os.environ["SYNC_ALERT_CHAT_ID"] = "oc_global"
+        self.send_ok = False
+        first = self.run_with_latest(status="failed", run_id=10, error_kind="network")
+        self.assertEqual({"opened": 1, "notified": 0}, self.pick(first, "opened", "notified"))
+        self.assertEqual("oc_job", self.sent[-1][0])
+
+        self.send_ok = True
+        second = self.run_with_latest(status="failed", run_id=10, error_kind="network")
+        self.assertEqual(1, second["notified"])
+        self.assertEqual(2, len(self.sent))
+
+    def test_missing_chat_records_open_without_calling_sender(self) -> None:
+        self.job["alert_chat_id"] = ""
+        os.environ.pop("SYNC_ALERT_CHAT_ID", None)
+        result = self.run_with_latest(status="partial", run_id=10, error_kind="schema")
+        self.assertEqual({"opened": 1, "notified": 0}, self.pick(result, "opened", "notified"))
+        self.assertEqual([], self.sent)
+
+    def test_missing_feishu_credentials_records_open_for_later_retry(self) -> None:
+        state = {
+            "job": dict(self.job),
+            "latest_run": {
+                "id": 10, "status": "failed", "started_at": self.now,
+                "finished_at": self.now, "error_kind": "network",
+                "error_message": "timeout", "detail_json": {},
+            },
+            "latest_success": None,
+            "consecutive_failures": 1,
+            "open_alerts": [],
+        }
+        self.repository.states = [state]
+        with mock.patch.object(self.notifier, "credentials_for_profile", return_value=[]):
+            result = self.notifier.run_notifier_once(repository=self.repository, now=self.now)
+        self.assertEqual({"opened": 1, "notified": 0}, self.pick(result, "opened", "notified"))
+        self.assertEqual("open", self.repository.alerts[1]["state"])
+
+    def test_failed_and_stale_can_coexist_without_parent_match_business_message(self) -> None:
+        self.job["freshness_sla_seconds"] = 60
+        from app.pipelines import tplus_parent_match
+
+        with mock.patch.object(tplus_parent_match, "send_feishu_alert") as business_sender:
+            result = self.run_with_latest(
+                status="failed", run_id=10, error_kind="network",
+                latest_success_at=self.now - timedelta(hours=2),
+            )
+        self.assertEqual(2, result["opened"])
+        self.assertEqual(2, result["notified"])
+        self.assertEqual({"failed", "stale"}, {
+            alert["alert_kind"] for alert in self.repository.alerts.values()
+        })
+        run_ids = {
+            alert["alert_kind"]: alert["run_id"] for alert in self.repository.alerts.values()
+        }
+        self.assertEqual({"failed": 10, "stale": None}, run_ids)
+        business_sender.assert_not_called()
+
+    def test_custom_positive_intervals_and_fallbacks_are_applied(self) -> None:
+        os.environ["SYNC_ALERT_ESCALATION_SECONDS"] = "12"
+        os.environ["SYNC_ARTIFACT_GRACE_SECONDS"] = "7"
+        with mock.patch.object(self.notifier, "artifact_is_stale", return_value=False) as predicate:
+            self.job["artifact_glob"] = "missing/*.xlsx"
+            self.run_with_latest(status="success", run_id=10, latest_success_at=self.now)
+        self.assertEqual(12, self.repository.escalation_seconds)
+        self.assertEqual(7, predicate.call_args.kwargs["grace_seconds"])
+
+        os.environ["SYNC_ALERT_ESCALATION_SECONDS"] = "0"
+        os.environ["SYNC_ARTIFACT_GRACE_SECONDS"] = "invalid"
+        with mock.patch.object(self.notifier, "artifact_is_stale", return_value=False) as predicate:
+            self.run_with_latest(status="success", run_id=11, latest_success_at=self.now)
+        self.assertEqual(21600, self.repository.escalation_seconds)
+        self.assertEqual(300, predicate.call_args.kwargs["grace_seconds"])
+
+
+class FeishuAlertSenderTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._old_sys_path = list(sys.path)
+        SyncAlertNotifierTests._clear_app_modules()
+        sys.path[:] = [item for item in sys.path if item != str(WORKER_ROOT)]
+        sys.path.insert(0, str(WORKER_ROOT))
+        from app.pipelines import sync_alert_notifier
+
+        self.notifier = sync_alert_notifier
+
+    def tearDown(self) -> None:
+        SyncAlertNotifierTests._clear_app_modules()
+        sys.path[:] = self._old_sys_path
+
+    def test_missing_credentials_returns_false_without_request(self) -> None:
+        with mock.patch.object(self.notifier, "credentials_for_profile", return_value=[]), mock.patch.object(
+            self.notifier, "FeishuBitableClient"
+        ) as client:
+            self.assertFalse(self.notifier.send_feishu_text("oc_alert", "hello"))
+        client.assert_not_called()
+
+    def test_sender_posts_feishu_text_with_configured_profile(self) -> None:
+        credential = mock.Mock(app_id="app", app_secret="secret", api_base="https://feishu.invalid")
+        client = mock.Mock()
+        client._headers.return_value = {"Authorization": "Bearer tenant"}
+        with mock.patch.dict(os.environ, {"SYNC_ALERT_FEISHU_PROFILE": "OPS"}, clear=False), mock.patch.object(
+            self.notifier, "credentials_for_profile", return_value=[credential]
+        ) as load_credentials, mock.patch.object(
+            self.notifier, "FeishuBitableClient", return_value=client
+        ):
+            self.assertTrue(self.notifier.send_feishu_text("oc_alert", "同步异常"))
+
+        load_credentials.assert_called_once_with("OPS")
+        client._request_json.assert_called_once_with(
+            "POST", "/im/v1/messages",
+            headers={"Authorization": "Bearer tenant"},
+            params={"receive_id_type": "chat_id"},
+            json={
+                "receive_id": "oc_alert",
+                "msg_type": "text",
+                "content": json.dumps({"text": "同步异常"}, ensure_ascii=False),
+            },
+        )
+
+    def test_sender_exception_log_contains_only_exception_type(self) -> None:
+        credential = mock.Mock(app_id="app", app_secret="secret", api_base="https://feishu.invalid")
+        client = mock.Mock()
+        client._headers.side_effect = RuntimeError("response synthetic-secret oc_sensitive")
+        output = io.StringIO()
+        with mock.patch.object(
+            self.notifier, "credentials_for_profile", return_value=[credential]
+        ), mock.patch.object(
+            self.notifier, "FeishuBitableClient", return_value=client
+        ), mock.patch("sys.stdout", output):
+            self.assertFalse(self.notifier.send_feishu_text("oc_sensitive", "hello"))
+        self.assertIn("RuntimeError", output.getvalue())
+        self.assertNotIn("synthetic-secret", output.getvalue())
+        self.assertNotIn("oc_sensitive", output.getvalue())
+
+    def test_credential_loader_exception_is_safely_reported(self) -> None:
+        output = io.StringIO()
+        with mock.patch.object(
+            self.notifier, "credentials_for_profile",
+            side_effect=RuntimeError("synthetic-secret oc_sensitive"),
+        ), mock.patch("sys.stdout", output):
+            self.assertFalse(self.notifier.send_feishu_text("oc_sensitive", "hello"))
+        self.assertIn("RuntimeError", output.getvalue())
+        self.assertNotIn("synthetic-secret", output.getvalue())
+        self.assertNotIn("oc_sensitive", output.getvalue())
 
 
 if __name__ == "__main__":
