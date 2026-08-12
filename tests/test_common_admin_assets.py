@@ -8,6 +8,7 @@ PUBLIC_WEB = Path(__file__).resolve().parents[1] / "services" / "public-web"
 ADMIN_CSS = PUBLIC_WEB / "common" / "admin.css"
 EXPORTS_PAGE = PUBLIC_WEB / "exports" / "index.html"
 TPLUS_PAGE = PUBLIC_WEB / "tplus-sync" / "index.html"
+SYNC_PAGE = PUBLIC_WEB / "sync" / "index.html"
 
 
 class AdminCssTests(unittest.TestCase):
@@ -26,15 +27,15 @@ class AdminCssTests(unittest.TestCase):
         ):
             self.assertIn(selector, css, f"admin.css 缺少 {selector}")
 
-    def test_both_pages_link_admin_css(self) -> None:
-        for page in (EXPORTS_PAGE, TPLUS_PAGE):
+    def test_admin_pages_link_admin_css(self) -> None:
+        for page in (EXPORTS_PAGE, TPLUS_PAGE, SYNC_PAGE):
             html = page.read_text(encoding="utf-8")
             self.assertIn('<link rel="stylesheet" href="/common/admin.css"/>', html,
                           f"{page.name} 未引用 admin.css")
 
     def test_pages_no_longer_inline_the_shared_css(self) -> None:
         # 抽取的意义就是不留第二份；留着就会各自漂移。
-        for page in (EXPORTS_PAGE, TPLUS_PAGE):
+        for page in (EXPORTS_PAGE, TPLUS_PAGE, SYNC_PAGE):
             html = page.read_text(encoding="utf-8")
             self.assertNotIn("--bg:#f7f5f0", html,
                              f"{page.name} 仍内联着共享 CSS 变量")
@@ -61,14 +62,14 @@ class AdminAuthJsTests(unittest.TestCase):
         # 两页的 applyGate 唯一差异就是管理员分支加载什么，用回调收敛。
         self.assertIn("function applyGate(me, onAdmin)", self.js)
 
-    def test_both_pages_load_admin_auth_before_use(self) -> None:
-        for page in (EXPORTS_PAGE, TPLUS_PAGE):
+    def test_admin_pages_load_admin_auth_before_use(self) -> None:
+        for page in (EXPORTS_PAGE, TPLUS_PAGE, SYNC_PAGE):
             html = page.read_text(encoding="utf-8")
             self.assertIn('<script src="/common/admin-auth.js"></script>', html,
                           f"{page.name} 未引用 admin-auth.js")
 
     def test_pages_no_longer_define_shared_helpers(self) -> None:
-        for page in (EXPORTS_PAGE, TPLUS_PAGE):
+        for page in (EXPORTS_PAGE, TPLUS_PAGE, SYNC_PAGE):
             html = page.read_text(encoding="utf-8")
             self.assertNotIn("async function api(", html,
                              f"{page.name} 仍自带一份 api()")

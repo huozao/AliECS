@@ -95,6 +95,13 @@ class SyncFrontendTests(unittest.TestCase):
         self.assertNotIn("runJob", self.html)
         self.assertNotIn("saveJob", self.html)
 
+    def test_detail_drawer_contract_is_present(self) -> None:
+        for dom_id in ("runDrawerCloseBtn", "runDetailBody"):
+            self.assertIn(f'id="{dom_id}"', self.html)
+        self.assertIn("/v1/sync/runs/${runId}", self.html)
+        self.assertIn("function openRunDetail(", self.html)
+        self.assertIn("function renderSteps(", self.html)
+
     def _run_timeline_probe(self, scenario: str) -> None:
         harness = textwrap.dedent(
             r"""
@@ -107,11 +114,16 @@ class SyncFrontendTests(unittest.TestCase):
             const source=html.slice(start,end);
             const elements={};
             function element(id){
+              const classes=new Set();
               return elements[id]||(elements[id]={id,value:'',innerHTML:'',textContent:'',disabled:false,
-                classList:{add(){},remove(){},toggle(){}},onclick:null,onchange:null});
+                classList:{add(...names){names.forEach((name)=>classes.add(name));},
+                  remove(...names){names.forEach((name)=>classes.delete(name));},
+                  toggle(name){classes.has(name)?classes.delete(name):classes.add(name);},
+                  contains(name){return classes.has(name);}},onclick:null,onchange:null});
             }
             const ids=['providerFilter','statusFilter','jobFilter','timelinePrevBtn','timelineNextBtn',
-              'timelinePageInfo','timelineList','syncSummary','jobList','alertList','refreshBtn','loginBtn','logoutBtn'];
+              'timelinePageInfo','timelineList','syncSummary','jobList','alertList','refreshBtn','loginBtn','logoutBtn',
+              'runDrawer','runDrawerCloseBtn','runDetailBody'];
             ids.forEach(element);
             const pending=[];
             function api(path){
@@ -124,22 +136,53 @@ class SyncFrontendTests(unittest.TestCase):
               '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;',
             }[char]));
             const toasts=[];
+            const timers=new Map();
+            let nextTimerId=1;
+            function fakeSetTimeout(callback,delay){
+              const id=nextTimerId++;
+              timers.set(id,{callback,delay});
+              return id;
+            }
+            function fakeClearTimeout(id){timers.delete(id);}
+            function fireNextTimer(){
+              const entry=timers.entries().next();
+              if(entry.done)throw new Error('no pending timer');
+              const [id,timer]=entry.value;
+              timers.delete(id);
+              timer.callback();
+              return timer;
+            }
+            const windowHandlers={};
             const context={console,Promise,URLSearchParams,location:{search:'',pathname:'/sync/'},
               document:{getElementById:element},AliECSToast:{show(text,type){toasts.push({text,type});}},
               AliECSAdmin:{api,fetchMe:async()=>null,esc,fmtTime:(value)=>value||'-',
                 chip:(value)=>`<span>${value}</span>`,clearAuthToken(){},ssoLogin(){},applyGate(){}},
-              setTimeout,clearTimeout};
+              window:{addEventListener(type,handler){windowHandlers[type]=handler;}},
+              setTimeout:fakeSetTimeout,clearTimeout:fakeClearTimeout};
             ids.forEach((id)=>{context[id]=element(id);});
             vm.createContext(context);
             vm.runInContext(source,context);
             function run(name){return {id:1,display_name:name,job_key:name,provider:'wecom',trigger:'manual',
               status:'success',started_at:'2026-08-12T00:00:00Z',duration_seconds:1,row_count:1,changed_count:0,
               error_label:'',error_message:''};}
+            function detail(id,status,options={}){
+              const finished=status==='running'?null:'2026-08-12T00:00:03Z';
+              return {run:{id,job_key:`job-${id}`,display_name:options.name||`run-${id}`,provider:'wecom',
+                kind:'document',trigger:'manual',status,started_at:'2026-08-12T00:00:00Z',finished_at:finished,
+                row_count:3,changed_count:1,error_kind:options.errorKind||null,error_label:options.errorLabel||'',
+                error_message:options.errorMessage||'',detail_json:{secret:'must-not-render'},
+                legacy_ref:{external_doc_id:'must-not-render'},duration_seconds:status==='running'?2:3},
+                steps:[{seq:1,name:options.stepName||'fetch',status:options.stepStatus||status,
+                  started_at:'2026-08-12T00:00:00Z',finished_at:finished,items:3,
+                  message:options.stepMessage||null,duration_seconds:999}],
+                reconciliation_id:null};
+            }
             """
         ) + scenario
         result = subprocess.run(
             ["node", "-e", harness, str(SYNC_PAGE)],
             text=True,
+            encoding="utf-8",
             capture_output=True,
             check=False,
         )
@@ -205,6 +248,146 @@ class SyncFrontendTests(unittest.TestCase):
                   if(vm.runInContext('state.timelineLoading',context)!==false)throw new Error('loading state did not recover');
                   if(!elements.timelinePrevBtn.disabled||elements.timelineNextBtn.disabled)throw new Error('pager state does not match page one');
                   if(toasts.length!==1)throw new Error(`expected 1 toast, got ${toasts.length}`);
+                })().catch((error)=>{console.error(error.stack||error);process.exitCode=1;});
+                """
+            )
+        )
+
+    def test_detail_renders_safe_run_and_step_fields(self) -> None:
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                (async()=>{
+                  const opened=vm.runInContext('openRunDetail(7)',context);
+                  if(pending.length!==1||pending[0].path!=='/v1/sync/runs/7')throw new Error('wrong detail request');
+                  pending[0].resolve(detail(7,'failed',{name:'<run-seven>',errorKind:'write',
+                    errorLabel:'写入失败',errorMessage:'<run-error>',stepStatus:'failed',
+                    stepName:'<write>',stepMessage:'<step-error>'}));
+                  await opened;
+                  const body=elements.runDetailBody.innerHTML;
+                  if(!elements.runDrawer.classList.contains('show'))throw new Error('drawer did not open');
+                  for(const expected of ['&lt;run-seven&gt;','写入失败','&lt;run-error&gt;',
+                    '&lt;write&gt;','&lt;step-error&gt;','3 秒']){
+                    if(!body.includes(expected))throw new Error(`missing safe field ${expected}: ${body}`);
+                  }
+                  for(const leaked of ['<run-seven>','<run-error>','<write>','<step-error>',
+                    'must-not-render','external_doc_id','16 分 39 秒']){
+                    if(body.includes(leaked))throw new Error(`unsafe/raw detail leaked: ${leaked}`);
+                  }
+                })().catch((error)=>{console.error(error.stack||error);process.exitCode=1;});
+                """
+            )
+        )
+
+    def test_closing_drawer_invalidates_late_detail_response(self) -> None:
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                (async()=>{
+                  const opened=vm.runInContext('openRunDetail(1)',context);
+                  elements.runDrawerCloseBtn.onclick();
+                  pending[0].resolve(detail(1,'success',{name:'late-run'}));
+                  await opened;
+                  if(elements.runDrawer.classList.contains('show'))throw new Error('late response reopened drawer');
+                  if(elements.runDetailBody.innerHTML.includes('late-run'))throw new Error('late response rendered after close');
+                  if(vm.runInContext('openRunId',context)!==null)throw new Error('closed run remains active');
+                })().catch((error)=>{console.error(error.stack||error);process.exitCode=1;});
+                """
+            )
+        )
+
+    def test_switching_runs_commits_only_latest_detail_response(self) -> None:
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                (async()=>{
+                  const first=vm.runInContext('openRunDetail(1)',context);
+                  const second=vm.runInContext('openRunDetail(2)',context);
+                  pending[1].resolve(detail(2,'success',{name:'new-run'}));
+                  await second;
+                  pending[0].resolve(detail(1,'success',{name:'old-run'}));
+                  await first;
+                  const body=elements.runDetailBody.innerHTML;
+                  if(!body.includes('new-run'))throw new Error('latest detail missing');
+                  if(body.includes('old-run'))throw new Error('stale detail overwrote latest');
+                  if(vm.runInContext('openRunId',context)!=='2')throw new Error('wrong active run');
+                })().catch((error)=>{console.error(error.stack||error);process.exitCode=1;});
+                """
+            )
+        )
+
+    def test_stale_detail_error_cannot_replace_or_report_over_latest_run(self) -> None:
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                (async()=>{
+                  const first=vm.runInContext('openRunDetail(1)',context);
+                  const second=vm.runInContext('openRunDetail(2)',context);
+                  pending[1].resolve(detail(2,'success',{name:'latest-run'}));
+                  await second;
+                  pending[0].reject(new Error('stale failure'));
+                  await first;
+                  const body=elements.runDetailBody.innerHTML;
+                  if(!body.includes('latest-run')||body.includes('stale failure'))throw new Error('stale error changed detail');
+                  if(toasts.length!==0)throw new Error('stale error emitted a toast');
+                })().catch((error)=>{console.error(error.stack||error);process.exitCode=1;});
+                """
+            )
+        )
+
+    def test_running_poll_is_three_seconds_non_overlapping_and_stops_at_terminal(self) -> None:
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                (async()=>{
+                  const opened=vm.runInContext('openRunDetail(3)',context);
+                  pending[0].resolve(detail(3,'running'));
+                  await opened;
+                  if(timers.size!==1)throw new Error(`expected one poll timer, got ${timers.size}`);
+                  if([...timers.values()][0].delay!==3000)throw new Error('poll delay is not 3000ms');
+                  fireNextTimer();
+                  await Promise.resolve();
+                  if(pending.length!==2||pending[1].path!=='/v1/sync/runs/3')throw new Error('poll request missing');
+                  if(timers.size!==0)throw new Error('poll overlapped in-flight request');
+                  pending[1].resolve(detail(3,'success'));
+                  await Promise.resolve();await Promise.resolve();
+                  if(timers.size!==0)throw new Error('terminal run kept polling');
+                  if(pending.length!==4)throw new Error(`terminal refresh missing: ${pending.length}`);
+                  if(pending[2].path!=='/v1/sync/overview'||!pending[3].path.startsWith('/v1/sync/runs?')){
+                    throw new Error(`wrong terminal refresh: ${pending.slice(2).map((item)=>item.path)}`);
+                  }
+                  pending[2].resolve({summary:{},items:[]});
+                  pending[3].resolve({items:[],total:0});
+                  await Promise.resolve();await Promise.resolve();
+                })().catch((error)=>{console.error(error.stack||error);process.exitCode=1;});
+                """
+            )
+        )
+
+    def test_poll_error_retries_after_delay_and_close_or_unload_cancels_timer(self) -> None:
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                (async()=>{
+                  const opened=vm.runInContext('openRunDetail(4)',context);
+                  pending[0].resolve(detail(4,'running'));
+                  await opened;
+                  fireNextTimer();
+                  await Promise.resolve();
+                  pending[1].reject(new Error('network down'));
+                  await pending[1].promise.catch(()=>{});
+                  await Promise.resolve();await Promise.resolve();
+                  if(toasts.length!==1||!toasts[0].text.includes('network down'))throw new Error('poll error not surfaced');
+                  if(timers.size!==1||[...timers.values()][0].delay!==3000)throw new Error('poll error did not retry after delay');
+                  windowHandlers.beforeunload();
+                  if(timers.size!==0)throw new Error('beforeunload did not cancel poll');
+
+                  const reopened=vm.runInContext('openRunDetail(5)',context);
+                  pending[2].resolve(detail(5,'running'));
+                  await reopened;
+                  if(timers.size!==1)throw new Error('reopened running detail did not poll');
+                  elements.runDrawerCloseBtn.onclick();
+                  if(timers.size!==0)throw new Error('close did not cancel poll');
                 })().catch((error)=>{console.error(error.stack||error);process.exitCode=1;});
                 """
             )

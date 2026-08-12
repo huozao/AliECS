@@ -52,11 +52,13 @@ class HealthFrontendTests(unittest.TestCase):
         self.assertIn("新数量", tplus_html)
 
     def test_health_has_card_links_to_new_pages(self) -> None:
-        """Health dashboard has card entries to /tplus-sync/ and /exports/."""
+        """Health dashboard keeps old cards and adds the read-only sync center."""
         self.assertIn('href="/tplus-sync/"', self.html)
         self.assertIn('href="/exports/"', self.html)
+        self.assertIn('href="/sync/"', self.html)
         # #188 移动端重设计把「畅捷通同步」卡片标题改为「T+ 同步时间线」，归入「同步与工具」分区
         self.assertIn("T+ 同步时间线", self.html)
+        self.assertIn("统一同步中心", self.html)
 
     def test_health_no_longer_contains_moved_functions(self) -> None:
         """Timeline and exports JS must not remain in health."""

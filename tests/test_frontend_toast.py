@@ -23,6 +23,7 @@ TOAST_PAGES = [
     "public-web/inventory/raw-materials/index.html",
     "public-web/bom-builder/index.html",
     "public-web/quality-reports/index.html",
+    "public-web/sync/index.html",
     "admin-ui/index.html",
 ]
 
