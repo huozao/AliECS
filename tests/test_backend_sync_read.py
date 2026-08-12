@@ -210,6 +210,36 @@ class FakeConnection:
         return "\n".join(sql for sql, _ in self.queries)
 
 
+def run_row(
+    *,
+    run_id: int = 91,
+    job_key: str = "wecom.doc.17",
+    provider: str = "wecom",
+    status: str = "failed",
+    started_at: datetime | None = None,
+    finished_at: datetime | None = None,
+    error_kind: str | None = "rate_limit",
+    detail_json: dict[str, Any] | None = None,
+) -> tuple[Any, ...]:
+    return (
+        run_id,
+        job_key,
+        "同步作业",
+        provider,
+        "pull",
+        "schedule",
+        status,
+        started_at if started_at is not None else NOW - timedelta(minutes=5),
+        finished_at,
+        120,
+        12,
+        error_kind,
+        "sanitized failure" if error_kind else None,
+        detail_json or {},
+        {"table": "sync_runs", "id": 7},
+    )
+
+
 def overview_row(
     *,
     job_key: str,
@@ -405,6 +435,208 @@ class AlertReadTests(SyncReadTestCase):
         self.assertNotIn("a.state = %s", conn.joined_sql())
         self.assertEqual((), conn.queries[0][1])
         self.assertEqual((25, 75), conn.queries[1][1])
+
+
+class RunTimelineReadTests(SyncReadTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        if not hasattr(sync_read, "runs_page"):
+            self.fail("sync_read.runs_page is not implemented")
+
+    def test_global_filters_and_paging_are_parameterized_with_one_predicate(self):
+        hostile_job = "wecom.doc.17' OR TRUE --"
+        conn = FakeConnection([(87,)], [run_row()])
+
+        page = sync_read.runs_page(
+            conn,
+            job_key=hostile_job,
+            provider="wecom",
+            status="failed",
+            limit=20,
+            offset=40,
+            now=NOW,
+        )
+
+        self.assertEqual(87, page["total"])
+        self.assertEqual(91, page["items"][0]["id"])
+        sql = conn.joined_sql()
+        for predicate in ("j.job_key = %s", "j.provider = %s", "r.status = %s"):
+            self.assertEqual(2, sql.count(predicate))
+        for value in (hostile_job, "wecom", "failed"):
+            self.assertNotIn(value, sql)
+        expected_filters = (hostile_job, "wecom", "failed")
+        self.assertEqual(expected_filters, conn.queries[0][1])
+        self.assertEqual((*expected_filters, 20, 40), conn.queries[1][1])
+
+    def test_runs_have_stable_global_order_and_complete_read_shape(self):
+        conn = FakeConnection([(1,)], [run_row(finished_at=NOW)])
+
+        page = sync_read.runs_page(
+            conn,
+            job_key=None,
+            provider=None,
+            status=None,
+            limit=20,
+            offset=0,
+            now=NOW,
+        )
+
+        self.assertIn("ORDER BY r.started_at DESC, r.id DESC", conn.joined_sql())
+        self.assertEqual(
+            {
+                "id",
+                "job_key",
+                "display_name",
+                "provider",
+                "kind",
+                "trigger",
+                "status",
+                "started_at",
+                "finished_at",
+                "row_count",
+                "changed_count",
+                "error_kind",
+                "error_label",
+                "error_message",
+                "detail_json",
+                "legacy_ref",
+                "duration_seconds",
+            },
+            set(page["items"][0]),
+        )
+        self.assertEqual("请求限流", page["items"][0]["error_label"])
+        self.assertEqual(300.0, page["items"][0]["duration_seconds"])
+
+    def test_duration_handles_running_missing_finish_and_negative_clock(self):
+        rows = [
+            run_row(
+                run_id=1,
+                status="running",
+                started_at=NOW - timedelta(seconds=5),
+                finished_at=None,
+                error_kind=None,
+            ),
+            run_row(
+                run_id=2,
+                status="failed",
+                started_at=NOW - timedelta(seconds=5),
+                finished_at=None,
+            ),
+            run_row(
+                run_id=3,
+                status="success",
+                started_at=NOW,
+                finished_at=NOW - timedelta(seconds=5),
+                error_kind=None,
+            ),
+        ]
+        conn = FakeConnection([(3,)], rows)
+
+        page = sync_read.runs_page(
+            conn,
+            job_key=None,
+            provider=None,
+            status=None,
+            limit=20,
+            offset=0,
+            now=NOW,
+        )
+
+        self.assertEqual(
+            [5.0, None, 0.0],
+            [item["duration_seconds"] for item in page["items"]],
+        )
+
+    def test_job_existence_query_uses_job_key_as_a_value(self):
+        hostile_job = "missing' OR TRUE --"
+        conn = FakeConnection([])
+
+        self.assertFalse(sync_read.job_exists(conn, hostile_job))
+
+        self.assertIn("WHERE job_key = %s", conn.queries[0][0])
+        self.assertNotIn(hostile_job, conn.queries[0][0])
+        self.assertEqual((hostile_job,), conn.queries[0][1])
+
+
+class RunDetailReadTests(SyncReadTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        if not hasattr(sync_read, "run_detail"):
+            self.fail("sync_read.run_detail is not implemented")
+
+    def test_run_detail_orders_steps_labels_error_and_computes_durations(self):
+        steps = [
+            (1, "token", "success", NOW - timedelta(seconds=4), NOW - timedelta(seconds=3), 0, None),
+            (2, "fetch", "running", NOW - timedelta(seconds=2), None, 40, None),
+            (3, "write", "failed", NOW, NOW - timedelta(seconds=1), 0, "sanitized step failure"),
+        ]
+        conn = FakeConnection(
+            [run_row(finished_at=NOW)],
+            steps,
+        )
+
+        detail = sync_read.run_detail(conn, 91, now=NOW)
+
+        self.assertEqual([1, 2, 3], [step["seq"] for step in detail["steps"]])
+        self.assertIn("ORDER BY seq ASC", conn.queries[1][0])
+        self.assertEqual("请求限流", detail["run"]["error_label"])
+        self.assertEqual([1.0, 2.0, 0.0], [step["duration_seconds"] for step in detail["steps"]])
+        self.assertEqual("sanitized step failure", detail["steps"][2]["message"])
+        self.assertIsNone(detail["reconciliation_id"])
+        self.assertNotIn("integration_reconciliation_diffs", conn.joined_sql())
+
+    def test_chanjet_full_uses_snapshot_id_for_bom_reconciliation_only(self):
+        conn = FakeConnection(
+            [
+                run_row(
+                    job_key="chanjet.full",
+                    provider="chanjet",
+                    status="success",
+                    finished_at=NOW,
+                    error_kind=None,
+                    detail_json={"full_snapshot_id": 812},
+                )
+            ],
+            [],
+            [(777,)],
+        )
+
+        detail = sync_read.run_detail(conn, 91, now=NOW)
+
+        self.assertEqual(777, detail["reconciliation_id"])
+        reconciliation_sql, params = conn.queries[2]
+        self.assertIn("FROM integration_reconciliation_diffs", reconciliation_sql)
+        self.assertIn("provider = 'chanjet'", reconciliation_sql)
+        self.assertIn("module = 'bom'", reconciliation_sql)
+        self.assertIn("full_snapshot_id = %s", reconciliation_sql)
+        self.assertIn("ORDER BY created_at DESC, id DESC", reconciliation_sql)
+        self.assertEqual((812,), params)
+
+    def test_chanjet_full_without_matching_diff_returns_null(self):
+        conn = FakeConnection(
+            [
+                run_row(
+                    job_key="chanjet.full",
+                    provider="chanjet",
+                    status="success",
+                    finished_at=NOW,
+                    error_kind=None,
+                    detail_json={"full_snapshot_id": 812},
+                )
+            ],
+            [],
+            [],
+        )
+
+        detail = sync_read.run_detail(conn, 91, now=NOW)
+
+        self.assertIsNone(detail["reconciliation_id"])
+
+    def test_missing_run_returns_none_without_followup_queries(self):
+        conn = FakeConnection([])
+
+        self.assertIsNone(sync_read.run_detail(conn, 404, now=NOW))
+        self.assertEqual(1, len(conn.queries))
 
 
 if __name__ == "__main__":
