@@ -2,6 +2,8 @@ import os
 import tempfile
 import unittest
 from contextlib import ExitStack
+from datetime import datetime, timezone
+import json
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -212,7 +214,10 @@ class JobSyncAllPlatformTests(unittest.TestCase):
             detail = platform.finished[-1]["detail_json"]
             self.assertEqual("物料清单合并_20260812.xlsx", detail["artifacts"][0]["name"])
             self.assertEqual(expected_epoch, detail["artifacts"][0]["mtime_epoch"])
-            self.assertIn("mtime", detail["artifacts"][0])
+            recorded_mtime = datetime.fromisoformat(detail["artifacts"][0]["mtime"])
+            self.assertEqual(timezone.utc, recorded_mtime.tzinfo)
+            self.assertEqual(expected_epoch, recorded_mtime.timestamp())
+            json.dumps(detail)
             self.assertNotIn(temporary_directory, repr(detail))
 
     def test_platform_detail_keeps_legacy_export_when_artifact_stat_fails(self):

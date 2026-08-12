@@ -71,6 +71,55 @@ class RecordingConnection:
         return "\n".join(sql for sql, _ in self.committed)
 
 
+class TransactionalDefaultsCursor:
+    def __init__(self, conn: "TransactionalDefaultsConnection") -> None:
+        self.conn = conn
+        self.rows: list[Any] = []
+        self.rowcount = 0
+
+    def __enter__(self) -> "TransactionalDefaultsCursor":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def execute(self, sql: str, _params: tuple[object, ...] | None = None) -> None:
+        if self.conn.aborted:
+            raise RuntimeError("transaction is aborted")
+        if "UPDATE sync_jobs" in sql:
+            self.conn.aborted = True
+            raise RuntimeError("synthetic defaults failure")
+        if "FROM sync_jobs j" in sql:
+            self.conn.load_calls += 1
+            self.rows = [(
+                7, "chanjet.full", "chanjet", "T+ 全量同步", False, True, "", None, None,
+                None, None, None, None, None, None, None, None, None, None, None, 0, [],
+            )]
+        elif "DELETE FROM sync_job_steps" in sql:
+            self.rowcount = 3
+
+    def fetchall(self) -> list[Any]:
+        return self.rows
+
+
+class TransactionalDefaultsConnection:
+    def __init__(self) -> None:
+        self.aborted = False
+        self.rollback_count = 0
+        self.load_calls = 0
+
+    def cursor(self) -> TransactionalDefaultsCursor:
+        return TransactionalDefaultsCursor(self)
+
+    def commit(self) -> None:
+        if self.aborted:
+            raise RuntimeError("transaction is aborted")
+
+    def rollback(self) -> None:
+        self.aborted = False
+        self.rollback_count += 1
+
+
 class SharedAlertBackend:
     def __init__(self) -> None:
         self.open = True
@@ -364,6 +413,21 @@ class SyncAlertRepositoryTests(unittest.TestCase):
         self.assertEqual(
             (172800, "/app/tplus-output/excel/*.xlsx", "chanjet.full"),
             self.conn.committed[-1][1],
+        )
+
+    def test_notifier_rolls_back_failed_defaults_before_loading_on_same_connection(self) -> None:
+        connection = TransactionalDefaultsConnection()
+        repository = self.notifier.SyncAlertRepository(connection, now_fn=lambda: NOW)
+
+        result = self.notifier.run_notifier_once(
+            repository=repository, sender=lambda *_args: True, now=NOW
+        )
+
+        self.assertEqual(1, connection.rollback_count)
+        self.assertEqual(1, connection.load_calls)
+        self.assertEqual(
+            {"checked": 1, "opened": 0, "resolved": 0, "notified": 0, "escalated": 0, "cleaned": 3},
+            result,
         )
 
     def test_claim_uses_jsonb_payload_and_returns_none_when_already_open(self) -> None:
