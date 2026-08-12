@@ -1,0 +1,62 @@
+  # 禁用 QUIC / UDP 443，强制回落 TCP
+  - AND,((NETWORK,UDP),(DST-PORT,443)),REJECT
+  # 本机 / 局域网直连
+  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
+  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+  - IP-CIDR,100.64.0.0/10,DIRECT,no-resolve
+
+  # 自建节点服务器地址的直连规则不在这里 —— 由 render.py 从节点定义运行时推导后
+  # 插在本文件之前。写死在模板里既是硬编码，也会把节点地址带进 public 仓库。
+
+  # 阿里云相关直连
+  - DOMAIN-SUFFIX,aliyun.com,DIRECT
+  - DOMAIN-SUFFIX,alibabacloud.com,DIRECT
+  - DOMAIN-SUFFIX,alicdn.com,DIRECT
+
+  # OpenAI / ChatGPT —— 走 AI服务 组，默认锁自建节点：
+  # 机场共享 IP 容易触发 ChatGPT / Claude 的登录与风控拦截。
+  - DOMAIN,challenges.cloudflare.com,AI服务
+  - DOMAIN-SUFFIX,cloudflare.com,AI服务
+  - DOMAIN,api.openai.com,AI服务
+  - DOMAIN,cdn.oaistatic.com,AI服务
+  - DOMAIN-SUFFIX,openai.com,AI服务
+  - DOMAIN-SUFFIX,chatgpt.com,AI服务
+  - DOMAIN-SUFFIX,oaistatic.com,AI服务
+  - DOMAIN-SUFFIX,oaiusercontent.com,AI服务
+  - DOMAIN-SUFFIX,auth.openai.com,AI服务
+
+  # GitHub
+  - DOMAIN-SUFFIX,github.com,节点选择
+  - DOMAIN-SUFFIX,githubusercontent.com,节点选择
+  - DOMAIN-SUFFIX,githubassets.com,节点选择
+  - DOMAIN-SUFFIX,github.dev,节点选择
+  - DOMAIN-SUFFIX,raw.githubusercontent.com,节点选择
+
+  # Google / Google Cloud
+  - DOMAIN-SUFFIX,google.com,节点选择
+  - DOMAIN-SUFFIX,gstatic.com,节点选择
+  - DOMAIN-SUFFIX,googleapis.com,节点选择
+  - DOMAIN-SUFFIX,googleusercontent.com,节点选择
+  - DOMAIN-SUFFIX,withgoogle.com,节点选择
+  - DOMAIN-SUFFIX,gcr.io,节点选择
+  - DOMAIN-SUFFIX,pkg.dev,节点选择
+
+  # YouTube / 视频相关
+  - DOMAIN-SUFFIX,youtube.com,节点选择
+  - DOMAIN-SUFFIX,youtu.be,节点选择
+  - DOMAIN-SUFFIX,ytimg.com,节点选择
+  - DOMAIN-SUFFIX,googlevideo.com,节点选择
+
+  # JetBrains / PyCharm
+  - DOMAIN-SUFFIX,jetbrains.com,节点选择
+  - DOMAIN-SUFFIX,jetbrains.space,节点选择
+  - DOMAIN-SUFFIX,intellij.net,节点选择
+
+  # 中国大陆直连
+  - GEOSITE,CN,DIRECT
+  - GEOIP,CN,DIRECT,no-resolve
+
+  # 兜底
+  - MATCH,节点选择

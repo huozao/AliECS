@@ -117,6 +117,7 @@
         <button type="button" data-target="sec-miniapp">小程序申请</button>
         <button type="button" data-target="sec-rbac">角色权限</button>
         <button type="button" data-target="sec-features">功能入口</button>
+        <button type="button" data-target="sec-clash-profile">Clash 配置</button>
         <button type="button" data-target="systemConfigPanel">系统配置</button>
         <button type="button" data-target="auditLogPanel">审计日志</button>
       </nav>
@@ -184,6 +185,29 @@
         <div id="featuresBody" class="entity-grid"></div>
       </details>
 
+      <!-- Clash 配置合成 -->
+      <details class="card" id="sec-clash-profile" data-sec="clash-profile">
+        <summary><h2><span class="htitle">Clash 配置 <span id="clashProviderCountBadge" class="badge">0</span></span></h2></summary>
+        <div class="notice">
+          机场节点由客户端自行定期同步，机场增删节点无需重新导入配置。
+          只有更换机场、改动自建节点或调整分流规则后，才需要重新下载并在各客户端重新导入。
+        </div>
+        <div class="sec-tools">
+          <button id="toggleClashProviderForm" type="button">＋ 新增订阅源</button>
+          <button id="clashDownloadBtn" type="button">下载配置</button>
+          <button id="clashCopyBtn" type="button">复制配置文本</button>
+        </div>
+        <div id="clashProviderForm" class="collapse hidden">
+          <div class="grid two">
+            <div><label>名称</label><input id="clashProviderName" placeholder="仅用于本页显示" /></div>
+            <div><label>排序</label><input id="clashProviderSort" type="number" value="0" /></div>
+            <div style="grid-column:1/-1"><label>订阅 URL</label><input id="clashProviderUrl" placeholder="https://..." /></div>
+          </div>
+          <div class="row" style="margin-top:14px;"><button id="createClashProviderBtn" class="primary" type="button">新增</button></div>
+        </div>
+        <div id="clashProviderBody" class="entity-grid"></div>
+      </details>
+
       <!-- 系统配置生效总览 -->
       <details id="systemConfigPanel" class="card" data-sec="config">
         <summary><h2><span class="htitle">系统配置生效总览</span></h2></summary>
@@ -249,7 +273,7 @@
   <script src="/common/toast.js"></script>
   <script>
     const API_BASE = location.port === "8081" ? "http://localhost:8000" : "/api";
-    const state = {token:"",me:null,users:[],roles:[],permissions:[],features:[],miniappRequests:[],logs:[],systemConfig:[],auditLogs:{items:[],page:1,page_size:50,total:0}};
+    const state = {token:"",me:null,users:[],roles:[],permissions:[],features:[],miniappRequests:[],logs:[],systemConfig:[],auditLogs:{items:[],page:1,page_size:50,total:0},clashProfile:{items:[],revealed:{}}};
     const $ = (id) => document.getElementById(id);
     const AUTH_KEYS = ["aliecs_auth_token","portal_token","admin_token"];
     const getAuthToken = () => AUTH_KEYS.map((k)=>localStorage.getItem(k)||"").find(Boolean)||"";
@@ -437,6 +461,76 @@
       state.auditLogs={items:logsResp.items||[],page:logsResp.page||page,page_size:logsResp.page_size||state.auditLogs.page_size,total:logsResp.total||0};
       state.logs=state.auditLogs.items;renderLogs();
     }
+    // Clash 配置合成：机场订阅源管理 + 合成配置下载。
+    // 订阅 URL 含机场分配的 token，列表默认打码，点「显示 URL」才展开。
+    function maskSubscriptionUrl(url){
+      const raw=String(url||"");
+      if(raw.length<=24) return "••••";
+      return `${raw.slice(0,16)}••••${raw.slice(-6)}`;
+    }
+    async function loadClashProviders(){
+      const resp=await api("/v1/admin/clash-profile/providers");
+      state.clashProfile.items=resp.items||[];
+      renderClashProviders();
+    }
+    function renderClashProviders(){
+      const items=state.clashProfile.items;
+      $("clashProviderCountBadge").textContent=items.length;
+      $("clashProviderBody").innerHTML=items.map((p)=>{
+        const shown=state.clashProfile.revealed[p.id]?escapeHtml(p.url):escapeHtml(maskSubscriptionUrl(p.url));
+        return `<div class="entity">
+          <div><strong>${escapeHtml(p.name)}</strong> ${p.enabled?"":'<span class="badge">已停用</span>'}</div>
+          <div class="muted" style="word-break:break-all">${shown}</div>
+          <div class="row">
+            <button type="button" data-clash-reveal="${p.id}">${state.clashProfile.revealed[p.id]?"隐藏":"显示"} URL</button>
+            <button type="button" data-clash-toggle="${p.id}">${p.enabled?"停用":"启用"}</button>
+            <button type="button" data-clash-delete="${p.id}">删除</button>
+          </div>
+        </div>`;
+      }).join("")||'<div class="muted">还没有订阅源。</div>';
+    }
+    async function createClashProvider(){
+      const name=$("clashProviderName").value.trim();
+      const url=$("clashProviderUrl").value.trim();
+      if(!name||!url){showError("名称与订阅 URL 都不能为空。");return;}
+      await api("/v1/admin/clash-profile/providers",{method:"POST",body:JSON.stringify({name,url,enabled:true,sort_order:Number($("clashProviderSort").value||0)})});
+      $("clashProviderName").value="";$("clashProviderUrl").value="";
+      showSuccess("订阅源已新增。");
+      await loadClashProviders();
+    }
+    async function toggleClashProvider(id){
+      const item=state.clashProfile.items.find((p)=>String(p.id)===String(id));
+      if(!item)return;
+      await api(`/v1/admin/clash-profile/providers/${id}`,{method:"PUT",body:JSON.stringify({name:item.name,url:item.url,enabled:!item.enabled,sort_order:item.sort_order})});
+      await loadClashProviders();
+    }
+    async function deleteClashProvider(id){
+      if(!confirm("确认删除这个订阅源？"))return;
+      await api(`/v1/admin/clash-profile/providers/${id}`,{method:"DELETE"});
+      showSuccess("订阅源已删除。");
+      await loadClashProviders();
+    }
+    // /preview 返回纯文本，不能走会做 JSON 解析的 api()。
+    async function fetchClashProfileText(){
+      const headers={};
+      if(state.token)headers.Authorization=`Bearer ${state.token}`;
+      const resp=await fetch(`${API_BASE}/v1/admin/clash-profile/preview`,{headers});
+      const text=await resp.text();
+      if(!resp.ok)throw new Error(text||`HTTP ${resp.status}`);
+      return text;
+    }
+    async function downloadClashProfile(){
+      const text=await fetchClashProfileText();
+      const blob=new Blob([text],{type:"text/yaml;charset=utf-8"});
+      const href=URL.createObjectURL(blob);
+      const a=document.createElement("a");
+      a.href=href;a.download="clash-profile.yaml";a.click();
+      URL.revokeObjectURL(href);
+    }
+    async function copyClashProfile(){
+      await navigator.clipboard.writeText(await fetchClashProfileText());
+      showSuccess("配置文本已复制。");
+    }
     async function loadAll(){
       clearMessage();
       state.me=await api("/v1/auth/me");
@@ -449,6 +543,7 @@
       renderAuth();renderIdentity();renderUsers();renderRoles();renderPermissions();renderFeatures();
       await loadMiniappRequests();
       await loadSystemConfig();
+      await loadClashProviders();
       await loadAuditLogs(1);
     }
     function ssoLogin(){location.href=`${API_BASE}/v1/auth/oidc/login`;}
@@ -548,6 +643,18 @@
       $("createFeatureBtn").addEventListener("click",()=>createFeature().catch((e)=>showError(e.message)));
       $("toggleUserForm").addEventListener("click",()=>$("userForm").classList.toggle("hidden"));
       $("toggleFeatureForm").addEventListener("click",()=>$("featureForm").classList.toggle("hidden"));
+      $("toggleClashProviderForm").addEventListener("click",()=>$("clashProviderForm").classList.toggle("hidden"));
+      $("createClashProviderBtn").addEventListener("click",()=>createClashProvider().catch((e)=>showError(e.message)));
+      $("clashDownloadBtn").addEventListener("click",()=>downloadClashProfile().catch((e)=>showError(`生成配置失败：${e.message}`)));
+      $("clashCopyBtn").addEventListener("click",()=>copyClashProfile().catch((e)=>showError(`复制失败：${e.message}`)));
+      $("clashProviderBody").addEventListener("click",(e)=>{
+        const reveal=e.target.getAttribute("data-clash-reveal");
+        if(reveal){state.clashProfile.revealed[reveal]=!state.clashProfile.revealed[reveal];renderClashProviders();return;}
+        const toggle=e.target.getAttribute("data-clash-toggle");
+        if(toggle){toggleClashProvider(toggle).catch((err)=>showError(err.message));return;}
+        const del=e.target.getAttribute("data-clash-delete");
+        if(del){deleteClashProvider(del).catch((err)=>showError(err.message));}
+      });
       // 分区折叠：展开状态记忆 + 锚点导航
       const SEC_KEY="admin_sections_open";
       let openSet;

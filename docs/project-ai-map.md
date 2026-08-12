@@ -20,6 +20,7 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 | `ops.py` | /v1/ops/*（T+ timeline、sync-config） |
 | `versions.py` | 版本看板 |
 | `backups.py` | 企微结构备份看板、镜像清理策略看板 |
+| `clash_profile.py` | Clash 配置合成器（人类叫法：订阅合并 / 一个订阅选所有节点）。机场订阅源 CRUD + 合成配置下载；渲染逻辑在 `app/clash_profile/render.py`，自建节点走 env `CLASH_SELF_NODES_B64`。验证：`python -m unittest discover -s tests -p "test_clash_profile_render.py"` |
 | `couple.py` | Couple（相册已由 Immich/AdventureLog 接管，此处仅存量） |
 
 输入：Postgres、runtime env、T+ worker 只读输出（`/app/tplus-output`）。
