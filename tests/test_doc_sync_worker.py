@@ -1295,6 +1295,135 @@ class FeishuBitableErrorTests(WorkerImportTestCase):
         self.assertNotIn("tenant-token", error)
 
 
+class WeComManualSyncTests(WorkerImportTestCase):
+    class FakePlatformWriter:
+        def __init__(self) -> None:
+            self.started: list[dict] = []
+            self.steps: list[dict] = []
+            self.finished: list[dict] = []
+
+        def start_run(self, **kwargs: object) -> int:
+            self.started.append(dict(kwargs))
+            return 99
+
+        def upsert_step(self, run_id: int, seq: int, name: str, status: str, **kwargs: object) -> None:
+            self.steps.append({"run_id": run_id, "seq": seq, "name": name, "status": status, **kwargs})
+
+        def finish_run(self, run_id: int, **kwargs: object) -> None:
+            from app.storage.sync_job_platform import classify_error
+
+            self.finished.append(
+                {"run_id": run_id, "error_kind": classify_error(kwargs.get("error")), **kwargs}
+            )
+
+        def successful_step_names(self) -> list[str]:
+            return [step["name"] for step in self.steps if step["status"] == "success"]
+
+    class RaisingPlatformWriter:
+        def start_run(self, **kwargs: object) -> int:
+            raise RuntimeError("platform unavailable")
+
+        def upsert_step(self, *args: object, **kwargs: object) -> None:
+            raise RuntimeError("platform unavailable")
+
+        def finish_run(self, *args: object, **kwargs: object) -> None:
+            raise RuntimeError("platform unavailable")
+
+    class _Store:
+        def __init__(self) -> None:
+            self.sync_jobs = WeComManualSyncTests.FakePlatformWriter()
+            self.finished: dict | None = None
+
+        def get_source(self, source_id: int) -> dict | None:
+            if source_id != 17:
+                return None
+            return {
+                "id": 17,
+                "provider": "wecom",
+                "env_profile": "COMPANY_A",
+                "source_name": "点检表 / 点检计划",
+                "external_doc_id": "dc_test",
+                "external_sheet_id": "sheet_test",
+                "source_url": "",
+                "sheet_name": "点检计划",
+            }
+
+        def start_run(self, provider: str, env_profile: str, mode: str) -> int:
+            return 42
+
+        def finish_run(self, run_id: int, status: str, counts: dict, error_json: list) -> None:
+            self.finished = {"run_id": run_id, "status": status, "counts": dict(counts), "errors": list(error_json)}
+
+        def replace_fields(self, source_id: int, fields: list) -> dict:
+            return {"field_1": "名称"}
+
+        def upsert_record(self, source_id: int, snapshot: object) -> object:
+            from app.storage.postgres import UpsertDecision
+
+            return UpsertDecision(action="create", should_write=True)
+
+        def mark_source_synced(self, source_id: int) -> None:
+            return None
+
+    class _Client:
+        def get_fields(self, docid: str, sheet_id: str) -> dict:
+            return {"fields": [{"field_id": "field_1", "field_title": "名称"}]}
+
+        def get_records(self, docid: str, sheet_id: str) -> dict:
+            return {"records": [{"record_id": "rec_1", "values": {"field_1": "点检项"}}], "page_count": 1}
+
+    @staticmethod
+    def _credential() -> object:
+        class Credential:
+            corpid = "corp"
+            secret = "secret"
+            label = "test"
+
+        return Credential()
+
+    def _run(self, store: object, credentials: list[object] | None = None) -> tuple:
+        import unittest.mock as mock
+
+        from app.pipelines import sync_wecom_full as module
+
+        with mock.patch.object(
+            module, "credentials_for_profile", return_value=[self._credential()] if credentials is None else credentials
+        ), mock.patch.object(module, "WeComSmartsheetClient", return_value=self._Client()):
+            return module.sync_wecom_source(store, source_id=17, mode="manual")
+
+    def test_wecom_manual_source_writes_running_steps_and_success(self) -> None:
+        store = self._Store()
+
+        status, legacy_run_id, _detail = self._run(store)
+
+        self.assertEqual("success", status)
+        self.assertEqual(42, legacy_run_id)
+        self.assertEqual("wecom.doc.17", store.sync_jobs.started[0]["job_key"])
+        self.assertEqual("manual", store.sync_jobs.started[0]["trigger"])
+        self.assertEqual({"table": "sync_runs", "id": 42}, store.sync_jobs.started[0]["legacy_ref"])
+        self.assertEqual(["token", "fetch_page", "normalize", "upsert"], store.sync_jobs.successful_step_names())
+        self.assertEqual("success", store.sync_jobs.finished[0]["status"])
+
+    def test_wecom_failure_finishes_platform_run_without_hiding_legacy_failure(self) -> None:
+        failing_store = self._Store()
+
+        status, legacy_run_id, _detail = self._run(failing_store, credentials=[])
+
+        self.assertEqual("failed", status)
+        self.assertEqual(42, legacy_run_id)
+        self.assertEqual("failed", failing_store.sync_jobs.finished[0]["status"])
+        self.assertEqual("auth", failing_store.sync_jobs.finished[0]["error_kind"])
+
+    def test_wecom_platform_writer_failure_does_not_change_legacy_result(self) -> None:
+        store = self._Store()
+        store.sync_jobs = self.RaisingPlatformWriter()
+
+        status, legacy_run_id, _detail = self._run(store)
+
+        self.assertEqual(("success", 42), (status, legacy_run_id))
+        self.assertEqual("success", store.finished["status"])
+
+
 class FeishuManualSyncTests(WorkerImportTestCase):
     class _Store:
         """sync_feishu_source 所需的最小 FakeStore。"""

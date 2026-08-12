@@ -17,6 +17,91 @@ from app.pipelines.wecom_structure_backup import (
     structure_backup_enabled,
 )
 from app.storage.postgres import build_record_snapshot, compose_source_name, open_store
+from app.storage.sync_job_platform import classify_error, platform_writer_for
+
+
+def _platform_error(exc: Exception) -> RuntimeError:
+    """Retain the fixed error kind without storing source IDs or credentials."""
+    kind = classify_error(exc)
+    messages = {
+        "auth": "unauthorized",
+        "rate_limit": "rate limit",
+        "network": "network failure",
+        "schema": "schema failure",
+        "write": "write failure",
+        "unknown": "sync failure",
+    }
+    return RuntimeError(messages[kind])
+
+
+class _PlatformRun:
+    """Keep platform observability isolated from the legacy sync path."""
+
+    def __init__(self, writer: Any, run_id: int | None) -> None:
+        self.writer = writer
+        self.run_id = run_id
+        self.current_step: tuple[int, str] | None = None
+
+    @classmethod
+    def start(
+        cls,
+        store: Any,
+        *,
+        source_id: int,
+        source_name: str,
+        legacy_run_id: int | None,
+        mode: str,
+    ) -> "_PlatformRun":
+        if legacy_run_id is None:
+            return cls(None, None)
+        try:
+            writer = platform_writer_for(store)
+            run_id = writer.start_run(
+                job_key=f"wecom.doc.{source_id}",
+                kind="pull",
+                provider="wecom",
+                display_name=str(source_name or source_id),
+                source_id=source_id,
+                trigger="manual" if mode == "manual" else "schedule",
+                legacy_ref={"table": "sync_runs", "id": legacy_run_id},
+            )
+            return cls(writer, run_id)
+        except Exception:  # noqa: BLE001 - observability must not alter the legacy result.
+            return cls(None, None)
+
+    def step(self, seq: int, name: str, status: str, *, items: int = 0, message: str = "") -> None:
+        if self.run_id is None or self.writer is None:
+            return
+        try:
+            self.writer.upsert_step(self.run_id, seq, name, status, items=items, message=message)
+            if status == "running":
+                self.current_step = (seq, name)
+            elif self.current_step == (seq, name):
+                self.current_step = None
+        except Exception:
+            return
+
+    def fail_current(self) -> None:
+        if self.current_step is None:
+            return
+        seq, name = self.current_step
+        self.step(seq, name, "failed")
+
+    def finish(self, *, legacy_status: str, counts: dict[str, int], error: Exception | None = None) -> None:
+        if self.run_id is None or self.writer is None:
+            return
+        status = "partial" if legacy_status == "partial_failed" else legacy_status
+        try:
+            self.writer.finish_run(
+                self.run_id,
+                status=status,
+                row_count=int(counts.get("record_count", 0) or 0),
+                changed_count=int(counts.get("created_count", 0) or 0) + int(counts.get("updated_count", 0) or 0),
+                error=error,
+                detail_json={"error_count": int(counts.get("error_count", 0) or 0)},
+            )
+        except Exception:
+            return
 
 
 def _sheet_id(sheet: dict[str, Any]) -> str:
@@ -42,11 +127,18 @@ def _sync_sheet_records(
     sheet_id: str,
     counts: dict[str, int],
     sheet_name: str = "",
+    platform_run: _PlatformRun | None = None,
 ) -> None:
+    if platform_run:
+        platform_run.step(3, "fetch_page", "running")
     fields_response = client.get_fields(docid, sheet_id)
     field_titles = store.replace_fields(source_id, _fields_from_response(fields_response))
     records_response = client.get_records(docid, sheet_id)
     records = records_response.get("records") or []
+    if platform_run:
+        platform_run.step(3, "fetch_page", "success", items=len(records), message=sheet_name)
+        platform_run.step(4, "normalize", "running", message=sheet_name)
+        platform_run.step(5, "upsert", "running", message=sheet_name)
     counts["sheet_count"] += 1
     counts["record_count"] += len(records)
     print(
@@ -70,6 +162,9 @@ def _sync_sheet_records(
         deleted_count = store.delete_missing_records(source_id, seen_record_ids)
         counts["deleted_count"] = counts.get("deleted_count", 0) + int(deleted_count or 0)
     store.mark_source_synced(source_id)
+    if platform_run:
+        platform_run.step(4, "normalize", "success", items=len(records), message=sheet_name)
+        platform_run.step(5, "upsert", "success", items=len(records), message=sheet_name)
 
 
 def _sync_doc(
@@ -83,6 +178,8 @@ def _sync_doc(
     counts: dict[str, int],
     errors: list[dict[str, Any]],
     skip_unchanged: bool,
+    legacy_run_id: int | None = None,
+    mode: str = "full",
 ) -> None:
     """同步一个智能表格文档：实时名 + modify_time 增量跳过 + 全 sheet 发现与同步（sheet 级容错）。"""
     doc_base = client.get_doc_base(docid)
@@ -120,10 +217,31 @@ def _sync_doc(
             document_name=document_name,
             sheet_name=sheet_name,
         )
+        platform_run = _PlatformRun.start(
+            store,
+            source_id=source_id,
+            source_name=compose_source_name(document_name, sheet_name),
+            legacy_run_id=legacy_run_id,
+            mode=mode,
+        )
+        platform_run.step(1, "token", "success", items=1)
+        platform_run.step(2, "list_sheets", "success", items=len(sheets))
         # sheet 级容错：个别表报错（如公开收集表 get_records 60111）不拖垮同文档其余表。
         try:
-            _sync_sheet_records(store, client, source_id, docid, sheet_id, counts, sheet_name)
+            before_counts = dict(counts)
+            _sync_sheet_records(store, client, source_id, docid, sheet_id, counts, sheet_name, platform_run)
+            platform_run.finish(
+                legacy_status="success",
+                counts={
+                    "record_count": counts["record_count"] - before_counts.get("record_count", 0),
+                    "created_count": counts["created_count"] - before_counts.get("created_count", 0),
+                    "updated_count": counts["updated_count"] - before_counts.get("updated_count", 0),
+                    "error_count": 0,
+                },
+            )
         except Exception as sheet_exc:  # noqa: BLE001
+            platform_run.fail_current()
+            platform_run.finish(legacy_status="failed", counts={"error_count": 1}, error=_platform_error(sheet_exc))
             counts["error_count"] += 1
             sheet_error = str(sheet_exc)
             errors.append(
@@ -213,6 +331,8 @@ def run_sync_wecom_full(profiles_arg: str = "") -> int:
                                 counts=counts,
                                 errors=errors,
                                 skip_unchanged=True,
+                                legacy_run_id=run_id,
+                                mode="full",
                             )
                             doc_synced = True
                             break
@@ -275,10 +395,22 @@ def sync_wecom_source(store: Any, source_id: int, mode: str = "manual") -> tuple
     }
     errors: list[dict[str, Any]] = []
     status = "failed"
+    failure: Exception | None = None
+    platform_run = None if is_doc_request else _PlatformRun.start(
+        store,
+        source_id=int(source["id"]),
+        source_name=str(source.get("source_name") or source_id),
+        legacy_run_id=run_id,
+        mode=mode,
+    )
     try:
+        if platform_run:
+            platform_run.step(1, "token", "running")
         credentials = credentials_for_profile(profile)
         if not credentials:
             raise RuntimeError(f"{profile} 缺少 WECOM_{profile}_CORP_ID 或 WECOM_{profile}_APP_SECRET。")
+        if platform_run:
+            platform_run.step(1, "token", "success", items=1)
 
         last_error: Exception | None = None
         for credential in credentials:
@@ -296,6 +428,8 @@ def sync_wecom_source(store: Any, source_id: int, mode: str = "manual") -> tuple
                         counts=counts,
                         errors=errors,
                         skip_unchanged=False,
+                        legacy_run_id=run_id,
+                        mode=mode,
                     )
                 else:
                     _sync_sheet_records(
@@ -306,6 +440,7 @@ def sync_wecom_source(store: Any, source_id: int, mode: str = "manual") -> tuple
                         str(source["external_sheet_id"]),
                         counts,
                         str(source.get("sheet_name") or source.get("source_name") or ""),
+                        platform_run,
                     )
                 status = "success" if counts["error_count"] == 0 else "partial_failed"
                 last_error = None
@@ -316,12 +451,21 @@ def sync_wecom_source(store: Any, source_id: int, mode: str = "manual") -> tuple
         if last_error is not None:
             raise last_error
     except Exception as exc:  # noqa: BLE001
+        failure = exc
+        if platform_run:
+            platform_run.fail_current()
         counts["error_count"] += 1
         error_text = str(exc)
         errors.append({"source_id": source_id, "error": error_text, "summary": summarize_wecom_error(error_text)})
         status = "failed"
 
     store.finish_run(run_id, status=status, counts=counts, error_json=errors)
+    if platform_run:
+        platform_run.finish(
+            legacy_status=status,
+            counts=counts,
+            error=_platform_error(failure) if failure else None,
+        )
     return status, run_id, {"errors": errors, "counts": counts}
 
 
