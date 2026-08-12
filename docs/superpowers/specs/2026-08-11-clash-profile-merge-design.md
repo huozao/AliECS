@@ -1,6 +1,6 @@
 # Clash 配置合成器：自建节点 + 第三方机场订阅（设计）
 
-2026-08-11 定稿。新增页面挂在 admin-ui，新增接口前缀 `/api/clash-profile`。
+2026-08-11 定稿。新增页面挂在 admin-ui，新增接口前缀 `/v1/admin/clash-profile`（admin-ui 侧 `API_BASE=/api`，浏览器实际路径是 `/api/v1/admin/clash-profile/*`）。
 
 ## 要解决的问题
 
@@ -115,7 +115,7 @@ proxy-groups:
 
 | 文件 | 内容 |
 |---|---|
-| `db/migrations/0048_clash_profile.sql` | 新表 `clash_profile_providers` |
+| `db/migrations/0049_clash_profile.sql` | 新表 `clash_profile_providers` |
 | `services/backend-api/app/clash_profile/template_base.yaml` | 静态段：基础设置、sniffer、dns、tun。原样输出 |
 | `services/backend-api/app/clash_profile/template_rules.yaml` | 静态段：规则列表项（**不含 `rules:` 这个 key**，只有 `  - XXX` 行） |
 | `services/backend-api/app/clash_profile/render.py` | 纯函数，无 IO |
@@ -196,12 +196,12 @@ render_profile(self_nodes: list[dict], providers: list[dict]) -> str
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
-| GET | `/api/clash-profile/providers` | 列表 |
-| POST | `/api/clash-profile/providers` | 新增 |
-| PUT | `/api/clash-profile/providers/{id}` | 修改（含启用/禁用） |
-| DELETE | `/api/clash-profile/providers/{id}` | 删除 |
-| GET | `/api/clash-profile/download` | 下载生成的配置，`Content-Disposition: attachment` |
-| GET | `/api/clash-profile/preview` | 返回配置文本，供页面上复制 |
+| GET | `/v1/admin/clash-profile/providers` | 列表 |
+| POST | `/v1/admin/clash-profile/providers` | 新增 |
+| PUT | `/v1/admin/clash-profile/providers/{id}` | 修改（含启用/禁用） |
+| DELETE | `/v1/admin/clash-profile/providers/{id}` | 删除 |
+| GET | `/v1/admin/clash-profile/download` | 下载生成的配置，`Content-Disposition: attachment` |
+| GET | `/v1/admin/clash-profile/preview` | 返回配置文本，供页面上复制 |
 
 ### 页面
 

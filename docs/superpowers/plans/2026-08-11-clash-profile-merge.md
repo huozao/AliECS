@@ -29,7 +29,7 @@
 | `services/backend-api/app/clash_profile/render.py` | 纯函数，无 IO（除读自己目录下的两个模板），无数据库，无网络 |
 | `services/backend-api/app/routers/clash_profile.py` | HTTP 层：机场源 CRUD + 生成下载。读环境变量、读数据库 |
 | `services/backend-api/app/main.py` | 挂载路由 |
-| `db/migrations/0048_clash_profile.sql` | 新表 `clash_profile_providers` |
+| `db/migrations/0049_clash_profile.sql` | 新表 `clash_profile_providers` |
 | `services/admin-ui/index.html` | 新增页签与交互 |
 | `tests/test_clash_profile_render.py` | 渲染纯函数单测 |
 | `tests/test_clash_profile_router.py` | 环境变量解析单测 |
@@ -372,7 +372,7 @@ git commit -m "feat(clash-profile): 配置渲染纯函数与静态模板"
 ### Task 2: 数据表、接口与路由挂载
 
 **Files:**
-- Create: `db/migrations/0048_clash_profile.sql`
+- Create: `db/migrations/0049_clash_profile.sql`
 - Create: `services/backend-api/app/routers/clash_profile.py`
 - Modify: `services/backend-api/app/main.py`
 - Test: `tests/test_clash_profile_router.py`
@@ -386,7 +386,7 @@ git commit -m "feat(clash-profile): 配置渲染纯函数与静态模板"
 
 - [ ] **Step 1: 写迁移**
 
-Create `db/migrations/0048_clash_profile.sql`:
+Create `db/migrations/0049_clash_profile.sql`:
 
 ```sql
 -- 0048: Clash 配置合成器 —— 第三方机场订阅源
@@ -654,7 +654,7 @@ Expected: 全部 PASS
 - [ ] **Step 8: 提交**
 
 ```bash
-git add db/migrations/0048_clash_profile.sql services/backend-api/app/routers/clash_profile.py services/backend-api/app/main.py tests/test_clash_profile_router.py
+git add db/migrations/0049_clash_profile.sql services/backend-api/app/routers/clash_profile.py services/backend-api/app/main.py tests/test_clash_profile_router.py
 git commit -m "feat(clash-profile): 订阅源表、管理接口与配置下载"
 ```
 
