@@ -75,9 +75,9 @@
         </div>
         <div id="timelineList" class="muted" aria-live="polite">加载中…</div>
         <div id="timelinePager" class="row" style="justify-content:center;margin-top:12px">
-          <button id="timelinePrevBtn" class="btn" type="button">上一页</button>
+          <button id="timelinePrevBtn" class="btn" type="button" disabled>上一页</button>
           <span id="timelinePageInfo" class="muted">第 1/1 页</span>
-          <button id="timelineNextBtn" class="btn" type="button">下一页</button>
+          <button id="timelineNextBtn" class="btn" type="button" disabled>下一页</button>
         </div>
       </section>
     </main>
@@ -98,7 +98,7 @@
   <script>
     const {api, fetchMe, esc, fmtTime, chip, clearAuthToken, ssoLogin} = AliECSAdmin;
     const $=(id)=>document.getElementById(id);
-    const state={overview:null,alerts:[],runs:[],limit:20,offset:0,total:0};
+    const state={overview:null,alerts:[],runs:[],limit:20,offset:0,total:0,timelineRequestId:0,timelineLoading:false};
     const initialJob=new URLSearchParams(location.search).get('job')||'';
 
     const freshnessLabels={fresh:'新鲜',warning:'即将过期',stale:'已过期',never:'从未成功',unmonitored:'未监控'};
@@ -153,22 +153,43 @@
         return `<tr><td><strong>${esc(item.display_name)}</strong><div class="muted">${esc(item.job_key)}</div></td><td>${esc(item.provider)}</td><td>${esc(triggerLabels[item.trigger]||item.trigger||'-')}</td><td>${statusChip(item.status)}${error}</td><td>${esc(fmtTime(item.started_at))}</td><td>${esc(durationLabel(item.duration_seconds))}</td><td>${esc(item.row_count??'-')}</td><td>${esc(item.changed_count??'-')}</td><td><button class="btn" type="button" disabled title="后续阶段开放">查看详情</button></td></tr>`;
       }).join('');
       $('timelineList').innerHTML=`<table><thead><tr><th>作业</th><th>提供方</th><th>触发</th><th>状态</th><th>开始时间</th><th>耗时</th><th>行数</th><th>变更</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="9" class="muted">当前筛选无运行记录。</td></tr>'}</tbody></table>`;
+      renderTimelinePager(state.offset,state.timelineLoading);
+    }
+    function renderTimelinePager(offset=state.offset,loading=state.timelineLoading){
       const pages=Math.max(1,Math.ceil(state.total/state.limit));
-      const page=Math.floor(state.offset/state.limit)+1;
-      $('timelinePageInfo').textContent=`第 ${page}/${pages} 页 · 共 ${state.total} 条`;
-      $('timelinePrevBtn').disabled=state.offset<=0;
-      $('timelineNextBtn').disabled=state.offset+state.limit>=state.total;
+      const page=Math.floor(offset/state.limit)+1;
+      $('timelinePageInfo').textContent=`第 ${page}/${pages} 页 · 共 ${state.total} 条${loading?' · 加载中…':''}`;
+      $('timelinePrevBtn').disabled=loading||offset<=0;
+      $('timelineNextBtn').disabled=loading||offset+state.limit>=state.total;
     }
 
     async function loadOverview(){state.overview=await api('/v1/sync/overview');renderOverview();}
     async function loadAlerts(){const d=await api('/v1/sync/alerts?state=open&limit=50&offset=0');state.alerts=d.items||[];renderAlerts();}
     async function loadTimeline(){
-      const params=new URLSearchParams({limit:String(state.limit),offset:String(state.offset)});
+      const requestId=++state.timelineRequestId;
+      const requestOffset=state.offset;
+      const params=new URLSearchParams({limit:String(state.limit),offset:String(requestOffset)});
       if($('providerFilter').value)params.set('provider',$('providerFilter').value);
       if($('statusFilter').value)params.set('status',$('statusFilter').value);
       if($('jobFilter').value)params.set('job_key',$('jobFilter').value);
-      const d=await api(`/v1/sync/runs?${params}`);
-      state.runs=d.items||[];state.total=d.total||0;renderTimeline();
+      state.timelineLoading=true;
+      renderTimelinePager(requestOffset,true);
+      try{
+        const d=await api(`/v1/sync/runs?${params}`);
+        if(requestId!==state.timelineRequestId)return;
+        state.offset=requestOffset;
+        state.runs=d.items||[];
+        state.total=d.total||0;
+        renderTimeline();
+      }catch(error){
+        if(requestId!==state.timelineRequestId)return;
+        throw error;
+      }finally{
+        if(requestId===state.timelineRequestId){
+          state.timelineLoading=false;
+          renderTimelinePager(state.offset,false);
+        }
+      }
     }
     async function loadAll(){await loadOverview();await Promise.all([loadAlerts(),loadTimeline()]);}
     function reloadTimelineFromStart(){state.offset=0;loadTimeline().catch((error)=>AliECSToast.show(`时间线加载失败：${error.message}`,'error'));}
@@ -176,8 +197,18 @@
     $('providerFilter').onchange=reloadTimelineFromStart;
     $('statusFilter').onchange=reloadTimelineFromStart;
     $('jobFilter').onchange=reloadTimelineFromStart;
-    $('timelinePrevBtn').onclick=()=>{state.offset=Math.max(0,state.offset-state.limit);loadTimeline().catch((error)=>AliECSToast.show(`时间线加载失败：${error.message}`,'error'));};
-    $('timelineNextBtn').onclick=()=>{state.offset+=state.limit;loadTimeline().catch((error)=>AliECSToast.show(`时间线加载失败：${error.message}`,'error'));};
+    $('timelinePrevBtn').onclick=()=>{
+      if(state.timelineLoading)return;
+      const offset=Math.max(0,state.offset-state.limit);
+      if(offset===state.offset)return;
+      state.offset=offset;
+      loadTimeline().catch((error)=>AliECSToast.show(`时间线加载失败：${error.message}`,'error'));
+    };
+    $('timelineNextBtn').onclick=()=>{
+      if(state.timelineLoading||state.offset+state.limit>=state.total)return;
+      state.offset+=state.limit;
+      loadTimeline().catch((error)=>AliECSToast.show(`时间线加载失败：${error.message}`,'error'));
+    };
     refreshBtn.onclick=()=>loadAll().catch((error)=>AliECSToast.show(`同步中心加载失败：${error.message}`,'error'));
     loginBtn.onclick=ssoLogin;
     logoutBtn.onclick=()=>{clearAuthToken();AliECSAdmin.applyGate(null);AliECSToast.show('已退出登录。','success');};

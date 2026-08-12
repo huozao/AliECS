@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -92,6 +94,96 @@ class SyncFrontendTests(unittest.TestCase):
         self.assertIn('disabled title="后续阶段开放"', self.html)
         self.assertNotIn("runJob", self.html)
         self.assertNotIn("saveJob", self.html)
+
+    def _run_timeline_probe(self, scenario: str) -> None:
+        harness = textwrap.dedent(
+            r"""
+            const fs=require('fs');
+            const vm=require('vm');
+            const html=fs.readFileSync(process.argv[1],'utf8');
+            const start=html.indexOf('<script>')+8;
+            const end=html.indexOf('</script>',start);
+            if(start<8||end<0)throw new Error('inline script missing');
+            const source=html.slice(start,end);
+            const elements={};
+            function element(id){
+              return elements[id]||(elements[id]={id,value:'',innerHTML:'',textContent:'',disabled:false,
+                classList:{add(){},remove(){},toggle(){}},onclick:null,onchange:null});
+            }
+            const ids=['providerFilter','statusFilter','jobFilter','timelinePrevBtn','timelineNextBtn',
+              'timelinePageInfo','timelineList','syncSummary','jobList','alertList','refreshBtn','loginBtn','logoutBtn'];
+            ids.forEach(element);
+            const pending=[];
+            function api(path){
+              let resolve,reject;
+              const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});
+              pending.push({path,resolve,reject,promise});
+              return promise;
+            }
+            const esc=(value)=>String(value??'').replace(/[&<>"']/g,(char)=>({
+              '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;',
+            }[char]));
+            const context={console,Promise,URLSearchParams,location:{search:'',pathname:'/sync/'},
+              document:{getElementById:element},AliECSToast:{show(){}},
+              AliECSAdmin:{api,fetchMe:async()=>null,esc,fmtTime:(value)=>value||'-',
+                chip:(value)=>`<span>${value}</span>`,clearAuthToken(){},ssoLogin(){},applyGate(){}},
+              setTimeout,clearTimeout};
+            ids.forEach((id)=>{context[id]=element(id);});
+            vm.createContext(context);
+            vm.runInContext(source,context);
+            function run(name){return {id:1,display_name:name,job_key:name,provider:'wecom',trigger:'manual',
+              status:'success',started_at:'2026-08-12T00:00:00Z',duration_seconds:1,row_count:1,changed_count:0,
+              error_label:'',error_message:''};}
+            """
+        ) + scenario
+        result = subprocess.run(
+            ["node", "-e", harness, str(SYNC_PAGE)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr or result.stdout)
+
+    def test_older_timeline_response_cannot_overwrite_latest_page(self) -> None:
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                (async()=>{
+                  const first=vm.runInContext('state.offset=20;loadTimeline()',context);
+                  const second=vm.runInContext('state.offset=40;loadTimeline()',context);
+                  if(pending.length!==2)throw new Error(`expected 2 requests, got ${pending.length}`);
+                  pending[1].resolve({items:[run('newer-page')],total:100});
+                  await second;
+                  pending[0].resolve({items:[run('older-page')],total:100});
+                  await first;
+                  if(!elements.timelineList.innerHTML.includes('newer-page'))throw new Error('latest result missing');
+                  if(elements.timelineList.innerHTML.includes('older-page'))throw new Error('older response overwrote latest');
+                  if(!elements.timelinePageInfo.textContent.includes('第 3/5 页'))throw new Error(`wrong page: ${elements.timelinePageInfo.textContent}`);
+                })().catch((error)=>{console.error(error.stack||error);process.exitCode=1;});
+                """
+            )
+        )
+
+    def test_pager_stays_disabled_and_does_not_double_advance_while_loading(self) -> None:
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                (async()=>{
+                  vm.runInContext('state.total=100;renderTimeline()',context);
+                  elements.timelineNextBtn.onclick();
+                  elements.timelineNextBtn.onclick();
+                  if(pending.length!==1)throw new Error(`expected 1 request, got ${pending.length}`);
+                  if(!elements.timelinePrevBtn.disabled||!elements.timelineNextBtn.disabled)throw new Error('pager not loading-guarded');
+                  if(!pending[0].path.includes('offset=20'))throw new Error(`wrong request: ${pending[0].path}`);
+                  pending[0].resolve({items:[run('page-two')],total:100});
+                  await pending[0].promise;
+                  await new Promise((resolve)=>setTimeout(resolve,0));
+                  if(vm.runInContext('state.offset',context)!==20)throw new Error('offset advanced twice');
+                  if(elements.timelineNextBtn.disabled)throw new Error('pager did not recover after latest response');
+                })().catch((error)=>{console.error(error.stack||error);process.exitCode=1;});
+                """
+            )
+        )
 
 
 if __name__ == "__main__":
