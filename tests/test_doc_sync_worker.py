@@ -218,6 +218,14 @@ class WorkerLoopTests(WorkerImportTestCase):
     def _one_minute_schedule() -> dict:
         return {"enabled": True, "interval_seconds": 60, "anchor_time": "", "pull_paused": False}
 
+    @staticmethod
+    def _read_and_tick(clock: dict) -> object:
+        from datetime import timedelta
+
+        observed = clock["now"]
+        clock["now"] = observed + timedelta(microseconds=1)
+        return observed
+
     def test_explicit_notifier_runs_before_full_and_after_each_pending_poll(self) -> None:
         import unittest.mock as mock
 
@@ -306,7 +314,7 @@ class WorkerLoopTests(WorkerImportTestCase):
                 max_cycles=2,
                 schedule_reader=self._one_minute_schedule,
                 config_puller=lambda: "noop",
-                now_fn=lambda: clock["now"],
+                now_fn=lambda: self._read_and_tick(clock),
                 last_full_reader=lambda: None,
             )
 
@@ -353,7 +361,7 @@ class WorkerLoopTests(WorkerImportTestCase):
                 max_cycles=2,
                 schedule_reader=schedule_reader,
                 config_puller=lambda: "noop",
-                now_fn=lambda: clock["now"],
+                now_fn=lambda: self._read_and_tick(clock),
                 last_full_reader=lambda: None,
             )
 
@@ -393,7 +401,7 @@ class WorkerLoopTests(WorkerImportTestCase):
                 max_cycles=2,
                 schedule_reader=schedule_reader,
                 config_puller=lambda: "noop",
-                now_fn=lambda: clock["now"],
+                now_fn=lambda: self._read_and_tick(clock),
                 last_full_reader=lambda: started,
             )
 
@@ -402,6 +410,52 @@ class WorkerLoopTests(WorkerImportTestCase):
         self.assertEqual(0, code)
         self.assertEqual((60, "notifier"), events[full_index - 1])
         self.assertEqual({0: 2, 60: 3}, dict(notifier_counts))
+
+    def test_terminal_poll_with_early_sleep_does_not_cover_later_full_preflight(self) -> None:
+        import unittest.mock as mock
+        from datetime import datetime, timedelta, timezone
+
+        from app.pipelines import worker_loop as module
+
+        started = datetime(2026, 8, 12, tzinfo=timezone.utc)
+        clock = {"now": started}
+        schedule_calls = {"count": 0}
+        sleep_calls = {"count": 0}
+        events: list[tuple[int, str]] = []
+
+        def record(event: str) -> int:
+            events.append((int((clock["now"] - started).total_seconds()), event))
+            return 0
+
+        def early_then_normal_sleep(seconds: float) -> None:
+            sleep_calls["count"] += 1
+            elapsed = 10 if sleep_calls["count"] <= 2 else seconds
+            clock["now"] += timedelta(seconds=elapsed)
+
+        def schedule_reader() -> dict:
+            schedule_calls["count"] += 1
+            if schedule_calls["count"] == 2:
+                clock["now"] = started + timedelta(seconds=60, microseconds=10)
+            return self._one_minute_schedule()
+
+        with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}), \
+                mock.patch.object(module, "_maybe_start_group_listener"):
+            code = module.run_worker_loop(
+                full_sync=lambda: record("full"),
+                consume_requests=lambda: record("pending"),
+                notifier_once=lambda: record("notifier") or {},
+                sleep=early_then_normal_sleep,
+                max_cycles=2,
+                schedule_reader=schedule_reader,
+                config_puller=lambda: "noop",
+                now_fn=lambda: self._read_and_tick(clock),
+                last_full_reader=lambda: started,
+            )
+
+        full_index = events.index((60, "full"))
+        self.assertEqual(0, code)
+        self.assertEqual((60, "notifier"), events[full_index - 1])
+        self.assertEqual([10, 20], [elapsed for elapsed, event in events[:4] if event == "notifier"])
 
     def test_nondivisible_interval_has_no_duplicate_boundary_notifier(self) -> None:
         import unittest.mock as mock
@@ -429,7 +483,7 @@ class WorkerLoopTests(WorkerImportTestCase):
                     "enabled": True, "interval_seconds": 65, "anchor_time": "", "pull_paused": False,
                 },
                 config_puller=lambda: "noop",
-                now_fn=lambda: clock["now"],
+                now_fn=lambda: self._read_and_tick(clock),
                 last_full_reader=lambda: None,
             )
 
@@ -447,31 +501,52 @@ class WorkerLoopTests(WorkerImportTestCase):
         clock = {"now": started}
         notifier_times: list[int] = []
         full_times: list[int] = []
+        events: list[tuple[int, str]] = []
+        schedule_calls = {"count": 0}
 
         def advance(seconds: float) -> None:
-            clock["now"] += timedelta(seconds=seconds)
+            if len(full_times) != 2:
+                clock["now"] += timedelta(seconds=seconds)
 
         def fail_full() -> int:
-            full_times.append(int((clock["now"] - started).total_seconds()))
-            raise RuntimeError("full failed")
+            elapsed = int((clock["now"] - started).total_seconds())
+            full_times.append(elapsed)
+            events.append((elapsed, "full"))
+            if len(full_times) == 2:
+                raise RuntimeError("full failed")
+            return 0
+
+        def notify() -> dict:
+            elapsed = int((clock["now"] - started).total_seconds())
+            notifier_times.append(elapsed)
+            events.append((elapsed, "notifier"))
+            return {}
+
+        def schedule_reader() -> dict:
+            schedule_calls["count"] += 1
+            if schedule_calls["count"] == 3:
+                clock["now"] = started + timedelta(seconds=120, microseconds=10)
+            return self._one_minute_schedule()
 
         with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}), \
                 mock.patch.object(module, "_maybe_start_group_listener"):
             code = module.run_worker_loop(
                 full_sync=fail_full,
                 consume_requests=lambda: 0,
-                notifier_once=lambda: notifier_times.append(int((clock["now"] - started).total_seconds())) or {},
+                notifier_once=notify,
                 sleep=advance,
                 max_cycles=3,
-                schedule_reader=self._one_minute_schedule,
+                schedule_reader=schedule_reader,
                 config_puller=lambda: "noop",
-                now_fn=lambda: clock["now"],
+                now_fn=lambda: self._read_and_tick(clock),
                 last_full_reader=lambda: None,
             )
 
+        third_full_index = events.index((120, "full"))
         self.assertEqual(0, code)
         self.assertEqual([0, 60, 120], full_times)
-        self.assertEqual([0, 30, 60, 90, 120, 150, 180], notifier_times)
+        self.assertEqual([0, 30, 60, 60, 60, 120, 150, 180], notifier_times)
+        self.assertEqual((120, "notifier"), events[third_full_index - 1])
 
     def test_full_only_injection_without_notifier_keeps_notifier_noop(self) -> None:
         import unittest.mock as mock

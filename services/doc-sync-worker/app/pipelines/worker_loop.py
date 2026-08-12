@@ -4,7 +4,7 @@ import os
 import threading
 import time
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.pipelines.backfill_smartsheet_images import run_backfill_images
@@ -155,8 +155,8 @@ def run_worker_loop(
     except Exception:  # noqa: BLE001
         last_full = None
     last_pull_monotonic: float | None = None
-    # 仅用真实观测时刻去重紧邻的 terminal poll / next preflight；每个 poll 仍独立告警。
-    last_terminal_poll_notified_at: datetime | None = None
+    # 仅去重紧邻的 terminal poll / next preflight；每个 poll 仍独立告警。
+    terminal_poll_covered_next_preflight = False
     cycles = 0
     while True:
         config = read_config()
@@ -164,8 +164,8 @@ def run_worker_loop(
         anchor_time = str(config.get("anchor_time") or "")
         enabled = bool(config.get("enabled", True))
         current = now()
-        terminal_poll_covers_current = last_terminal_poll_notified_at == current
-        last_terminal_poll_notified_at = None
+        terminal_poll_covers_preflight = terminal_poll_covered_next_preflight
+        terminal_poll_covered_next_preflight = False
         if not enabled:
             print(f"[文档同步循环] 定时同步已关闭，仅消费手动请求（poll={poll_seconds}s）。")
             remaining = float(min(interval_seconds, DISABLED_RECHECK_MAX_SECONDS))
@@ -177,7 +177,7 @@ def run_worker_loop(
                     f"anchor={anchor_time or '-'}）"
                 )
                 last_full = current
-                if not terminal_poll_covers_current:
+                if not terminal_poll_covers_preflight:
                     _notify_fail_open()
                 try:
                     run_full()
@@ -187,6 +187,7 @@ def run_worker_loop(
             else:
                 print(f"[文档同步循环] 上次全量未到期（下次 {due.isoformat()}），跳过启动全量。")
             remaining = max((due - current).total_seconds(), 0.0)
+        expected_terminal_boundary = due if enabled else current + timedelta(seconds=remaining)
         while remaining > 0:
             step = min(poll_seconds, remaining)
             sleep(step)
@@ -197,7 +198,8 @@ def run_worker_loop(
                 print(f"[文档同步循环] 消费手动请求异常：{exc}")
             _notify_fail_open()
             if remaining <= 0:
-                last_terminal_poll_notified_at = now()
+                observed = now()
+                terminal_poll_covered_next_preflight = observed >= expected_terminal_boundary
             mono = time.monotonic()
             if last_pull_monotonic is None or mono - last_pull_monotonic >= CONFIG_PULL_MIN_SECONDS:
                 last_pull_monotonic = mono
