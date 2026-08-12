@@ -18,6 +18,7 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 | `wecom_assistant.py` | 企微统一助手 |
 | `system_config.py` | 同步调度等系统配置（DB 生效面） |
 | `ops.py` | /v1/ops/*（T+ timeline、sync-config） |
+| `app/routers/sync.py` | `/v1/sync/*` 统一同步中心，查询层为 `app/sync_read.py`；P2 仅提供管理员 GET，不包含 run/config 写入口 |
 | `versions.py` | 版本看板 |
 | `backups.py` | 企微结构备份看板、镜像清理策略看板 |
 | `clash_profile.py` | Clash 配置合成器（人类叫法：订阅合并 / 一个订阅选所有节点）。机场订阅源 CRUD + 合成配置下载；渲染逻辑在 `app/clash_profile/render.py`，自建节点走 env `CLASH_SELF_NODES_B64`。验证：`python -m unittest discover -s tests -p "test_clash_profile_render.py"` |
@@ -41,6 +42,7 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 ## services/public-web
 
 公网首页（纯 nginx 静态）：功能卡片、登录、formula 入口、工具分区（灰分计算器）。
+`services/public-web/sync/index.html` 对应 `/sync/` 管理员只读统一同步中心，展示作业总览、运行时间线、步骤详情与告警；P2 不提供运行或配置写入操作。
 `formula/colors/` 是标准型号色彩空间（three.js + camera-controls，数据走 `/v1/formula/colors`，
 需登录且有 `formula.read`）；`mock-data.js` 是默认隐藏的参考示例，惰性加载。视图设置已从画布浮层移到顶部 `#settingsPanel`；色点标签由 `rebuildLabels()` / `syncLabels()` 的 DOM 层渲染，偏好存 `localStorage['aliecs_formula_colors_view_prefs']`。
 「刷新数据」按钮走 `POST /v1/formula/colors/refresh` 入队 `sync_requests` 后轮询 `meta.last_sync_at`（死线 180s）——
