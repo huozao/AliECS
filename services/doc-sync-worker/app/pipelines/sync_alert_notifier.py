@@ -387,6 +387,10 @@ def run_notifier_once(
     }
 
     try:
+        try:
+            repository.ensure_chanjet_defaults()
+        except Exception as exc:  # noqa: BLE001 - 默认值写入不能阻断已有告警轮询
+            print(f"[sync-alert] chanjet defaults failed: {type(exc).__name__}")
         states = repository.load_job_states()
         result["checked"] = len(states)
         contexts: list[dict[str, Any]] = []
@@ -507,6 +511,24 @@ class SyncAlertRepository:
             "notify_count": row[6],
             "payload_json": row[7] or {},
         }
+
+    def ensure_chanjet_defaults(self) -> None:
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE sync_jobs
+                    SET freshness_sla_seconds = COALESCE(freshness_sla_seconds, %s),
+                        artifact_glob = COALESCE(artifact_glob, %s),
+                        updated_at = NOW()
+                    WHERE job_key = %s
+                    """,
+                    (172800, "/app/tplus-output/excel/*.xlsx", "chanjet.full"),
+                )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def claim_alert(self, job: dict[str, Any], run_id: int | None, alert_kind: str, payload: dict[str, Any]) -> int | None:
         try:

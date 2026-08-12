@@ -355,6 +355,17 @@ class SyncAlertRepositoryTests(unittest.TestCase):
         self.assertNotIn("ON CONFLICT DO NOTHING", sql)
         self.assertEqual(91, alert_id)
 
+    def test_chanjet_defaults_only_fill_null_operator_fields(self) -> None:
+        self.repo.ensure_chanjet_defaults()
+
+        sql = self.conn.joined_sql()
+        self.assertIn("freshness_sla_seconds = COALESCE(freshness_sla_seconds, %s)", sql)
+        self.assertIn("artifact_glob = COALESCE(artifact_glob, %s)", sql)
+        self.assertEqual(
+            (172800, "/app/tplus-output/excel/*.xlsx", "chanjet.full"),
+            self.conn.committed[-1][1],
+        )
+
     def test_claim_uses_jsonb_payload_and_returns_none_when_already_open(self) -> None:
         self.conn.rows = [None]
 
@@ -586,6 +597,9 @@ class InMemoryAlertRepository:
         self.next_id = 1
         self.cleanup_calls = 0
         self.events: list[str] = []
+
+    def ensure_chanjet_defaults(self) -> None:
+        self.events.append("defaults")
 
     def load_job_states(self) -> list[dict[str, Any]]:
         self.events.append("load")
@@ -1029,6 +1043,20 @@ class SyncAlertOrchestrationTests(unittest.TestCase):
         self.assertLess(max(resolve_indexes), min(claim_indexes))
         self.assertLess(max(claim_indexes), min(deliver_indexes))
         self.assertEqual("cleanup", phases[-1])
+
+    def test_notifier_applies_chanjet_defaults_before_loading_jobs(self) -> None:
+        self.run_with_latest(status="success", run_id=10)
+
+        self.assertLess(self.repository.events.index("defaults"), self.repository.events.index("load"))
+
+    def test_notifier_continues_loading_jobs_when_chanjet_defaults_write_fails(self) -> None:
+        with mock.patch.object(
+            self.repository, "ensure_chanjet_defaults", side_effect=RuntimeError("database unavailable")
+        ):
+            result = self.run_with_latest(status="success", run_id=10)
+
+        self.assertEqual(1, result["checked"])
+        self.assertIn("load", self.repository.events)
 
 
 class FeishuAlertSenderTests(unittest.TestCase):
