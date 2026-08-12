@@ -85,6 +85,11 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-local}
       DATABASE_URL: ${DATABASE_URL:-postgresql://app:app@postgres:5432/app}
+      SYNC_ALERT_CHAT_ID: ${SYNC_ALERT_CHAT_ID:-}
+      SYNC_ALERT_FEISHU_PROFILE: ${SYNC_ALERT_FEISHU_PROFILE:-COMPANY_A}
+      SYNC_ALERT_ESCALATION_SECONDS: ${SYNC_ALERT_ESCALATION_SECONDS:-21600}
+      SYNC_ARTIFACT_GRACE_SECONDS: ${SYNC_ARTIFACT_GRACE_SECONDS:-300}
+      CHANJET_OPEN_TOKEN_FILE: /app/tplus-sync-requests/chanjet_open_token.txt
       WECOM_ENV_PROFILES: ${WECOM_ENV_PROFILES:-}
       WECOM_COMPANY_A_CORP_ID: ${WECOM_COMPANY_A_CORP_ID:-}
       WECOM_COMPANY_A_APP_SECRET: ${WECOM_COMPANY_A_APP_SECRET:-}
@@ -130,6 +135,8 @@ services:
       WECOM_GROUP_MEDIA_DIR: /app/wecom-group-media
     volumes:
       - wecom_group_media:/app/wecom-group-media
+      - tplus_sync_requests:/app/tplus-sync-requests:ro
+      - tplus_sync_output:/app/tplus-output:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -180,5 +187,6 @@ volumes:
   pgdata:
   recipe_active_bom:
   tplus_sync_requests:
+  tplus_sync_output:
   uploads:
   wecom_group_media:

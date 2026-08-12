@@ -11,6 +11,7 @@ from app.pipelines.backfill_smartsheet_images import run_backfill_images
 from app.pipelines.group_message_listener import resolve_groupbot_profile, run_group_listener
 from app.pipelines.rnd_record_writer import run_write_rnd_records
 from app.pipelines.sync_feishu_full import run_sync_feishu_full
+from app.pipelines import sync_alert_notifier
 from app.pipelines.sync_schedule import (
     next_full_sync_due,
     pull_config_from_bitable,
@@ -59,6 +60,7 @@ def run_worker_loop(
     *,
     full_sync: Callable[[], int] | None = None,
     consume_requests: Callable[[], int] | None = None,
+    notifier_once: Callable[[], dict[str, Any]] | None = None,
     sleep: Callable[[float], None] = time.sleep,
     max_cycles: int | None = None,
     schedule_reader: Callable[[], dict[str, Any]] | None = None,
@@ -133,6 +135,18 @@ def run_worker_loop(
 
     run_full = full_sync or _default_full_sync
     run_pending = consume_requests or _default_consume_requests
+    if notifier_once is not None:
+        run_notifier = notifier_once
+    elif is_default_pipeline:
+        run_notifier = sync_alert_notifier.run_notifier_once
+    else:
+        run_notifier = lambda: {}  # noqa: E731
+
+    def _notify_fail_open() -> None:
+        try:
+            run_notifier()
+        except Exception as exc:  # noqa: BLE001 - 告警失败不拖垮同步主循环
+            print(f"[文档同步循环] 告警检查异常：{type(exc).__name__}")
 
     _maybe_start_group_listener()
 
@@ -159,6 +173,7 @@ def run_worker_loop(
                     f"anchor={anchor_time or '-'}）"
                 )
                 last_full = current
+                _notify_fail_open()
                 try:
                     run_full()
                 except Exception as exc:  # noqa: BLE001
@@ -175,6 +190,7 @@ def run_worker_loop(
                 run_pending()
             except Exception as exc:  # noqa: BLE001
                 print(f"[文档同步循环] 消费手动请求异常：{exc}")
+            _notify_fail_open()
             mono = time.monotonic()
             if last_pull_monotonic is None or mono - last_pull_monotonic >= CONFIG_PULL_MIN_SECONDS:
                 last_pull_monotonic = mono

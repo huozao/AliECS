@@ -151,3 +151,15 @@ Default WebDock health targets use the ECS-side SSH tunnel host alias `host.dock
 | `FEISHU_<PROFILE>_APP_NAME` / `FEISHU_<PROFILE>_TABLE_NAME` | doc-sync-worker | Source display name | Optional |
 
 Do not commit real Feishu app IDs, app secrets, app tokens, wiki node tokens, tenant access tokens, or business table data. Feishu sync writes normalized fields, records, and run diagnostics into Postgres through `doc-sync-worker`.
+
+## 11. Unified sync-center alerts
+
+| Variable | Scope | Purpose | Required |
+|---|---|---|---|
+| `SYNC_ALERT_CHAT_ID` | doc-sync-worker | Default Feishu chat receiving unified sync alerts; individual jobs may override it | Optional, empty disables chat delivery |
+| `SYNC_ALERT_FEISHU_PROFILE` | doc-sync-worker | Feishu credential profile used to deliver alerts | Optional, default `COMPANY_A` |
+| `SYNC_ALERT_ESCALATION_SECONDS` | doc-sync-worker | Age threshold before an unfinished job is escalated | Optional, default `21600` (6 hours) |
+| `SYNC_ARTIFACT_GRACE_SECONDS` | doc-sync-worker | Grace period for expected output artifacts after a successful run | Optional, default `300` (5 minutes) |
+| `CHANJET_OPEN_TOKEN_FILE` | doc-sync-worker | Read-only Chanjet token file used for T+ authentication checks | Set by Compose to `/app/tplus-sync-requests/chanjet_open_token.txt` |
+
+The worker checks alerts before each scheduled full-sync cycle and after every request poll (30 seconds by default). Alert failures are fail-open and do not change sync exit codes. Both `tplus_sync_requests` and `tplus_sync_output` are mounted into `doc-sync-worker` read-only; the notifier must not modify token or output artifacts.

@@ -214,6 +214,116 @@ class ImageCellTests(WorkerImportTestCase):
 
 
 class WorkerLoopTests(WorkerImportTestCase):
+    @staticmethod
+    def _one_minute_schedule() -> dict:
+        return {"enabled": True, "interval_seconds": 60, "anchor_time": "", "pull_paused": False}
+
+    def test_explicit_notifier_runs_before_full_and_after_each_pending_poll(self) -> None:
+        import unittest.mock as mock
+
+        from app.pipelines.worker_loop import run_worker_loop
+
+        events: list[str] = []
+        with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}):
+            code = run_worker_loop(
+                full_sync=lambda: events.append("full") or 0,
+                consume_requests=lambda: events.append("pending") or 0,
+                notifier_once=lambda: events.append("notifier") or {},
+                sleep=lambda _seconds: events.append("sleep"),
+                max_cycles=1,
+                schedule_reader=self._one_minute_schedule,
+                config_puller=lambda: events.append("config") or "noop",
+                last_full_reader=lambda: None,
+            )
+
+        self.assertEqual(0, code)
+        self.assertEqual(
+            [
+                "notifier", "full",
+                "sleep", "pending", "notifier", "config",
+                "sleep", "pending", "notifier",
+            ],
+            events,
+        )
+
+    def test_notifier_failure_is_fail_open_and_logs_only_exception_type(self) -> None:
+        import contextlib
+        import io
+        import unittest.mock as mock
+
+        from app.pipelines.worker_loop import run_worker_loop
+
+        events: list[str] = []
+
+        def fail_notifier() -> dict:
+            raise RuntimeError("sensitive notifier detail")
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}):
+            code = run_worker_loop(
+                full_sync=lambda: events.append("full") or 0,
+                consume_requests=lambda: events.append("pending") or 0,
+                notifier_once=fail_notifier,
+                sleep=lambda _seconds: None,
+                max_cycles=1,
+                schedule_reader=self._one_minute_schedule,
+                config_puller=lambda: "noop",
+                last_full_reader=lambda: None,
+            )
+
+        self.assertEqual(0, code)
+        self.assertEqual(["full", "pending", "pending"], events)
+        self.assertIn("RuntimeError", output.getvalue())
+        self.assertNotIn("sensitive notifier detail", output.getvalue())
+
+    def test_injected_pipeline_without_notifier_keeps_notifier_noop(self) -> None:
+        import unittest.mock as mock
+
+        from app.pipelines import worker_loop as module
+
+        with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}), \
+                mock.patch.object(module.sync_alert_notifier, "run_notifier_once") as default_notifier:
+            code = module.run_worker_loop(
+                full_sync=lambda: 0,
+                consume_requests=lambda: 0,
+                sleep=lambda _seconds: None,
+                max_cycles=1,
+                schedule_reader=self._one_minute_schedule,
+                config_puller=lambda: "noop",
+                last_full_reader=lambda: None,
+            )
+
+        self.assertEqual(0, code)
+        default_notifier.assert_not_called()
+
+    def test_default_pipeline_uses_production_notifier(self) -> None:
+        import unittest.mock as mock
+
+        from app.pipelines import worker_loop as module
+
+        with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}), \
+                mock.patch.object(module, "_maybe_start_group_listener"), \
+                mock.patch.object(module, "run_sync_wecom_full", return_value=0), \
+                mock.patch.object(module, "run_backfill_images", side_effect=RuntimeError("skip")), \
+                mock.patch.object(module, "run_sync_feishu_full", return_value=0), \
+                mock.patch.object(module, "run_enqueue_daily_structure_backup_jobs", return_value=0), \
+                mock.patch.object(module, "run_pending_structure_backup_jobs", return_value=0), \
+                mock.patch.object(module, "run_tplus_parent_match", return_value=0), \
+                mock.patch.object(module, "run_pending_sync_requests", return_value=0), \
+                mock.patch.object(module, "run_write_rnd_records", return_value=0), \
+                mock.patch.object(module, "run_backfill_if_bom_synced", return_value=(None, False)), \
+                mock.patch.object(module.sync_alert_notifier, "run_notifier_once", return_value={}) as default_notifier:
+            code = module.run_worker_loop(
+                sleep=lambda _seconds: None,
+                max_cycles=1,
+                schedule_reader=self._one_minute_schedule,
+                config_puller=lambda: "noop",
+                last_full_reader=lambda: None,
+            )
+
+        self.assertEqual(0, code)
+        self.assertEqual(3, default_notifier.call_count)
+
     def test_loop_runs_full_then_polls_pending_requests(self) -> None:
         import os
         from app.pipelines.worker_loop import run_worker_loop
