@@ -156,7 +156,7 @@ def test_bridge_sends_request_id_header(monkeypatch):
     bridge = load_bridge()
     monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
     monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
-    captured = {}
+    captured = []
 
     class FakeResponse:
         headers = {}
@@ -171,8 +171,9 @@ def test_bridge_sends_request_id_header(monkeypatch):
             return b'{"choices":[{"message":{"content":"ok"}}]}'
 
     def fake_urlopen(request, timeout):
-        captured["request"] = request
-        captured["timeout"] = timeout
+        captured.append((request, timeout))
+        if request.full_url.endswith("/chat/jobs"):
+            raise urllib.error.HTTPError(request.full_url, 404, "Not Found", {}, io.BytesIO(b"{}"))
         return FakeResponse()
 
     monkeypatch.setattr(bridge.urllib.request, "urlopen", fake_urlopen)
@@ -180,8 +181,371 @@ def test_bridge_sends_request_id_header(monkeypatch):
 
     bridge.call_webdock(body)
 
-    outbound = json.loads(captured["request"].data.decode("utf-8"))
-    assert captured["request"].get_header("X-request-id") == outbound["metadata"]["request_id"]
+    outbound = json.loads(captured[0][0].data.decode("utf-8"))
+    assert len(captured) == 2
+    assert {item[0].get_header("X-request-id") for item in captured} == {
+        outbound["metadata"]["request_id"]
+    }
+
+
+def test_bridge_submits_async_job_then_polls_the_accepting_standby(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
+    monkeypatch.setenv("WEB_DOCK_STANDBY_BASE_URL", "http://127.0.0.1:11811/v1")
+    monkeypatch.setattr(bridge.time, "sleep", lambda _seconds: None)
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload, headers=None):
+            self.payload = payload
+            self.headers = headers or {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload).encode()
+
+    responses = iter(
+        [
+            FakeResponse(
+                {"job_id": "job-abc", "status": "running"},
+                {"X-Webdock-Route": "standby", "X-Webdock-Device": "webdock1"},
+            ),
+            FakeResponse({"job_id": "job-abc", "status": "running"}),
+            FakeResponse(
+                {
+                    "job_id": "job-abc",
+                    "status": "succeeded",
+                    "result": {
+                        "choices": [{"message": {"content": "long result"}}],
+                        "metadata": {"chatgpt_conversation_url": "https://chatgpt.com/c/abc"},
+                    },
+                }
+            ),
+        ]
+    )
+
+    def fake_urlopen(request, timeout):
+        calls.append((request.full_url, request.get_method(), request.get_header("X-request-id"), timeout))
+        return next(responses)
+
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", fake_urlopen)
+
+    result = bridge.call_webdock({"messages": [{"role": "user", "content": "hello"}]})
+
+    assert result.reply == "long result"
+    assert result.metadata["chatgpt_conversation_url"] == "https://chatgpt.com/c/abc"
+    assert result.footer["route"] == "standby"
+    assert result.footer["device"] == "webdock1"
+    assert calls[0][0] == "http://127.0.0.1:11800/v1/chat/jobs"
+    assert calls[1][0] == "http://127.0.0.1:11811/v1/chat/jobs/job-abc"
+    assert calls[2][0] == calls[1][0]
+    assert len({call[2] for call in calls}) == 1
+    assert all(call[3] <= 30 for call in calls)
+
+
+def test_bridge_falls_back_to_sync_when_async_job_endpoint_is_absent(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
+    calls = []
+
+    class FakeResponse:
+        headers = {"X-Webdock-Route": "primary", "X-Webdock-Device": "webdock2"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"choices":[{"message":{"content":"sync result"}}]}'
+
+    def fake_urlopen(request, timeout):
+        calls.append(request.full_url)
+        if request.full_url.endswith("/chat/jobs"):
+            raise urllib.error.HTTPError(request.full_url, 404, "Not Found", {}, io.BytesIO(b"{}"))
+        return FakeResponse()
+
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", fake_urlopen)
+
+    result = bridge.call_webdock({"messages": [{"role": "user", "content": "hello"}]})
+
+    assert result.reply == "sync result"
+    assert calls == [
+        "http://127.0.0.1:11800/v1/chat/jobs",
+        "http://127.0.0.1:11800/v1/chat/completions",
+    ]
+
+
+def test_bridge_does_not_fall_back_to_sync_for_malformed_success(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    calls = []
+
+    class FakeResponse:
+        headers = {"X-Webdock-Route": "primary"}
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"unexpected":true}'
+
+    def fake_urlopen(request, timeout):
+        calls.append(request.full_url)
+        return FakeResponse()
+
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(json.JSONDecodeError):
+        bridge.call_webdock({"messages": [{"role": "user", "content": "hello"}]})
+
+    assert calls == ["http://127.0.0.1:11800/v1/chat/jobs"]
+
+
+@pytest.mark.parametrize("route", ["", "unexpected"])
+def test_bridge_rejects_missing_or_invalid_accepting_route(monkeypatch, route):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+
+    class FakeResponse:
+        headers = {"X-Webdock-Route": route}
+        status = 202
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"job_id":"job-route","status":"running"}'
+
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", lambda *_args, **_kwargs: FakeResponse())
+
+    with pytest.raises(json.JSONDecodeError):
+        bridge.call_webdock({"messages": [{"role": "user", "content": "hello"}]})
+
+
+def test_bridge_retries_transient_poll_failure_on_same_node(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setattr(bridge.time, "sleep", lambda _seconds: None)
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload, headers=None):
+            self.payload = payload
+            self.headers = headers or {}
+            self.status = 202
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload).encode()
+
+    responses = iter(
+        [
+            FakeResponse(
+                {"job_id": "job-retry", "status": "running"},
+                {"X-Webdock-Route": "primary", "X-Webdock-Device": "webdock2"},
+            ),
+            TimeoutError("temporary poll timeout"),
+            FakeResponse(
+                {
+                    "job_id": "job-retry",
+                    "status": "succeeded",
+                    "result": {"choices": [{"message": {"content": "recovered"}}]},
+                }
+            ),
+        ]
+    )
+
+    def fake_urlopen(request, timeout):
+        calls.append(request.full_url)
+        response = next(responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", fake_urlopen)
+
+    result = bridge.call_webdock({"messages": [{"role": "user", "content": "hello"}]})
+
+    assert result.reply == "recovered"
+    assert calls[1:] == [
+        "http://127.0.0.1:11810/v1/chat/jobs/job-retry",
+        "http://127.0.0.1:11810/v1/chat/jobs/job-retry",
+    ]
+
+
+def test_bridge_recovers_lost_submit_response_by_deterministic_job_id(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setattr(bridge.time, "sleep", lambda _seconds: None)
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+            self.headers = {}
+            self.status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload).encode()
+
+    def fake_urlopen(request, timeout):
+        calls.append(request.full_url)
+        url = request.full_url
+        if url.endswith("/chat/jobs"):
+            raise TimeoutError("submit response lost")
+        if ":11810/" in url:
+            raise urllib.error.HTTPError(url, 404, "not found", {}, io.BytesIO(b"{}"))
+        if len([call for call in calls if ":11811/" in call]) == 1:
+            return FakeResponse({"job_id": url.rsplit("/", 1)[-1], "status": "running"})
+        return FakeResponse(
+            {
+                "job_id": url.rsplit("/", 1)[-1],
+                "status": "succeeded",
+                "result": {"choices": [{"message": {"content": "found after timeout"}}]},
+            }
+        )
+
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", fake_urlopen)
+
+    result = bridge.call_webdock({"messages": [{"role": "user", "content": "hello"}]})
+
+    assert result.reply == "found after timeout"
+    assert len([call for call in calls if call.endswith("/chat/jobs")]) == 1
+    assert calls[-1].startswith("http://127.0.0.1:11811/")
+
+
+def test_bridge_never_reposts_while_submit_recovery_is_uncertain(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setattr(bridge.time, "sleep", lambda _seconds: None)
+    calls = []
+    standby_gets = 0
+
+    class FakeResponse:
+        headers = {}
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "job_id": self.job_id,
+                    "status": "succeeded",
+                    "result": {"choices": [{"message": {"content": "single execution"}}]},
+                }
+            ).encode()
+
+    def fake_urlopen(request, timeout):
+        nonlocal standby_gets
+        calls.append(request.full_url)
+        if request.full_url.endswith("/chat/jobs"):
+            raise TimeoutError("submit response lost")
+        if ":11810/" in request.full_url:
+            raise urllib.error.HTTPError(
+                request.full_url, 404, "not found", {}, io.BytesIO(b"{}")
+            )
+        standby_gets += 1
+        if standby_gets == 1:
+            raise TimeoutError("standby status temporarily unavailable")
+        response = FakeResponse()
+        response.job_id = request.full_url.rsplit("/", 1)[-1]
+        return response
+
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", fake_urlopen)
+
+    result = bridge.call_webdock({"messages": [{"role": "user", "content": "hello"}]})
+
+    assert result.reply == "single execution"
+    assert len([call for call in calls if call.endswith("/chat/jobs")]) == 1
+    assert standby_gets == 2
+
+
+def test_bridge_derives_node_local_job_poll_urls_from_failover_base(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.delenv("WEB_DOCK_PRIMARY_BASE_URL", raising=False)
+    monkeypatch.delenv("WEB_DOCK_STANDBY_BASE_URL", raising=False)
+
+    assert bridge.webdock_jobs_url("primary") == "http://127.0.0.1:11810/v1/chat/jobs"
+    assert bridge.webdock_jobs_url("standby") == "http://127.0.0.1:11811/v1/chat/jobs"
+
+
+def test_bridge_surfaces_lane_busy_from_failed_async_job(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "0")
+    monkeypatch.setattr(bridge.time, "sleep", lambda _seconds: None)
+
+    class FakeResponse:
+        headers = {"X-Webdock-Route": "primary", "X-Webdock-Device": "webdock2"}
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload, ensure_ascii=False).encode()
+
+    responses = iter(
+        [
+            FakeResponse({"job_id": "job-busy", "status": "running"}),
+            FakeResponse(
+                {
+                    "job_id": "job-busy",
+                    "status": "failed",
+                    "error": {
+                        "error_code": "LANE_BUSY",
+                        "message": "当前会话正在处理另一项任务；已等待 5.0s，本次请求未执行。",
+                    },
+                }
+            ),
+        ]
+    )
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", lambda *_args, **_kwargs: next(responses))
+
+    reply = bridge.build_reply({"messages": [{"role": "user", "content": "hello"}]})
+
+    assert "LANE_BUSY" in reply
+    assert "已等待 5.0s" in reply
+    assert "WebDock lane lock" in reply
 
 
 def test_bridge_forwards_openclaw_metadata_to_webdock_lane(monkeypatch):

@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import hmac
+import io
 import json
 import base64
 import mimetypes
@@ -505,6 +506,42 @@ def webdock_configured() -> bool:
 
 def webdock_url() -> str:
     return os.getenv("WEB_DOCK_BASE_URL", "").rstrip("/") + "/chat/completions"
+
+
+def webdock_jobs_url(route: str = "") -> str:
+    if route and route not in {"primary", "standby"}:
+        raise ValueError(f"invalid WebDock route: {route}")
+    env_name = {
+        "primary": "WEB_DOCK_PRIMARY_BASE_URL",
+        "standby": "WEB_DOCK_STANDBY_BASE_URL",
+    }.get(route, "")
+    base = os.getenv(env_name, "").rstrip("/") if env_name else ""
+    if not base:
+        base = os.getenv("WEB_DOCK_BASE_URL", "").rstrip("/")
+    if route and not os.getenv(env_name or "", ""):
+        parsed = urllib.parse.urlsplit(base)
+        if parsed.hostname in {"127.0.0.1", "localhost"} and parsed.port == 11800:
+            port = 11810 if route == "primary" else 11811
+            host = parsed.hostname or "127.0.0.1"
+            netloc = f"{host}:{port}"
+            base = urllib.parse.urlunsplit(
+                (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+            ).rstrip("/")
+    return base + "/chat/jobs"
+
+
+def webdock_job_poll_seconds() -> float:
+    try:
+        return max(1.0, float(os.getenv("WEB_DOCK_JOB_POLL_SECONDS", "5")))
+    except ValueError:
+        return 5.0
+
+
+def webdock_job_http_timeout() -> float:
+    try:
+        return max(1.0, min(30.0, float(os.getenv("WEB_DOCK_JOB_HTTP_TIMEOUT_SECONDS", "30"))))
+    except ValueError:
+        return 30.0
 
 
 def webdock_media_root() -> str:
@@ -3663,25 +3700,55 @@ def parse_http_error_message(exc: urllib.error.HTTPError) -> str:
     return str(detail.get("message") or detail.get("error_code") or exc)
 
 
-def call_webdock(body: dict[str, Any]) -> WebDockResult:
-    outbound = build_webdock_body(body)
-    request_id = str((outbound.get("metadata") or {}).get("request_id") or "").strip()
-    data = json.dumps(outbound, ensure_ascii=False).encode("utf-8")
+class _AsyncJobsUnavailable(Exception):
+    pass
+
+
+def _webdock_job_id(request_id: str) -> str:
+    return "job-" + hashlib.sha256(request_id.encode("utf-8")).hexdigest()[:24]
+
+
+def _is_transient_webdock_error(exc: BaseException) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in {408, 425} or 500 <= exc.code <= 599
+    return isinstance(exc, (TimeoutError, urllib.error.URLError))
+
+
+def _webdock_request(
+    url: str,
+    *,
+    request_id: str,
+    method: str,
+    payload: dict[str, Any] | None = None,
+    timeout: float,
+) -> tuple[dict[str, Any], Any, int | None]:
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
     request = urllib.request.Request(
-        webdock_url(),
+        url,
         data=data,
         headers={
             "Content-Type": "application/json",
             "Authorization": "Bearer " + os.getenv("WEB_DOCK_API_TOKEN", ""),
             "X-Request-ID": request_id,
         },
-        method="POST",
+        method=method,
     )
-    started = time.monotonic()
-    with urllib.request.urlopen(request, timeout=webdock_timeout()) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-        device = str(response.headers.get("X-Webdock-Device") or "").strip()
-        route = str(response.headers.get("X-Webdock-Route") or "").strip()
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        result = json.loads(response.read().decode("utf-8"))
+        return result, response.headers, getattr(response, "status", None)
+
+
+def _sync_webdock(outbound: dict[str, Any], request_id: str, started: float) -> WebDockResult:
+    request_id = str((outbound.get("metadata") or {}).get("request_id") or "").strip()
+    payload, headers, _status = _webdock_request(
+        webdock_url(),
+        request_id=request_id,
+        method="POST",
+        payload=outbound,
+        timeout=webdock_timeout(),
+    )
+    device = str(headers.get("X-Webdock-Device") or "").strip()
+    route = str(headers.get("X-Webdock-Route") or "").strip()
     footer: dict[str, Any] = {"elapsed_seconds": round(time.monotonic() - started)}
     if device:
         footer["device"] = device
@@ -3692,6 +3759,159 @@ def call_webdock(body: dict[str, Any]) -> WebDockResult:
         extract_webdock_metadata(payload),
         footer,
     )
+
+
+def _raise_job_error(url: str, state: dict[str, Any]) -> None:
+    detail = state.get("error") if isinstance(state.get("error"), dict) else {}
+    error_code = str(detail.get("error_code") or "UNKNOWN_ERROR")
+    if error_code in {"BUSY", "LANE_BUSY", "JOB_QUEUE_FULL"}:
+        status = 429
+    elif error_code == "REQUEST_CANCELLED":
+        status = 409
+    else:
+        status = 500
+    body = json.dumps({"detail": detail}, ensure_ascii=False).encode("utf-8")
+    raise urllib.error.HTTPError(url, status, "WebDock job failed", {}, io.BytesIO(body))
+
+
+def _recover_submitted_job(
+    request_id: str,
+    deadline: float,
+) -> tuple[dict[str, Any], str, str] | None:
+    job_id = _webdock_job_id(request_id)
+    while True:
+        explicit_not_found = 0
+        uncertain = False
+        for route in ("primary", "standby"):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("WebDock job submission could not be recovered before deadline")
+            url = webdock_jobs_url(route) + "/" + urllib.parse.quote(job_id, safe="")
+            try:
+                state, headers, _status = _webdock_request(
+                    url,
+                    request_id=request_id,
+                    method="GET",
+                    timeout=min(webdock_job_http_timeout(), max(1.0, remaining)),
+                )
+            except urllib.error.HTTPError as exc:
+                if exc.code == 404:
+                    explicit_not_found += 1
+                    continue
+                if _is_transient_webdock_error(exc):
+                    uncertain = True
+                    continue
+                raise
+            except (TimeoutError, urllib.error.URLError):
+                uncertain = True
+                continue
+            if str(state.get("job_id") or "") != job_id:
+                raise json.JSONDecodeError("Recovered WebDock job id did not match request id", "", 0)
+            device = str(headers.get("X-Webdock-Device") or "").strip()
+            return state, route, device
+        if explicit_not_found == 2:
+            return None
+        if not uncertain:
+            raise json.JSONDecodeError("WebDock job recovery returned no definitive state", "", 0)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("WebDock job submission could not be recovered before deadline")
+        time.sleep(min(webdock_job_poll_seconds(), remaining))
+
+
+def _submit_async_job(
+    outbound: dict[str, Any],
+    request_id: str,
+    deadline: float,
+) -> tuple[dict[str, Any], str, str]:
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("WebDock async job submission exceeded its deadline")
+        try:
+            submitted, headers, _response_status = _webdock_request(
+                webdock_jobs_url(),
+                request_id=request_id,
+                method="POST",
+                payload=outbound,
+                timeout=min(webdock_job_http_timeout(), max(1.0, remaining)),
+            )
+        except urllib.error.HTTPError as exc:
+            if exc.code in {404, 405}:
+                raise _AsyncJobsUnavailable from exc
+            if not _is_transient_webdock_error(exc):
+                raise
+            recovered = _recover_submitted_job(request_id, deadline)
+            if recovered is not None:
+                return recovered
+        except (TimeoutError, urllib.error.URLError):
+            recovered = _recover_submitted_job(request_id, deadline)
+            if recovered is not None:
+                return recovered
+        else:
+            job_id = str(submitted.get("job_id") or "").strip()
+            if not job_id:
+                raise json.JSONDecodeError("WebDock job response omitted job_id", "", 0)
+            route = str(headers.get("X-Webdock-Route") or "").strip()
+            if route not in {"primary", "standby"}:
+                raise json.JSONDecodeError("WebDock job response omitted a valid route", "", 0)
+            device = str(headers.get("X-Webdock-Device") or "").strip()
+            return submitted, route, device
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("WebDock async job submission exceeded its deadline")
+        time.sleep(min(webdock_job_poll_seconds(), remaining))
+
+
+def _async_webdock(outbound: dict[str, Any], request_id: str, started: float) -> WebDockResult:
+    deadline = started + webdock_timeout()
+    submitted, route, device = _submit_async_job(outbound, request_id, deadline)
+    job_id = str(submitted.get("job_id") or "").strip()
+    poll_url = webdock_jobs_url(route) + "/" + urllib.parse.quote(job_id, safe="")
+    state = submitted
+    while True:
+        status = str(state.get("status") or "")
+        if status == "succeeded":
+            payload = state.get("result")
+            if not isinstance(payload, dict):
+                raise json.JSONDecodeError("WebDock job result is not an object", "", 0)
+            footer: dict[str, Any] = {"elapsed_seconds": round(time.monotonic() - started)}
+            if device:
+                footer["device"] = device
+            if route:
+                footer["route"] = route
+            return WebDockResult(
+                normalize_reply(extract_assistant_reply(payload)) or FALLBACK_MESSAGE,
+                extract_webdock_metadata(payload),
+                footer,
+            )
+        if status in {"failed", "cancelled"}:
+            _raise_job_error(poll_url, state)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"WebDock job {job_id} exceeded {webdock_timeout()}s")
+        time.sleep(min(webdock_job_poll_seconds(), remaining))
+        try:
+            state, _poll_headers, _poll_status = _webdock_request(
+                poll_url,
+                request_id=request_id,
+                method="GET",
+                timeout=min(webdock_job_http_timeout(), max(1.0, remaining)),
+            )
+        except Exception as exc:
+            if not _is_transient_webdock_error(exc):
+                raise
+            continue
+
+
+def call_webdock(body: dict[str, Any]) -> WebDockResult:
+    outbound = build_webdock_body(body)
+    request_id = str((outbound.get("metadata") or {}).get("request_id") or "").strip()
+    started = time.monotonic()
+    try:
+        return _async_webdock(outbound, request_id, started)
+    except _AsyncJobsUnavailable:
+        return _sync_webdock(outbound, request_id, started)
 
 
 def unpack_webdock_result(result: Any) -> tuple[str, dict[str, Any]]:

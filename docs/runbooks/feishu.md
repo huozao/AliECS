@@ -8,9 +8,11 @@
   → OpenClaw（txecs 容器，飞书插件）
   → openclaw-bridge（txecs 容器，源码 deploy/openclaw-bridge/openclaw_bridge.py）
   → 127.0.0.1:11800（txecs，webdock-failover-proxy 主备路由）
+  → POST /v1/chat/jobs（快速返回 job_id）
   → 反向隧道（webdock 设备 webdock-ecs-tunnel.service 的 ssh -R）
   → WebDock API :18000（webdock2 主 / webdock1 备）
   → Chrome / ChatGPT 网页
+  ← GET /v1/chat/jobs/{job_id}（固定原接单节点，短轮询）
 ```
 
 主备判定权威：txecs `/etc/default/webdock-failover-proxy`；实际来源看响应头 `X-Webdock-Device` / `X-Webdock-Route`。
@@ -42,6 +44,7 @@
 | 卡片格式乱/表格丢失 | lark_md 不认 GFM 表格/`##`/引用 | 表格必须截图、标题转粗体、引用转 `▎`（卡片合成在 bridge） |
 | /新对话 /模式 不生效 | 群表「对话模式」列类型、sender 前缀剥离 | 旧构建误建 Checkbox 列（PR#165 加 reconcile_type）；粘性状态优先级链已修（PR#177） |
 | 同群后续消息很快返回 `LANE_BUSY` | WebDock archive 查同一 `lane.key` 的 active 请求和被拒请求 | WebDock 只短等车道锁；被拒消息没有发进 ChatGPT。等待当前任务，或发送 `/新对话` 抢占并重建该车道 |
+| 长任务超过 320s 但处理卡片仍更新 | bridge trace 查 job submit/poll；WebDock archive 查最终状态 | 正常：浏览器任务已与 failover-proxy 的单连接 320s 解耦；占位卡轮播持续显示“处理中 + 已等待秒数”，最终结果仍回填原卡片 |
 
 ## 验证命令
 
@@ -68,3 +71,5 @@ ssh webdock2 "wsl -d Ubuntu-24.04-WebDock -- docker ps"  # WebDock 容器状态
 - OpenClaw 的 dispatch→bridge 延迟 0.9-2.4s 属正常（处理中占位卡即为此设计）。
 - bridge 单测：`tests/test_openclaw_bridge.py`；mock 形状必须对齐真实 OpenClaw 输出（合成形状掩盖过串频道 bug）。
 - WebDock HTTP 429 会读取错误体：`LANE_BUSY` 的错误码和“已等待/未执行”文案会进入飞书诊断卡片；旧 `BUSY` 仍保留原 browser-lock 文案。
+- bridge 默认先提交 WebDock 异步 job，再以不超过 30s 的短 HTTP 查询状态；提交响应必须带合法的 `X-Webdock-Route`，后续固定轮询 `11810`（primary）或 `11811`（standby）。短暂超时/5xx 在总时限内重试；若提交响应丢失，bridge 用确定性 job id 到两节点找回已接单任务。只有 job 接口明确返回 404/405 才降级旧同步接口，避免重复执行。这项粘性不能去掉，否则 standby 接单后 primary 恢复会查到错误节点。
+- job 运行期间飞书占位卡轮播不会停止：基础文案/提示文案继续轮换并附 `已等待 Ns`；只有终局答案或诊断卡 patch 时才停止。这样“页面仍在处理”和“结果已完成/失败”在用户侧可见。
