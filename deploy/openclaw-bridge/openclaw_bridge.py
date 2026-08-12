@@ -3806,9 +3806,23 @@ def build_reply(body: dict[str, Any]) -> str:
     except urllib.error.HTTPError as exc:
         elapsed = time.monotonic() - started
         if exc.code == 429:
+            error_detail = parse_http_error_detail(exc)
+            error_code = str(error_detail.get("error_code") or "")
+            error_message = str(error_detail.get("message") or "")
+            if error_code == "LANE_BUSY":
+                reason = (
+                    "bridge -> WebDock 已联通；WebDock 返回 429 LANE_BUSY"
+                    + (f": {error_message}" if error_message else "。")
+                )
+                stop_at = "WebDock lane lock"
+            else:
+                reason = "bridge -> WebDock 已联通；WebDock 返回 429 BUSY，浏览器正在处理另一条请求。"
+                stop_at = "WebDock browser lock"
             reply = diagnostic_message(
-                "bridge -> WebDock 已联通；WebDock 返回 429 BUSY，浏览器正在处理另一条请求。",
-                "WebDock browser lock",
+                reason,
+                stop_at,
+                error_code=error_code or None,
+                debug_dir=str(error_detail.get("debug_dir") or "") or None,
                 elapsed_seconds=elapsed,
                 details=details,
             )

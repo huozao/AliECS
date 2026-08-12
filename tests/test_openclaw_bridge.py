@@ -2086,6 +2086,37 @@ def test_bridge_reports_webdock_busy_with_diagnostic(monkeypatch):
     assert "WebDock browser lock" in reply
 
 
+def test_bridge_reports_lane_busy_code_and_wait_message(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
+
+    def raise_busy(*args, **kwargs):
+        payload = {
+            "detail": {
+                "error_code": "LANE_BUSY",
+                "message": "当前会话正在处理另一项任务；已等待 5.0s，本次请求未执行。",
+            }
+        }
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        raise urllib.error.HTTPError(
+            "http://127.0.0.1:11800/v1/chat/completions",
+            429,
+            "Too Many Requests",
+            {},
+            io.BytesIO(body),
+        )
+
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", raise_busy)
+
+    reply = bridge.build_reply({"messages": [{"role": "user", "content": "hello"}]})
+
+    assert bridge.FALLBACK_MESSAGE in reply
+    assert "错误码 LANE_BUSY" in reply
+    assert "已等待 5.0s，本次请求未执行" in reply
+    assert "WebDock lane lock" in reply
+
+
 def test_parse_file_marker():
     bridge = load_bridge()
 
