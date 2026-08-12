@@ -1,6 +1,6 @@
 """Clash 配置合成：第三方机场订阅源的增删改，以及合成配置的预览与下载。
 
-自建节点定义来自环境变量 CLASH_SELF_NODES_JSON（由 SOPS 管理、部署时渲染），
+自建节点定义来自环境变量 CLASH_SELF_NODES_B64（由 SOPS 管理、部署时渲染），
 仓库里没有也不得有。机场订阅 URL 存库，不进仓库。
 
 本模块不访问机场——机场节点由客户端 mihomo 通过 proxy-providers 自行拉取，
@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import os
 from contextlib import closing
@@ -39,20 +41,36 @@ def _row_to_dict(row: tuple) -> dict[str, Any]:
 
 
 def _load_self_nodes() -> list[dict[str, Any]]:
-    raw = os.getenv("CLASH_SELF_NODES_JSON", "").strip()
+    """从 CLASH_SELF_NODES_B64 读自建节点定义。
+
+    ⚠️ 值是 base64 而不是裸 JSON，这一点不能"简化"回去。runtime env 会被
+    `deploy/ecs/deploy.sh` 以 `set -a; source <file>` 载入，bash 的引号移除会把
+    `[{"name":"a"}]` 吃成 `[{name:a}]`（2026-08-11 实测），json.loads 随后报错。
+    整条链路是 bash source → heredoc 展开 → dotenv → compose 插值四层，每层的引号
+    语义都不一样；base64 的字符集穿这四层都不需要任何转义。
+    """
+    raw = os.getenv("CLASH_SELF_NODES_B64", "").strip()
     if not raw:
-        raise HTTPException(status_code=500, detail="CLASH_SELF_NODES_JSON 未配置，无法生成配置")
+        raise HTTPException(status_code=500, detail="CLASH_SELF_NODES_B64 未配置，无法生成配置")
     try:
-        nodes = json.loads(raw)
+        decoded = base64.b64decode(raw, validate=True).decode("utf-8")
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(
+            status_code=500, detail=f"CLASH_SELF_NODES_B64 不是合法 base64/UTF-8：{exc}"
+        ) from exc
+    try:
+        nodes = json.loads(decoded)
     except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=500, detail=f"CLASH_SELF_NODES_JSON 不是合法 JSON：{exc}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"CLASH_SELF_NODES_B64 解码后不是合法 JSON：{exc}"
+        ) from exc
     if not isinstance(nodes, list) or not nodes:
-        raise HTTPException(status_code=500, detail="CLASH_SELF_NODES_JSON 必须是非空数组")
+        raise HTTPException(status_code=500, detail="CLASH_SELF_NODES_B64 解码后必须是非空数组")
     for node in nodes:
         if not isinstance(node, dict) or "name" not in node or "server" not in node:
             raise HTTPException(
                 status_code=500,
-                detail="CLASH_SELF_NODES_JSON 的每个元素都必须是含 name 与 server 的对象",
+                detail="CLASH_SELF_NODES_B64 的每个元素都必须是含 name 与 server 的对象",
             )
     return nodes
 

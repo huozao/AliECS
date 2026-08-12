@@ -380,7 +380,7 @@ git commit -m "feat(clash-profile): 配置渲染纯函数与静态模板"
 **Interfaces:**
 - Consumes: Task 1 的 `render_profile(self_nodes, providers)`、`provider_key(provider_id)`
 - Produces:
-  - `_load_self_nodes() -> list[dict]`，从环境变量 `CLASH_SELF_NODES_JSON` 读，失败抛 `HTTPException(500)`
+  - `_load_self_nodes() -> list[dict]`，从环境变量 `CLASH_SELF_NODES_B64` 读，失败抛 `HTTPException(500)`
   - 路由前缀 `/v1/admin/clash-profile`，六个端点（见下），admin-ui 通过 `/api` 反代访问
   - 表 `clash_profile_providers(id, name, url, enabled, sort_order, created_at, updated_at)`
 
@@ -423,7 +423,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1] / "services" / "backend-api"
 class ClashProfileEnvTests(unittest.TestCase):
     def setUp(self) -> None:
         self._old_sys_path = list(sys.path)
-        self._old_env = {k: os.environ.get(k) for k in ("AUTH_TOKEN_SECRET", "CLASH_SELF_NODES_JSON")}
+        self._old_env = {k: os.environ.get(k) for k in ("AUTH_TOKEN_SECRET", "CLASH_SELF_NODES_B64")}
         for name in list(sys.modules):
             if name == "app" or name.startswith("app."):
                 del sys.modules[name]
@@ -450,37 +450,37 @@ class ClashProfileEnvTests(unittest.TestCase):
                 del sys.modules[name]
 
     def test_missing_env_raises_500(self) -> None:
-        os.environ.pop("CLASH_SELF_NODES_JSON", None)
+        os.environ.pop("CLASH_SELF_NODES_B64", None)
         with self.assertRaises(self.HTTPException) as ctx:
             self.module._load_self_nodes()
         self.assertEqual(ctx.exception.status_code, 500)
 
     def test_invalid_json_raises_500(self) -> None:
-        os.environ["CLASH_SELF_NODES_JSON"] = "{not json"
+        os.environ["CLASH_SELF_NODES_B64"] = "{not json"
         with self.assertRaises(self.HTTPException) as ctx:
             self.module._load_self_nodes()
         self.assertEqual(ctx.exception.status_code, 500)
 
     def test_non_list_raises_500(self) -> None:
-        os.environ["CLASH_SELF_NODES_JSON"] = '{"name": "x"}'
+        os.environ["CLASH_SELF_NODES_B64"] = '{"name": "x"}'
         with self.assertRaises(self.HTTPException) as ctx:
             self.module._load_self_nodes()
         self.assertEqual(ctx.exception.status_code, 500)
 
     def test_empty_list_raises_500(self) -> None:
-        os.environ["CLASH_SELF_NODES_JSON"] = "[]"
+        os.environ["CLASH_SELF_NODES_B64"] = "[]"
         with self.assertRaises(self.HTTPException) as ctx:
             self.module._load_self_nodes()
         self.assertEqual(ctx.exception.status_code, 500)
 
     def test_node_without_required_keys_raises_500(self) -> None:
-        os.environ["CLASH_SELF_NODES_JSON"] = '[{"name": "a"}]'
+        os.environ["CLASH_SELF_NODES_B64"] = '[{"name": "a"}]'
         with self.assertRaises(self.HTTPException) as ctx:
             self.module._load_self_nodes()
         self.assertEqual(ctx.exception.status_code, 500)
 
     def test_valid_env_returns_nodes(self) -> None:
-        os.environ["CLASH_SELF_NODES_JSON"] = '[{"name": "a", "server": "203.0.113.10", "type": "vless"}]'
+        os.environ["CLASH_SELF_NODES_B64"] = '[{"name": "a", "server": "203.0.113.10", "type": "vless"}]'
         nodes = self.module._load_self_nodes()
         self.assertEqual(nodes[0]["server"], "203.0.113.10")
 
@@ -500,7 +500,7 @@ Create `services/backend-api/app/routers/clash_profile.py`:
 ```python
 """Clash 配置合成：第三方机场订阅源的增删改，以及合成配置的预览与下载。
 
-自建节点定义来自环境变量 CLASH_SELF_NODES_JSON（由 SOPS 管理、部署时渲染），
+自建节点定义来自环境变量 CLASH_SELF_NODES_B64（由 SOPS 管理、部署时渲染），
 仓库里没有也不得有。机场订阅 URL 存库，不进仓库。
 
 本模块不访问机场——机场节点由客户端 mihomo 通过 proxy-providers 自行拉取。
@@ -534,18 +534,18 @@ class ProviderIn(BaseModel):
 
 
 def _load_self_nodes() -> list[dict[str, Any]]:
-    raw = os.getenv("CLASH_SELF_NODES_JSON", "").strip()
+    raw = os.getenv("CLASH_SELF_NODES_B64", "").strip()
     if not raw:
-        raise HTTPException(status_code=500, detail="CLASH_SELF_NODES_JSON 未配置，无法生成配置")
+        raise HTTPException(status_code=500, detail="CLASH_SELF_NODES_B64 未配置，无法生成配置")
     try:
         nodes = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=500, detail=f"CLASH_SELF_NODES_JSON 不是合法 JSON：{exc}") from exc
+        raise HTTPException(status_code=500, detail=f"CLASH_SELF_NODES_B64 不是合法 JSON：{exc}") from exc
     if not isinstance(nodes, list) or not nodes:
-        raise HTTPException(status_code=500, detail="CLASH_SELF_NODES_JSON 必须是非空数组")
+        raise HTTPException(status_code=500, detail="CLASH_SELF_NODES_B64 必须是非空数组")
     for node in nodes:
         if not isinstance(node, dict) or "name" not in node or "server" not in node:
-            raise HTTPException(status_code=500, detail="CLASH_SELF_NODES_JSON 的每个元素都必须含 name 与 server")
+            raise HTTPException(status_code=500, detail="CLASH_SELF_NODES_B64 的每个元素都必须含 name 与 server")
     return nodes
 
 
@@ -891,7 +891,7 @@ git commit -m "feat(clash-profile): admin-ui 订阅源管理与配置下载页�
 - Modify: 顶层 `../功能地图-人类版.md`（workspace 治理仓，**单独提交**）
 
 **Interfaces:**
-- Consumes: Task 2 定义的环境变量名 `CLASH_SELF_NODES_JSON`
+- Consumes: Task 2 定义的环境变量名 `CLASH_SELF_NODES_B64`
 - Produces: 无
 
 - [ ] **Step 1: 两个 env 示例各加一行**
@@ -901,12 +901,12 @@ git commit -m "feat(clash-profile): admin-ui 订阅源管理与配置下载页�
 ```bash
 # Clash 配置合成器：自建节点定义，JSON 数组，每个元素是一个完整的 clash proxy 定义（至少含 name 与 server）。
 # 生产值由 SOPS 管理并在部署时渲染，切勿把真实节点参数写进仓库。
-CLASH_SELF_NODES_JSON=[{"name":"example","type":"vless","server":"203.0.113.10","port":443}]
+CLASH_SELF_NODES_B64=[{"name":"example","type":"vless","server":"203.0.113.10","port":443}]
 ```
 
 - [ ] **Step 2: backend-api README 记录新增环境变量与接口**
 
-在 `services/backend-api/README.md` 的环境变量小节追加 `CLASH_SELF_NODES_JSON` 的用途、格式与「缺失时 `/download` 返回 500」的行为；在接口小节追加 `/v1/admin/clash-profile` 六个端点。
+在 `services/backend-api/README.md` 的环境变量小节追加 `CLASH_SELF_NODES_B64` 的用途、格式与「缺失时 `/download` 返回 500」的行为；在接口小节追加 `/v1/admin/clash-profile` 六个端点。
 
 - [ ] **Step 3: 导航文档记录功能入口**
 
@@ -956,7 +956,7 @@ cd AliECS
 - Modify: infra 仓 `secrets/README.md`
 
 **Interfaces:**
-- Consumes: Task 2 的环境变量名 `CLASH_SELF_NODES_JSON`
+- Consumes: Task 2 的环境变量名 `CLASH_SELF_NODES_B64`
 - Produces: 生产环境可用的自建节点定义
 
 ⚠️ **本任务跨仓库且涉及密钥与生产部署，每一步都要先向用户报告再执行，不得自动推进。**
@@ -1031,3 +1031,32 @@ Expected: 输出配置校验通过，无 error。若核心不在该路径，从 
 **类型一致性**：`render_profile(self_nodes, providers)` 在 Task 1 定义、Task 2 调用，参数顺序与键名一致；`provider_key(id)` 返回的 `airport{id}` 在 Task 1 实现与测试断言中一致；`_load_self_nodes()` 在 Task 2 定义并被同任务的 `_profile_text()` 调用；admin-ui 调用的六个路径与 Task 2 的路由前缀 `/v1/admin/clash-profile` 一致。
 
 **外部依赖核对**：Task 3 用到的 admin-ui 辅助函数（`$`、`showError`、`showSuccess`、`escapeHtml`、`state.token`、`API_BASE`）已逐个在 `index.html` 中确认存在，签名见 Task 3 Step 5 的表。Task 1 用到的模板抽取源文件为 devbox 本机 Clash Verge 现用 profile，路径见 Step 2。`services/backend-api/Dockerfile` 是 `COPY app ./app`，两个模板在 `app/clash_profile/` 下会被一并打包，无需改 Dockerfile。
+
+---
+
+## 实施记录：与计划的四处偏离（2026-08-11）
+
+计划是照着写的，但实施中发现四个问题，都已修正并留下回归保护。
+
+**1. DELETE 不能用 204。** 计划里 `delete_provider` 写了 `status_code=204` 配 `-> None` 返回标注。FastAPI 会从返回标注推断 `response_model`，而 204 不允许响应体，`APIRoute.__init__` 直接断言失败——整个模块在 import 期就崩，7 条测试同时红。改成仓库既有惯例（`couple.py` 等）的 200 + dict。
+
+**2. 环境变量必须用 base64，不能是裸 JSON。** 计划设计的 `CLASH_SELF_NODES_JSON` 会在部署时被 bash 吃掉引号。实测：
+
+```
+A=[{"name":"self-a","port":443}]      # source 后 → [{name:self-a,port:443}]
+B='[{"name":"self-a","port":443}]'    # source 后 → [{"name":"self-a","port":443}]
+```
+
+`deploy/ecs/deploy.sh` 用 `set -a; source` 载入 runtime env，第 1 层就废了；单引号只能救第 1 层，heredoc 重建时展开又变回裸值。改为 `CLASH_SELF_NODES_B64`，理由与四层链路的完整说明见设计文档「环境变量」一节。回归保护：`test_quotes_survive_the_env_round_trip`。
+
+**这个坑本地测不出来** —— 单测直接 `os.environ[...]=` 赋值，绕过了 bash sourcing。只有走一遍真实链路才会暴露，而暴露形态是部署后 `/download` 报 `json.loads` 错误。
+
+**3. 计划漏了两个必改文件。** compose 用显式 `environment:` 而非 `env_file`，没在 `deploy/ecs/compose.prod.yml` 的 `backend-api.environment` 里列出的变量根本不会进容器；`deploy/ecs/deploy.sh` 的 heredoc 是白名单重建，不在名单里的键会被丢掉。两处都已补。
+
+**4. 计划里的测试命令跑不起来。** `tests` 不是 package，`python -m unittest tests.X` 报 `ModuleNotFoundError`，要用 `python -m unittest discover -s tests -p "X.py"`。计划正文已改。
+
+## 实施记录：并发工作树冲突
+
+实施到一半发现另一个会话/agent 在同一个 checkout 上工作，把分支从 `feat/clash-profile-merge` 切回了 `feat/sync-platform-p0` 并提交了两个 commit。我方 5 个提交完好（reflog 可查），但共享一个工作树轮流切分支迟早互相踩掉未提交改动。
+
+处置：为本分支单开 worktree `_worktrees/clash-profile`，不再动主 checkout。后续在本仓做并行任务时应沿用这个做法——`.codex-worktrees/` 下已有先例。

@@ -31,7 +31,7 @@ devbox 的 Clash Verge 里存着两个 profile：一个本地配置（只有自�
 
 | 内容 | 去处 |
 |---|---|
-| 自建节点完整定义（协议类型、地址、端口、传输与伪装参数、全部凭据、节点名） | 环境变量 `CLASH_SELF_NODES_JSON`，值由 SOPS 管理并在部署时渲染 |
+| 自建节点完整定义（协议类型、地址、端口、传输与伪装参数、全部凭据、节点名） | 环境变量 `CLASH_SELF_NODES_B64`，值由 SOPS 管理并在部署时渲染 |
 | 自建节点服务器地址派生的防回环规则 | 由 `render.py` 从节点定义**运行时推导**，模板文件里不写死 |
 | 第三方机场的名称与订阅 URL | 数据库表，admin-ui 里维护 |
 
@@ -121,6 +121,8 @@ proxy-groups:
 | `services/backend-api/app/clash_profile/render.py` | 纯函数，无 IO |
 | `services/backend-api/app/routers/clash_profile.py` | HTTP 层 |
 | `services/admin-ui/index.html` | 新增页签 |
+| `deploy/ecs/compose.prod.yml` | `backend-api.environment` 加 `CLASH_SELF_NODES_B64`（漏了变量进不了容器） |
+| `deploy/ecs/deploy.sh` | heredoc 白名单加同一个键（漏了会被重建过程丢掉） |
 | `tests/test_clash_profile_render.py` | 单测 |
 
 模板拆成两个文件而不是一个，是为了让 `render.py` 能在 `rules:` 开头插入运行时推导的防回环规则，而**不需要解析 YAML**。
@@ -171,11 +173,22 @@ render_profile(self_nodes: list[dict], providers: list[dict]) -> str
 
 ### 环境变量
 
-`CLASH_SELF_NODES_JSON`：JSON 数组，每个元素是一个完整的 clash proxy 定义。
+`CLASH_SELF_NODES_B64`：**base64 编码的** JSON 数组，每个元素是一个完整的 clash proxy 定义。
 
-代码必须处理缺失场景：未设置或解析失败时，`/download` 返回 500 并说明缺少配置，不得输出一份没有自建节点的配置——那会让 `AI服务` 组为空导致 mihomo 启动失败。
+**为什么是 base64 而不是裸 JSON**（2026-08-11 实施时实测发现，不要"简化"回去）：这个值要穿过四层，每层引号语义都不同——
+
+1. `deploy/ecs/deploy.sh` 用 `set -a; source <env 文件>` 载入。bash 的引号移除会把 `[{"name":"a"}]` 吃成 `[{name:a}]`
+2. 同一个脚本用 heredoc 白名单重建 `current.env`，`${VAR}` 展开不会重新加引号
+3. 结果文件由 `docker compose --env-file` 按 dotenv 语义读
+4. compose 再做 `${VAR}` 插值
+
+裸 JSON 在第 1 层就废了，而且失败形态是部署后 `/download` 报 `json.loads` 错误，本地测不出来。单引号包裹只能救第 1 层，第 2 层展开后又变回裸值。base64 的字符集（`A-Za-z0-9+/=`）穿这四层都不需要任何转义。
+
+代码必须处理缺失场景：未设置、不是合法 base64/UTF-8、解码后不是合法 JSON、空数组、元素缺 `name`/`server`——一律 `/download` 返回 500 并说明原因，不得输出一份没有自建节点的配置，那会让 `AI服务` 组为空导致 mihomo 启动失败。
 
 按 infra 规矩，真实值由 SOPS 管理，`render.sh` 渲染进 business-cn 的 env 文件，示例配置里只放结构占位。
+
+**新增环境变量必须同时改三处，少一处就悄悄失效**：`deploy/ecs/compose.prod.yml` 的 `backend-api.environment`（compose 用显式 `environment:` 而非 `env_file`，没列出的变量根本不会进容器）、`deploy/ecs/deploy.sh` 的 heredoc 白名单（不在名单里的键会被重建过程丢掉）、以及两个 `*.env.example`。
 
 ### 接口
 
@@ -205,7 +218,7 @@ admin-ui 新增页签，复用现有 `common/toast.js` 风格：
 |---|---|
 | 机场增删节点、节点改名 | 无需任何操作，mihomo 按 `interval: 86400` 自动同步 |
 | 更换机场 | admin-ui 改 URL → 下载配置 → 两台设备重新导入 |
-| 自建节点参数变更 | SOPS 改 `CLASH_SELF_NODES_JSON` → 重建容器 → 下载配置 → 重新导入 |
+| 自建节点参数变更 | SOPS 改 `CLASH_SELF_NODES_B64` → 重建容器 → 下载配置 → 重新导入 |
 | 调整分流规则 | 改 `template_rules.yaml` → PR → 部署 → 下载配置 → 重新导入 |
 
 分流规则从"手工编辑本地 yaml"变成"改仓库文件走 PR"，可追溯性提升，代价是改一次规则要走一轮部署。

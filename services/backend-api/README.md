@@ -8,10 +8,15 @@ FastAPI service for AliECS. This is the public API boundary for authentication, 
 - Auth and bootstrap env vars such as `AUTH_TOKEN_SECRET` and `ADMIN_BOOTSTRAP_*`.
 - Chanjet webhook env vars such as `CHANJET_APP_KEY`, `CHANJET_APP_SECRET`, and `CHANJET_WEBHOOK_AES_KEY`.
 - T+ worker output mounted read-only at `RECIPE_BOM_INPUT_DIR`, default `/app/tplus-output/excel`.
-- `CLASH_SELF_NODES_JSON` for the Clash profile composer: a JSON array of complete clash proxy
-  definitions, each requiring at least `name` and `server`. Managed in SOPS and rendered at deploy
-  time — never commit real node parameters, this repository is public. When the variable is
-  missing, malformed, empty, or holds an element without `name`/`server`, both
+- `CLASH_SELF_NODES_B64` for the Clash profile composer: **base64 of** a JSON array of complete
+  clash proxy definitions, each requiring at least `name` and `server`. Managed in SOPS and
+  rendered at deploy time — never commit real node parameters, this repository is public.
+  Base64 rather than raw JSON is deliberate: `deploy/ecs/deploy.sh` loads the runtime env with
+  `set -a; source <file>`, and bash quote removal turns `[{"name":"a"}]` into `[{name:a}]`
+  (measured 2026-08-11). The value crosses four layers with different quoting rules — bash
+  source, heredoc expansion, dotenv, compose interpolation — and the base64 alphabet needs no
+  escaping in any of them. When the variable is missing, not valid base64/UTF-8, not valid JSON
+  after decoding, empty, or holds an element without `name`/`server`, both
   `/v1/admin/clash-profile/preview` and `/download` return 500 with an explanatory message rather
   than emitting a profile that would fail to start on the client.
 
