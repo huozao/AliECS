@@ -52,6 +52,20 @@ class SyncJobPlatformMigrationTests(unittest.TestCase):
     def test_steps_reference_runs_with_cascade(self) -> None:
         self.assertIn("REFERENCES sync_job_runs(id) ON DELETE CASCADE", self.sql)
 
+    def test_alert_state_vocabulary_is_pinned_by_check(self) -> None:
+        # 去重偏索引只认 'open'。写成 'OPEN' 不报错、只静默绕过去重导致刷屏，
+        # 所以词表必须由 CHECK 焊死而不是靠调用方自觉。
+        self.assertIn("CHECK (state IN ('open', 'resolved'))", self.sql)
+
+    def test_alerts_point_back_to_the_triggering_run(self) -> None:
+        # 没有 run_id 的话，P2「点告警跳到那次运行」只能去解 payload_json，不可 join。
+        # 可空是有意的：新鲜度类告警本就没有对应的 run。
+        self.assertIn("run_id BIGINT REFERENCES sync_job_runs(id) ON DELETE SET NULL", self.sql)
+
+    def test_steps_are_uniquely_keyed_by_run_and_seq(self) -> None:
+        # P1 要按 (run_id, seq) upsert 步骤状态；不唯一就没有冲突键，并发下会插出重复步骤。
+        self.assertIn("CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_job_steps_run_seq", self.sql)
+
 
 if __name__ == "__main__":
     unittest.main()

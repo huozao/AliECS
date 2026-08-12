@@ -68,17 +68,33 @@ CREATE TABLE IF NOT EXISTS sync_job_steps (
     message TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_sync_job_steps_run_seq
+-- 唯一而非普通索引：P1 要按 (run_id, seq) upsert 步骤状态（running → success/failed），
+-- 没有冲突键就只能先查后写，并发下会插出重复步骤。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_job_steps_run_seq
     ON sync_job_steps(run_id, seq);
 
 -- 告警状态机。下面那条 partial unique index 是防刷屏的根：
--- 一个作业一种告警同时只可能有一条 open，P3 的 notifier 靠
--- 「INSERT ... ON CONFLICT DO NOTHING 抢占成功才推送」保证不重复推。
+-- 一个作业一种告警同时只可能有一条 open，P3 的 notifier 靠抢占成功才推送来防重复。
+-- 抢占的确定写法（偏索引必须带谓词才能完成 index inference，
+-- 写成 ON CONFLICT (job_id, alert_kind) 不带 WHERE 会直接报 42P10）：
+--
+--   INSERT INTO sync_job_alerts (job_id, alert_kind, payload_json)
+--   VALUES ($1, $2, $3)
+--   ON CONFLICT (job_id, alert_kind) WHERE state = 'open' DO NOTHING
+--   RETURNING id;          -- 返回 0 行 = 抢占失败 = 已有人推过，本次不推
+--
+-- 不要用无 target 的 ON CONFLICT DO NOTHING：它会吞掉本表**任何**唯一索引的冲突，
+-- 今天只有 PK 和这条偏索引所以碰巧安全，日后再加唯一索引就会静默扩大吞噬范围。
 CREATE TABLE IF NOT EXISTS sync_job_alerts (
     id BIGSERIAL PRIMARY KEY,
     job_id BIGINT NOT NULL REFERENCES sync_jobs(id) ON DELETE CASCADE,
+    -- 触发本条告警的那次运行。允许为空：新鲜度类告警（artifact_stale / 长时间没跑）
+    -- 本就没有对应的 run。run 被清理时置空而不是连告警一起删。
+    run_id BIGINT REFERENCES sync_job_runs(id) ON DELETE SET NULL,
     alert_kind TEXT NOT NULL,
-    state TEXT NOT NULL DEFAULT 'open',
+    -- 去重的正确性完全骑在这个字面量上：下面那条偏索引只认 'open'。
+    -- 写成 'OPEN' 不会报错，只会静默绕过去重 → 同一告警无限刷屏。故用 CHECK 焊死。
+    state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'resolved')),
     first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_notified_at TIMESTAMPTZ,
     notify_count INTEGER NOT NULL DEFAULT 0,
