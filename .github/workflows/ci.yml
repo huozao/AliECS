@@ -46,6 +46,7 @@ jobs:
           python -m pip install httpx==0.28.1
           python -m pip install pytest==9.0.3
           python -m unittest discover -s tests
+          (cd services/tplus-sync-worker && PYTHONPATH=src:. python -m unittest discover -s tests -v)
 
       - name: Shell 语法检查
         run: bash -n deploy/ecs/auto-sync.sh deploy/ecs/deploy.sh deploy/ecs/migrate.sh deploy/ecs/healthcheck.sh deploy/ecs/rollback.sh deploy/ecs/post-deploy-smoke.sh deploy/ecs/collect-diagnostics.sh
