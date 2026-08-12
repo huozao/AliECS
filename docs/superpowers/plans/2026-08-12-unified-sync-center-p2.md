@@ -657,4 +657,3 @@ GET /common/admin-auth.js -> 200
 3. NULL SLA 显示未监控，空 schedule 不猜 next run，P3 前空 alerts 有明确空态。
 4. formula 当前 BOM 文件只读展示，不修改 formula 或产出目录。
 5. 根 CI、导航、Compose、PR、发布、txecs 镜像与线上页面/API证据齐全。
-
