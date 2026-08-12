@@ -19,6 +19,7 @@ from typing import Any
 from app.providers.feishu import FeishuBitableClient, credentials_for_profile as feishu_credentials
 from app.providers.wecom import WeComApiError, WeComSmartsheetClient, credentials_for_profile as wecom_credentials
 from app.storage.postgres import connect
+from app.storage.sync_job_platform import open_owned, safe_error_message
 
 
 SOURCE_PROVIDER = "wecom"
@@ -293,10 +294,116 @@ def send_feishu_alert(text: str) -> bool:
         return False
 
 
-def run_tplus_parent_match(*, dry_run: bool = False, notify: bool = True) -> int:
+class _PlatformRun:
+    """Best-effort platform lifecycle; it must never alter the legacy reconcile path."""
+
+    def __init__(self, writer: Any | None, run_id: int | None, owns_writer: bool) -> None:
+        self.writer = writer
+        self.run_id = run_id
+        self.owns_writer = owns_writer
+
+    @classmethod
+    def start(cls, *, trigger: str, writer: Any | None) -> "_PlatformRun":
+        owns_writer = writer is None
+        if writer is None:
+            try:
+                writer = open_owned()
+            except Exception:  # noqa: BLE001 - observability is fail-open.
+                return cls(None, None, False)
+        try:
+            run_id = writer.start_run(
+                job_key="tplus.parent_match",
+                kind="reconcile",
+                provider="chanjet",
+                display_name="T+ 父件核对",
+                source_id=None,
+                trigger=trigger,
+                legacy_ref={},
+            )
+        except Exception:  # noqa: BLE001 - observability is fail-open.
+            run_id = None
+        return cls(writer, run_id, owns_writer)
+
+    def step(self, seq: int, name: str, status: str, *, items: int = 0, message: str = "") -> None:
+        if self.writer is None or self.run_id is None:
+            return
+        try:
+            self.writer.upsert_step(self.run_id, seq, name, status, items=items, message=message)
+        except Exception:  # noqa: BLE001 - observability is fail-open.
+            return
+
+    def finish(
+        self,
+        *,
+        status: str,
+        row_count: int,
+        changed_count: int,
+        error: BaseException | str | None,
+        detail_json: dict[str, Any],
+    ) -> None:
+        if self.writer is None or self.run_id is None:
+            return
+        try:
+            self.writer.finish_run(
+                self.run_id,
+                status=status,
+                row_count=row_count,
+                changed_count=changed_count,
+                error=error,
+                detail_json=detail_json,
+            )
+        except Exception:  # noqa: BLE001 - observability is fail-open.
+            return
+
+    def close(self) -> None:
+        if self.owns_writer and self.writer is not None:
+            try:
+                self.writer.close()
+            except Exception:  # noqa: BLE001 - observability is fail-open.
+                return
+
+
+def _platform_detail(result: MatchResult, *, dry_run: bool, notify: bool) -> dict[str, Any]:
+    return {
+        "missing_count": len(result.missing),
+        "renamed_count": len(result.renamed),
+        "disabled_count": len(result.disabled),
+        "created_field_count": len(result.created_fields),
+        "created_row_count": len(result.created_rows),
+        "write_error_count": len(result.write_errors),
+        "dry_run": dry_run,
+        "notify": notify,
+    }
+
+
+def run_tplus_parent_match(
+    *, dry_run: bool = False, notify: bool = True, trigger: str = "manual", platform: Any | None = None
+) -> int:
+    platform_run = _PlatformRun.start(trigger=trigger, writer=platform)
+    try:
+        return _run_tplus_parent_match(dry_run=dry_run, notify=notify, platform_run=platform_run)
+    except Exception as exc:
+        platform_run.finish(
+            status="failed", row_count=0, changed_count=0, error=exc,
+            detail_json={"dry_run": dry_run, "notify": notify},
+        )
+        raise
+    finally:
+        platform_run.close()
+
+
+def _run_tplus_parent_match(*, dry_run: bool, notify: bool, platform_run: _PlatformRun) -> int:
+    platform_run.step(1, "load_source", "running")
     creds = wecom_credentials(SOURCE_PROFILE)
+    source_loaded = False
     if not creds:
         print(f"[T+核对] 企微 profile {SOURCE_PROFILE} 无凭据，跳过。")
+        platform_run.step(1, "load_source", "success", message="disabled")
+        platform_run.step(2, "fetch_page", "success")
+        platform_run.step(3, "normalize", "success")
+        platform_run.step(4, "writeback", "success", message="disabled")
+        platform_run.step(5, "notify", "success", message="disabled")
+        platform_run.finish(status="success", row_count=0, changed_count=0, error=None, detail_json={})
         return 0
 
     try:
@@ -304,14 +411,27 @@ def run_tplus_parent_match(*, dry_run: bool = False, notify: bool = True) -> int
         # resolve_source() 拿不到已同步的源时也抛 RuntimeError，同一层捕获。不捕获就直接冒泡，
         # 跳过下面的 notify 分支——飞书一条告警都没有，只剩容器 stdout；事件通道还会每 poll 周期重试。
         docid, sheet_id = resolve_source()
+        source_loaded = True
+        platform_run.step(1, "load_source", "success", items=1)
+        platform_run.step(2, "fetch_page", "running")
         client = WeComSmartsheetClient(creds[0].corpid, creds[0].secret)
         bom = load_active_bom()
         if not bom:
             print("[T+核对] tplus_bom_records 没有当前有效记录，跳过（避免把整表标成失联）。")
+            platform_run.step(2, "fetch_page", "success")
+            platform_run.step(3, "normalize", "success")
+            platform_run.step(4, "writeback", "success", message="disabled")
+            platform_run.step(5, "notify", "success", message="disabled")
+            platform_run.finish(status="success", row_count=0, changed_count=0, error=None, detail_json={})
             return 0
         created = [] if dry_run else ensure_fields(client, docid, sheet_id)
         records = list(client.get_records(docid, sheet_id).get("records") or [])
     except RuntimeError as exc:
+        message = safe_error_message(exc)
+        if source_loaded:
+            platform_run.step(2, "fetch_page", "failed", message=message)
+        else:
+            platform_run.step(1, "load_source", "failed", message=message)
         checked_at = datetime.now(_BEIJING).strftime("%Y-%m-%d %H:%M")
         msg = f"核对未能开始（企微读取失败，非写入问题）：{exc}"
         print(f"[T+核对] {msg}")
@@ -319,13 +439,22 @@ def run_tplus_parent_match(*, dry_run: bool = False, notify: bool = True) -> int
             alert_text = f"【{SOURCE_DOCUMENT} · T+ 物料清单核对】\n核对时间 {checked_at}\n❌ {msg}"
             if not send_feishu_alert(alert_text):
                 print("[T+核对] 飞书告警未送达。")
+        platform_run.finish(
+            status="failed", row_count=0, changed_count=0, error=exc,
+            detail_json={"dry_run": dry_run, "notify": notify},
+        )
         return 1
 
+    platform_run.step(2, "fetch_page", "success", items=len(records))
+    platform_run.step(3, "normalize", "running")
     checked_at = datetime.now(_BEIJING).strftime("%Y-%m-%d %H:%M")
     result = plan_updates(records, bom, checked_at)
     result.created_fields = created
     creates = plan_creates(records, bom, checked_at)
     result.created_rows = [item["values"][F_PARENT_CODE][0]["text"] for item in creates]
+    changed_count = len(result.updates) + len(creates)
+    written_count = 0
+    platform_run.step(3, "normalize", "success", items=result.total)
 
     print(
         f"[T+核对] 共 {result.total} 行 / 有编码 {result.with_code} / 一致 {result.ok} / "
@@ -339,8 +468,15 @@ def run_tplus_parent_match(*, dry_run: bool = False, notify: bool = True) -> int
         for code in result.created_rows[:50]:
             print(f"[T+核对] 待补建 {code}｜{bom[code][0]}")
         print(f"[T+核对] dry-run，未写入（待补建 {len(result.created_rows)} 行）。")
+        platform_run.step(4, "writeback", "success", items=changed_count, message="dry-run")
+        platform_run.step(5, "notify", "success", message="dry-run")
+        platform_run.finish(
+            status="success", row_count=result.total, changed_count=0, error=None,
+            detail_json=_platform_detail(result, dry_run=dry_run, notify=notify),
+        )
         return 0
 
+    platform_run.step(4, "writeback", "running")
     for start in range(0, len(result.updates), 200):
         batch = result.updates[start:start + 200]
         try:
@@ -348,6 +484,7 @@ def run_tplus_parent_match(*, dry_run: bool = False, notify: bool = True) -> int
                 "docid": docid, "sheet_id": sheet_id,
                 "key_type": "CELL_VALUE_KEY_TYPE_FIELD_TITLE", "records": batch,
             })
+            written_count += len(batch)
         except RuntimeError as exc:
             msg = f"更新第 {start // 200 + 1} 批：{exc}"
             print(f"[T+核对] {msg}")
@@ -358,17 +495,44 @@ def run_tplus_parent_match(*, dry_run: bool = False, notify: bool = True) -> int
         batch = creates[start:start + 200]
         try:
             client.add_records(docid, sheet_id, batch)
+            written_count += len(batch)
         except RuntimeError as exc:
             msg = f"补建第 {start // 200 + 1} 批：{exc}"
             print(f"[T+核对] {msg}")
             result.write_errors.append(msg)
             result.exit_code = 1
 
+    if result.write_errors:
+        platform_run.step(4, "writeback", "failed", items=changed_count, message="write failure")
+    else:
+        platform_run.step(4, "writeback", "success", items=changed_count)
+
+    platform_run.step(5, "notify", "running")
     if notify and (result.missing or result.renamed or result.disabled or result.created_fields
                    or result.created_rows or result.write_errors):
         if not send_feishu_alert(build_alert(result)):
             print("[T+核对] 飞书告警未送达。")
             result.exit_code = 1
+            platform_run.step(5, "notify", "failed", message="delivery failed")
+        else:
+            platform_run.step(5, "notify", "success", items=1)
+    elif not notify:
+        platform_run.step(5, "notify", "success", message="disabled")
+    else:
+        platform_run.step(5, "notify", "success", message="not-needed")
+
+    failure: BaseException | None = None
+    if result.write_errors:
+        failure = RuntimeError("write failure")
+    elif result.exit_code:
+        failure = RuntimeError("notification delivery failed")
+    platform_run.finish(
+        status="partial" if result.exit_code else "success",
+        row_count=result.total,
+        changed_count=written_count,
+        error=failure,
+        detail_json=_platform_detail(result, dry_run=dry_run, notify=notify),
+    )
     return result.exit_code
 
 
@@ -411,7 +575,7 @@ def run_backfill_if_bom_synced(last_seen: datetime | None) -> tuple[datetime | N
         return last_seen, False
     if last_seen is None or current <= last_seen:
         return current, False
-    exit_code = run_tplus_parent_match()
+    exit_code = run_tplus_parent_match(trigger="event")
     if exit_code != 0:
         # 水位仍然推进，不重试：失败可能是永久性的（比如某行数据被企微一直拒绝），
         # 不推进会变成每 30s 一次飞书告警风暴。失败已经在 run_tplus_parent_match 里推过告警，

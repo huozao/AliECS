@@ -107,7 +107,7 @@ def run_worker_loop(
             print(f"[文档同步循环] 企微结构备份异常：{exc}")
         # 放在全量同步之后：核对要读刚同步下来的 T+ BOM 与表格最新内容。
         try:
-            run_tplus_parent_match()
+            run_tplus_parent_match(trigger="schedule")
         except Exception as exc:  # noqa: BLE001 - 核对失败不拖垮源同步周期
             print(f"[文档同步循环] T+ 父件核对异常：{exc}")
         return code
