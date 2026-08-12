@@ -44,9 +44,14 @@ def classify_freshness(
         }
 
     current = now or datetime.now(timezone.utc)
-    age = max(0, int((current - last_success_at).total_seconds()))
-    ratio = age / sla if sla > 0 else None
-    state = "stale" if age > sla else ("warning" if age >= sla * 0.8 else "fresh")
+    elapsed_seconds = max(0.0, (current - last_success_at).total_seconds())
+    age = int(elapsed_seconds)
+    ratio = elapsed_seconds / sla if sla > 0 else None
+    state = (
+        "stale"
+        if elapsed_seconds > sla
+        else ("warning" if elapsed_seconds >= sla * 0.8 else "fresh")
+    )
     return {
         "state": state,
         "sla_seconds": sla,

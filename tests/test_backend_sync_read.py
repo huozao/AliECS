@@ -84,6 +84,24 @@ class FreshnessTests(SyncReadTestCase):
             )["state"],
         )
 
+    def test_subsecond_boundaries_use_exact_elapsed_time(self):
+        now = datetime(2026, 8, 13, tzinfo=timezone.utc)
+
+        for elapsed, expected in (
+            (2879.999, "fresh"),
+            (2880.001, "warning"),
+            (3600.001, "stale"),
+        ):
+            with self.subTest(elapsed=elapsed):
+                value = sync_read.classify_freshness(
+                    now - timedelta(seconds=elapsed),
+                    3600,
+                    now=now,
+                )
+                self.assertEqual(expected, value["state"])
+                self.assertEqual(int(elapsed), value["age_seconds"])
+                self.assertAlmostEqual(elapsed / 3600, value["ratio"], places=9)
+
 
 class ErrorKindLabelTests(SyncReadTestCase):
     def test_known_error_kinds_have_fixed_labels(self):
