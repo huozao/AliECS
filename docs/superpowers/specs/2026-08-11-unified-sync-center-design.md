@@ -334,7 +334,7 @@ DB 那半由「业务数据不搬」覆盖；文件那半平台只**读** mtime 
 
 | 阶段 | 日期 | PR | 验证结论 |
 |---|---|---|---|
-| P0 建表 + 抽 common 前端资产 | 2026-08-12 | [#294](https://github.com/huozao/AliECS/pull/294) | `unittest discover -s tests` 646 项全绿（基线 640）；两页 smoke 通过：`admin.css` 生效（`.btn` 圆角 999px）、`window.AliECSAdmin` 13 个契约字段齐、**零 pageerror 零 console error**、SSO 跳转正常；`check_navigation.py` 通过。**迁移未在真实 Postgres 上跑过**（本地 Docker daemon 未启动），靠 CI `migration-dry-run` 兜底 |
+| P0 建表 + 抽 common 前端资产 | 2026-08-12 | [#294](https://github.com/huozao/AliECS/pull/294) | `unittest discover -s tests` 646 项全绿（基线 640）；两页 smoke 通过：`admin.css` 生效（`.btn` 圆角 999px）、`window.AliECSAdmin` 13 个契约字段齐、**零 pageerror 零 console error**、SSO 跳转正常；`check_navigation.py` 通过；迁移 0048 由 CI `migration-dry-run` 在 postgres:16-alpine 上实际执行，全 job 日志零 ERROR/FATAL。**未验证重复执行**（CI 只在全新库上跑一遍，`psql` 未带 `ON_ERROR_STOP`，可重复性目前只有 `IF NOT EXISTS` 与文本断言两层保障） |
 
 P1 接手须知：
 
