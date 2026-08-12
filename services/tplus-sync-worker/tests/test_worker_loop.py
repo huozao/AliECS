@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tplus_datahub.jobs.worker_loop import run_forever
 
@@ -76,6 +77,7 @@ class WorkerLoopTests(unittest.TestCase):
                     "status": "success",
                     "row_count": 0,
                     "exit_code": 0,
+                    "platform_run_id": None,
                     "detail_json": {"run": 1, "export_files": [], "diff_summary": None, "full_snapshot_id": None, "failed_modules": []},
                     "error_json": {},
                 }
@@ -100,6 +102,55 @@ class WorkerLoopTests(unittest.TestCase):
         self.assertEqual("failed", recorded[0]["status"])
         self.assertEqual(1, recorded[0]["exit_code"])
         self.assertEqual({"run": 1, "export_files": [], "diff_summary": None, "full_snapshot_id": None, "failed_modules": []}, recorded[0]["detail_json"])
+
+    def test_worker_attaches_scheduled_legacy_run(self):
+        from tplus_datahub.jobs.job_sync_all import SyncAllResult
+
+        recorded = {}
+        run_forever(
+            sync_once=lambda: SyncAllResult(0, platform_run_id=77),
+            record_sync_run=lambda **kwargs: recorded.update(kwargs) or 41,
+            sleep=lambda _seconds: None,
+            max_runs=1,
+        )
+
+        self.assertEqual(77, recorded["platform_run_id"])
+
+    def test_default_full_sync_uses_schedule_then_manual_triggers(self):
+        import tplus_datahub.jobs.worker_loop as worker_loop
+        from tplus_datahub.jobs.job_sync_all import SyncAllResult
+
+        triggers = []
+        requests = [{"id": 9, "mode": "manual_full", "target_json": {}}]
+        old_interval = os.environ.get("TPLUS_SYNC_INTERVAL_SECONDS")
+        old_poll = os.environ.get("TPLUS_SYNC_POLL_SECONDS")
+        os.environ["TPLUS_SYNC_INTERVAL_SECONDS"] = "1"
+        os.environ["TPLUS_SYNC_POLL_SECONDS"] = "1"
+        try:
+            with patch.object(
+                worker_loop,
+                "sync_all_run",
+                side_effect=lambda *, trigger: triggers.append(trigger) or SyncAllResult(0),
+            ) as default_sync:
+                run_forever(
+                    sync_once=default_sync,
+                    fetch_db_full_request=lambda limit=5: requests.pop(0) if requests else None,
+                    finish_db_full_request=lambda *_args: None,
+                    record_sync_run=lambda **_kwargs: 41,
+                    sleep=lambda _seconds: None,
+                    max_runs=2,
+                )
+        finally:
+            for key, value in {
+                "TPLUS_SYNC_INTERVAL_SECONDS": old_interval,
+                "TPLUS_SYNC_POLL_SECONDS": old_poll,
+            }.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        self.assertEqual(["schedule", "manual", "schedule"], triggers)
 
     def test_run_forever_records_failed_modules_for_partial_success(self):
         """模块独立容错后，整轮可能 status=success 却有模块没数据；

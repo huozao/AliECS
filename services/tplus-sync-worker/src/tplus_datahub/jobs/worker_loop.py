@@ -217,7 +217,7 @@ def _run_pending_db_full_request(
     request_id = int(request["id"])
     logger.info("DB T+ full sync request detected: id=%s", request_id)
     try:
-        outcome = sync_once()
+        outcome = _call_full_sync(sync_once, trigger="manual")
     except Exception as exc:
         logger.exception("DB T+ full sync failed with unexpected exception: id=%s", request_id)
         finish_db_full_request(request_id, "failed", 1, {"error": str(exc), "source": "manual_full"})
@@ -232,6 +232,7 @@ def _run_pending_db_full_request(
             "full_snapshot_id": getattr(outcome, "full_snapshot_id", None),
             "failed_modules": list(getattr(outcome, "failed_modules", []) or []),
             "failure_details": list(getattr(outcome, "failure_details", []) or []),
+            "platform_run_id": getattr(outcome, "platform_run_id", None),
         }
     else:
         exit_code = int(outcome or 0)
@@ -240,6 +241,12 @@ def _run_pending_db_full_request(
     logger.info("DB T+ full sync finished: id=%s status=%s exit_code=%s", request_id, status, exit_code)
     finish_db_full_request(request_id, status, exit_code, detail)
     return exit_code
+
+
+def _call_full_sync(sync_once: Callable[[], Any], *, trigger: str) -> Any:
+    if sync_once is sync_all_run:
+        return sync_once(trigger=trigger)
+    return sync_once()
 
 
 def _sleep_with_request_polling(
@@ -349,7 +356,7 @@ def run_forever(
             last_full = current
             logger.info("T+ sync run started: run=%s anchor=%s", run_count, anchor_time or "-")
             try:
-                outcome = sync_once()
+                outcome = _call_full_sync(sync_once, trigger="schedule")
             except Exception:
                 logger.exception("T+ sync run failed with unexpected exception: run=%s", run_count)
                 outcome = 1
@@ -360,6 +367,7 @@ def run_forever(
                 full_snapshot_id = getattr(outcome, "full_snapshot_id", None)
                 failed_modules = list(getattr(outcome, "failed_modules", []) or [])
                 failure_details = list(getattr(outcome, "failure_details", []) or [])
+                platform_run_id = getattr(outcome, "platform_run_id", None)
             else:
                 last_exit_code = int(outcome or 0)
                 export_files = []
@@ -367,6 +375,7 @@ def run_forever(
                 full_snapshot_id = None
                 failed_modules = []
                 failure_details = []
+                platform_run_id = None
 
             if last_exit_code == 0:
                 logger.info("T+ sync run finished: run=%s status=success", run_count)
@@ -382,6 +391,7 @@ def run_forever(
                     status=status,
                     row_count=0,
                     exit_code=last_exit_code,
+                    platform_run_id=platform_run_id,
                     # failed_modules 是 backend 侧告警的唯一依据（模块独立容错后，
                     # 整轮可能 status=success 却有个别模块没数据），别在写入侧省掉。
                     detail_json={"run": run_count, "export_files": export_files,
