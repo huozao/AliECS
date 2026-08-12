@@ -14,8 +14,11 @@ except ModuleNotFoundError:  # pragma: no cover - pure unit tests do not require
 _RUN_STATUSES = {"running", "success", "partial", "failed"}
 _STEP_STATUSES = {"running", "success", "failed"}
 _LEGACY_TABLES = {"sync_runs", "integration_sync_runs"}
-_TPLUS_JOB_KEYS = {"chanjet.full", "tplus.parent_match"}
-_DOCUMENT_JOB_KEY = re.compile(r"^(?:wecom|feishu)\.doc\.(\d+)$")
+_TPLUS_JOB_METADATA = {
+    "chanjet.full": ("pull", "chanjet"),
+    "tplus.parent_match": ("reconcile", "chanjet"),
+}
+_DOCUMENT_JOB_KEY = re.compile(r"^(wecom|feishu)\.doc\.(\d+)$")
 _SECRET_PATTERN = re.compile(
     r"(?i)(?P<key>[\"']?(?:access[_ -]?token|corpsecret|app[_ -]?secret|authorization)[\"']?)"
     r"\s*(?P<separator>[:=])\s*"
@@ -84,14 +87,29 @@ class SyncJobPlatformWriter:
         raise ValueError("invalid legacy reference")
 
     @staticmethod
-    def _validate_start(job_key: str, source_id: int | None, legacy_ref: dict[str, Any]) -> None:
+    def _validate_start(
+        job_key: str,
+        kind: str,
+        provider: str,
+        source_id: int | None,
+        legacy_ref: dict[str, Any],
+    ) -> None:
         SyncJobPlatformWriter._validate_legacy_ref(legacy_ref)
         document_job = _DOCUMENT_JOB_KEY.fullmatch(job_key)
         if document_job:
-            if type(source_id) is not int or source_id <= 0 or int(document_job.group(1)) != source_id:
+            if kind != "pull" or provider != document_job.group(1):
+                raise ValueError("invalid document metadata")
+            if type(source_id) is not int or source_id <= 0 or int(document_job.group(2)) != source_id:
                 raise ValueError("invalid document source")
-        elif job_key in _TPLUS_JOB_KEYS and source_id is not None:
-            raise ValueError("invalid tplus source")
+            return
+        expected_metadata = _TPLUS_JOB_METADATA.get(job_key)
+        if expected_metadata is not None:
+            if source_id is not None:
+                raise ValueError("invalid tplus source")
+            if (kind, provider) != expected_metadata:
+                raise ValueError("invalid tplus metadata")
+            return
+        raise ValueError("unknown job key")
 
     def start_run(
         self,
@@ -105,7 +123,7 @@ class SyncJobPlatformWriter:
         legacy_ref: dict[str, Any],
     ) -> int | None:
         def write() -> int:
-            self._validate_start(job_key, source_id, legacy_ref)
+            self._validate_start(job_key, kind, provider, source_id, legacy_ref)
             with self.conn.cursor() as cur:
                 cur.execute(
                     """

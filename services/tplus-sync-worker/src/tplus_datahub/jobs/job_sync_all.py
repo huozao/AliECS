@@ -172,6 +172,7 @@ def run(*, trigger: str = "manual", platform: Any | None = None) -> SyncAllResul
         )
     except Exception as exc:
         finish_platform("failed", exc)
+        exc.platform_run_id = platform_run_id
         raise
 
     def stage(module_name: str, action):

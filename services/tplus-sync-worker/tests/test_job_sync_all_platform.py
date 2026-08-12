@@ -1,9 +1,12 @@
+import os
 import unittest
 from contextlib import ExitStack
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import tplus_datahub.jobs.job_sync_all as job_sync_all
+import tplus_datahub.jobs.db_sync_requests as db_sync_requests
 import tplus_datahub.jobs.sync_state as sync_state
+import tplus_datahub.jobs.worker_loop as worker_loop
 from config.settings import ConfigError
 from tplus_datahub.core.exceptions import ChanjetAPIError
 from tplus_datahub.jobs.sync_state import FullBomSnapshotResult
@@ -230,10 +233,11 @@ class JobSyncAllPlatformTests(unittest.TestCase):
         platform = RecordingPlatform()
 
         with patch.object(job_sync_all, "load_settings", side_effect=RuntimeError("unexpected")):
-            with self.assertRaisesRegex(RuntimeError, "unexpected"):
+            with self.assertRaisesRegex(RuntimeError, "unexpected") as raised:
                 job_sync_all.run(platform=platform)
 
         self.assertEqual("failed", platform.finished[0]["status"])
+        self.assertEqual(77, raised.exception.platform_run_id)
 
 
 class _RunCursor:
@@ -268,6 +272,64 @@ class _RunConnection:
 
     def close(self):
         self.events.append("close")
+
+
+class TopLevelFailureLegacyLinkTests(unittest.TestCase):
+    def test_scheduled_top_level_failure_commits_before_attaching_existing_platform_run(self):
+        events = []
+        platform = RecordingPlatform()
+        conn = _RunConnection(events)
+        fake_psycopg = type("Psycopg", (), {"connect": staticmethod(lambda *_args, **_kwargs: conn)})
+
+        with (
+            patch.dict(os.environ, {"DATABASE_URL": "postgresql://example"}),
+            patch.object(job_sync_all, "load_settings", side_effect=RuntimeError("unexpected")),
+            patch.object(job_sync_all, "sync_job_platform", platform),
+            patch.object(sync_state, "psycopg", fake_psycopg),
+            patch.object(
+                sync_state,
+                "attach_legacy_ref",
+                side_effect=lambda platform_id, legacy_id: events.append(("attach", platform_id, legacy_id)),
+            ),
+        ):
+            exit_code = worker_loop.run_forever(
+                sync_once=job_sync_all.run,
+                record_sync_run=sync_state.record_tplus_sync_run_if_configured,
+                read_sync_config=lambda: None,
+                read_last_full=lambda: None,
+                sleep=lambda _seconds: None,
+                max_runs=1,
+            )
+
+        self.assertEqual(1, exit_code)
+        self.assertEqual("failed", platform.finished[0]["status"])
+        self.assertLess(events.index("commit"), events.index(("attach", 77, 41)))
+
+    def test_manual_top_level_failure_commits_before_attaching_existing_platform_run(self):
+        events = []
+        platform = RecordingPlatform()
+        conn = _RunConnection(events)
+
+        with (
+            patch.object(job_sync_all, "load_settings", side_effect=RuntimeError("unexpected")),
+            patch.object(job_sync_all, "sync_job_platform", platform),
+            patch.object(db_sync_requests, "connect_if_configured", return_value=conn),
+            patch.object(
+                db_sync_requests,
+                "attach_legacy_ref",
+                side_effect=lambda platform_id, legacy_id: events.append(("attach", platform_id, legacy_id)),
+            ),
+        ):
+            exit_code = worker_loop._run_pending_db_full_request(
+                fetch_db_full_request=lambda **_kwargs: {"id": 9, "mode": "manual_full"},
+                finish_db_full_request=db_sync_requests.finish_full_request,
+                sync_once=job_sync_all.run,
+                logger=Mock(),
+            )
+
+        self.assertEqual(1, exit_code)
+        self.assertEqual("failed", platform.finished[0]["status"])
+        self.assertLess(events.index("commit"), events.index(("attach", 77, 41)))
 
 
 class RecordLegacyRunTests(unittest.TestCase):

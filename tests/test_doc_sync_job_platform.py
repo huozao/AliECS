@@ -192,6 +192,73 @@ class SyncJobPlatformWriterTests(unittest.TestCase):
                 self.assertEqual([], conn.sql)
                 self.assertEqual([], conn.params)
 
+    def test_unknown_job_key_does_not_write_sql_or_parameters(self):
+        conn = FakeConn()
+
+        result = SyncJobPlatformWriter(conn, logger=lambda _: None).start_run(
+            job_key="arbitrary.future.job",
+            kind="pull",
+            provider="wecom",
+            display_name="future",
+            source_id=None,
+            trigger="manual",
+            legacy_ref={},
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual([], conn.sql)
+        self.assertEqual([], conn.params)
+
+    def test_job_key_kind_and_provider_mismatches_do_not_write_sql(self):
+        invalid_starts = (
+            ("wecom.doc.17", "pull", "feishu", 17),
+            ("wecom.doc.17", "reconcile", "wecom", 17),
+            ("feishu.doc.19", "pull", "wecom", 19),
+            ("feishu.doc.19", "reconcile", "feishu", 19),
+            ("chanjet.full", "reconcile", "chanjet", None),
+            ("chanjet.full", "pull", "wecom", None),
+            ("tplus.parent_match", "pull", "chanjet", None),
+            ("tplus.parent_match", "reconcile", "wecom", None),
+        )
+        for job_key, kind, provider, source_id in invalid_starts:
+            with self.subTest(job_key=job_key, kind=kind, provider=provider):
+                conn = FakeConn()
+                result = SyncJobPlatformWriter(conn, logger=lambda _: None).start_run(
+                    job_key=job_key,
+                    kind=kind,
+                    provider=provider,
+                    display_name="job",
+                    source_id=source_id,
+                    trigger="manual",
+                    legacy_ref={},
+                )
+                self.assertIsNone(result)
+                self.assertEqual([], conn.sql)
+                self.assertEqual([], conn.params)
+
+    def test_all_supported_job_key_metadata_combinations_still_start(self):
+        valid_starts = (
+            ("wecom.doc.17", "pull", "wecom", 17),
+            ("feishu.doc.19", "pull", "feishu", 19),
+            ("chanjet.full", "pull", "chanjet", None),
+            ("tplus.parent_match", "reconcile", "chanjet", None),
+        )
+        for job_key, kind, provider, source_id in valid_starts:
+            with self.subTest(job_key=job_key):
+                conn = FakeConn()
+                result = SyncJobPlatformWriter(conn).start_run(
+                    job_key=job_key,
+                    kind=kind,
+                    provider=provider,
+                    display_name="job",
+                    source_id=source_id,
+                    trigger="manual",
+                    legacy_ref={},
+                )
+                self.assertEqual(31, result)
+                self.assertEqual(2, len(conn.sql))
+                self.assertEqual(2, len(conn.params))
+
     def test_invalid_run_or_step_status_does_not_write_sql(self):
         conn = FakeConn()
         writer = SyncJobPlatformWriter(conn, logger=lambda _: None)

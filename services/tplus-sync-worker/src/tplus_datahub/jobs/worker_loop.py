@@ -220,7 +220,16 @@ def _run_pending_db_full_request(
         outcome = _call_full_sync(sync_once, trigger="manual")
     except Exception as exc:
         logger.exception("DB T+ full sync failed with unexpected exception: id=%s", request_id)
-        finish_db_full_request(request_id, "failed", 1, {"error": str(exc), "source": "manual_full"})
+        finish_db_full_request(
+            request_id,
+            "failed",
+            1,
+            {
+                "error": str(exc),
+                "source": "manual_full",
+                "platform_run_id": getattr(exc, "platform_run_id", None),
+            },
+        )
         return 1
 
     if hasattr(outcome, "exit_code"):
@@ -355,10 +364,12 @@ def run_forever(
         if run_full:
             last_full = current
             logger.info("T+ sync run started: run=%s anchor=%s", run_count, anchor_time or "-")
+            platform_run_id = None
             try:
                 outcome = _call_full_sync(sync_once, trigger="schedule")
-            except Exception:
+            except Exception as exc:
                 logger.exception("T+ sync run failed with unexpected exception: run=%s", run_count)
+                platform_run_id = getattr(exc, "platform_run_id", None)
                 outcome = 1
             if hasattr(outcome, "exit_code"):
                 last_exit_code = int(outcome.exit_code or 0)
@@ -375,7 +386,6 @@ def run_forever(
                 full_snapshot_id = None
                 failed_modules = []
                 failure_details = []
-                platform_run_id = None
 
             if last_exit_code == 0:
                 logger.info("T+ sync run finished: run=%s status=success", run_count)
