@@ -104,30 +104,71 @@ class JobSyncAllPlatformTests(unittest.TestCase):
 
     def test_sync_all_records_each_actual_module_and_partial_result(self):
         platform = RecordingPlatform()
-        failure = ChanjetAPIError(
-            "Authorization: Bearer secret-value timed out",
-            endpoint="/tplus/api/v2/inventory/Query",
-            status_code=500,
-        )
+        failure_message = "Authorization: Bearer secret-value " + "x" * 600
+        failure = RuntimeError(failure_message)
 
         result = self._run(
             platform,
-            sync_inventory=patch.object(job_sync_all, "sync_inventory", side_effect=failure),
+            sync_bom=patch.object(job_sync_all, "sync_bom", return_value=[{"ID": 1}, {"ID": 2}]),
+            upsert_and_snapshot_full_bom=patch.object(
+                job_sync_all,
+                "upsert_and_snapshot_full_bom",
+                return_value=FullBomSnapshotResult(
+                    full_rows=[{"ID": index} for index in range(5)],
+                    full_snapshot_id=19,
+                    diff_summary={"needs_review": False},
+                ),
+            ),
+            sync_inventory=patch.object(
+                job_sync_all, "sync_inventory", return_value=[{"Code": "1"}, {"Code": "2"}, {"Code": "3"}]
+            ),
+            export_inventory=patch.object(job_sync_all, "export_inventory", side_effect=failure),
+            sync_partner=patch.object(job_sync_all, "sync_partner", return_value=[{"Code": "P1"}]),
+            sync_base_archive=patch.object(
+                job_sync_all, "sync_base_archive", return_value=[{"Code": str(index)} for index in range(4)]
+            ),
+            VERIFIED_VOUCHER_LIST_ENDPOINTS=patch.object(
+                job_sync_all,
+                "VERIFIED_VOUCHER_LIST_ENDPOINTS",
+                {"sale_order_list": {"endpoint": "/voucher", "select_fields": ["Code"]}},
+            ),
+            sync_voucher_list=patch.object(
+                job_sync_all, "sync_voucher_list", return_value=[{"Code": "S1"}, {"Code": "S2"}]
+            ),
+            export_voucher_list=patch.object(
+                job_sync_all, "export_voucher_list", return_value="sale_order_list.xlsx"
+            ),
+            sync_purchase_price=patch.object(
+                job_sync_all, "sync_purchase_price", return_value=[{"Code": "B1"}, {"Code": "B2"}]
+            ),
+            sync_sales_price=patch.object(job_sync_all, "sync_sales_price", return_value=[{"Code": "C1"}]),
         )
 
         self.assertEqual("chanjet.full", platform.started[0]["job_key"])
         self.assertEqual("schedule", platform.started[0]["trigger"])
         self.assertEqual(77, result.platform_run_id)
-        self.assertIn("bom", platform.terminal_step_names("success"))
-        self.assertIn("inventory", platform.terminal_step_names("failed"))
-        self.assertNotIn("secret-value", next(
+        expected = [
+            (1, "bom", "success", 2),
+            (2, "inventory", "failed", 3),
+            (3, "partner", "success", 1),
+            (4, "warehouse", "success", 4),
+            (5, "sale_order_list", "success", 2),
+            (6, "purchase_price", "success", 2),
+            (7, "sales_price", "success", 1),
+        ]
+        self.assertEqual(14, len(platform.steps))
+        for seq, name, terminal_status, items in expected:
+            module_steps = [step for step in platform.steps if step["name"] == name]
+            self.assertEqual(2, len(module_steps), name)
+            self.assertEqual([seq, seq], [step["seq"] for step in module_steps], name)
+            self.assertEqual(["running", terminal_status], [step["status"] for step in module_steps], name)
+            self.assertEqual([0, items], [step["items"] for step in module_steps], name)
+        failed_message = next(
             step["message"] for step in platform.steps
             if step["name"] == "inventory" and step["status"] == "failed"
-        ))
-        for name in ("bom", "inventory", "partner", "warehouse", "purchase_price", "sales_price"):
-            states = [step["status"] for step in platform.steps if step["name"] == name]
-            self.assertEqual("running", states[0])
-            self.assertIn(states[-1], {"success", "failed"})
+        )
+        self.assertEqual(("Authorization: [REDACTED] " + "x" * 600)[:500], failed_message)
+        self.assertEqual(500, len(failed_message))
         self.assertEqual("partial", platform.finished[0]["status"])
         self.assertEqual(
             {
@@ -148,6 +189,20 @@ class JobSyncAllPlatformTests(unittest.TestCase):
             result.export_files,
         )
         self.assertIsNone(result.platform_run_id)
+
+    def test_failed_fetch_records_zero_items_when_no_count_is_reliable(self):
+        platform = RecordingPlatform()
+
+        self._run(
+            platform,
+            sync_inventory=patch.object(job_sync_all, "sync_inventory", side_effect=RuntimeError("fetch failed")),
+        )
+
+        failed_step = next(
+            step for step in platform.steps
+            if step["name"] == "inventory" and step["status"] == "failed"
+        )
+        self.assertEqual(0, failed_step["items"])
 
     def test_step_and_finish_platform_failures_do_not_change_sync_result(self):
         result = self._run(RaisingAfterStartPlatform())
@@ -199,14 +254,17 @@ class _RunCursor:
 
 
 class _RunConnection:
-    def __init__(self, events):
+    def __init__(self, events, commit_error=None):
         self.events = events
+        self.commit_error = commit_error
 
     def cursor(self):
         return _RunCursor(self.events)
 
     def commit(self):
         self.events.append("commit")
+        if self.commit_error is not None:
+            raise self.commit_error
 
     def close(self):
         self.events.append("close")
@@ -263,6 +321,26 @@ class RecordLegacyRunTests(unittest.TestCase):
         self.assertEqual(41, run_id)
         self.assertIn("commit", events)
         attach.assert_called_once_with(77, 41)
+
+    def test_scheduled_commit_failure_never_attaches_platform_run(self):
+        events = []
+        conn = _RunConnection(events, commit_error=RuntimeError("commit failed"))
+        fake_psycopg = type("Psycopg", (), {"connect": staticmethod(lambda *_args, **_kwargs: conn)})
+
+        with (
+            patch.dict("os.environ", {"DATABASE_URL": "postgresql://example"}),
+            patch.object(sync_state, "psycopg", fake_psycopg),
+            patch.object(sync_state, "attach_legacy_ref", create=True) as attach,
+        ):
+            run_id = sync_state.record_tplus_sync_run_if_configured(
+                module="all",
+                mode="scheduled_full",
+                status="success",
+                platform_run_id=77,
+            )
+
+        self.assertIsNone(run_id)
+        attach.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -170,6 +170,39 @@ class FinishFullRequestTests(unittest.TestCase):
         self.assertIn("commit", events)
         attach.assert_called_once_with(77, 55)
 
+    def test_manual_full_commit_failure_never_attaches_platform_run(self):
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def execute(self, _sql, _params=()):
+                return None
+
+            def fetchone(self):
+                return (55,)
+
+        class Conn:
+            def cursor(self):
+                return Cursor()
+
+            def commit(self):
+                raise RuntimeError("commit failed")
+
+            def close(self):
+                return None
+
+        with (
+            patch.object(db_sync_requests, "connect_if_configured", return_value=Conn()),
+            patch.object(db_sync_requests, "attach_legacy_ref", create=True) as attach,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "commit failed"):
+                db_sync_requests.finish_full_request(9, "success", 0, {"platform_run_id": 77})
+
+        attach.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

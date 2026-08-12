@@ -111,6 +111,7 @@ def run(*, trigger: str = "manual", platform: Any | None = None) -> SyncAllResul
     failures: list[tuple[str, int]] = []
     failure_details: list[dict] = []
     failure_errors: list[BaseException] = []
+    module_items: dict[str, int] = {}
     snap = None
     step_seq = 0
     platform = sync_job_platform if platform is None else platform
@@ -192,48 +193,63 @@ def run(*, trigger: str = "manual", platform: Any | None = None) -> SyncAllResul
                     seq,
                     module_name,
                     "failed",
+                    items=module_items.get(module_name, 0),
                     message=sync_job_platform.safe_error_message(exc),
                 )
             return None
         if platform_run_id is not None:
-            platform_call("upsert_step", platform_run_id, seq, module_name, "success")
+            platform_call(
+                "upsert_step",
+                platform_run_id,
+                seq,
+                module_name,
+                "success",
+                items=module_items.get(module_name, 0),
+            )
         return result
 
     def _bom():
         nonlocal snap
         bom_rows = sync_bom(settings=settings, timestamp=timestamp)
+        module_items["bom"] = len(bom_rows)
         snap = upsert_and_snapshot_full_bom(bom_rows, mode="scheduled_full", source_json={"job": "job_sync_all"})
         bom_path = export_bom(snap.full_rows, settings=settings, timestamp=timestamp)
         exports.append(_basename(bom_path)); logger.info("BOM Excel exported: %s", bom_path)
 
     def _inventory():
         inventory_rows = sync_inventory(settings=settings, timestamp=timestamp)
+        module_items["inventory"] = len(inventory_rows)
         inventory_path = export_inventory(inventory_rows, settings=settings, timestamp=timestamp)
         exports.append(_basename(inventory_path)); logger.info("Inventory Excel exported: %s", inventory_path)
         persist_inventory_records(inventory_rows, mode="scheduled_full")
 
     def _partner():
         partner_rows = sync_partner(settings=settings, timestamp=timestamp)
+        module_items["partner"] = len(partner_rows)
         partner_path = export_partner(partner_rows, settings=settings, timestamp=timestamp)
         exports.append(_basename(partner_path)); logger.info("Partner Excel exported: %s", partner_path)
 
     def _archive(module_name: str, endpoint: str):
         archive_rows = sync_base_archive(module_name=module_name, endpoint=endpoint, settings=settings, timestamp=timestamp)
+        module_items[module_name] = len(archive_rows)
         archive_path = export_base_archive(module_name, archive_rows, settings=settings, timestamp=timestamp)
         exports.append(_basename(archive_path)); logger.info("%s Excel exported: %s", module_name, archive_path)
 
     def _voucher(module_name: str, config: dict):
         voucher_rows = sync_voucher_list(module_name=module_name, endpoint=config["endpoint"], select_fields=config["select_fields"], settings=settings, timestamp=timestamp)
+        module_items[module_name] = len(voucher_rows)
         voucher_path = export_voucher_list(module_name, voucher_rows, settings=settings, timestamp=timestamp)
         exports.append(_basename(voucher_path)); logger.info("%s Excel exported: %s", module_name, voucher_path)
 
     def _purchase_price():
         purchase_price_rows = sync_purchase_price(settings=settings, timestamp=timestamp)
+        module_items["purchase_price"] = len(purchase_price_rows)
         purchase_price_path = export_purchase_price(purchase_price_rows, settings=settings, timestamp=timestamp)
         exports.append(_basename(purchase_price_path)); logger.info("purchase_price Excel exported: %s", purchase_price_path)
 
     def _sales_price():
         sales_price_rows = sync_sales_price(settings=settings, timestamp=timestamp)
+        module_items["sales_price"] = len(sales_price_rows)
         sales_price_path = export_sales_price(sales_price_rows, settings=settings, timestamp=timestamp)
         exports.append(_basename(sales_price_path)); logger.info("sales_price Excel exported: %s", sales_price_path)
 
