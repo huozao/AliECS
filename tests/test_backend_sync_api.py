@@ -78,6 +78,19 @@ class SyncApiTests(unittest.TestCase):
         self.assertNotIn("secret", raised.exception.detail)
         self.assertNotIn("SELECT", raised.exception.detail)
 
+    def test_overview_preserves_classified_http_exception(self):
+        expected = HTTPException(status_code=409, detail="classified overview")
+
+        with patch.object(sync_router, "_conn"), patch.object(
+            sync_router.sync_read, "overview", side_effect=expected
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                sync_router.sync_overview(_={})
+
+        self.assertIs(expected, raised.exception)
+        self.assertEqual(409, raised.exception.status_code)
+        self.assertEqual("classified overview", raised.exception.detail)
+
     def test_alert_database_error_exposes_only_exception_type(self):
         raw_message = "postgresql://secret@db SELECT * FROM credentials"
 
@@ -93,6 +106,21 @@ class SyncApiTests(unittest.TestCase):
         )
         self.assertNotIn("secret", raised.exception.detail)
         self.assertNotIn("SELECT", raised.exception.detail)
+
+    def test_alert_preserves_classified_http_exception(self):
+        expected = HTTPException(status_code=404, detail="classified alert")
+
+        with patch.object(sync_router, "_conn"), patch.object(
+            sync_router.sync_read, "alerts_page", side_effect=expected
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                sync_router.sync_alerts(
+                    state="open", limit=50, offset=0, _={}
+                )
+
+        self.assertIs(expected, raised.exception)
+        self.assertEqual(404, raised.exception.status_code)
+        self.assertEqual("classified alert", raised.exception.detail)
 
 
 if __name__ == "__main__":

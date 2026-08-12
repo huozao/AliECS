@@ -19,6 +19,8 @@ def sync_overview(
     try:
         with closing(_conn()) as conn:
             return sync_read.overview(conn)
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -41,6 +43,8 @@ def sync_alerts(
                 limit=limit,
                 offset=offset,
             )
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(
             status_code=500,
