@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>AliECS · 统一同步中心</title>
+  <link rel="stylesheet" href="/common/admin.css"/>
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <div>
+        <h1>统一同步中心</h1>
+        <p class="subtitle">企微、飞书与 T+ 同步作业的只读总览、告警与运行时间线。</p>
+      </div>
+      <nav class="actions" aria-label="页面操作">
+        <a class="btn" href="/health/">← 返回 API Health</a>
+        <button id="loginBtn" class="btn" type="button">登录（SSO）</button>
+        <button id="logoutBtn" class="btn hidden" type="button">退出登录</button>
+        <button id="refreshBtn" class="btn primary hidden" type="button">刷新</button>
+      </nav>
+    </header>
+
+    <div id="gateHint" class="band">此页面仅管理员可见。请点右上角「登录（SSO）」。</div>
+
+    <main id="adminContent" class="hidden">
+      <section class="band" aria-labelledby="summaryTitle">
+        <div class="row" style="justify-content:space-between">
+          <div>
+            <h2 id="summaryTitle" style="margin:0">同步概况</h2>
+            <p class="muted">新鲜度按每个作业自身 SLA 计算；未配置 SLA 的作业单列为「未监控」。</p>
+          </div>
+          <div class="row" aria-label="后续阶段操作">
+            <button class="btn" type="button" disabled title="后续阶段开放">编辑调度</button>
+            <button class="btn primary" type="button" disabled title="后续阶段开放">立即运行</button>
+          </div>
+        </div>
+        <div id="syncSummary" class="grid" aria-live="polite"><div class="panel muted">加载中…</div></div>
+      </section>
+
+      <section class="band" aria-labelledby="jobsTitle">
+        <h2 id="jobsTitle">作业总览</h2>
+        <div id="jobList" class="muted" aria-live="polite">加载中…</div>
+      </section>
+
+      <section class="band" aria-labelledby="alertsTitle">
+        <h2 id="alertsTitle">未解决告警</h2>
+        <div id="alertList" class="list muted" aria-live="polite">加载中…</div>
+      </section>
+
+      <section class="band" aria-labelledby="timelineTitle">
+        <h2 id="timelineTitle">全局运行时间线</h2>
+        <div class="row" style="margin-bottom:12px">
+          <label>提供方
+            <select id="providerFilter" aria-label="按提供方筛选">
+              <option value="">全部</option>
+              <option value="wecom">企微</option>
+              <option value="feishu">飞书</option>
+              <option value="chanjet">畅捷通</option>
+            </select>
+          </label>
+          <label>状态
+            <select id="statusFilter" aria-label="按运行状态筛选">
+              <option value="">全部</option>
+              <option value="running">运行中</option>
+              <option value="success">成功</option>
+              <option value="partial">部分成功</option>
+              <option value="failed">失败</option>
+            </select>
+          </label>
+          <label>作业
+            <select id="jobFilter" aria-label="按作业筛选"><option value="">全部</option></select>
+          </label>
+        </div>
+        <div id="timelineList" class="muted" aria-live="polite">加载中…</div>
+        <div id="timelinePager" class="row" style="justify-content:center;margin-top:12px">
+          <button id="timelinePrevBtn" class="btn" type="button" disabled>上一页</button>
+          <span id="timelinePageInfo" class="muted">第 1/1 页</span>
+          <button id="timelineNextBtn" class="btn" type="button" disabled>下一页</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="runDrawer" class="modal" role="dialog" aria-modal="true" aria-labelledby="runDrawerTitle">
+    <div class="modal-panel">
+      <div class="row" style="justify-content:space-between">
+        <h2 id="runDrawerTitle" style="margin:0">运行详情</h2>
+        <button id="runDrawerCloseBtn" class="btn" type="button">关闭</button>
+      </div>
+      <div id="runDetailBody" style="margin-top:12px" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <script src="/common/toast.js"></script>
+  <script src="/common/admin-auth.js"></script>
+  <script>
+    const {api, fetchMe, esc, fmtTime, chip, clearAuthToken, ssoLogin} = AliECSAdmin;
+    const $=(id)=>document.getElementById(id);
+    const state={overview:null,alerts:[],runs:[],limit:20,offset:0,total:0,timelineRequestId:0,timelineLoading:false};
+    const initialJob=new URLSearchParams(location.search).get('job')||'';
+    let detailPollTimer=null,openRunId=null,detailGeneration=0,sessionGeneration=0,loadGeneration=0;
+
+    const freshnessLabels={fresh:'新鲜',warning:'即将过期',stale:'已过期',never:'从未成功',unmonitored:'未监控'};
+    const triggerLabels={manual:'手动',schedule:'定时',event:'订阅变更',scheduled:'定时',webhook:'订阅变更',unknown:'未知'};
+
+    function statusChip(value){return chip(esc(value||'unknown'));}
+    function showError(message){AliECSToast.show(message,'error');}
+    function freshnessChip(value){
+      const key=String(value||'unmonitored');
+      const label=freshnessLabels[key]||key;
+      const css=key==='fresh'?'ok':key==='stale'?'failed':key;
+      return `<span class="chip ${esc(css)}">${esc(label)}</span>`;
+    }
+    function scheduleLabel(value){return value&&Object.keys(value).length?'已配置':'未配置';}
+    function durationLabel(value){
+      if(value==null)return '-';
+      const seconds=Math.max(0,Number(value)||0);
+      return seconds>=60?`${Math.floor(seconds/60)} 分 ${Math.round(seconds%60)} 秒`:`${Math.round(seconds)} 秒`;
+    }
+    function metric(label,value){return `<article class="panel"><div class="muted">${esc(label)}</div><div class="metric">${esc(value)}</div></article>`;}
+
+    function renderOverview(){
+      const data=state.overview||{},summary=data.summary||{},items=data.items||[];
+      $('syncSummary').innerHTML=[
+        metric('作业',summary.jobs||0),metric('新鲜',summary.fresh||0),
+        metric('即将过期',summary.warning||0),metric('已过期',summary.stale||0),
+        metric('从未成功',summary.never||0),metric('未监控',summary.unmonitored||0),
+        metric('失败',summary.failed||0),metric('部分成功',summary.partial||0),
+        metric('运行中',summary.running||0),metric('未解决告警',summary.open_alerts||0),
+      ].join('');
+
+      const rows=items.map((item)=>{
+        const last=item.last_run||{};
+        const artifact=item.artifact?`${esc(item.artifact.name)} · ${esc(fmtTime(item.artifact.mtime))}`:'-';
+        const error=last.error_message?`<div class="muted">${esc(last.error_label)}：${esc(last.error_message)}</div>`:'';
+        return `<tr><td><strong>${esc(item.display_name)}</strong><div class="muted">${esc(item.job_key)}</div></td><td>${esc(item.provider)}</td><td>${item.enabled?'启用':'停用'}</td><td>${freshnessChip(item.freshness&&item.freshness.state)}</td><td>${last.status?statusChip(last.status):'<span class="muted">无记录</span>'}<div class="muted">${esc(fmtTime(last.started_at))}</div>${error}</td><td>${esc(scheduleLabel(item.schedule))}</td><td>${artifact}</td><td>${esc(item.open_alert_count||0)}</td><td><button class="btn" type="button" disabled title="后续阶段开放">立即运行</button></td></tr>`;
+      }).join('');
+      $('jobList').innerHTML=`<table><thead><tr><th>作业</th><th>提供方</th><th>开关</th><th>新鲜度</th><th>最近运行</th><th>调度</th><th>当前产出物</th><th>告警</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="9" class="muted">暂无同步作业。</td></tr>'}</tbody></table>`;
+
+      const selected=initialJob||$('jobFilter').value;
+      $('jobFilter').innerHTML=`<option value="">全部</option>${items.map((item)=>`<option value="${esc(item.job_key)}">${esc(item.display_name)}（${esc(item.job_key)}）</option>`).join('')}`;
+      if(items.some((item)=>item.job_key===selected))$('jobFilter').value=selected;
+    }
+
+    function renderAlerts(){
+      if(!state.alerts.length){$('alertList').innerHTML='<div class="muted">暂无未解决告警。</div>';return;}
+      $('alertList').innerHTML=state.alerts.map((item)=>`<article class="attention critical"><strong>${esc(item.display_name)}</strong> · ${esc(item.alert_kind)}<div class="muted">${esc(item.job_key)} · ${esc(item.provider)} · 首次发现 ${esc(fmtTime(item.first_seen_at))} · 通知 ${esc(item.notify_count||0)} 次</div></article>`).join('');
+    }
+
+    function renderTimeline(){
+      const rows=state.runs.map((item)=>{
+        const error=item.error_message?`<div class="muted">${esc(item.error_label)}：${esc(item.error_message)}</div>`:'';
+        const runId=Number(item.id);
+        const detailButton=Number.isSafeInteger(runId)&&runId>0
+          ?`<button class="btn" type="button" onclick="openRunDetail(${runId})">查看详情</button>`
+          :'<span class="muted">-</span>';
+        return `<tr><td><strong>${esc(item.display_name)}</strong><div class="muted">${esc(item.job_key)}</div></td><td>${esc(item.provider)}</td><td>${esc(triggerLabels[item.trigger]||item.trigger||'-')}</td><td>${statusChip(item.status)}${error}</td><td>${esc(fmtTime(item.started_at))}</td><td>${esc(durationLabel(item.duration_seconds))}</td><td>${esc(item.row_count??'-')}</td><td>${esc(item.changed_count??'-')}</td><td>${detailButton}</td></tr>`;
+      }).join('');
+      $('timelineList').innerHTML=`<table><thead><tr><th>作业</th><th>提供方</th><th>触发</th><th>状态</th><th>开始时间</th><th>耗时</th><th>行数</th><th>变更</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="9" class="muted">当前筛选无运行记录。</td></tr>'}</tbody></table>`;
+      renderTimelinePager(state.offset,state.timelineLoading);
+    }
+    function renderTimelinePager(offset=state.offset,loading=state.timelineLoading){
+      const pages=Math.max(1,Math.ceil(state.total/state.limit));
+      const page=Math.floor(offset/state.limit)+1;
+      $('timelinePageInfo').textContent=`第 ${page}/${pages} 页 · 共 ${state.total} 条${loading?' · 加载中…':''}`;
+      $('timelinePrevBtn').disabled=loading||offset<=0;
+      $('timelineNextBtn').disabled=loading||offset+state.limit>=state.total;
+    }
+
+    function renderSteps(steps){
+      if(!steps||!steps.length)return '<div class="muted">该运行暂无步骤记录。</div>';
+      return `<div class="list">${steps.map((step)=>{
+        let result='<span class="muted">-</span>';
+        if(step.status==='running')result='<span class="muted">进行中</span>';
+        else if(step.status==='failed'&&step.message)result=`<span class="failed">${esc(step.message)}</span>`;
+        else if(step.status==='success')result=`<span class="muted">处理 ${esc(step.items??0)} 项</span>`;
+        return `<article class="attention ${step.status==='failed'?'critical':''}"><div class="row" style="justify-content:space-between"><strong>${esc(step.seq)}. ${esc(step.name)}</strong>${statusChip(step.status)}</div><div class="muted">${esc(fmtTime(step.started_at))} · ${esc(stepDurationLabel(step))}</div><div style="margin-top:6px">${result}</div></article>`;
+      }).join('')}</div>`;
+    }
+    function stepDurationLabel(step){
+      if(step.status==='running')return '进行中';
+      const started=Date.parse(step.started_at||''),finished=Date.parse(step.finished_at||'');
+      if(!Number.isFinite(started)||!Number.isFinite(finished))return '-';
+      return durationLabel(Math.max(0,(finished-started)/1000));
+    }
+    function renderDiffItemRows(title,items){
+      const list=Array.isArray(items)?items:[];
+      const rows=list.map((item)=>`<tr><td>${esc(item&&item.parent_code)}</td><td>${esc(item&&item.parent_name)}</td><td>${esc(item&&item.version)}</td><td>${esc(item&&item.child_code)}</td><td>${esc(item&&item.child_name)}</td><td>${esc(item&&item.unit)}</td><td>${esc(item&&item.quantity)}</td><td>${esc(item&&item.disabled)}</td></tr>`).join('');
+      return `<h4>${esc(title)}（${list.length}）</h4><table><thead><tr><th>父件编码</th><th>父件名称</th><th>版本</th><th>子件编码</th><th>子件名称</th><th>单位</th><th>数量</th><th>停用</th></tr></thead><tbody>${rows||'<tr><td colspan="8" class="muted">无</td></tr>'}</tbody></table>`;
+    }
+    function renderChangedRows(items){
+      const list=Array.isArray(items)?items:[];
+      const rows=list.map((item)=>{
+        const key=item&&item.key||{},before=item&&item.before||{},after=item&&item.after||{};
+        const fields=Array.isArray(item&&item.changed_fields)?item.changed_fields.join(', '):'';
+        return `<tr><td>${esc(key.parent_code)}</td><td>${esc(key.version)}</td><td>${esc(key.child_code)}</td><td>${esc(fields)}</td><td>${esc(before.quantity)}</td><td>${esc(after.quantity)}</td><td>${esc(before.child_name)}</td><td>${esc(after.child_name)}</td></tr>`;
+      }).join('');
+      return `<h4>字段变化（${list.length}）</h4><table><thead><tr><th>父件编码</th><th>版本</th><th>子件编码</th><th>变化字段</th><th>原数量</th><th>新数量</th><th>原子件名</th><th>新子件名</th></tr></thead><tbody>${rows||'<tr><td colspan="8" class="muted">无</td></tr>'}</tbody></table>`;
+    }
+    function renderReconciliation(data){
+      if(data&&data.reconciliation_error)return '<div class="attention critical">差异明细读取失败</div>';
+      const reconciliation=data&&data.reconciliation;
+      if(!reconciliation)return '<div class="muted">暂无可用差异明细。</div>';
+      const diff=reconciliation.diff_json&&typeof reconciliation.diff_json==='object'?reconciliation.diff_json:{};
+      return `<div class="panel"><strong>${esc(reconciliation.summary||'差异校验')}</strong><div class="muted">状态 ${esc(reconciliation.status||'-')} · 严重度 ${esc(reconciliation.severity||'-')}</div></div>${renderDiffItemRows('新增子件',diff.added)}${renderDiffItemRows('删除子件',diff.removed)}${renderChangedRows(diff.changed)}`;
+    }
+    function renderRunDetail(data){
+      const run=data&&data.run?data.run:{};
+      const error=run.error_message?`<div class="attention critical"><strong>${esc(run.error_label||'未知错误')}</strong><br/>${esc(run.error_message)}</div>`:'';
+      const reconciliation=data&&data.reconciliation_id!=null
+        ?`<h3>变化明细</h3>${renderReconciliation(data)}`:'';
+      $('runDetailBody').innerHTML=`
+        <div class="panel"><strong>${esc(run.display_name||'-')}</strong><div class="muted">${esc(run.job_key||'-')} · ${esc(run.provider||'-')} · ${esc(triggerLabels[run.trigger]||run.trigger||'-')}</div><div class="row" style="margin-top:8px">${statusChip(run.status)}<span class="muted">开始 ${esc(fmtTime(run.started_at))} · 耗时 ${esc(durationLabel(run.duration_seconds))} · 行数 ${esc(run.row_count??'-')} · 变更 ${esc(run.changed_count??'-')}</span></div></div>
+        ${error}<h3>运行步骤</h3>${renderSteps(data&&data.steps?data.steps:[])}${reconciliation}`;
+    }
+    function stopDetailPolling(){
+      if(detailPollTimer!==null){clearTimeout(detailPollTimer);detailPollTimer=null;}
+    }
+    function detailIsCurrent(generation,runId){
+      return generation===detailGeneration&&openRunId===runId&&$('runDrawer').classList.contains('show');
+    }
+    async function loadReconciliation(data,generation,runId){
+      if(!data||data.reconciliation_id==null)return data;
+      try{
+        const reconciliation=await api(`/v1/ops/reconciliation/${data.reconciliation_id}`);
+        if(!detailIsCurrent(generation,runId))return null;
+        return {...data,reconciliation};
+      }catch(error){
+        if(!detailIsCurrent(generation,runId))return null;
+        return {...data,reconciliation_error:true};
+      }
+    }
+    function scheduleDetailPolling(generation,runId){
+      stopDetailPolling();
+      if(!detailIsCurrent(generation,runId))return;
+      detailPollTimer=setTimeout(()=>{
+        detailPollTimer=null;
+        refreshOpenRun(generation,runId);
+      },3000);
+    }
+    async function openRunDetail(value){
+      const runId=String(value),generation=++detailGeneration;
+      openRunId=runId;
+      stopDetailPolling();
+      $('runDrawer').classList.add('show');
+      $('runDetailBody').innerHTML='<div class="muted">加载运行详情…</div>';
+      try{
+        let data=await api(`/v1/sync/runs/${runId}`);
+        if(!detailIsCurrent(generation,runId))return;
+        data=await loadReconciliation(data,generation,runId);
+        if(!data||!detailIsCurrent(generation,runId))return;
+        renderRunDetail(data);
+        if(data.run&&data.run.status==='running')scheduleDetailPolling(generation,runId);
+      }catch(error){
+        if(!detailIsCurrent(generation,runId))return;
+        $('runDetailBody').innerHTML=`<div class="attention critical"><strong>详情加载失败</strong><br/>${esc(error.message)}</div>`;
+        showError(`运行详情加载失败：${error.message}`);
+      }
+    }
+    async function refreshOpenRun(generation,runId){
+      if(!detailIsCurrent(generation,runId))return;
+      let data;
+      try{
+        data=await api(`/v1/sync/runs/${runId}`);
+      }catch(error){
+        if(!detailIsCurrent(generation,runId))return;
+        showError(`运行详情刷新失败：${error.message}`);
+        scheduleDetailPolling(generation,runId);
+        return;
+      }
+      if(!detailIsCurrent(generation,runId))return;
+      data=await loadReconciliation(data,generation,runId);
+      if(!data||!detailIsCurrent(generation,runId))return;
+      renderRunDetail(data);
+      if(data.run&&data.run.status==='running'){
+        scheduleDetailPolling(generation,runId);
+        return;
+      }
+      stopDetailPolling();
+      await loadAll().catch((error)=>showError(`同步中心刷新失败：${error.message}`));
+    }
+    function closeRunDetail(){
+      detailGeneration+=1;
+      openRunId=null;
+      stopDetailPolling();
+      $('runDrawer').classList.remove('show');
+      $('runDetailBody').innerHTML='';
+    }
+
+    function beginLoad(){return {session:sessionGeneration,load:++loadGeneration};}
+    function currentLoad(){return {session:sessionGeneration,load:loadGeneration};}
+    function loadIsCurrent(generation){return generation.session===sessionGeneration&&generation.load===loadGeneration;}
+    async function loadOverview(generation=beginLoad()){
+      try{
+        const data=await api('/v1/sync/overview');
+        if(!loadIsCurrent(generation))return;
+        state.overview=data;renderOverview();
+      }catch(error){if(loadIsCurrent(generation))throw error;}
+    }
+    async function loadAlerts(generation=beginLoad()){
+      try{
+        const data=await api('/v1/sync/alerts?state=open&limit=50&offset=0');
+        if(!loadIsCurrent(generation))return;
+        state.alerts=data.items||[];renderAlerts();
+      }catch(error){if(loadIsCurrent(generation))throw error;}
+    }
+    async function loadTimeline(requestOffset=state.offset,generation=currentLoad()){
+      const requestId=++state.timelineRequestId;
+      const params=new URLSearchParams({limit:String(state.limit),offset:String(requestOffset)});
+      if($('providerFilter').value)params.set('provider',$('providerFilter').value);
+      if($('statusFilter').value)params.set('status',$('statusFilter').value);
+      if($('jobFilter').value)params.set('job_key',$('jobFilter').value);
+      state.timelineLoading=true;
+      renderTimelinePager(requestOffset,true);
+      try{
+        const d=await api(`/v1/sync/runs?${params}`);
+        if(requestId!==state.timelineRequestId||!loadIsCurrent(generation))return;
+        state.offset=requestOffset;
+        state.runs=d.items||[];
+        state.total=d.total||0;
+        renderTimeline();
+      }catch(error){
+        if(requestId!==state.timelineRequestId||!loadIsCurrent(generation))return;
+        throw error;
+      }finally{
+        if(requestId===state.timelineRequestId&&loadIsCurrent(generation)){
+          state.timelineLoading=false;
+          renderTimelinePager(state.offset,false);
+        }
+      }
+    }
+    async function loadAll(){
+      const generation=beginLoad();
+      await Promise.all([loadOverview(generation),loadAlerts(generation),loadTimeline(state.offset,generation)]);
+    }
+    function reloadTimelineFromStart(){loadTimeline(0).catch((error)=>AliECSToast.show(`时间线加载失败：${error.message}`,'error'));}
+
+    $('providerFilter').onchange=reloadTimelineFromStart;
+    $('statusFilter').onchange=reloadTimelineFromStart;
+    $('jobFilter').onchange=reloadTimelineFromStart;
+    $('timelinePrevBtn').onclick=()=>{
+      if(state.timelineLoading)return;
+      const offset=Math.max(0,state.offset-state.limit);
+      if(offset===state.offset)return;
+      loadTimeline(offset).catch((error)=>AliECSToast.show(`时间线加载失败：${error.message}`,'error'));
+    };
+    $('timelineNextBtn').onclick=()=>{
+      if(state.timelineLoading||state.offset+state.limit>=state.total)return;
+      loadTimeline(state.offset+state.limit).catch((error)=>AliECSToast.show(`时间线加载失败：${error.message}`,'error'));
+    };
+    $('runDrawerCloseBtn').onclick=closeRunDetail;
+    $('runDrawer').onclick=(event)=>{if(event.target===$('runDrawer'))closeRunDetail();};
+    refreshBtn.onclick=()=>loadAll().catch((error)=>AliECSToast.show(`同步中心加载失败：${error.message}`,'error'));
+    loginBtn.onclick=ssoLogin;
+    function clearAdminData(){
+      state.overview=null;state.alerts=[];state.runs=[];state.offset=0;state.total=0;state.timelineLoading=false;
+      for(const id of ['syncSummary','jobList','alertList','timelineList','runDetailBody'])$(id).innerHTML='';
+      $('timelinePageInfo').textContent='';$('jobFilter').innerHTML='<option value="">全部</option>';
+      $('timelinePrevBtn').disabled=true;$('timelineNextBtn').disabled=true;
+    }
+    logoutBtn.onclick=()=>{
+      sessionGeneration+=1;loadGeneration+=1;state.timelineRequestId+=1;
+      closeRunDetail();clearAdminData();clearAuthToken();AliECSAdmin.applyGate(null);AliECSToast.show('已退出登录。','success');
+    };
+    window.addEventListener('beforeunload',stopDetailPolling);
+    (async()=>{
+      const generation=sessionGeneration,me=await fetchMe();
+      if(generation!==sessionGeneration)return;
+      AliECSAdmin.applyGate(me,()=>{loadAll().catch((error)=>AliECSToast.show(`同步中心加载失败：${error.message}`,'error'));});
+    })();
+  </script>
+</body>
+</html>
