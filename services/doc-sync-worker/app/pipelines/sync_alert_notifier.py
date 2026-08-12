@@ -3,10 +3,17 @@ from __future__ import annotations
 import base64
 import json
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import quote
+
+try:
+    from psycopg.types.json import Jsonb
+except ModuleNotFoundError:  # pragma: no cover - pure unit tests do not require psycopg.
+    class Jsonb:  # type: ignore[no-redef]
+        def __init__(self, value: Any) -> None:
+            self.value = value
 
 
 ERROR_KIND_LABELS = {
@@ -158,3 +165,212 @@ def build_alert_text(event: str, alert: dict[str, Any], *, now: datetime) -> str
         lines.append(f"上次成功：{last_success_at}")
     lines.append(f"查看任务：https://hydwang.xyz/sync/?job={quote(job_key, safe='')}")
     return "\n".join(lines)
+
+
+class SyncAlertRepository:
+    def __init__(
+        self, conn: Any, *, now_fn: Callable[[], datetime], escalation_seconds: int = 21600
+    ) -> None:
+        self.conn = conn
+        self.now_fn = now_fn
+        self.escalation_seconds = escalation_seconds
+
+    @staticmethod
+    def _alert_from_row(row: Any) -> dict[str, Any]:
+        if isinstance(row, dict):
+            return dict(row)
+        return {
+            "id": row[0],
+            "job_id": row[1],
+            "run_id": row[2],
+            "alert_kind": row[3],
+            "first_seen_at": row[4],
+            "last_notified_at": row[5],
+            "notify_count": row[6],
+            "payload_json": row[7] or {},
+        }
+
+    def claim_alert(self, job: dict[str, Any], run_id: int | None, alert_kind: str, payload: dict[str, Any]) -> int | None:
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO sync_job_alerts (job_id, run_id, alert_kind, payload_json)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (job_id, alert_kind) WHERE state = 'open' DO NOTHING
+                    RETURNING id
+                    """,
+                    (int(job["id"]), run_id, alert_kind, Jsonb(payload)),
+                )
+                row = cur.fetchone()
+            self.conn.commit()
+            return int(row[0]) if row else None
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def _lock_open_alert(self, cur: Any, alert_id: int) -> dict[str, Any] | None:
+        cur.execute(
+            """
+            SELECT id, job_id, run_id, alert_kind, first_seen_at, last_notified_at, notify_count, payload_json
+            FROM sync_job_alerts
+            WHERE id = %s AND state = 'open'
+            FOR UPDATE SKIP LOCKED
+            """,
+            (alert_id,),
+        )
+        row = cur.fetchone()
+        return self._alert_from_row(row) if row else None
+
+    @staticmethod
+    def _sender_alert(alert: dict[str, Any], payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        result = dict(alert)
+        stored_payload = alert.get("payload_json")
+        if isinstance(stored_payload, dict):
+            result.update(stored_payload)
+        if payload:
+            result.update(payload)
+        return result
+
+    def deliver_due(self, alert_id: int, sender: Callable[[dict[str, Any]], bool]) -> bool:
+        cutoff = self.now_fn() - timedelta(seconds=self.escalation_seconds)
+        try:
+            with self.conn.cursor() as cur:
+                alert = self._lock_open_alert(cur, alert_id)
+                if alert is None:
+                    self.conn.rollback()
+                    return False
+                last_notified_at = alert.get("last_notified_at")
+                if last_notified_at is not None and last_notified_at >= cutoff:
+                    self.conn.rollback()
+                    return False
+                if not sender(self._sender_alert(alert)):
+                    self.conn.rollback()
+                    return False
+                cur.execute(
+                    """
+                    UPDATE sync_job_alerts
+                    SET last_notified_at = NOW(),
+                        notify_count = notify_count + 1
+                    WHERE id = %s
+                      AND state = 'open'
+                      AND (last_notified_at IS NULL OR last_notified_at < %s)
+                    """,
+                    (alert_id, cutoff),
+                )
+            self.conn.commit()
+            return True
+        except Exception:
+            self.conn.rollback()
+            return False
+
+    def resolve_alert(self, alert_id: int, payload: dict[str, Any], sender: Callable[[dict[str, Any]], bool]) -> bool:
+        try:
+            with self.conn.cursor() as cur:
+                alert = self._lock_open_alert(cur, alert_id)
+                if alert is None or not sender(self._sender_alert(alert, payload)):
+                    self.conn.rollback()
+                    return False
+                cur.execute(
+                    """
+                    UPDATE sync_job_alerts
+                    SET state = 'resolved',
+                        resolved_at = NOW(),
+                        payload_json = %s
+                    WHERE id = %s AND state = 'open'
+                    """,
+                    (Jsonb(payload), alert_id),
+                )
+            self.conn.commit()
+            return True
+        except Exception:
+            self.conn.rollback()
+            return False
+
+    def load_job_states(self) -> list[dict[str, Any]]:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    j.id,
+                    j.job_key,
+                    j.kind,
+                    j.provider,
+                    j.display_name,
+                    j.enabled,
+                    (
+                        SELECT success_run.finished_at
+                        FROM sync_job_runs success_run
+                        WHERE success_run.job_id = j.id AND success_run.status = 'success'
+                        ORDER BY success_run.finished_at DESC NULLS LAST, success_run.id DESC
+                        LIMIT 1
+                    ) AS last_success_at,
+                    (
+                        SELECT latest_run.status
+                        FROM sync_job_runs latest_run
+                        WHERE latest_run.job_id = j.id
+                        ORDER BY latest_run.started_at DESC, latest_run.id DESC
+                        LIMIT 1
+                    ) AS latest_status,
+                    (
+                        SELECT COUNT(*)
+                        FROM sync_job_runs failed_run
+                        WHERE failed_run.job_id = j.id
+                          AND failed_run.status IN ('failed', 'partial')
+                          AND failed_run.started_at > COALESCE(
+                              (
+                                  SELECT MAX(previous_success.finished_at)
+                                  FROM sync_job_runs previous_success
+                                  WHERE previous_success.job_id = j.id
+                                    AND previous_success.status = 'success'
+                              ),
+                              '-infinity'::timestamptz
+                          )
+                    ) AS consecutive_failures,
+                    COALESCE(
+                        (
+                            SELECT array_agg(open_alert.alert_kind ORDER BY open_alert.id)
+                            FROM sync_job_alerts open_alert
+                            WHERE open_alert.job_id = j.id AND open_alert.state = 'open'
+                        ),
+                        ARRAY[]::text[]
+                    ) AS open_alerts
+                FROM sync_jobs j
+                ORDER BY j.id
+                """
+            )
+            rows = cur.fetchall()
+        return [
+            {
+                "id": row[0],
+                "job_key": row[1],
+                "kind": row[2],
+                "provider": row[3],
+                "display_name": row[4],
+                "enabled": row[5],
+                "last_success_at": row[6],
+                "latest_status": row[7],
+                "consecutive_failures": int(row[8]),
+                "open_alerts": list(row[9] or []),
+            }
+            for row in rows
+        ]
+
+    def cleanup_steps(self) -> int:
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM sync_job_steps s USING sync_job_runs r
+                    WHERE s.run_id = r.id AND (
+                      (r.status = 'success' AND r.finished_at < NOW() - INTERVAL '30 days') OR
+                      (r.status <> 'success' AND r.finished_at < NOW() - INTERVAL '90 days')
+                    )
+                    """
+                )
+                deleted = int(cur.rowcount or 0)
+            self.conn.commit()
+            return deleted
+        except Exception:
+            self.conn.rollback()
+            raise
