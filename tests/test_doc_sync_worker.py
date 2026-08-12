@@ -1196,6 +1196,7 @@ class FeishuBitableSyncTests(WorkerImportTestCase):
             def __init__(self) -> None:
                 self.sources: list[dict] = []
                 self.finished: dict | None = None
+                self.sync_jobs = WeComManualSyncTests.FakePlatformWriter()
 
             def list_bitable_sources(self, provider: str, env_profile: str) -> list[dict]:
                 return [
@@ -1255,6 +1256,9 @@ class FeishuBitableSyncTests(WorkerImportTestCase):
         self.assertEqual(0, exit_code)
         self.assertEqual("success", store.finished["status"])
         self.assertEqual(2, store.finished["counts"]["sheet_count"])
+        self.assertEqual(["feishu.doc.1", "feishu.doc.2"], [run["job_key"] for run in store.sync_jobs.started])
+        self.assertEqual(["schedule", "schedule"], [run["trigger"] for run in store.sync_jobs.started])
+        self.assertEqual(["success", "success"], [run["status"] for run in store.sync_jobs.finished])
         registered = {item["external_sheet_id"] for item in store.sources}
         self.assertIn("tbl_new", registered)
 
@@ -1650,6 +1654,7 @@ class FeishuManualSyncTests(WorkerImportTestCase):
             self.runs: list[dict] = []
             self.finished: dict | None = None
             self.sources: list[dict] = []
+            self.sync_jobs = WeComManualSyncTests.FakePlatformWriter()
 
         def get_source(self, source_id: int) -> dict | None:
             return dict(self.source) if source_id == self.source["id"] else None
@@ -1689,7 +1694,7 @@ class FeishuManualSyncTests(WorkerImportTestCase):
         def get_records(self, app_token: str, table_id: str, view_id: str = "") -> dict:
             return {"records": [{"record_id": f"rec_{table_id}", "fields": {}}], "page_count": 1}
 
-    def _run(self, source: dict) -> tuple:
+    def _run(self, source: dict, client: object | None = None) -> tuple:
         import unittest.mock as mock
 
         from app.pipelines import sync_feishu_full as module
@@ -1702,10 +1707,48 @@ class FeishuManualSyncTests(WorkerImportTestCase):
 
         store = self._Store(source)
         with mock.patch.object(module, "credentials_for_profile", return_value=[Cred()]), mock.patch.object(
-            module, "FeishuBitableClient", return_value=self._Client()
+            module, "FeishuBitableClient", return_value=client or self._Client()
         ):
             result = module.sync_feishu_source(store, source_id=source["id"], mode="manual")
         return store, result
+
+    @staticmethod
+    def _table_source() -> dict:
+        return {
+            "id": 9,
+            "provider": "feishu",
+            "env_profile": "COMPANY_A",
+            "source_name": "飞书 ChatGPT 会话管理台 / 消息日志表",
+            "source_type": "bitable_table",
+            "external_doc_id": "bascn_console",
+            "external_sheet_id": "tbl_messages",
+            "source_url": "",
+            "status": "active",
+            "sheet_name": "消息日志表",
+        }
+
+    def _run_doc_with_one_failed_table(self) -> tuple:
+        class FailingClient(self._Client):
+            def get_records(self, app_token: str, table_id: str, view_id: str = "") -> dict:
+                if table_id == "tbl_b":
+                    raise RuntimeError("HTTP 429 too many requests")
+                return super().get_records(app_token, table_id, view_id)
+
+        return self._run(
+            {
+                "id": 1619,
+                "provider": "feishu",
+                "env_profile": "COMPANY_A",
+                "source_name": "飞书 ChatGPT 会话管理台",
+                "source_type": "smartsheet_doc",
+                "external_doc_id": "bascn_console",
+                "external_sheet_id": "",
+                "source_url": "",
+                "status": "active",
+                "sheet_name": "",
+            },
+            client=FailingClient(),
+        )
 
     def test_doc_level_request_rescans_and_syncs_all_tables(self) -> None:
         store, (status, run_id, detail) = self._run(
@@ -1747,6 +1790,20 @@ class FeishuManualSyncTests(WorkerImportTestCase):
         self.assertEqual("success", status)
         self.assertEqual(0, len(store.sources))  # 单表请求不重扫
         self.assertEqual(1, store.finished["counts"]["sheet_count"])
+
+    def test_feishu_table_request_dual_writes_with_legacy_ref(self) -> None:
+        store, (status, run_id, _detail) = self._run(self._table_source())
+
+        self.assertEqual(("success", 42), (status, run_id))
+        self.assertEqual("feishu.doc.9", store.sync_jobs.started[0]["job_key"])
+        self.assertEqual({"table": "sync_runs", "id": 42}, store.sync_jobs.started[0]["legacy_ref"])
+        self.assertEqual(["token", "fetch_page", "normalize", "upsert"], store.sync_jobs.successful_step_names())
+
+    def test_feishu_partial_maps_to_platform_partial(self) -> None:
+        store, (status, _run_id, _detail) = self._run_doc_with_one_failed_table()
+
+        self.assertEqual("partial_failed", status)
+        self.assertEqual("partial", store.sync_jobs.finished[-1]["status"])
 
     def test_non_feishu_source_fails_without_run(self) -> None:
         from app.pipelines.sync_feishu_full import sync_feishu_source
