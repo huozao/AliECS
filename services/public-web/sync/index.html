@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>AliECS · 统一同步中心</title>
+  <link rel="stylesheet" href="/common/admin.css"/>
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <div>
+        <h1>统一同步中心</h1>
+        <p class="subtitle">企微、飞书与 T+ 同步作业的只读总览、告警与运行时间线。</p>
+      </div>
+      <nav class="actions" aria-label="页面操作">
+        <a class="btn" href="/health/">← 返回 API Health</a>
+        <button id="loginBtn" class="btn" type="button">登录（SSO）</button>
+        <button id="logoutBtn" class="btn hidden" type="button">退出登录</button>
+        <button id="refreshBtn" class="btn primary hidden" type="button">刷新</button>
+      </nav>
+    </header>
+
+    <div id="gateHint" class="band">此页面仅管理员可见。请点右上角「登录（SSO）」。</div>
+
+    <main id="adminContent" class="hidden">
+      <section class="band" aria-labelledby="summaryTitle">
+        <div class="row" style="justify-content:space-between">
+          <div>
+            <h2 id="summaryTitle" style="margin:0">同步概况</h2>
+            <p class="muted">新鲜度按每个作业自身 SLA 计算；未配置 SLA 的作业单列为「未监控」。</p>
+          </div>
+          <div class="row" aria-label="后续阶段操作">
+            <button class="btn" type="button" disabled title="后续阶段开放">编辑调度</button>
+            <button class="btn primary" type="button" disabled title="后续阶段开放">立即运行</button>
+          </div>
+        </div>
+        <div id="syncSummary" class="grid" aria-live="polite"><div class="panel muted">加载中…</div></div>
+      </section>
+
+      <section class="band" aria-labelledby="jobsTitle">
+        <h2 id="jobsTitle">作业总览</h2>
+        <div id="jobList" class="muted" aria-live="polite">加载中…</div>
+      </section>
+
+      <section class="band" aria-labelledby="alertsTitle">
+        <h2 id="alertsTitle">未解决告警</h2>
+        <div id="alertList" class="list muted" aria-live="polite">加载中…</div>
+      </section>
+
+      <section class="band" aria-labelledby="timelineTitle">
+        <h2 id="timelineTitle">全局运行时间线</h2>
+        <div class="row" style="margin-bottom:12px">
+          <label>提供方
+            <select id="providerFilter" aria-label="按提供方筛选">
+              <option value="">全部</option>
+              <option value="wecom">企微</option>
+              <option value="feishu">飞书</option>
+              <option value="chanjet">畅捷通</option>
+              <option value="tplus">T+</option>
+            </select>
+          </label>
+          <label>状态
+            <select id="statusFilter" aria-label="按运行状态筛选">
+              <option value="">全部</option>
+              <option value="running">运行中</option>
+              <option value="success">成功</option>
+              <option value="partial">部分成功</option>
+              <option value="failed">失败</option>
+            </select>
+          </label>
+          <label>作业
+            <select id="jobFilter" aria-label="按作业筛选"><option value="">全部</option></select>
+          </label>
+        </div>
+        <div id="timelineList" class="muted" aria-live="polite">加载中…</div>
+        <div id="timelinePager" class="row" style="justify-content:center;margin-top:12px">
+          <button id="timelinePrevBtn" class="btn" type="button">上一页</button>
+          <span id="timelinePageInfo" class="muted">第 1/1 页</span>
+          <button id="timelineNextBtn" class="btn" type="button">下一页</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="runDrawer" class="modal" role="dialog" aria-modal="true" aria-labelledby="runDrawerTitle">
+    <div class="modal-panel">
+      <div class="row" style="justify-content:space-between">
+        <h2 id="runDrawerTitle" style="margin:0">运行详情</h2>
+        <button class="btn" type="button" disabled title="后续阶段开放">关闭</button>
+      </div>
+      <p class="muted">运行步骤详情将在下一任务开放。</p>
+    </div>
+  </div>
+
+  <script src="/common/toast.js"></script>
+  <script src="/common/admin-auth.js"></script>
+  <script>
+    const {api, fetchMe, esc, fmtTime, chip, clearAuthToken, ssoLogin} = AliECSAdmin;
+    const $=(id)=>document.getElementById(id);
+    const state={overview:null,alerts:[],runs:[],limit:20,offset:0,total:0};
+    const initialJob=new URLSearchParams(location.search).get('job')||'';
+
+    const freshnessLabels={fresh:'新鲜',warning:'即将过期',stale:'已过期',never:'从未成功',unmonitored:'未监控'};
+    const triggerLabels={manual:'手动',scheduled:'定时',webhook:'订阅变更',unknown:'未知'};
+
+    function statusChip(value){return chip(esc(value||'unknown'));}
+    function freshnessChip(value){
+      const key=String(value||'unmonitored');
+      const label=freshnessLabels[key]||key;
+      const css=key==='fresh'?'ok':key==='stale'?'failed':key;
+      return `<span class="chip ${esc(css)}">${esc(label)}</span>`;
+    }
+    function scheduleLabel(value){return value&&Object.keys(value).length?'已配置':'未配置';}
+    function durationLabel(value){
+      if(value==null)return '-';
+      const seconds=Math.max(0,Number(value)||0);
+      return seconds>=60?`${Math.floor(seconds/60)} 分 ${Math.round(seconds%60)} 秒`:`${Math.round(seconds)} 秒`;
+    }
+    function metric(label,value){return `<article class="panel"><div class="muted">${esc(label)}</div><div class="metric">${esc(value)}</div></article>`;}
+
+    function renderOverview(){
+      const data=state.overview||{},summary=data.summary||{},items=data.items||[];
+      $('syncSummary').innerHTML=[
+        metric('作业',summary.jobs||0),metric('新鲜',summary.fresh||0),
+        metric('即将过期',summary.warning||0),metric('已过期',summary.stale||0),
+        metric('从未成功',summary.never||0),metric('未监控',summary.unmonitored||0),
+        metric('失败',summary.failed||0),metric('部分成功',summary.partial||0),
+        metric('运行中',summary.running||0),metric('未解决告警',summary.open_alerts||0),
+      ].join('');
+
+      const rows=items.map((item)=>{
+        const last=item.last_run||{};
+        const artifact=item.artifact?`${esc(item.artifact.name)} · ${esc(fmtTime(item.artifact.mtime))}`:'-';
+        const error=last.error_message?`<div class="muted">${esc(last.error_label)}：${esc(last.error_message)}</div>`:'';
+        return `<tr><td><strong>${esc(item.display_name)}</strong><div class="muted">${esc(item.job_key)}</div></td><td>${esc(item.provider)}</td><td>${item.enabled?'启用':'停用'}</td><td>${freshnessChip(item.freshness&&item.freshness.state)}</td><td>${last.status?statusChip(last.status):'<span class="muted">无记录</span>'}<div class="muted">${esc(fmtTime(last.started_at))}</div>${error}</td><td>${esc(scheduleLabel(item.schedule))}</td><td>${artifact}</td><td>${esc(item.open_alert_count||0)}</td><td><button class="btn" type="button" disabled title="后续阶段开放">立即运行</button></td></tr>`;
+      }).join('');
+      $('jobList').innerHTML=`<table><thead><tr><th>作业</th><th>提供方</th><th>开关</th><th>新鲜度</th><th>最近运行</th><th>调度</th><th>当前产出物</th><th>告警</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="9" class="muted">暂无同步作业。</td></tr>'}</tbody></table>`;
+
+      const selected=initialJob||$('jobFilter').value;
+      $('jobFilter').innerHTML=`<option value="">全部</option>${items.map((item)=>`<option value="${esc(item.job_key)}">${esc(item.display_name)}（${esc(item.job_key)}）</option>`).join('')}`;
+      if(items.some((item)=>item.job_key===selected))$('jobFilter').value=selected;
+    }
+
+    function renderAlerts(){
+      if(!state.alerts.length){$('alertList').innerHTML='<div class="muted">暂无未解决告警。</div>';return;}
+      $('alertList').innerHTML=state.alerts.map((item)=>`<article class="attention critical"><strong>${esc(item.display_name)}</strong> · ${esc(item.alert_kind)}<div class="muted">${esc(item.job_key)} · ${esc(item.provider)} · 首次发现 ${esc(fmtTime(item.first_seen_at))} · 通知 ${esc(item.notify_count||0)} 次</div></article>`).join('');
+    }
+
+    function renderTimeline(){
+      const rows=state.runs.map((item)=>{
+        const error=item.error_message?`<div class="muted">${esc(item.error_label)}：${esc(item.error_message)}</div>`:'';
+        return `<tr><td><strong>${esc(item.display_name)}</strong><div class="muted">${esc(item.job_key)}</div></td><td>${esc(item.provider)}</td><td>${esc(triggerLabels[item.trigger]||item.trigger||'-')}</td><td>${statusChip(item.status)}${error}</td><td>${esc(fmtTime(item.started_at))}</td><td>${esc(durationLabel(item.duration_seconds))}</td><td>${esc(item.row_count??'-')}</td><td>${esc(item.changed_count??'-')}</td><td><button class="btn" type="button" disabled title="后续阶段开放">查看详情</button></td></tr>`;
+      }).join('');
+      $('timelineList').innerHTML=`<table><thead><tr><th>作业</th><th>提供方</th><th>触发</th><th>状态</th><th>开始时间</th><th>耗时</th><th>行数</th><th>变更</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="9" class="muted">当前筛选无运行记录。</td></tr>'}</tbody></table>`;
+      const pages=Math.max(1,Math.ceil(state.total/state.limit));
+      const page=Math.floor(state.offset/state.limit)+1;
+      $('timelinePageInfo').textContent=`第 ${page}/${pages} 页 · 共 ${state.total} 条`;
+      $('timelinePrevBtn').disabled=state.offset<=0;
+      $('timelineNextBtn').disabled=state.offset+state.limit>=state.total;
+    }
+
+    async function loadOverview(){state.overview=await api('/v1/sync/overview');renderOverview();}
+    async function loadAlerts(){const d=await api('/v1/sync/alerts?state=open&limit=50&offset=0');state.alerts=d.items||[];renderAlerts();}
+    async function loadTimeline(){
+      const params=new URLSearchParams({limit:String(state.limit),offset:String(state.offset)});
+      if($('providerFilter').value)params.set('provider',$('providerFilter').value);
+      if($('statusFilter').value)params.set('status',$('statusFilter').value);
+      if($('jobFilter').value)params.set('job_key',$('jobFilter').value);
+      const d=await api(`/v1/sync/runs?${params}`);
+      state.runs=d.items||[];state.total=d.total||0;renderTimeline();
+    }
+    async function loadAll(){await loadOverview();await Promise.all([loadAlerts(),loadTimeline()]);}
+    function reloadTimelineFromStart(){state.offset=0;loadTimeline().catch((error)=>AliECSToast.show(`时间线加载失败：${error.message}`,'error'));}
+
+    $('providerFilter').onchange=reloadTimelineFromStart;
+    $('statusFilter').onchange=reloadTimelineFromStart;
+    $('jobFilter').onchange=reloadTimelineFromStart;
+    $('timelinePrevBtn').onclick=()=>{state.offset=Math.max(0,state.offset-state.limit);loadTimeline().catch((error)=>AliECSToast.show(`时间线加载失败：${error.message}`,'error'));};
+    $('timelineNextBtn').onclick=()=>{state.offset+=state.limit;loadTimeline().catch((error)=>AliECSToast.show(`时间线加载失败：${error.message}`,'error'));};
+    refreshBtn.onclick=()=>loadAll().catch((error)=>AliECSToast.show(`同步中心加载失败：${error.message}`,'error'));
+    loginBtn.onclick=ssoLogin;
+    logoutBtn.onclick=()=>{clearAuthToken();AliECSAdmin.applyGate(null);AliECSToast.show('已退出登录。','success');};
+    (async()=>{AliECSAdmin.applyGate(await fetchMe(),()=>{loadAll().catch((error)=>AliECSToast.show(`同步中心加载失败：${error.message}`,'error'));});})();
+  </script>
+</body>
+</html>
