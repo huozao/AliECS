@@ -245,6 +245,86 @@ class TplusParentMatchTests(unittest.TestCase):
             self.assertEqual(0, self.module.run_tplus_parent_match())
         self.assertTrue(owned.closed)
 
+    def test_unknown_normalize_error_fails_the_running_step_before_the_run(self) -> None:
+        platform = _RecordingPlatform()
+        records = [{"record_id": "r1", "values": {"父件编码": _cells("A")}}]
+        self._patch_run(bom={"A": ("甲", "v1", False)}, records=records)
+        failure = ValueError("Authorization: Bearer secret-value normalize failed")
+
+        with patch.object(self.module, "plan_updates", side_effect=failure):
+            with self.assertRaisesRegex(ValueError, "normalize failed"):
+                self.module.run_tplus_parent_match(platform=platform)
+
+        terminal = self._terminal_steps(platform)
+        self.assertEqual((3, "normalize", "failed", 0),
+                         (terminal[-1]["seq"], terminal[-1]["name"], terminal[-1]["status"], terminal[-1]["items"]))
+        self.assertNotIn("secret-value", terminal[-1]["message"])
+        self.assertEqual("failed", platform.finished[-1]["status"])
+
+    def test_owned_platform_open_and_close_failures_do_not_change_legacy_result(self) -> None:
+        records = [{"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("旧名")}}]
+        self._patch_run(bom={"A": ("新名", "v1", False)}, records=records)
+        with patch.object(self.module, "open_owned", side_effect=RuntimeError("platform unavailable")):
+            self.assertEqual(0, self.module.run_tplus_parent_match())
+
+        class _CloseFailingPlatform(_RecordingPlatform):
+            def close(self):
+                self.closed = True
+                raise RuntimeError("platform close failed")
+
+        owned = _CloseFailingPlatform()
+        self._patch_run(bom={"A": ("新名", "v1", False)}, records=records)
+        with patch.object(self.module, "open_owned", return_value=owned):
+            self.assertEqual(0, self.module.run_tplus_parent_match())
+        self.assertTrue(owned.closed)
+
+    def test_owned_writer_closes_when_business_error_preserves_original_exception(self) -> None:
+        owned = _RecordingPlatform()
+        records = [{"record_id": "r1", "values": {"父件编码": _cells("A")}}]
+        self._patch_run(bom={"A": ("甲", "v1", False)}, records=records)
+        with patch.object(self.module, "open_owned", return_value=owned), \
+                patch.object(self.module, "plan_updates", side_effect=ValueError("normalize failed")):
+            with self.assertRaisesRegex(ValueError, "normalize failed"):
+                self.module.run_tplus_parent_match()
+        self.assertTrue(owned.closed)
+
+    def test_direct_call_uses_manual_trigger_by_default(self) -> None:
+        platform = _RecordingPlatform()
+        self._patch_run(bom={"A": ("甲", "v1", False)}, records=[])
+
+        self.assertEqual(0, self.module.run_tplus_parent_match(platform=platform))
+
+        self.assertEqual("manual", platform.started[0]["trigger"])
+
+    def test_worker_default_full_sync_uses_schedule_trigger(self) -> None:
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+        from app.pipelines import worker_loop
+
+        calls: list[dict] = []
+        with patch.object(worker_loop, "_maybe_start_group_listener"), \
+                patch.object(worker_loop, "run_sync_wecom_full", return_value=0), \
+                patch.object(worker_loop, "run_backfill_images", return_value=SimpleNamespace(
+                    target_count=0, scanned_count=0, updated_count=0, error_count=0,
+                )), \
+                patch.object(worker_loop, "run_sync_feishu_full", return_value=0), \
+                patch.object(worker_loop, "run_enqueue_daily_structure_backup_jobs", return_value=0), \
+                patch.object(worker_loop, "run_pending_structure_backup_jobs", return_value=0), \
+                patch.object(worker_loop, "run_tplus_parent_match", side_effect=lambda **kwargs: calls.append(kwargs) or 0), \
+                patch.object(worker_loop, "run_pending_sync_requests", return_value=0), \
+                patch.object(worker_loop, "run_write_rnd_records", return_value=0), \
+                patch.object(worker_loop, "run_backfill_if_bom_synced", return_value=(None, False)):
+            self.assertEqual(0, worker_loop.run_worker_loop(
+                sleep=lambda _seconds: None,
+                max_cycles=1,
+                schedule_reader=lambda: {"enabled": True, "interval_seconds": 60, "anchor_time": ""},
+                config_puller=lambda: "noop",
+                now_fn=lambda: datetime(2026, 8, 12, 1, 0, tzinfo=timezone.utc),
+                last_full_reader=lambda: None,
+            ))
+
+        self.assertEqual([{"trigger": "schedule"}], calls)
+
     def test_matched_row_fills_parent_name_from_tplus(self) -> None:
         records = [{"record_id": "r1", "values": {"父件编码": _cells("40000019"), "型号": _cells("0539-ABS耐候玄武灰")}}]
         result = self._plan(records, {"40000019": ("0539-耐候ABS  玄武灰色母", "20250208", False)})

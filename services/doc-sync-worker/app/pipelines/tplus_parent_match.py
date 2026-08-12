@@ -301,6 +301,7 @@ class _PlatformRun:
         self.writer = writer
         self.run_id = run_id
         self.owns_writer = owns_writer
+        self.current_step: tuple[int, str, int, str] | None = None
 
     @classmethod
     def start(cls, *, trigger: str, writer: Any | None) -> "_PlatformRun":
@@ -325,12 +326,22 @@ class _PlatformRun:
         return cls(writer, run_id, owns_writer)
 
     def step(self, seq: int, name: str, status: str, *, items: int = 0, message: str = "") -> None:
+        if status == "running":
+            self.current_step = (seq, name, items, message)
+        elif self.current_step and self.current_step[:2] == (seq, name):
+            self.current_step = None
         if self.writer is None or self.run_id is None:
             return
         try:
             self.writer.upsert_step(self.run_id, seq, name, status, items=items, message=message)
         except Exception:  # noqa: BLE001 - observability is fail-open.
             return
+
+    def fail_current(self, exc: BaseException) -> None:
+        if self.current_step is None:
+            return
+        seq, name, items, _message = self.current_step
+        self.step(seq, name, "failed", items=items, message=safe_error_message(exc))
 
     def finish(
         self,
@@ -383,6 +394,7 @@ def run_tplus_parent_match(
     try:
         return _run_tplus_parent_match(dry_run=dry_run, notify=notify, platform_run=platform_run)
     except Exception as exc:
+        platform_run.fail_current(exc)
         platform_run.finish(
             status="failed", row_count=0, changed_count=0, error=exc,
             detail_json={"dry_run": dry_run, "notify": notify},
