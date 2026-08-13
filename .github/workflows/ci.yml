@@ -120,6 +120,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r services/backend-api/requirements.txt
           python -m pip install -r services/doc-sync-worker/requirements.txt
+          python -m pip install -r services/tplus-sync-worker/requirements.txt
           python -m pip install httpx==0.28.1
           python -m pip install pytest==9.0.3
 
@@ -151,6 +152,11 @@ jobs:
         env:
           SYNC_ALERT_INTEGRATION_DATABASE_URL: postgresql://app:app@localhost:5432/app
         run: python -m unittest discover -s tests -p "test_sync_alert_notifier_integration.py" -v
+
+      - name: Run scheduler shadow integration test
+        env:
+          SYNC_SCHEDULER_INTEGRATION_DATABASE_URL: postgresql://app:app@localhost:5432/app
+        run: python -m unittest discover -s tests -p "test_sync_scheduler_integration.py" -v
 
       - name: Run backend smoke test
         env:

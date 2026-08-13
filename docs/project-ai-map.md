@@ -34,12 +34,14 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 统一同步作业双写入口：`app/storage/sync_job_platform.py`。
 `app/pipelines/sync_alert_notifier.py` 是 P3 告警事实源：轮询 `sync_jobs` 与 `sync_job_runs`，以
 `sync_job_alerts` 的 partial unique open claim 去重；行锁只保护投递和恢复，resolved 后由 partial unique 允许重开，步骤清理由独立 DELETE 按 30/90 天执行。
+调度候选内核在 `app/pipelines/sync_scheduler.py`；`sync_jobs.schedule` 是候选配置面，legacy `integration_sync_config` 仍驱动 shadow 期的真实执行并作为回滚面。shadow 证据只合并到已有真实 `trigger='schedule'` run 的 `detail_json.shadow`，不创建伪 run。
 验证：`SYNC_ALERT_INTEGRATION_DATABASE_URL=<postgres-url> python -m unittest discover -s tests -p "test_sync_alert_notifier_integration.py" -v`。
 
 ## services/tplus-sync-worker
 
 畅捷通 T+ 只读拉取（BOM/存货/价格）。排障：`docs/runbooks/tplus.md`。
 统一同步作业双写入口：`src/tplus_datahub/jobs/sync_job_platform.py`。
+调度候选内核在 `src/tplus_datahub/jobs/sync_scheduler.py`，与 doc-sync 副本字节相同；候选配置、legacy 回滚和真实 scheduled run 上的 shadow 证据语义与上节一致。
 测试要 `PYTHONPATH="src;."`；根 CI 同时运行子项目 unittest。
 
 ## services/public-web

@@ -103,6 +103,7 @@ Do not commit real AppKey, AppSecret, AES key, appTicket, certificate, auth code
 | `TPLUS_SYNC_POLL_SECONDS` | tplus-sync-worker | Poll interval for manual BOM sync request files during long sleeps | Optional, default 30 |
 | `TPLUS_DB_SYNC_REQUESTS_ENABLED` | tplus-sync-worker | Whether the worker polls Postgres `integration_sync_requests` for event-driven BOM sync | Optional, default true |
 | `TPLUS_BOM_SYNC_REQUEST_DIR` | backend-api / tplus-sync-worker | Shared runtime directory for homepage "manual sync recipe" requests | Optional |
+| `TPLUS_SYNC_SCHEDULER_MODE` | ECS deploy host → tplus-sync-worker `SYNC_SCHEDULER_MODE` | T+ worker scheduler mode | Optional, default `legacy`; exactly `legacy`, `shadow`, or `active` |
 
 Production stores worker output in Docker volumes mounted at `/app/data` and `/app/output`.
 The current long-running worker scope is verified read-only `QueryPage` sync for BOM, inventory, and partner records. Other T+ modules must be added only after confirming their official read-only endpoints.
@@ -161,5 +162,8 @@ Do not commit real Feishu app IDs, app secrets, app tokens, wiki node tokens, te
 | `SYNC_ALERT_ESCALATION_SECONDS` | doc-sync-worker | Age threshold before an unfinished job is escalated | Optional, default `21600` (6 hours) |
 | `SYNC_ARTIFACT_GRACE_SECONDS` | doc-sync-worker | Grace period for expected output artifacts after a successful run | Optional, default `300` (5 minutes) |
 | `CHANJET_OPEN_TOKEN_FILE` | doc-sync-worker | Read-only Chanjet token file used for T+ authentication checks | Set by Compose to `/app/tplus-sync-requests/chanjet_open_token.txt` |
+| `DOC_SYNC_SCHEDULER_MODE` | ECS deploy host → doc-sync-worker `SYNC_SCHEDULER_MODE` | Document worker scheduler mode | Optional, default `legacy`; exactly `legacy`, `shadow`, or `active` |
 
 The worker checks alerts before each scheduled full-sync cycle and after every request poll (30 seconds by default). Alert failures are fail-open and do not change sync exit codes. In production, `tplus_sync_requests` and `tplus_sync_output` are mounted into `doc-sync-worker` read-only. Local Compose keeps `tplus_sync_requests` read-only and mounts the same `../services/tplus-sync-worker/output` host directory used by the local T+ producer as `/app/tplus-output:ro`; the notifier must not modify token or output artifacts.
+
+`DOC_SYNC_SCHEDULER_MODE` and `TPLUS_SYNC_SCHEDULER_MODE` are independent deployment controls. The checked-in release example starts both in `shadow`; set either one to `legacy` for a worker-only rollback. The deploy guard rejects blank values, case variants, and any value outside the three exact lowercase modes before Compose is run.
