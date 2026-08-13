@@ -27,6 +27,7 @@ from app.pipelines.wecom_structure_backup import (
     run_pending_structure_backup_jobs,
 )
 from app.storage.postgres import open_store
+from app.storage.job_catalog import reconcile_document_jobs_fail_open
 
 
 CONFIG_PULL_MIN_SECONDS = 120
@@ -80,6 +81,18 @@ def _finish_scheduler_shadow(run_ids: list[int], observed_sleep_seconds: int, ca
         finally:
             store.close()
     except Exception:  # noqa: BLE001 - 影子收尾失败不得改变生产行为
+        pass
+
+
+def _reconcile_platform_catalog() -> None:
+    """Own one startup store lifecycle and keep catalog failures fail-open."""
+    try:
+        store = open_store()
+        try:
+            reconcile_document_jobs_fail_open(store)
+        finally:
+            store.close()
+    except Exception:  # noqa: BLE001 - catalog bootstrap must not block legacy sync
         pass
 
 
@@ -216,6 +229,8 @@ def run_worker_loop(
         except Exception as exc:  # noqa: BLE001 - 告警失败不拖垮同步主循环
             print(f"[文档同步循环] 告警检查异常：{type(exc).__name__}")
 
+    if is_default_pipeline:
+        _reconcile_platform_catalog()
     _maybe_start_group_listener()
 
     try:

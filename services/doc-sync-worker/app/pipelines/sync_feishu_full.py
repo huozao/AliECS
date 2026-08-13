@@ -12,6 +12,7 @@ from app.providers.feishu import (
 )
 from app.pipelines.managed_contacts import sync_managed_contact_from_row
 from app.storage.postgres import build_record_snapshot, compose_source_name, open_store
+from app.storage.job_catalog import reconcile_document_jobs_fail_open
 
 
 FIELD_TEXT = 1
@@ -762,6 +763,7 @@ def run_sync_feishu_full(profiles_arg: str = "") -> int:
             if counts["error_count"]:
                 exit_code = 1
     finally:
+        reconcile_document_jobs_fail_open(store)
         store.close()
 
     return exit_code

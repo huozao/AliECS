@@ -154,6 +154,93 @@ class SyncJobPlatformWriter:
 
         return self._best_effort("start_run", write)
 
+    def reconcile_document_jobs(self) -> dict[str, int] | None:
+        """Pre-catalog active table sources without creating synthetic runs."""
+
+        def write() -> dict[str, int]:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    WITH legacy_schedule AS (
+                        SELECT jsonb_build_object(
+                            'enabled', enabled,
+                            'interval_seconds', interval_seconds,
+                            'anchor_time', anchor_time
+                        ) AS value
+                        FROM integration_sync_config
+                        WHERE provider = 'doc_sync'
+                    ), eligible AS (
+                        SELECT
+                            s.id,
+                            s.provider,
+                            COALESCE(
+                                NULLIF(CONCAT_WS(' / ', NULLIF(s.document_name, ''), NULLIF(s.sheet_name, '')), ''),
+                                NULLIF(s.source_name, ''),
+                                CASE WHEN s.provider = 'wecom' THEN '企微表格' ELSE '飞书表格' END
+                            ) AS display_name,
+                            COALESCE((SELECT value FROM legacy_schedule), '{}'::jsonb) AS schedule
+                        FROM external_sources s
+                        WHERE s.status = 'active'
+                          AND s.external_doc_id <> ''
+                          AND s.external_sheet_id <> ''
+                          AND (
+                               (s.provider = 'wecom' AND s.source_type = 'smartsheet_sheet')
+                            OR (s.provider = 'feishu' AND s.source_type = 'bitable_table')
+                          )
+                    )
+                    INSERT INTO sync_jobs(
+                        job_key, kind, provider, display_name, source_id,
+                        enabled, schedule, updated_at
+                    )
+                    SELECT
+                        eligible.provider || '.doc.' || eligible.id::text,
+                        'pull', eligible.provider, eligible.display_name, eligible.id,
+                        TRUE, eligible.schedule, NOW()
+                    FROM eligible
+                    ON CONFLICT(job_key) DO UPDATE SET
+                        kind = EXCLUDED.kind,
+                        provider = EXCLUDED.provider,
+                        display_name = EXCLUDED.display_name,
+                        source_id = EXCLUDED.source_id,
+                        enabled = TRUE,
+                        schedule = CASE
+                            WHEN sync_jobs.schedule = '{}'::jsonb THEN EXCLUDED.schedule
+                            ELSE sync_jobs.schedule
+                        END,
+                        updated_at = NOW()
+                    RETURNING id
+                    """
+                )
+                enabled_ids = [int(row[0]) for row in cur.fetchall()]
+                cur.execute(
+                    """
+                    UPDATE sync_jobs j
+                    SET enabled = FALSE, updated_at = NOW()
+                    WHERE j.kind = 'pull'
+                      AND j.provider IN ('wecom', 'feishu')
+                      AND j.source_id IS NOT NULL
+                      AND j.enabled
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM external_sources s
+                          WHERE s.id = j.source_id
+                            AND s.status = 'active'
+                            AND s.external_doc_id <> ''
+                            AND s.external_sheet_id <> ''
+                            AND (
+                                 (s.provider = 'wecom' AND s.source_type = 'smartsheet_sheet')
+                              OR (s.provider = 'feishu' AND s.source_type = 'bitable_table')
+                            )
+                      )
+                    RETURNING j.id
+                    """
+                )
+                disabled_ids = [int(row[0]) for row in cur.fetchall()]
+            self.conn.commit()
+            return {"enabled": len(enabled_ids), "disabled": len(disabled_ids)}
+
+        return self._best_effort("reconcile_document_jobs", write)
+
     def upsert_step(
         self, run_id: int, seq: int, name: str, status: str, *, items: int = 0, message: str = ""
     ) -> None:
@@ -244,6 +331,9 @@ class _NoopSyncJobPlatformWriter:
         return None
 
     def finish_run(self, *_: Any, **__: Any) -> None:
+        return None
+
+    def reconcile_document_jobs(self) -> None:
         return None
 
     def close(self) -> None:

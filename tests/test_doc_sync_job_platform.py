@@ -92,6 +92,29 @@ class FailingRollbackConn(FailingConn):
         raise RuntimeError("rollback failed")
 
 
+class CatalogCursor(FakeCursor):
+    def __init__(self, conn: "CatalogConn") -> None:
+        super().__init__(conn)
+        self.current: list[tuple[int, ...]] = []
+
+    def execute(self, sql: str, params=None) -> None:
+        super().execute(sql, params)
+        self.current = self.conn.responses.pop(0) if self.conn.responses else []
+
+    def fetchall(self):
+        return list(self.current)
+
+
+class CatalogConn(FakeConn):
+    def __init__(self, responses: list[list[tuple[int, ...]]]) -> None:
+        super().__init__()
+        self.responses = list(responses)
+        self.catalog_cursor = CatalogCursor(self)
+
+    def cursor(self) -> CatalogCursor:
+        return self.catalog_cursor
+
+
 class SyncJobPlatformWriterTests(unittest.TestCase):
     def setUp(self) -> None:
         self.conn = FakeConn()
@@ -129,6 +152,43 @@ class SyncJobPlatformWriterTests(unittest.TestCase):
         for protected in ("schedule =", "freshness_sla_seconds =", "artifact_glob =",
                           "alert_enabled =", "alert_chat_id ="):
             self.assertNotIn(protected, sql)
+
+    def test_reconcile_upserts_only_active_table_sources_without_runs(self):
+        conn = CatalogConn([[(17,), (19,)], [(23,)]])
+
+        result = SyncJobPlatformWriter(conn).reconcile_document_jobs()
+
+        self.assertEqual({"enabled": 2, "disabled": 1}, result)
+        sql = "\n".join(conn.sql)
+        self.assertIn("source_type = 'smartsheet_sheet'", sql)
+        self.assertIn("source_type = 'bitable_table'", sql)
+        self.assertIn("status = 'active'", sql)
+        self.assertIn("ON CONFLICT(job_key) DO UPDATE", sql)
+        self.assertNotIn("INSERT INTO sync_job_runs", sql)
+        self.assertNotIn("smartsheet_link", sql)
+        self.assertNotIn("structure_backup", sql)
+        self.assertEqual(1, conn.commits)
+
+    def test_reconcile_preserves_operator_schedule_and_updates_timestamp(self):
+        conn = CatalogConn([[(17,)], []])
+
+        SyncJobPlatformWriter(conn).reconcile_document_jobs()
+
+        sql = "\n".join(conn.sql)
+        self.assertIn("schedule = CASE", sql)
+        self.assertIn("sync_jobs.schedule = '{}'::jsonb", sql)
+        self.assertIn("ELSE sync_jobs.schedule", sql)
+        self.assertGreaterEqual(sql.count("updated_at = NOW()"), 2)
+        for protected in ("freshness_sla_seconds =", "artifact_glob =", "alert_enabled =", "alert_chat_id ="):
+            self.assertNotIn(protected, sql)
+
+    def test_reconcile_failure_rolls_back_and_is_fail_open(self):
+        conn = FailingConn()
+
+        result = SyncJobPlatformWriter(conn).reconcile_document_jobs()
+
+        self.assertIsNone(result)
+        self.assertEqual(1, conn.rollback_count)
 
     def test_step_uses_the_unique_run_seq_conflict_target(self):
         SyncJobPlatformWriter(self.conn).upsert_step(31, 2, "fetch_page", "success", items=40)

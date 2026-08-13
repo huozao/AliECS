@@ -17,6 +17,7 @@ from app.pipelines.wecom_structure_backup import (
     structure_backup_enabled,
 )
 from app.storage.postgres import build_record_snapshot, compose_source_name, open_store
+from app.storage.job_catalog import reconcile_document_jobs_fail_open
 from app.storage.sync_job_platform import classify_error, platform_writer_for
 
 
@@ -408,6 +409,7 @@ def run_sync_wecom_full(profiles_arg: str = "") -> int:
             if counts["error_count"]:
                 exit_code = 1
     finally:
+        reconcile_document_jobs_fail_open(store)
         store.close()
 
     return exit_code
@@ -526,6 +528,7 @@ def run_sync_wecom_source(source_id: int) -> int:
 def run_pending_sync_requests(limit: int = 10) -> int:
     store = open_store()
     exit_code = 0
+    requests: list[dict[str, Any]] = []
     try:
         requests = store.pending_sync_requests(limit=limit)
         if not requests:
@@ -550,5 +553,7 @@ def run_pending_sync_requests(limit: int = 10) -> int:
             if request_status != "success":
                 exit_code = 1
     finally:
+        if requests:
+            reconcile_document_jobs_fail_open(store)
         store.close()
     return exit_code
