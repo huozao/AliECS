@@ -28,14 +28,14 @@ class AdminCssTests(unittest.TestCase):
             self.assertIn(selector, css, f"admin.css 缺少 {selector}")
 
     def test_admin_pages_link_admin_css(self) -> None:
-        for page in (EXPORTS_PAGE, TPLUS_PAGE, SYNC_PAGE):
+        for page in (EXPORTS_PAGE, SYNC_PAGE):
             html = page.read_text(encoding="utf-8")
             self.assertIn('<link rel="stylesheet" href="/common/admin.css"/>', html,
                           f"{page.name} 未引用 admin.css")
 
     def test_pages_no_longer_inline_the_shared_css(self) -> None:
         # 抽取的意义就是不留第二份；留着就会各自漂移。
-        for page in (EXPORTS_PAGE, TPLUS_PAGE, SYNC_PAGE):
+        for page in (EXPORTS_PAGE, SYNC_PAGE):
             html = page.read_text(encoding="utf-8")
             self.assertNotIn("--bg:#f7f5f0", html,
                              f"{page.name} 仍内联着共享 CSS 变量")
@@ -63,13 +63,13 @@ class AdminAuthJsTests(unittest.TestCase):
         self.assertIn("function applyGate(me, onAdmin)", self.js)
 
     def test_admin_pages_load_admin_auth_before_use(self) -> None:
-        for page in (EXPORTS_PAGE, TPLUS_PAGE, SYNC_PAGE):
+        for page in (EXPORTS_PAGE, SYNC_PAGE):
             html = page.read_text(encoding="utf-8")
             self.assertIn('<script src="/common/admin-auth.js"></script>', html,
                           f"{page.name} 未引用 admin-auth.js")
 
     def test_pages_no_longer_define_shared_helpers(self) -> None:
-        for page in (EXPORTS_PAGE, TPLUS_PAGE, SYNC_PAGE):
+        for page in (EXPORTS_PAGE, SYNC_PAGE):
             html = page.read_text(encoding="utf-8")
             self.assertNotIn("async function api(", html,
                              f"{page.name} 仍自带一份 api()")
@@ -79,11 +79,10 @@ class AdminAuthJsTests(unittest.TestCase):
     def test_pages_still_pass_their_own_admin_loader(self) -> None:
         # 抽取不能把「登录后加载什么」丢掉。
         exports_html = EXPORTS_PAGE.read_text(encoding="utf-8")
-        self.assertIn("loadDocSyncConfig", exports_html)
         self.assertIn("loadExports", exports_html)
-        tplus_html = TPLUS_PAGE.read_text(encoding="utf-8")
-        self.assertIn("loadSyncConfig", tplus_html)
-        self.assertIn("loadTplusTimeline", tplus_html)
+        sync_html = SYNC_PAGE.read_text(encoding="utf-8")
+        self.assertIn("loadControl", sync_html)
+        self.assertIn("loadTimeline", sync_html)
 
 
 if __name__ == "__main__":

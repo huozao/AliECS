@@ -18,7 +18,6 @@ TOAST_PAGES = [
     "public-web/formula/index.html",
     "public-web/health/index.html",
     "public-web/health/versions/index.html",
-    "public-web/tplus-sync/index.html",
     "public-web/inventory/finished-goods/index.html",
     "public-web/inventory/raw-materials/index.html",
     "public-web/bom-builder/index.html",

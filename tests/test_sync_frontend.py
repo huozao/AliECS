@@ -49,11 +49,16 @@ class SyncFrontendTests(unittest.TestCase):
         self.assertNotIn("function chip(", self.html)
         self.assertNotIn("--bg:#f7f5f0", self.html)
 
-    def test_uses_only_read_only_sync_endpoints(self) -> None:
-        for path in ("/v1/sync/overview", "/v1/sync/runs", "/v1/sync/alerts"):
+    def test_uses_canonical_read_and_control_endpoints(self) -> None:
+        for path in (
+            "/v1/sync/overview", "/v1/sync/runs", "/v1/sync/alerts", "/v1/sync/assets",
+            "/v1/sync/config/doc", "/v1/sync/config/tplus", "/v1/sync/run-all",
+        ):
             self.assertIn(path, self.html)
-        for write_marker in ("method:'POST'", 'method: "POST"', "method:'PUT'", 'method: "PUT"'):
-            self.assertNotIn(write_marker, self.html)
+        self.assertIn("method:'POST'", self.html)
+        self.assertIn("method:'PUT'", self.html)
+        self.assertNotIn("/v1/ops/doc-sync", self.html)
+        self.assertNotIn("/v1/exports/sync-all", self.html)
 
     def test_has_global_filters_paging_and_query_preselection(self) -> None:
         for dom_id in (
@@ -71,11 +76,23 @@ class SyncFrontendTests(unittest.TestCase):
         self.assertIn("params.set('status'", self.html)
         self.assertIn("params.set('job_key'", self.html)
         self.assertIn("state.offset", self.html)
+        self.assertIn(".get('group')", self.html)
+
+    def test_jobs_and_assets_have_grouped_filters(self) -> None:
+        for dom_id in (
+            "jobGroupFilter", "jobProviderFilter", "jobStatusFilter", "jobFreshnessFilter",
+            "jobSearchFilter", "assetTabs", "assetList", "runAllBtn",
+            "docConfigCard", "tplusConfigCard",
+        ):
+            self.assertIn(f'id="{dom_id}"', self.html)
+        for marker in ("T+ ERP", "企微 A", "企微 B", "飞书", "不可自动同步"):
+            self.assertIn(marker, self.html)
 
     def test_uses_real_p1_trigger_and_provider_literals(self) -> None:
         for marker in ("manual:'手动'", "schedule:'定时'", "event:'订阅变更'"):
             self.assertIn(marker, self.html)
-        self.assertNotIn('<option value="tplus">', self.html)
+        provider_block = self.html.split('id="providerFilter"', 1)[1].split("</select>", 1)[0]
+        self.assertNotIn('<option value="tplus">', provider_block)
 
     def test_renders_unmonitored_and_explicit_empty_alert_state(self) -> None:
         self.assertIn("unmonitored", self.html)
@@ -92,13 +109,13 @@ class SyncFrontendTests(unittest.TestCase):
             "alert_kind",
         ):
             self.assertIn(f"esc(item.{field}", self.html)
-        self.assertNotIn("JSON.stringify", self.html)
+        self.assertNotIn("<pre>${esc(JSON.stringify", self.html)
         self.assertNotIn("detail_json", self.html)
 
-    def test_future_write_actions_are_disabled_without_handlers(self) -> None:
-        self.assertIn('disabled title="后续阶段开放"', self.html)
-        self.assertNotIn("runJob", self.html)
-        self.assertNotIn("saveJob", self.html)
+    def test_write_actions_have_loading_guards(self) -> None:
+        for marker in ("function runJob(", "function runAsset(", "function runAll(", "function saveConfig("):
+            self.assertIn(marker, self.html)
+        self.assertIn("controlBusy", self.html)
 
     def test_detail_drawer_contract_is_present(self) -> None:
         for dom_id in ("runDrawerCloseBtn", "runDetailBody"):
@@ -126,9 +143,9 @@ class SyncFrontendTests(unittest.TestCase):
                   toggle(name){classes.has(name)?classes.delete(name):classes.add(name);},
                   contains(name){return classes.has(name);}},onclick:null,onchange:null});
             }
-            const ids=['providerFilter','statusFilter','jobFilter','timelinePrevBtn','timelineNextBtn',
+            const ids=['providerFilter','statusFilter','jobFilter','jobGroupFilter','jobProviderFilter','jobStatusFilter','jobFreshnessFilter','jobSearchFilter','timelinePrevBtn','timelineNextBtn',
               'timelinePageInfo','timelineList','syncSummary','jobList','alertList','refreshBtn','loginBtn','logoutBtn',
-              'runDrawer','runDrawerCloseBtn','runDetailBody'];
+              'runDrawer','runDrawerCloseBtn','runDetailBody','assetTabs','assetList','runAllBtn','docConfigEnabled','docConfigHours','docConfigAnchor','docConfigPaused','docConfigSaveBtn','docConfigStatus','tplusConfigEnabled','tplusConfigHours','tplusConfigAnchor','tplusConfigSaveBtn','tplusConfigStatus'];
             ids.forEach(element);
             const pending=[];
             function api(path){
@@ -221,12 +238,12 @@ class SyncFrontendTests(unittest.TestCase):
                   elements.refreshBtn.onclick();
                   elements.refreshBtn.onclick();
                   await Promise.resolve();
-                  if(pending.length!==6)throw new Error(`loadAll must start 3 parallel reads per refresh, got ${pending.length}`);
+                  if(pending.length!==12)throw new Error(`loadAll must start 6 parallel reads per refresh, got ${pending.length}`);
                   const overview=(jobs)=>({summary:{jobs},items:[]});
                   const alerts=(name)=>({items:[{display_name:name,job_key:name,provider:'wecom',alert_kind:'failed',first_seen_at:'x',notify_count:1}]});
-                  pending[3].resolve(overview(2));pending[4].resolve(alerts('new-alert'));pending[5].resolve({items:[run('new-run')],total:1});
+                  pending[6].resolve(overview(2));pending[7].resolve(alerts('new-alert'));pending[8].resolve({groups:[]});pending[9].resolve({});pending[10].resolve({});pending[11].resolve({items:[run('new-run')],total:1});
                   await Promise.resolve();await Promise.resolve();
-                  pending[0].resolve(overview(1));pending[1].resolve(alerts('old-alert'));pending[2].resolve({items:[run('old-run')],total:1});
+                  pending[0].resolve(overview(1));pending[1].resolve(alerts('old-alert'));pending[2].resolve({groups:[]});pending[3].resolve({});pending[4].resolve({});pending[5].resolve({items:[run('old-run')],total:1});
                   await Promise.resolve();await Promise.resolve();
                   if(vm.runInContext('state.overview.summary.jobs',context)!==2)throw new Error('stale overview committed');
                   if(!elements.alertList.innerHTML.includes('new-alert')||elements.alertList.innerHTML.includes('old-alert'))throw new Error('stale alerts committed');
@@ -244,9 +261,9 @@ class SyncFrontendTests(unittest.TestCase):
                 (async()=>{
                   elements.refreshBtn.onclick();elements.refreshBtn.onclick();
                   await Promise.resolve();
-                  pending[3].resolve({summary:{jobs:2},items:[]});pending[4].resolve({items:[]});pending[5].resolve({items:[],total:0});
+                  pending[6].resolve({summary:{jobs:2},items:[]});pending[7].resolve({items:[]});pending[8].resolve({groups:[]});pending[9].resolve({});pending[10].resolve({});pending[11].resolve({items:[],total:0});
                   await Promise.resolve();await Promise.resolve();
-                  pending[0].reject(new Error('old overview failed'));pending[1].reject(new Error('old alerts failed'));pending[2].reject(new Error('old timeline failed'));
+                  for(let i=0;i<6;i++)pending[i].reject(new Error('old refresh failed'));
                   await Promise.resolve();await Promise.resolve();
                   if(vm.runInContext('state.overview.summary.jobs',context)!==2)throw new Error('latest batch was disturbed');
                   if(toasts.length!==0)throw new Error(`stale errors emitted ${toasts.length} toast(s)`);
@@ -513,12 +530,12 @@ class SyncFrontendTests(unittest.TestCase):
                   pending[1].resolve(detail(3,'success'));
                   await new Promise((resolve)=>setImmediate(resolve));
                   if(timers.size!==0)throw new Error('terminal run kept polling');
-                  if(pending.length!==5)throw new Error(`terminal refresh missing: ${pending.length}`);
-                  if(pending[2].path!=='/v1/sync/overview'||!pending[3].path.startsWith('/v1/sync/alerts?')||!pending[4].path.startsWith('/v1/sync/runs?')){
+                  if(pending.length!==8)throw new Error(`terminal refresh missing: ${pending.length}`);
+                  if(pending[2].path!=='/v1/sync/overview'||!pending[3].path.startsWith('/v1/sync/alerts?')||pending[4].path!=='/v1/sync/assets'||pending[5].path!=='/v1/sync/config/doc'||pending[6].path!=='/v1/sync/config/tplus'||!pending[7].path.startsWith('/v1/sync/runs?')){
                     throw new Error(`wrong terminal refresh: ${pending.slice(2).map((item)=>item.path)}`);
                   }
                   pending[2].resolve({summary:{},items:[]});
-                  pending[3].resolve({items:[],total:0});pending[4].resolve({items:[],total:0});
+                  pending[3].resolve({items:[],total:0});pending[4].resolve({groups:[]});pending[5].resolve({});pending[6].resolve({});pending[7].resolve({items:[],total:0});
                   await Promise.resolve();await Promise.resolve();
                 })().catch((error)=>{console.error(error.stack||error);process.exitCode=1;});
                 """
