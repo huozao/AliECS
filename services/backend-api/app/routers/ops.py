@@ -102,23 +102,36 @@ def ops_tplus_sync_config_put(
     body: SyncConfigUpdate, user: dict[str, Any] = Depends(require_admin)
 ) -> dict[str, Any]:
     interval_seconds = int(round(body.interval_hours * 3600))
+    schedule = {"enabled": body.enabled, "interval_seconds": interval_seconds, "anchor_time": body.anchor_time}
     try:
         with closing(_conn()) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO integration_sync_config(provider, enabled, interval_seconds, anchor_time, updated_at, updated_by)
-                    VALUES ('chanjet', %s, %s, %s, NOW(), %s)
-                    ON CONFLICT (provider) DO UPDATE
-                    SET enabled = EXCLUDED.enabled,
-                        interval_seconds = EXCLUDED.interval_seconds,
-                        anchor_time = EXCLUDED.anchor_time,
-                        updated_at = NOW(),
-                        updated_by = EXCLUDED.updated_by
-                    """,
-                    (body.enabled, interval_seconds, body.anchor_time, str(user.get("sub") or "")),
-                )
-            conn.commit()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO integration_sync_config(provider, enabled, interval_seconds, anchor_time, updated_at, updated_by)
+                        VALUES ('chanjet', %s, %s, %s, NOW(), %s)
+                        ON CONFLICT (provider) DO UPDATE
+                        SET enabled = EXCLUDED.enabled,
+                            interval_seconds = EXCLUDED.interval_seconds,
+                            anchor_time = EXCLUDED.anchor_time,
+                            updated_at = NOW(),
+                            updated_by = EXCLUDED.updated_by
+                        """,
+                        (body.enabled, interval_seconds, body.anchor_time, str(user.get("sub") or "")),
+                    )
+                    cur.execute(
+                        """
+                        UPDATE sync_jobs
+                        SET schedule = %s, updated_at = NOW()
+                        WHERE job_key = 'chanjet.full'
+                        """,
+                        (Jsonb(schedule),),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
     except HTTPException:
         raise
     except Exception as exc:
@@ -248,24 +261,37 @@ def ops_doc_sync_config_put(
 ) -> dict[str, Any]:
     """管理页应急覆盖：写全字段（含 pull_paused）。pull_paused=true 时 worker 停止表格拉取，手动值不会被覆盖。"""
     interval_seconds = int(round(body.interval_hours * 3600))
+    schedule = {"enabled": body.enabled, "interval_seconds": interval_seconds, "anchor_time": body.anchor_time}
     try:
         with closing(_conn()) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO integration_sync_config(provider, enabled, interval_seconds, anchor_time, pull_paused, updated_at, updated_by)
-                    VALUES ('doc_sync', %s, %s, %s, %s, NOW(), %s)
-                    ON CONFLICT (provider) DO UPDATE
-                    SET enabled = EXCLUDED.enabled,
-                        interval_seconds = EXCLUDED.interval_seconds,
-                        anchor_time = EXCLUDED.anchor_time,
-                        pull_paused = EXCLUDED.pull_paused,
-                        updated_at = NOW(),
-                        updated_by = EXCLUDED.updated_by
-                    """,
-                    (body.enabled, interval_seconds, body.anchor_time, body.pull_paused, str(user.get("sub") or "")),
-                )
-            conn.commit()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO integration_sync_config(provider, enabled, interval_seconds, anchor_time, pull_paused, updated_at, updated_by)
+                        VALUES ('doc_sync', %s, %s, %s, %s, NOW(), %s)
+                        ON CONFLICT (provider) DO UPDATE
+                        SET enabled = EXCLUDED.enabled,
+                            interval_seconds = EXCLUDED.interval_seconds,
+                            anchor_time = EXCLUDED.anchor_time,
+                            pull_paused = EXCLUDED.pull_paused,
+                            updated_at = NOW(),
+                            updated_by = EXCLUDED.updated_by
+                        """,
+                        (body.enabled, interval_seconds, body.anchor_time, body.pull_paused, str(user.get("sub") or "")),
+                    )
+                    cur.execute(
+                        """
+                        UPDATE sync_jobs
+                        SET schedule = %s, updated_at = NOW()
+                        WHERE kind = 'pull' AND provider IN ('wecom', 'feishu')
+                        """,
+                        (Jsonb(schedule),),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
     except HTTPException:
         raise
     except Exception as exc:

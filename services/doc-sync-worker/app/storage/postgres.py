@@ -1118,22 +1118,132 @@ class PostgresDocSyncStore:
     def upsert_sync_config(
         self, provider: str, enabled: bool, interval_seconds: int, anchor_time: str, updated_by: str
     ) -> None:
-        """写调度配置（不碰 pull_paused，那是管理页应急覆盖的专属开关）。"""
-        with self.conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO integration_sync_config(provider, enabled, interval_seconds, anchor_time, updated_at, updated_by)
-                VALUES (%s, %s, %s, %s, NOW(), %s)
-                ON CONFLICT (provider) DO UPDATE
-                SET enabled = EXCLUDED.enabled,
-                    interval_seconds = EXCLUDED.interval_seconds,
-                    anchor_time = EXCLUDED.anchor_time,
-                    updated_at = NOW(),
-                    updated_by = EXCLUDED.updated_by
-                """,
-                (provider, enabled, interval_seconds, anchor_time, updated_by),
-            )
-        self.conn.commit()
+        """写 legacy 配置，并只给尚未设置的平台 pull job 初始化 schedule。"""
+        schedule = {"enabled": bool(enabled), "interval_seconds": int(interval_seconds), "anchor_time": str(anchor_time or "")}
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO integration_sync_config(provider, enabled, interval_seconds, anchor_time, updated_at, updated_by)
+                    VALUES (%s, %s, %s, %s, NOW(), %s)
+                    ON CONFLICT (provider) DO UPDATE
+                    SET enabled = EXCLUDED.enabled,
+                        interval_seconds = EXCLUDED.interval_seconds,
+                        anchor_time = EXCLUDED.anchor_time,
+                        updated_at = NOW(),
+                        updated_by = EXCLUDED.updated_by
+                    """,
+                    (provider, enabled, interval_seconds, anchor_time, updated_by),
+                )
+                cur.execute(
+                    """
+                    UPDATE sync_jobs
+                    SET schedule = %s, updated_at = NOW()
+                    WHERE kind = 'pull'
+                      AND provider IN ('wecom', 'feishu')
+                      AND schedule = '{}'::jsonb
+                    """,
+                    (Jsonb(schedule),),
+                )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def fetch_platform_schedule(self) -> dict[str, Any] | None:
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT schedule
+                    FROM sync_jobs
+                    WHERE kind = 'pull'
+                      AND provider IN ('wecom', 'feishu')
+                      AND schedule <> '{}'::jsonb
+                    ORDER BY id
+                    LIMIT 1
+                    """
+                )
+                row = cur.fetchone()
+            schedule = row[0] if row else None
+            return dict(schedule) if isinstance(schedule, dict) and schedule else None
+        except Exception:
+            self.conn.rollback()
+            return None
+
+    def seed_platform_schedule(self, schedule: dict[str, Any]) -> None:
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE sync_jobs
+                    SET schedule = %s, updated_at = NOW()
+                    WHERE kind = 'pull'
+                      AND provider IN ('wecom', 'feishu')
+                      AND schedule = '{}'::jsonb
+                    """,
+                    (Jsonb(schedule),),
+                )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+
+    def record_scheduler_shadow(self, payload: dict[str, Any]) -> list[int]:
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    WITH latest AS (
+                      SELECT DISTINCT ON (r.job_id) r.id
+                      FROM sync_job_runs r
+                      JOIN sync_jobs j ON j.id = r.job_id
+                      WHERE r.trigger = 'schedule'
+                        AND j.kind = 'pull'
+                        AND j.provider IN ('wecom', 'feishu')
+                      ORDER BY r.job_id, r.started_at DESC
+                    )
+                    UPDATE sync_job_runs r
+                    SET detail_json = jsonb_set(r.detail_json, '{shadow}', %s, true)
+                    FROM latest
+                    WHERE r.id = latest.id
+                    RETURNING r.id
+                    """,
+                    (Jsonb(payload),),
+                )
+                run_ids = [int(row[0]) for row in cur.fetchall()]
+            self.conn.commit()
+            return run_ids
+        except Exception:
+            self.conn.rollback()
+            return []
+
+    def finish_scheduler_shadow(
+        self, run_ids: list[int], observed_sleep_seconds: int, candidate_would_wake: bool
+    ) -> None:
+        if not run_ids:
+            return
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE sync_job_runs r
+                    SET detail_json = jsonb_set(
+                        r.detail_json,
+                        '{shadow}',
+                        COALESCE(r.detail_json -> 'shadow', '{}'::jsonb)
+                          || jsonb_build_object(
+                              'observed_sleep_seconds', %s::integer,
+                              'candidate_would_wake', %s::boolean
+                          ),
+                        true
+                    )
+                    WHERE r.id = ANY(%s)
+                    """,
+                    (int(observed_sleep_seconds), bool(candidate_would_wake), run_ids),
+                )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
 
     def last_full_run_started_at(self) -> datetime | None:
         with self.conn.cursor() as cur:

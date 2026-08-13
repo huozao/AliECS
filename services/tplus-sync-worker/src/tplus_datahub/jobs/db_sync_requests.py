@@ -121,6 +121,121 @@ def fetch_sync_config(provider: str = "chanjet", conn: Any | None = None) -> dic
         }
 
 
+def fetch_platform_schedule(job_key: str = "chanjet.full", conn: Any | None = None) -> dict[str, Any] | None:
+    if conn is None:
+        owned_conn = connect_if_configured()
+        if owned_conn is None:
+            return None
+        with closing(owned_conn):
+            return fetch_platform_schedule(job_key, owned_conn)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT schedule FROM sync_jobs WHERE job_key = %s", (job_key,))
+            row = cur.fetchone()
+        schedule = row[0] if row else None
+        return dict(schedule) if isinstance(schedule, dict) and schedule else None
+    except Exception:
+        conn.rollback()
+        return None
+
+
+def seed_platform_schedule(schedule: dict[str, Any], job_key: str = "chanjet.full", conn: Any | None = None) -> None:
+    if conn is None:
+        owned_conn = connect_if_configured()
+        if owned_conn is None:
+            return
+        with closing(owned_conn):
+            seed_platform_schedule(schedule, job_key, owned_conn)
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE sync_jobs
+                SET schedule = %s, updated_at = NOW()
+                WHERE job_key = %s
+                  AND schedule = '{}'::jsonb
+                """,
+                (Jsonb(schedule), job_key),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+
+
+def record_scheduler_shadow(
+    payload: dict[str, Any], job_key: str = "chanjet.full", conn: Any | None = None
+) -> list[int]:
+    if conn is None:
+        owned_conn = connect_if_configured()
+        if owned_conn is None:
+            return []
+        with closing(owned_conn):
+            return record_scheduler_shadow(payload, job_key, owned_conn)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                WITH latest AS (
+                  SELECT DISTINCT ON (r.job_id) r.id
+                  FROM sync_job_runs r
+                  JOIN sync_jobs j ON j.id = r.job_id
+                  WHERE r.trigger = 'schedule'
+                    AND j.job_key = %s
+                  ORDER BY r.job_id, r.started_at DESC
+                )
+                UPDATE sync_job_runs r
+                SET detail_json = jsonb_set(r.detail_json, '{shadow}', %s, true)
+                FROM latest
+                WHERE r.id = latest.id
+                RETURNING r.id
+                """,
+                (job_key, Jsonb(payload)),
+            )
+            run_ids = [int(row[0]) for row in cur.fetchall()]
+        conn.commit()
+        return run_ids
+    except Exception:
+        conn.rollback()
+        return []
+
+
+def finish_scheduler_shadow(
+    run_ids: list[int], observed_sleep_seconds: int, candidate_would_wake: bool, conn: Any | None = None
+) -> None:
+    if not run_ids:
+        return
+    if conn is None:
+        owned_conn = connect_if_configured()
+        if owned_conn is None:
+            return
+        with closing(owned_conn):
+            finish_scheduler_shadow(run_ids, observed_sleep_seconds, candidate_would_wake, owned_conn)
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE sync_job_runs r
+                SET detail_json = jsonb_set(
+                    r.detail_json,
+                    '{shadow}',
+                    COALESCE(r.detail_json -> 'shadow', '{}'::jsonb)
+                      || jsonb_build_object(
+                          'observed_sleep_seconds', %s::integer,
+                          'candidate_would_wake', %s::boolean
+                      ),
+                    true
+                )
+                WHERE r.id = ANY(%s)
+                """,
+                (int(observed_sleep_seconds), bool(candidate_would_wake), run_ids),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+
+
 def fetch_last_scheduled_full_at(provider: str = "chanjet", conn: Any | None = None) -> Any | None:
     """上一次定时全量同步的开始时刻（aware-UTC）。用于重启后不丢锚点相位：
     容器重建不应该在白天立刻补跑一次全量。无 DB / 无记录返回 None。"""

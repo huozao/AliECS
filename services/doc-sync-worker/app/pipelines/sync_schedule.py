@@ -169,6 +169,18 @@ def read_schedule_config() -> dict[str, Any]:
     return default_schedule_config()
 
 
+def read_platform_schedule() -> dict[str, Any] | None:
+    """读取统一平台 schedule；无 DB / 未 seed / SQL 失败均不影响 legacy 调度。"""
+    try:
+        store = open_store()
+        try:
+            return store.fetch_platform_schedule()
+        finally:
+            store.close()
+    except Exception:  # noqa: BLE001 - shadow/active 读取不得拖垮 worker
+        return None
+
+
 def read_last_full_run() -> datetime | None:
     try:
         store = open_store()
