@@ -251,6 +251,9 @@ def overview_row(
     error_kind: str | None = None,
     open_alert_count: int = 0,
     source_id: int | None = 17,
+    env_profile: str | None = "COMPANY_A",
+    document_name: str | None = "生产表",
+    sheet_name: str | None = "明细",
 ) -> tuple[Any, ...]:
     has_run = status is not None
     return (
@@ -277,6 +280,9 @@ def overview_row(
         {"table": "sync_runs", "id": 7} if has_run else None,
         last_success_at,
         open_alert_count,
+        env_profile,
+        document_name,
+        sheet_name,
     )
 
 
@@ -368,6 +374,12 @@ class OverviewReadTests(SyncReadTestCase):
         self.assertEqual(4, len(result["items"]))
         self.assertEqual("凭据过期", result["items"][0]["last_run"]["error_label"])
         self.assertEqual(17, result["items"][0]["source_id"])
+        self.assertEqual("wecom_company_a", result["items"][0]["source_group"])
+        self.assertEqual("COMPANY_A", result["items"][0]["env_profile"])
+        self.assertEqual("生产表", result["items"][0]["document_name"])
+        self.assertEqual("明细", result["items"][0]["sheet_name"])
+        self.assertEqual("feishu", result["items"][1]["source_group"])
+        self.assertEqual("tplus", result["items"][2]["source_group"])
         self.assertEqual({}, result["items"][0]["schedule"])
         self.assertIsNone(result["items"][0]["next_expected_at"])
         self.assertEqual("unmonitored", result["items"][3]["freshness"]["state"])
@@ -387,6 +399,10 @@ class OverviewReadTests(SyncReadTestCase):
         self.assertIn("state = 'open'", sql)
         self.assertIn("GROUP BY job_id", sql)
         self.assertIn("j.source_id", sql)
+        self.assertIn("LEFT JOIN external_sources source", sql)
+        self.assertIn("source.env_profile", sql)
+        self.assertIn("source.document_name", sql)
+        self.assertIn("source.sheet_name", sql)
         self.assertNotIn("external_doc_id", sql)
         self.assertNotIn("alert_chat_id", sql)
 

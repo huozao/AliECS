@@ -5,6 +5,7 @@ import sys
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1] / "services" / "backend-api"
@@ -130,6 +131,33 @@ class BackendOpsStatusTests(unittest.TestCase):
         self.assertEqual("飞书配置表", _doc_sync_source_label("feishu-config-table"))
         self.assertEqual("默认", _doc_sync_source_label(""))
         self.assertEqual("手动", _doc_sync_source_label("admin"))
+
+    def test_legacy_config_and_full_sync_routes_delegate_to_shared_service(self) -> None:
+        from app.routers import ops
+
+        doc_body = ops.DocSyncConfigUpdate(enabled=True, interval_hours=24, anchor_time="02:00")
+        tplus_body = ops.SyncConfigUpdate(enabled=True, interval_hours=24, anchor_time="01:00")
+        with patch.object(ops.sync_control, "read_doc_config", return_value={"kind": "doc"}) as read_doc, patch.object(
+            ops.sync_control, "read_tplus_config", return_value={"kind": "tplus"}
+        ) as read_tplus, patch.object(
+            ops.sync_control, "save_doc_config", return_value={"saved": "doc"}
+        ) as save_doc, patch.object(
+            ops.sync_control, "save_tplus_config", return_value={"saved": "tplus"}
+        ) as save_tplus, patch.object(
+            ops.sync_control, "enqueue_tplus_full", return_value={"queued": True, "request_id": 9, "status": "pending"}
+        ) as enqueue, patch.object(ops, "_conn") as connect:
+            self.assertEqual({"kind": "doc"}, ops.ops_doc_sync_config_get(_={}))
+            self.assertEqual({"kind": "tplus"}, ops.ops_tplus_sync_config_get(_={}))
+            self.assertEqual({"saved": "doc"}, ops.ops_doc_sync_config_put(doc_body, user={"sub": "admin"}))
+            self.assertEqual({"saved": "tplus"}, ops.ops_tplus_sync_config_put(tplus_body, user={"sub": "admin"}))
+            result = ops.ops_tplus_full_sync(user={"sub": "admin"})
+
+        self.assertTrue(result["queued"])
+        read_doc.assert_called_once_with(connect)
+        read_tplus.assert_called_once_with(connect)
+        save_doc.assert_called_once_with(connect, doc_body, "admin")
+        save_tplus.assert_called_once_with(connect, tplus_body, "admin")
+        enqueue.assert_called_once_with(unittest.mock.ANY, "admin")
 
     def test_ops_status_uses_default_external_hosts_when_env_is_empty(self) -> None:
         # WebDock API is always present (defaults to the in-host SSH tunnel),
