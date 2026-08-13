@@ -19,7 +19,6 @@ from app.providers.wecom import (
 from app.providers.wecom_groupbot import WeComGroupBotClient
 from app.storage.postgres import close_store, first_text_cell, open_store, record_values
 
-DEFAULT_DOCID = "dc45aaSDeAwXO54CKSmFkl3ZOH8H_MLVqEmnfE07PONMKTJGB_4T_d5_8LKzdJ7QB2x7lfi8fQkghPaG5gKWyWLA"
 DEFAULT_SHEET_TITLE = "配色&样品需求单"
 APPROVAL_NO_FIELD = "审批单编号"
 APPROVAL_LINK_FIELD = "审批链接"
@@ -211,7 +210,7 @@ def run_group_listener(
     store: Any | None = None,
     groupbot_factory: Callable[[str], Any] = _default_groupbot_factory,
     smartsheet_factory: Callable[[str], Any] = _default_smartsheet_factory,
-    docid: str = DEFAULT_DOCID,
+    docid: str = "",
     sheet_title: str = DEFAULT_SHEET_TITLE,
     index_ttl: int = 600,
     ping_interval: int = 25,
@@ -226,6 +225,12 @@ def run_group_listener(
 
     owned_store = store is None
     store = store or open_store()
+    docid = str(docid or "").strip() or store.find_unique_wecom_docid(profile, sheet_title)
+    if not docid:
+        print(f"[群监听] {profile} 未唯一登记目标工作表，跳过群监听。")
+        if owned_store:
+            close_store(store)
+        return 0
     deadline = (time.time() + max_seconds) if max_seconds else None
     handled = 0
     backoff = 1.0

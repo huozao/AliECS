@@ -26,7 +26,6 @@ from app.core import _conn
 
 router = APIRouter(prefix="/v1/internal/wecom", tags=["wecom-internal"])
 
-DEFAULT_DOCID = "dc45aaSDeAwXO54CKSmFkl3ZOH8H_MLVqEmnfE07PONMKTJGB_4T_d5_8LKzdJ7QB2x7lfi8fQkghPaG5gKWyWLA"
 DEFAULT_SHEET_TITLE = "配色&样品需求单"
 _NODE_COMMAND_RE = re.compile(r"#节点(?:\s+([^\s]{1,8}))?(?:\s+(.+))?", re.DOTALL)
 _AI_NODE_COMMAND_RE = re.compile(r"#AI节点(?:\s+([^\s]{1,8}))?(?:\s+(.+))?", re.IGNORECASE | re.DOTALL)
@@ -91,9 +90,30 @@ def _approval_from_link(value: Any) -> str:
     return ""
 
 
-def _requirement_index(cur: Any) -> dict[str, dict[str, str]]:
-    docid = os.getenv("WECOM_RND_DOCID", DEFAULT_DOCID).strip() or DEFAULT_DOCID
+def _requirement_source(cur: Any) -> tuple[str, str]:
     title = os.getenv("WECOM_RND_SOURCE_SHEET", DEFAULT_SHEET_TITLE).strip() or DEFAULT_SHEET_TITLE
+    configured = os.getenv("WECOM_RND_DOCID", "").strip()
+    if configured:
+        return (configured, title) if configured.startswith("dc") and len(configured) >= 80 else ("", title)
+    cur.execute(
+        """
+        SELECT DISTINCT external_doc_id
+        FROM external_sources
+        WHERE provider='wecom' AND env_profile='COMPANY_B'
+          AND source_type='smartsheet_sheet' AND status='active'
+          AND sheet_name=%s AND external_doc_id LIKE 'dc%%'
+          AND length(external_doc_id) >= 80
+        """,
+        (title,),
+    )
+    rows = cur.fetchall()
+    return (str(rows[0][0]), title) if len(rows) == 1 else ("", title)
+
+
+def _requirement_index(cur: Any) -> dict[str, dict[str, str]]:
+    docid, title = _requirement_source(cur)
+    if not docid:
+        return {}
     cur.execute(
         """
         SELECT er.external_record_id, er.normalized_json
@@ -114,7 +134,7 @@ def _requirement_index(cur: Any) -> dict[str, dict[str, str]]:
         codes = [_first_text(values.get("审批单编号")), _approval_from_link(values.get("审批链接"))]
         for code in codes:
             if code:
-                result.setdefault(code, {"record_id": str(record_id), "requirement_key": code})
+                result.setdefault(code, {"record_id": str(record_id), "requirement_key": code, "docid": docid, "sheet_title": title})
     return result
 
 
@@ -245,7 +265,6 @@ def wecom_inbound(payload: InboundMessage, x_internal_token: str | None = Header
                 if len(matches) == 1:
                     code = matches[0]
                     record = index[code]
-                    docid = os.getenv("WECOM_RND_DOCID", DEFAULT_DOCID).strip() or DEFAULT_DOCID
                     cur.execute(
                         """
                         INSERT INTO group_record_map(
@@ -256,7 +275,7 @@ def wecom_inbound(payload: InboundMessage, x_internal_token: str | None = Header
                             record_id=EXCLUDED.record_id, requirement_key=EXCLUDED.requirement_key,
                             bound_by=EXCLUDED.bound_by, updated_at=NOW()
                         """,
-                        (payload.chatid, docid, DEFAULT_SHEET_TITLE, record["record_id"], code, payload.from_userid),
+                        (payload.chatid, record["docid"], record["sheet_title"], record["record_id"], code, payload.from_userid),
                     )
                     cur.execute(
                         "UPDATE group_messages SET record_id=%s WHERE chatid=%s AND COALESCE(record_id, '')=''",
