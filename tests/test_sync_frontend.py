@@ -116,6 +116,12 @@ class SyncFrontendTests(unittest.TestCase):
         for marker in ("function runJob(", "function runAsset(", "function runAll(", "function saveConfig("):
             self.assertIn(marker, self.html)
         self.assertIn("controlBusy", self.html)
+        self.assertIn("session!==sessionGeneration", self.html)
+
+    def test_dynamic_job_keys_never_enter_inline_handlers(self) -> None:
+        self.assertIn("function runVisibleJob(", self.html)
+        self.assertIn("function runVisibleAsset(", self.html)
+        self.assertNotIn("onclick=\"runJob('${esc(item.job_key)}'", self.html)
 
     def test_detail_drawer_contract_is_present(self) -> None:
         for dom_id in ("runDrawerCloseBtn", "runDetailBody"):
