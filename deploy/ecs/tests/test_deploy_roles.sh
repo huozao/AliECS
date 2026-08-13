@@ -66,6 +66,31 @@ assert_contains "$DEPLOY" 'docker image inspect "$image"'
 assert_contains "$DEPLOY" '离线缓存缺镜像'
 assert_contains "$DEPLOY" 'CURRENT_SOURCE_COMMIT="${DEPLOY_COMMIT_SHA:-}"'
 
+assert_scheduler_mode_rejected() {
+  local variable="$1" value="$2" meta_file output
+  meta_file="$(mktemp)"
+  printf '%s\n' \
+    "DOC_SYNC_SCHEDULER_MODE=${DOC_SYNC_SCHEDULER_MODE:-shadow}" \
+    "TPLUS_SYNC_SCHEDULER_MODE=${TPLUS_SYNC_SCHEDULER_MODE:-shadow}" > "$meta_file"
+  printf '%s=%s\n' "$variable" "$value" >> "$meta_file"
+
+  if output="$(RELEASE_META_FILE="$meta_file" bash "$DEPLOY" sha-0123456789ab 2>&1)"; then
+    rm -f "$meta_file"
+    echo "scheduler mode $variable=$value must be rejected" >&2
+    exit 1
+  fi
+  rm -f "$meta_file"
+  if ! grep -Fq "无效的 ${variable}" <<<"$output"; then
+    echo "scheduler mode guard did not reject $variable=$value before compose" >&2
+    echo "$output" >&2
+    exit 1
+  fi
+}
+
+assert_scheduler_mode_rejected DOC_SYNC_SCHEDULER_MODE SHADOW
+assert_scheduler_mode_rejected TPLUS_SYNC_SCHEDULER_MODE ''
+assert_scheduler_mode_rejected DOC_SYNC_SCHEDULER_MODE active-now
+
 assert_contains "$COLD" 'profiles: ["cold-recovery"]'
 if ENABLE_COLD_RECOVERY=false bash "$ROLE_DEPLOY" business-cold-recovery sha-0123456789ab >/dev/null 2>&1; then
   echo "cold recovery must be blocked by default" >&2
