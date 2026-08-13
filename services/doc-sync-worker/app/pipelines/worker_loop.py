@@ -17,6 +17,7 @@ from app.pipelines.sync_schedule import (
     read_last_full_run,
     read_platform_schedule,
     read_schedule_config,
+    seed_platform_schedule,
 )
 from app.pipelines.sync_scheduler import ScheduleDecision, decide, normalize_mode, shadow_payload, target_moved_earlier
 from app.pipelines.sync_wecom_full import run_pending_sync_requests, run_sync_wecom_full
@@ -126,6 +127,7 @@ def run_worker_loop(
     last_full_reader: Callable[[], datetime | None] | None = None,
     scheduler_mode_reader: Callable[[], str | None] | None = None,
     platform_schedule_reader: Callable[[], dict[str, Any] | None] | None = None,
+    platform_schedule_seeder: Callable[[dict[str, Any]], None] | None = None,
     shadow_recorder: Callable[[dict[str, Any]], list[int]] | None = None,
     shadow_finisher: Callable[[list[int], int, bool], None] | None = None,
 ) -> int:
@@ -139,6 +141,7 @@ def run_worker_loop(
     read_last_full = last_full_reader or read_last_full_run
     read_scheduler_mode = scheduler_mode_reader or (lambda: os.getenv("SYNC_SCHEDULER_MODE"))
     read_platform_schedule_config = platform_schedule_reader or read_platform_schedule
+    seed_platform_schedule_if_empty = platform_schedule_seeder or seed_platform_schedule
     record_shadow = shadow_recorder or _record_scheduler_shadow
     finish_shadow = shadow_finisher or _finish_scheduler_shadow
     # 默认 puller 只在生产装配（未注入 full/consume）时启用，测试注入路径不碰网络/DB。
@@ -294,9 +297,22 @@ def run_worker_loop(
         terminal_poll_covers_preflight = terminal_poll_covered_next_preflight
         terminal_poll_covered_next_preflight = False
         legacy_decision = _schedule_decision(current, last_full, config)
+        candidate: tuple[ScheduleDecision, bool] | None = None
+        if mode != "legacy":
+            candidate = _read_candidate_decision(current, last_full, read_platform_schedule_config)
+            if candidate is None:
+                candidate_config = {
+                    "enabled": enabled,
+                    "interval_seconds": interval_seconds,
+                    "anchor_time": anchor_time,
+                }
+                try:
+                    seed_platform_schedule_if_empty(candidate_config)
+                except Exception:  # noqa: BLE001 - 注入 seeder 也必须 fail-open
+                    pass
+                candidate = _read_candidate_decision(current, last_full, read_platform_schedule_config)
 
         if mode == "active":
-            candidate = _read_candidate_decision(current, last_full, read_platform_schedule_config)
             active_decision = candidate[0] if candidate is not None else legacy_decision
             active_disabled_recheck = candidate is not None and not candidate[1]
             if active_decision.run_full:
@@ -376,10 +392,14 @@ def run_worker_loop(
         planned_candidate_due: datetime | None = None
         candidate_would_wake = False
         if mode == "shadow":
-            shadow_observation_candidate = _read_candidate_decision(
-                shadow_observation_sampled_at,
-                last_full,
-                read_platform_schedule_config,
+            shadow_observation_candidate = (
+                _read_candidate_decision(
+                    shadow_observation_sampled_at,
+                    last_full,
+                    read_platform_schedule_config,
+                )
+                if legacy_decision.run_full
+                else candidate
             )
             if shadow_observation_candidate is not None:
                 candidate_decision, _ = shadow_observation_candidate
