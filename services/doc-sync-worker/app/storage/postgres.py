@@ -439,6 +439,23 @@ class PostgresDocSyncStore:
             for row in rows
         ]
 
+    def find_unique_wecom_docid(self, env_profile: str, sheet_name: str) -> str:
+        """Resolve one registered table document without exposing identifiers in source code."""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT external_doc_id
+                FROM external_sources
+                WHERE provider='wecom' AND env_profile=%s
+                  AND source_type='smartsheet_sheet' AND status='active'
+                  AND sheet_name=%s AND external_doc_id LIKE 'dc%%'
+                  AND length(external_doc_id) >= 80
+                """,
+                (env_profile, sheet_name),
+            )
+            rows = cur.fetchall()
+        return str(rows[0][0]) if len(rows) == 1 else ""
+
     def list_bitable_sources(self, provider: str, env_profile: str) -> list[dict[str, Any]]:
         with self.conn.cursor() as cur:
             cur.execute(

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from app import sync_control
 from app.recipes.bom_query import locate_recipe_source
 
 
@@ -98,8 +99,12 @@ SELECT
     latest.detail_json,
     latest.legacy_ref,
     succeeded.finished_at,
-    COALESCE(alerts.open_alert_count, 0)
+    COALESCE(alerts.open_alert_count, 0),
+    source.env_profile,
+    source.document_name,
+    source.sheet_name
 FROM sync_jobs j
+LEFT JOIN external_sources source ON source.id = j.source_id
 LEFT JOIN LATERAL (
     SELECT id, trigger, status, started_at, finished_at, row_count, changed_count,
            error_kind, error_message, detail_json, legacy_ref
@@ -193,6 +198,10 @@ def overview(conn, *, now=None) -> dict[str, Any]:
                 "artifact_glob": row[7],
                 "alert_enabled": row[8],
                 "source_id": row[9],
+                "source_group": sync_control.source_group(str(row[2] or ""), str(row[23] or "")),
+                "env_profile": row[23],
+                "document_name": row[24],
+                "sheet_name": row[25],
                 "last_run": last_run,
                 "last_success_at": row[21],
                 "freshness": freshness,

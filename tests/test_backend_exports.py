@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1] / "services" / "backend-api"
@@ -195,6 +196,24 @@ class BackendExportsTests(unittest.TestCase):
             ],
             wecom_a["items"],
         )
+
+    def test_legacy_sync_routes_delegate_to_shared_control_service(self) -> None:
+        with patch.object(self.main, "_conn"), patch.object(
+            self.main.sync_control,
+            "enqueue_doc_asset",
+            return_value={"queued": True, "request_id": 1, "status": "pending", "document_name": "生产表"},
+        ) as enqueue_doc, patch.object(
+            self.main.sync_control,
+            "enqueue_all",
+            return_value={"documents_queued": 2, "documents_skipped": 0, "tplus_queued": True, "message": "queued"},
+        ) as enqueue_all:
+            single = self.main.exports_external_doc_sync(17, user={"sub": "admin"})
+            all_result = self.main.exports_sync_all(user={"sub": "admin"})
+
+        self.assertEqual(1, single["requests_created"])
+        self.assertEqual(2, all_result["requests_created"])
+        enqueue_doc.assert_called_once_with(unittest.mock.ANY, 17, "admin")
+        enqueue_all.assert_called_once_with(unittest.mock.ANY, "admin")
 
     def test_match_export_files_buckets_to_first_run_at_or_after_file_time(self):
         from app.routers.exports import _match_export_files_to_runs

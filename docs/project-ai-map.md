@@ -18,7 +18,7 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 | `wecom_assistant.py` | 企微统一助手 |
 | `system_config.py` | 同步调度等系统配置（DB 生效面） |
 | `ops.py` | /v1/ops/*（T+ timeline、sync-config） |
-| `app/routers/sync.py` | `/v1/sync/*` 统一同步中心，查询层为 `app/sync_read.py`；P2 仅提供管理员 GET，不包含 run/config 写入口 |
+| `app/routers/sync.py` | `/v1/sync/*` 统一同步中心，查询层为 `app/sync_read.py`，控制层为 `app/sync_control.py`；统一提供资产、调度与手动运行入口 |
 | `versions.py` | 版本看板 |
 | `backups.py` | 企微结构备份看板、镜像清理策略看板 |
 | `clash_profile.py` | Clash 配置合成器（人类叫法：订阅合并 / 一个订阅选所有节点）。机场订阅源 CRUD + 合成配置下载；渲染逻辑在 `app/clash_profile/render.py`，自建节点走 env `CLASH_SELF_NODES_B64`。验证：`python -m unittest discover -s tests -p "test_clash_profile_render.py"` |
@@ -47,7 +47,7 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 ## services/public-web
 
 公网首页（纯 nginx 静态）：功能卡片、登录、formula 入口、工具分区（灰分计算器）。
-`services/public-web/sync/index.html` 对应 `/sync/` 管理员只读统一同步中心，展示作业总览、运行时间线、步骤详情与告警；P2 不提供运行或配置写入操作。
+`services/public-web/sync/index.html` 对应 `/sync/` 管理员统一同步中心，按 T+ ERP、企微 A、企微 B、飞书分类展示资产和作业，并统一提供调度、立即运行、时间线、步骤详情与告警。`/exports/` 只负责分类下载，`/tplus-sync/` 跳转到 `/sync/?group=tplus`。
 `formula/colors/` 是标准型号色彩空间（three.js + camera-controls，数据走 `/v1/formula/colors`，
 需登录且有 `formula.read`）；`mock-data.js` 是默认隐藏的参考示例，惰性加载。视图设置已从画布浮层移到顶部 `#settingsPanel`；色点标签由 `rebuildLabels()` / `syncLabels()` 的 DOM 层渲染，偏好存 `localStorage['aliecs_formula_colors_view_prefs']`。
 「刷新数据」按钮走 `POST /v1/formula/colors/refresh` 入队 `sync_requests` 后轮询 `meta.last_sync_at`（死线 180s）——
@@ -55,7 +55,7 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 第二个参数会展开进 `fetch` 的 init；漏掉它会把 POST 悄悄降级成 GET。
 生产热更新可 `docker cp`；HTML 已加 no-cache 头。验证：JS 语法检查 + 浏览器 smoke。
 
-⚠️ `exports/` 与 `tplus-sync/` 两页已改为引用共享资产 `common/admin.css` + `common/admin-auth.js`
+⚠️ `exports/` 与 `sync/` 引用共享资产 `common/admin.css` + `common/admin-auth.js`；旧 `tplus-sync/` 仅保留重定向兜底页
 （后者导出 `window.AliECSAdmin`，页面内联脚本第一条语句就解构它）。**热更新必须成对拷贝**：
 只 `docker cp` 一个 `index.html` 而不带 `common/`，会让内联脚本在第一行抛 `ReferenceError` 中止，
 整页 onclick 全不绑定、登录闸门失效。镜像整体部署是原子的，只有 `docker cp` 这条路径有此风险。

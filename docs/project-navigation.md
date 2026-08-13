@@ -10,6 +10,8 @@
 | 管理后台 | `services/admin-ui/` | JS 语法 + 核心入口 smoke |
 | API、配方、导出、BOM | `services/backend-api/app/` | [`backend-api-domains.md`](backend-api-domains.md)、相关单测 |
 | T+ 拉取与写回 | `services/tplus-sync-worker/` | [`runbooks/tplus.md`](runbooks/tplus.md) |
+| 统一同步控制台（企微/飞书/T+） | `services/public-web/sync/`、`services/backend-api/app/routers/sync.py` | [`project-ai-map.md`](project-ai-map.md) |
+| 数据导出下载 | `services/public-web/exports/`、`services/backend-api/app/routers/exports.py` | [`project-ai-map.md`](project-ai-map.md) |
 | 企微/飞书文档同步 | `services/doc-sync-worker/` | [`constraints/doc-sync.md`](constraints/doc-sync.md) |
 | 飞书 bridge | `deploy/openclaw-bridge/` | [`runbooks/feishu.md`](runbooks/feishu.md) |
 | Clash 配置合成（订阅合并） | `services/backend-api/app/clash_profile/`、`app/routers/clash_profile.py`、admin-ui `sec-clash-profile` | `python -m unittest discover -s tests -p "test_clash_profile_render.py"`，产物再过一遍 `clash-meta -t -f`。⚠️ `-t` 只做静态校验，**测不出机场订阅拉不拉得到**（首版据此误判为通过，实跑节点数 0），改机场相关逻辑必须真跑一次实例查 `/providers/proxies`，见设计文档「手工验证」 |

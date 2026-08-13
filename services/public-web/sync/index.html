@@ -11,7 +11,7 @@
     <header class="topbar">
       <div>
         <h1>统一同步中心</h1>
-        <p class="subtitle">企微、飞书与 T+ 同步作业的只读总览、告警与运行时间线。</p>
+        <p class="subtitle">企微 A、企微 B、飞书与 T+ ERP 的统一控制、运行和告警中心。</p>
       </div>
       <nav class="actions" aria-label="页面操作">
         <a class="btn" href="/health/">← 返回 API Health</a>
@@ -30,16 +30,44 @@
             <h2 id="summaryTitle" style="margin:0">同步概况</h2>
             <p class="muted">新鲜度按每个作业自身 SLA 计算；未配置 SLA 的作业单列为「未监控」。</p>
           </div>
-          <div class="row" aria-label="后续阶段操作">
-            <button class="btn" type="button" disabled title="后续阶段开放">编辑调度</button>
-            <button class="btn primary" type="button" disabled title="后续阶段开放">立即运行</button>
+          <div class="row" aria-label="同步操作">
+            <button id="runAllBtn" class="btn primary" type="button">全部立即同步</button>
           </div>
         </div>
         <div id="syncSummary" class="grid" aria-live="polite"><div class="panel muted">加载中…</div></div>
       </section>
 
+      <section class="band" aria-labelledby="configTitle">
+        <h2 id="configTitle">同步设置</h2>
+        <div class="grid">
+          <article id="docConfigCard" class="panel">
+            <h3>企微 / 飞书</h3>
+            <div class="row"><label><input id="docConfigEnabled" type="checkbox"/> 定时同步</label><label>周期（小时） <input id="docConfigHours" type="number" min="1" max="168" step="0.5"/></label><label>执行时刻 <input id="docConfigAnchor" type="time"/></label><label><input id="docConfigPaused" type="checkbox"/> 暂停配置表拉取</label><button id="docConfigSaveBtn" class="btn" type="button">保存</button></div>
+            <div id="docConfigStatus" class="muted"></div>
+          </article>
+          <article id="tplusConfigCard" class="panel">
+            <h3>T+ ERP</h3>
+            <div class="row"><label><input id="tplusConfigEnabled" type="checkbox"/> 定时同步</label><label>周期（小时） <input id="tplusConfigHours" type="number" min="1" max="168" step="0.5"/></label><label>执行时刻 <input id="tplusConfigAnchor" type="time"/></label><button id="tplusConfigSaveBtn" class="btn" type="button">保存</button></div>
+            <div id="tplusConfigStatus" class="muted"></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="band" aria-labelledby="assetsTitle">
+        <div class="row" style="justify-content:space-between"><div><h2 id="assetsTitle" style="margin:0">同步资产</h2><p class="muted">导出页中的全部表格在这里统一同步；不可自动同步的分享链接会明确标注。</p></div></div>
+        <div id="assetTabs" class="row" style="margin:10px 0"></div>
+        <div id="assetList" class="muted" aria-live="polite">加载中…</div>
+      </section>
+
       <section class="band" aria-labelledby="jobsTitle">
         <h2 id="jobsTitle">作业总览</h2>
+        <div class="row" style="margin-bottom:12px">
+          <label>分类 <select id="jobGroupFilter"><option value="">全部</option><option value="tplus">T+ ERP</option><option value="wecom_company_a">企微 A</option><option value="wecom_company_b">企微 B</option><option value="feishu">飞书</option></select></label>
+          <label>提供方 <select id="jobProviderFilter"><option value="">全部</option><option value="chanjet">畅捷通</option><option value="wecom">企微</option><option value="feishu">飞书</option></select></label>
+          <label>状态 <select id="jobStatusFilter"><option value="">全部</option><option value="running">运行中</option><option value="success">成功</option><option value="partial">部分成功</option><option value="failed">失败</option><option value="never">无记录</option></select></label>
+          <label>新鲜度 <select id="jobFreshnessFilter"><option value="">全部</option><option value="fresh">新鲜</option><option value="warning">即将过期</option><option value="stale">已过期</option><option value="never">从未成功</option><option value="unmonitored">未监控</option></select></label>
+          <label>搜索 <input id="jobSearchFilter" type="search" placeholder="作业名或键"/></label>
+        </div>
         <div id="jobList" class="muted" aria-live="polite">加载中…</div>
       </section>
 
@@ -97,8 +125,12 @@
   <script>
     const {api, fetchMe, esc, fmtTime, chip, clearAuthToken, ssoLogin} = AliECSAdmin;
     const $=(id)=>document.getElementById(id);
-    const state={overview:null,alerts:[],runs:[],limit:20,offset:0,total:0,timelineRequestId:0,timelineLoading:false};
-    const initialJob=new URLSearchParams(location.search).get('job')||'';
+    const state={overview:null,assets:[],visibleJobs:[],visibleAssets:[],activeAssetGroup:'tplus',alerts:[],runs:[],limit:20,offset:0,total:0,timelineRequestId:0,timelineLoading:false,controlBusy:false};
+    const initialParams=new URLSearchParams(location.search);
+    const initialJob=initialParams.get('job')||'';
+    const initialGroup=initialParams.get('group')||'';
+    if(['tplus','wecom_company_a','wecom_company_b','feishu'].includes(initialGroup))state.activeAssetGroup=initialGroup;
+    if(initialGroup)$('jobGroupFilter').value=initialGroup;
     let detailPollTimer=null,openRunId=null,detailGeneration=0,sessionGeneration=0,loadGeneration=0;
 
     const freshnessLabels={fresh:'新鲜',warning:'即将过期',stale:'已过期',never:'从未成功',unmonitored:'未监控'};
@@ -130,17 +162,49 @@
         metric('运行中',summary.running||0),metric('未解决告警',summary.open_alerts||0),
       ].join('');
 
-      const rows=items.map((item)=>{
+      const group=$('jobGroupFilter').value,provider=$('jobProviderFilter').value,status=$('jobStatusFilter').value;
+      const freshness=$('jobFreshnessFilter').value,search=$('jobSearchFilter').value.trim().toLowerCase();
+      const visible=items.filter((item)=>{
+        const last=item.last_run||{},fresh=(item.freshness&&item.freshness.state)||'unmonitored';
+        const itemStatus=last.status||'never',text=`${item.display_name||''} ${item.job_key||''}`.toLowerCase();
+        return (!group||item.source_group===group)&&(!provider||item.provider===provider)&&(!status||itemStatus===status)&&(!freshness||fresh===freshness)&&(!search||text.includes(search));
+      });
+      state.visibleJobs=visible;
+      const rows=visible.map((item,index)=>{
         const last=item.last_run||{};
         const artifact=item.artifact?`${esc(item.artifact.name)} · ${esc(fmtTime(item.artifact.mtime))}`:'-';
         const error=last.error_message?`<div class="muted">${esc(last.error_label)}：${esc(last.error_message)}</div>`:'';
-        return `<tr><td><strong>${esc(item.display_name)}</strong><div class="muted">${esc(item.job_key)}</div></td><td>${esc(item.provider)}</td><td>${item.enabled?'启用':'停用'}</td><td>${freshnessChip(item.freshness&&item.freshness.state)}</td><td>${last.status?statusChip(last.status):'<span class="muted">无记录</span>'}<div class="muted">${esc(fmtTime(last.started_at))}</div>${error}</td><td>${esc(scheduleLabel(item.schedule))}</td><td>${artifact}</td><td>${esc(item.open_alert_count||0)}</td><td><button class="btn" type="button" disabled title="后续阶段开放">立即运行</button></td></tr>`;
+        return `<tr><td><strong>${esc(item.display_name)}</strong><div class="muted">${esc(item.job_key)}</div></td><td>${esc(item.source_group||'-')}</td><td>${esc(item.provider)}</td><td>${item.enabled?'启用':'停用'}</td><td>${freshnessChip(item.freshness&&item.freshness.state)}</td><td>${last.status?statusChip(last.status):'<span class="muted">无记录</span>'}<div class="muted">${esc(fmtTime(last.started_at))}</div>${error}</td><td>${esc(scheduleLabel(item.schedule))}</td><td>${artifact}</td><td>${esc(item.open_alert_count||0)}</td><td><button class="btn" type="button" ${state.controlBusy||!item.enabled?'disabled':''} onclick="runVisibleJob(${index},this)">立即运行</button></td></tr>`;
       }).join('');
-      $('jobList').innerHTML=`<table><thead><tr><th>作业</th><th>提供方</th><th>开关</th><th>新鲜度</th><th>最近运行</th><th>调度</th><th>当前产出物</th><th>告警</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="9" class="muted">暂无同步作业。</td></tr>'}</tbody></table>`;
+      $('jobList').innerHTML=`<table><thead><tr><th>作业</th><th>分类</th><th>提供方</th><th>开关</th><th>新鲜度</th><th>最近运行</th><th>调度</th><th>当前产出物</th><th>告警</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="10" class="muted">当前筛选无同步作业。</td></tr>'}</tbody></table>`;
 
       const selected=initialJob||$('jobFilter').value;
       $('jobFilter').innerHTML=`<option value="">全部</option>${items.map((item)=>`<option value="${esc(item.job_key)}">${esc(item.display_name)}（${esc(item.job_key)}）</option>`).join('')}`;
       if(items.some((item)=>item.job_key===selected))$('jobFilter').value=selected;
+    }
+
+    function renderAssets(){
+      const groups=state.assets||[];
+      $('assetTabs').innerHTML=groups.map((group)=>`<button class="btn ${group.key===state.activeAssetGroup?'primary':''}" type="button" onclick="selectAssetGroup('${esc(group.key)}')">${esc(group.title)}（${(group.items||[]).length}）</button>`).join('');
+      const group=groups.find((item)=>item.key===state.activeAssetGroup)||groups[0];
+      if(!group){$('assetList').innerHTML='<span class="muted">暂无同步资产。</span>';return;}
+      state.visibleAssets=group.items||[];
+      const rows=state.visibleAssets.map((item,index)=>{
+        const reason=item.syncable?'':`<div class="muted">不可自动同步：${esc(item.reason||'来源无有效 API 标识')}</div>`;
+        const action=item.syncable?`<button class="btn" type="button" ${state.controlBusy?'disabled':''} onclick="runVisibleAsset(${index},this)">立即同步</button>`:'<span class="chip failed">不可自动同步</span>';
+        return `<tr><td><strong>${esc(item.name)}</strong>${reason}</td><td>${esc(item.sheets??'-')}</td><td>${esc(item.jobs??'-')}</td><td>${esc(fmtTime(item.updated_at))}</td><td>${action}</td></tr>`;
+      }).join('');
+      $('assetList').innerHTML=`<table><thead><tr><th>资产</th><th>表数</th><th>作业数</th><th>最近同步</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="5" class="muted">该分类暂无资产。</td></tr>'}</tbody></table>`;
+    }
+    function selectAssetGroup(key){state.activeAssetGroup=key;renderAssets();}
+
+    function renderConfig(kind,data){
+      const prefix=kind==='doc'?'doc':'tplus';
+      $(`${prefix}ConfigEnabled`).checked=!!data.enabled;
+      $(`${prefix}ConfigHours`).value=data.interval_hours??24;
+      $(`${prefix}ConfigAnchor`).value=data.anchor_time||'';
+      if(kind==='doc')$('docConfigPaused').checked=!!data.pull_paused;
+      $(`${prefix}ConfigStatus`).textContent=data.updated_at?`更新：${fmtTime(data.updated_at)}`:'';
     }
 
     function renderAlerts(){
@@ -305,6 +369,15 @@
         state.alerts=data.items||[];renderAlerts();
       }catch(error){if(loadIsCurrent(generation))throw error;}
     }
+    async function loadControl(generation=beginLoad()){
+      try{
+        const [assets,docConfig,tplusConfig]=await Promise.all([
+          api('/v1/sync/assets'),api('/v1/sync/config/doc'),api('/v1/sync/config/tplus')
+        ]);
+        if(!loadIsCurrent(generation))return;
+        state.assets=assets.groups||[];renderAssets();renderConfig('doc',docConfig);renderConfig('tplus',tplusConfig);
+      }catch(error){if(loadIsCurrent(generation))throw error;}
+    }
     async function loadTimeline(requestOffset=state.offset,generation=currentLoad()){
       const requestId=++state.timelineRequestId;
       const params=new URLSearchParams({limit:String(state.limit),offset:String(requestOffset)});
@@ -332,13 +405,42 @@
     }
     async function loadAll(){
       const generation=beginLoad();
-      await Promise.all([loadOverview(generation),loadAlerts(generation),loadTimeline(state.offset,generation)]);
+      await Promise.all([loadOverview(generation),loadAlerts(generation),loadControl(generation),loadTimeline(state.offset,generation)]);
+    }
+    async function withControlBusy(button,work){
+      if(state.controlBusy)return;
+      const session=sessionGeneration;
+      state.controlBusy=true;if(button)button.disabled=true;$('runAllBtn').disabled=true;
+      try{await work(session);}finally{if(session===sessionGeneration){state.controlBusy=false;if(button)button.disabled=false;$('runAllBtn').disabled=false;renderOverview();renderAssets();}}
+    }
+    async function runAll(button=$('runAllBtn')){
+      await withControlBusy(button,async(session)=>{const data=await api('/v1/sync/run-all',{method:'POST'});if(session!==sessionGeneration)return;AliECSToast.show(data.message||'同步请求已排队。','success');await loadAll();});
+    }
+    async function runAsset(sourceId,button){
+      await withControlBusy(button,async(session)=>{const data=await api(`/v1/sync/assets/${sourceId}/run`,{method:'POST'});if(session!==sessionGeneration)return;AliECSToast.show(data.queued?'同步请求已排队。':'已有请求正在执行。','success');await loadAll();});
+    }
+    async function runJob(jobKey,button){
+      await withControlBusy(button,async(session)=>{const data=await api(`/v1/sync/jobs/${encodeURIComponent(jobKey)}/run`,{method:'POST'});if(session!==sessionGeneration)return;AliECSToast.show(data.queued?'同步请求已排队。':'已有请求正在执行。','success');await loadAll();});
+    }
+    function runVisibleJob(index,button){const item=state.visibleJobs[index];if(item)runJob(item.job_key,button).catch((error)=>AliECSToast.show(`作业同步失败：${error.message}`,'error'));}
+    function runVisibleAsset(index,button){const item=state.visibleAssets[index];if(!item)return;if(item.source_id!=null)runAsset(Number(item.source_id),button).catch((error)=>AliECSToast.show(`资产同步失败：${error.message}`,'error'));else runJob(item.job_key,button).catch((error)=>AliECSToast.show(`资产同步失败：${error.message}`,'error'));}
+    async function saveConfig(kind,button){
+      const prefix=kind==='doc'?'doc':'tplus',interval_hours=Number($(`${prefix}ConfigHours`).value),anchor_time=$(`${prefix}ConfigAnchor`).value||'';
+      if(!(interval_hours>=1&&interval_hours<=168)){AliECSToast.show('周期必须为 1 至 168 小时。','error');return;}
+      const body={enabled:$(`${prefix}ConfigEnabled`).checked,interval_hours,anchor_time};
+      if(kind==='doc')body.pull_paused=$('docConfigPaused').checked;
+      await withControlBusy(button,async(session)=>{const data=await api(`/v1/sync/config/${kind}`,{method:'PUT',body:JSON.stringify(body)});if(session!==sessionGeneration)return;renderConfig(kind,data);AliECSToast.show('同步设置已保存。','success');});
     }
     function reloadTimelineFromStart(){loadTimeline(0).catch((error)=>AliECSToast.show(`时间线加载失败：${error.message}`,'error'));}
 
     $('providerFilter').onchange=reloadTimelineFromStart;
     $('statusFilter').onchange=reloadTimelineFromStart;
     $('jobFilter').onchange=reloadTimelineFromStart;
+    for(const id of ['jobGroupFilter','jobProviderFilter','jobStatusFilter','jobFreshnessFilter'])$(id).onchange=renderOverview;
+    $('jobSearchFilter').oninput=renderOverview;
+    $('runAllBtn').onclick=()=>runAll().catch((error)=>AliECSToast.show(`全部同步失败：${error.message}`,'error'));
+    $('docConfigSaveBtn').onclick=()=>saveConfig('doc',$('docConfigSaveBtn')).catch((error)=>AliECSToast.show(`保存失败：${error.message}`,'error'));
+    $('tplusConfigSaveBtn').onclick=()=>saveConfig('tplus',$('tplusConfigSaveBtn')).catch((error)=>AliECSToast.show(`保存失败：${error.message}`,'error'));
     $('timelinePrevBtn').onclick=()=>{
       if(state.timelineLoading)return;
       const offset=Math.max(0,state.offset-state.limit);
@@ -354,8 +456,8 @@
     refreshBtn.onclick=()=>loadAll().catch((error)=>AliECSToast.show(`同步中心加载失败：${error.message}`,'error'));
     loginBtn.onclick=ssoLogin;
     function clearAdminData(){
-      state.overview=null;state.alerts=[];state.runs=[];state.offset=0;state.total=0;state.timelineLoading=false;
-      for(const id of ['syncSummary','jobList','alertList','timelineList','runDetailBody'])$(id).innerHTML='';
+      state.overview=null;state.assets=[];state.visibleJobs=[];state.visibleAssets=[];state.alerts=[];state.runs=[];state.offset=0;state.total=0;state.timelineLoading=false;state.controlBusy=false;
+      for(const id of ['syncSummary','assetTabs','assetList','jobList','alertList','timelineList','runDetailBody'])$(id).innerHTML='';
       $('timelinePageInfo').textContent='';$('jobFilter').innerHTML='<option value="">全部</option>';
       $('timelinePrevBtn').disabled=true;$('timelineNextBtn').disabled=true;
     }

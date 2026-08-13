@@ -45,6 +45,30 @@ def test_first_text_handles_wecom_cells() -> None:
     assert mod._approval_from_link("https://example.test/detail?sp_no=202607160002") == "202607160002"
 
 
+def test_requirement_source_is_resolved_from_registered_table_without_hardcoded_docid(monkeypatch) -> None:
+    mod = _module()
+    monkeypatch.delenv("WECOM_RND_DOCID", raising=False)
+
+    class Cursor:
+        def execute(self, query, params=None):
+            self.query, self.params = str(query), params
+
+        def fetchall(self):
+            return [("dc" + "x" * 80,)]
+
+    cursor = Cursor()
+    assert mod._requirement_source(cursor) == ("dc" + "x" * 80, "配色&样品需求单")
+    assert "external_sources" in cursor.query
+    assert cursor.params == ("配色&样品需求单",)
+
+
+def test_public_source_contains_no_real_wecom_document_identifier() -> None:
+    source = (BACKEND_ROOT / "app" / "routers" / "wecom_assistant.py").read_text(encoding="utf-8")
+    import re
+
+    assert re.search(r'dc[A-Za-z0-9_-]{60,}', source) is None
+
+
 def test_save_images_is_content_addressed_and_idempotent(tmp_path, monkeypatch) -> None:
     mod = _module()
     monkeypatch.setenv("WECOM_GROUP_MEDIA_DIR", str(tmp_path))

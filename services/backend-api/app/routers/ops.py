@@ -14,6 +14,7 @@ import urllib.parse
 import urllib.request
 
 from app.integrations.events import build_ops_attention_items
+from app import sync_control
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
@@ -49,214 +50,83 @@ def healthz() -> dict[str, object]:
     }
 
 
-_SYNC_CONFIG_DEFAULTS = {"enabled": True, "interval_seconds": 86400, "anchor_time": ""}
+_SYNC_CONFIG_DEFAULTS = dict(sync_control._TPLUS_DEFAULTS)
+SyncConfigUpdate = sync_control.SyncConfigUpdate
+DocSyncConfigUpdate = sync_control.DocSyncConfigUpdate
+_ENQUEUE_FULL_SYNC_SQL = sync_control.ENQUEUE_FULL_SYNC_SQL
+_PENDING_FULL_SYNC_SQL = sync_control.PENDING_FULL_SYNC_SQL
 
 
 def _read_sync_config_row(provider: str = "chanjet") -> dict[str, Any]:
-    """读取定时同步配置行；DB 不可用 / 表或行不存在一律回退默认（不报错）。"""
-    try:
-        with closing(_conn()) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT enabled, interval_seconds, anchor_time, updated_at, updated_by "
-                    "FROM integration_sync_config WHERE provider = %s",
-                    (provider,),
-                )
-                row = cur.fetchone()
-                if row:
-                    return {"enabled": bool(row[0]), "interval_seconds": int(row[1]),
-                            "anchor_time": str(row[2] or ""),
-                            "updated_at": str(row[3]) if row[3] else None, "updated_by": row[4]}
-    except Exception:
-        pass
-    return {**_SYNC_CONFIG_DEFAULTS, "updated_at": None, "updated_by": None}
+    response = sync_control.read_tplus_config(_conn)
+    return {key: response.get(key) for key in ("enabled", "interval_seconds", "anchor_time", "updated_at", "updated_by")}
 
 
 def _sync_config_response(row: dict[str, Any]) -> dict[str, Any]:
-    seconds = int(row.get("interval_seconds") or 86400)
-    return {
-        "enabled": bool(row.get("enabled", True)),
-        "interval_seconds": seconds,
-        "interval_hours": round(seconds / 3600, 4),
-        "anchor_time": str(row.get("anchor_time") or ""),
-        "updated_at": row.get("updated_at"),
-        "updated_by": row.get("updated_by"),
-    }
-
-
-class SyncConfigUpdate(BaseModel):
-    enabled: bool
-    interval_hours: float = Field(ge=1, le=168)  # 下限 1h（防误填打爆机器）、上限 7d
-    # 北京时间 HH:MM，空=不锚定（保持"跑完睡一个周期"的旧行为）
-    anchor_time: str = Field(default="", pattern=r"^$|^([01]\d|2[0-3]):[0-5]\d$")
+    return sync_control._config_response(row, document=False)
 
 
 @router.get("/v1/ops/tplus/sync-config")
 def ops_tplus_sync_config_get(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     """定时同步开关与间隔。worker 每轮热读同一张表。"""
-    return _sync_config_response(_read_sync_config_row())
+    return sync_control.read_tplus_config(_conn)
 
 
 @router.put("/v1/ops/tplus/sync-config")
 def ops_tplus_sync_config_put(
     body: SyncConfigUpdate, user: dict[str, Any] = Depends(require_admin)
 ) -> dict[str, Any]:
-    interval_seconds = int(round(body.interval_hours * 3600))
-    schedule = {"enabled": body.enabled, "interval_seconds": interval_seconds, "anchor_time": body.anchor_time}
     try:
-        with closing(_conn()) as conn:
-            try:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        INSERT INTO integration_sync_config(provider, enabled, interval_seconds, anchor_time, updated_at, updated_by)
-                        VALUES ('chanjet', %s, %s, %s, NOW(), %s)
-                        ON CONFLICT (provider) DO UPDATE
-                        SET enabled = EXCLUDED.enabled,
-                            interval_seconds = EXCLUDED.interval_seconds,
-                            anchor_time = EXCLUDED.anchor_time,
-                            updated_at = NOW(),
-                            updated_by = EXCLUDED.updated_by
-                        """,
-                        (body.enabled, interval_seconds, body.anchor_time, str(user.get("sub") or "")),
-                    )
-                    cur.execute(
-                        """
-                        UPDATE sync_jobs
-                        SET schedule = %s, updated_at = NOW()
-                        WHERE job_key = 'chanjet.full'
-                        RETURNING job_key
-                        """,
-                        (Jsonb(schedule),),
-                    )
-                    updated_job_keys = [str(row[0]) for row in cur.fetchall()]
-                    if updated_job_keys != ["chanjet.full"]:
-                        raise RuntimeError("统一调度作业 chanjet.full 不存在或重复")
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
+        return sync_control.save_tplus_config(_conn, body, str(user.get("sub") or ""))
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"保存定时同步配置失败：{type(exc).__name__}") from exc
-    return _sync_config_response(_read_sync_config_row())
 
 
 # 「立即全量同步」不在这里直接调 T+，而是排一条请求交给 tplus-sync-worker——
 # backend 不持有 T+ 凭据，全量也要跑一两分钟，HTTP 请求扛不住。
 # module='all' 是 worker 侧 fetch_next_full_request() 的分流依据；worker 跑完记账时
 # mode 写 'manual_full'，不会顶掉 fetch_last_scheduled_full_at() 的锚点相位。
-_ENQUEUE_FULL_SYNC_SQL = """
-    INSERT INTO integration_sync_requests(
-        provider, module, mode, target_json, priority, status, dedupe_key
-    )
-    VALUES ('chanjet', 'all', 'manual_full', '{}'::jsonb, 50, 'pending', %s)
-    RETURNING id
-    """
-
-# 排队中或正在跑的都算「已有一个」：全量是整轮重拉，连点两次没有意义，
-# 两个进程同时全量还会互相把对方本批未出现的记录标成 missing_since。
-_PENDING_FULL_SYNC_SQL = """
-    SELECT id, status FROM integration_sync_requests
-    WHERE provider = 'chanjet' AND module = 'all' AND status IN ('pending', 'running')
-    ORDER BY id DESC LIMIT 1
-    """
-
-
 @router.post("/v1/ops/tplus/full-sync")
 def ops_tplus_full_sync(user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     """把一次全量同步排进队列，由 tplus-sync-worker 在下个轮询周期（默认 30s）取走。"""
     try:
         with closing(_conn()) as conn:
-            with conn.cursor() as cur:
-                cur.execute(_PENDING_FULL_SYNC_SQL)
-                existing = cur.fetchone()
-                if existing:
-                    return {
-                        "queued": False,
-                        "request_id": int(existing[0]),
-                        "status": str(existing[1]),
-                        "message": "已有一次全量同步在排队或执行中，请等它跑完。",
-                    }
-                dedupe_key = f"manual-full-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{user.get('sub') or ''}"
-                cur.execute(_ENQUEUE_FULL_SYNC_SQL, (dedupe_key,))
-                request_id = int(cur.fetchone()[0])
-            conn.commit()
+            result = sync_control.enqueue_tplus_full(conn, str(user.get("sub") or ""))
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"排队全量同步失败：{type(exc).__name__}") from exc
-    return {
-        "queued": True,
-        "request_id": request_id,
-        "status": "pending",
-        "message": "已排队，worker 将在约 30 秒内开始，全量约需 1～2 分钟。",
-    }
+    result["message"] = (
+        "已排队，worker 将在约 30 秒内开始，全量约需 1～2 分钟。"
+        if result["queued"]
+        else "已有一次全量同步在排队或执行中，请等它跑完。"
+    )
+    return result
 
 
-_DOC_SYNC_CONFIG_DEFAULTS = {"enabled": True, "interval_seconds": 86400, "anchor_time": "", "pull_paused": False}
+_DOC_SYNC_CONFIG_DEFAULTS = dict(sync_control._DOC_DEFAULTS)
 
 
 def _read_doc_sync_config_row() -> dict[str, Any]:
-    """读取文档同步调度配置行；DB 不可用 / 表列或行不存在一律回退默认（不报错）。"""
-    try:
-        with closing(_conn()) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT enabled, interval_seconds, anchor_time, pull_paused, updated_at, updated_by "
-                    "FROM integration_sync_config WHERE provider = 'doc_sync'"
-                )
-                row = cur.fetchone()
-                if row:
-                    return {
-                        "enabled": bool(row[0]),
-                        "interval_seconds": int(row[1]),
-                        "anchor_time": str(row[2] or ""),
-                        "pull_paused": bool(row[3]),
-                        "updated_at": str(row[4]) if row[4] else None,
-                        "updated_by": str(row[5] or ""),
-                    }
-    except Exception:
-        pass
-    return {**_DOC_SYNC_CONFIG_DEFAULTS, "updated_at": None, "updated_by": ""}
+    response = sync_control.read_doc_config(_conn)
+    return {key: response.get(key) for key in ("enabled", "interval_seconds", "anchor_time", "pull_paused", "updated_at", "updated_by")}
 
 
 def _doc_sync_source_label(updated_by: str) -> str:
-    if updated_by == "feishu-config-table":
-        return "飞书配置表"
-    if not updated_by:
-        return "默认"
-    return "手动"
+    return str(sync_control._config_response({"updated_by": updated_by}, document=True)["source"])
 
 
 def _doc_sync_config_response(row: dict[str, Any]) -> dict[str, Any]:
-    seconds = int(row.get("interval_seconds") or 86400)
-    updated_by = str(row.get("updated_by") or "")
-    return {
-        "enabled": bool(row.get("enabled", True)),
-        "interval_seconds": seconds,
-        "interval_hours": round(seconds / 3600, 4),
-        "anchor_time": str(row.get("anchor_time") or ""),
-        "pull_paused": bool(row.get("pull_paused", False)),
-        "updated_at": row.get("updated_at"),
-        "updated_by": updated_by,
-        "source": _doc_sync_source_label(updated_by),
-    }
-
-
-class DocSyncConfigUpdate(BaseModel):
-    enabled: bool
-    interval_hours: float = Field(ge=1, le=168)
-    anchor_time: str = Field(default="", pattern=r"^$|^([01]\d|2[0-3]):[0-5]\d$")  # 北京时间 HH:MM，空=不锚定
-    pull_paused: bool = False
+    return sync_control._config_response(row, document=True)
 
 
 @router.get("/v1/ops/doc-sync/sync-config")
 def ops_doc_sync_config_get(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     """文档同步（企微+飞书）定时开关/周期/起点时间。worker 每轮热读同一张表；
     updated_by=feishu-config-table 表示当前生效值来自飞书「配置表」。"""
-    return _doc_sync_config_response(_read_doc_sync_config_row())
+    return sync_control.read_doc_config(_conn)
 
 
 @router.put("/v1/ops/doc-sync/sync-config")
@@ -264,46 +134,12 @@ def ops_doc_sync_config_put(
     body: DocSyncConfigUpdate, user: dict[str, Any] = Depends(require_admin)
 ) -> dict[str, Any]:
     """管理页应急覆盖：写全字段（含 pull_paused）。pull_paused=true 时 worker 停止表格拉取，手动值不会被覆盖。"""
-    interval_seconds = int(round(body.interval_hours * 3600))
-    schedule = {"enabled": body.enabled, "interval_seconds": interval_seconds, "anchor_time": body.anchor_time}
     try:
-        with closing(_conn()) as conn:
-            try:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        INSERT INTO integration_sync_config(provider, enabled, interval_seconds, anchor_time, pull_paused, updated_at, updated_by)
-                        VALUES ('doc_sync', %s, %s, %s, %s, NOW(), %s)
-                        ON CONFLICT (provider) DO UPDATE
-                        SET enabled = EXCLUDED.enabled,
-                            interval_seconds = EXCLUDED.interval_seconds,
-                            anchor_time = EXCLUDED.anchor_time,
-                            pull_paused = EXCLUDED.pull_paused,
-                            updated_at = NOW(),
-                            updated_by = EXCLUDED.updated_by
-                        """,
-                        (body.enabled, interval_seconds, body.anchor_time, body.pull_paused, str(user.get("sub") or "")),
-                    )
-                    cur.execute(
-                        """
-                        UPDATE sync_jobs
-                        SET schedule = %s, updated_at = NOW()
-                        WHERE kind = 'pull' AND provider IN ('wecom', 'feishu')
-                        RETURNING id
-                        """,
-                        (Jsonb(schedule),),
-                    )
-                    if not cur.fetchall():
-                        raise RuntimeError("未找到文档同步 pull 作业")
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
+        return sync_control.save_doc_config(_conn, body, str(user.get("sub") or ""))
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"保存文档同步配置失败：{type(exc).__name__}") from exc
-    return _doc_sync_config_response(_read_doc_sync_config_row())
 
 
 @router.get("/v1/ops/tplus/runs")

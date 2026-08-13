@@ -226,6 +226,74 @@ class WorkerLoopTests(WorkerImportTestCase):
         clock["now"] = observed + timedelta(microseconds=1)
         return observed
 
+    def test_platform_catalog_reconciler_owns_store_lifecycle(self) -> None:
+        from app.pipelines import worker_loop as module
+
+        events: list[object] = []
+
+        class Jobs:
+            def reconcile_document_jobs(self) -> dict[str, int]:
+                events.append("reconcile")
+                return {"enabled": 2, "disabled": 0}
+
+        class Store:
+            sync_jobs = Jobs()
+
+            def close(self) -> None:
+                events.append("close")
+
+        with patch.object(module, "open_store", side_effect=lambda: events.append("open") or Store()):
+            module._reconcile_platform_catalog()
+
+        self.assertEqual(["open", "reconcile", "close"], events)
+
+    def test_platform_catalog_reconciler_is_fail_open_and_closes_store(self) -> None:
+        from app.pipelines import worker_loop as module
+
+        events: list[str] = []
+
+        class Jobs:
+            def reconcile_document_jobs(self) -> None:
+                events.append("reconcile")
+                raise RuntimeError("catalog unavailable")
+
+        class Store:
+            sync_jobs = Jobs()
+
+            def close(self) -> None:
+                events.append("close")
+
+        with patch.object(module, "open_store", return_value=Store()):
+            module._reconcile_platform_catalog()
+
+        self.assertEqual(["reconcile", "close"], events)
+
+    def test_injected_worker_loop_never_opens_platform_catalog(self) -> None:
+        from datetime import datetime, timezone
+        from app.pipelines import worker_loop as module
+
+        with patch.object(
+            module,
+            "_reconcile_platform_catalog",
+            side_effect=AssertionError("injected loop must not touch database"),
+        ):
+            code = module.run_worker_loop(
+                full_sync=lambda: 0,
+                consume_requests=lambda: 0,
+                notifier_once=lambda: {},
+                sleep=lambda _seconds: None,
+                max_cycles=1,
+                schedule_reader=lambda: {
+                    "enabled": False,
+                    "interval_seconds": 60,
+                    "anchor_time": "",
+                    "pull_paused": False,
+                },
+                now_fn=lambda: datetime(2026, 8, 13, tzinfo=timezone.utc),
+            )
+
+        self.assertEqual(0, code)
+
     def test_explicit_notifier_runs_before_full_and_after_each_pending_poll(self) -> None:
         import unittest.mock as mock
 
@@ -2674,6 +2742,7 @@ class FeishuBitableSyncTests(WorkerImportTestCase):
         self.assertEqual(["feishu.doc.1", "feishu.doc.2"], [run["job_key"] for run in store.sync_jobs.started])
         self.assertEqual(["schedule", "schedule"], [run["trigger"] for run in store.sync_jobs.started])
         self.assertEqual(["success", "success"], [run["status"] for run in store.sync_jobs.finished])
+        self.assertEqual(1, store.sync_jobs.reconciled)
         registered = {item["external_sheet_id"] for item in store.sources}
         self.assertIn("tbl_new", registered)
 
@@ -2720,6 +2789,7 @@ class WeComManualSyncTests(WorkerImportTestCase):
             self.started: list[dict] = []
             self.steps: list[dict] = []
             self.finished: list[dict] = []
+            self.reconciled = 0
 
         def start_run(self, **kwargs: object) -> int:
             self.started.append(dict(kwargs))
@@ -2734,6 +2804,10 @@ class WeComManualSyncTests(WorkerImportTestCase):
             self.finished.append(
                 {"run_id": run_id, "error_kind": classify_error(kwargs.get("error")), **kwargs}
             )
+
+        def reconcile_document_jobs(self) -> dict[str, int]:
+            self.reconciled += 1
+            return {"enabled": 1, "disabled": 0}
 
         def successful_step_names(self) -> list[str]:
             return [step["name"] for step in self.steps if step["status"] == "success"]
@@ -3352,6 +3426,7 @@ class SyncRequestDispatchTests(WorkerImportTestCase):
         class FakeStore:
             def __init__(self) -> None:
                 self.finished: list[tuple] = []
+                self.sync_jobs = WeComManualSyncTests.FakePlatformWriter()
 
             def pending_sync_requests(self, limit: int) -> list[dict]:
                 return [
@@ -3389,6 +3464,7 @@ class SyncRequestDispatchTests(WorkerImportTestCase):
         self.assertEqual(0, exit_code)
         self.assertEqual([("feishu", 1619), ("wecom", 100)], calls)
         self.assertEqual([(1, "success"), (2, "success")], store.finished)
+        self.assertEqual(1, store.sync_jobs.reconciled)
 
 
 if __name__ == "__main__":

@@ -488,6 +488,18 @@ class DocScheduleStorageTests(unittest.TestCase):
         schedule_params = next(params for statement, params in conn.statements if "UPDATE sync_jobs" in statement)
         self.assertEqual(SCHEDULE, _json_value(schedule_params[0]))
 
+    def test_doc_resolves_unique_registered_table_identifier_without_source_literal(self) -> None:
+        identifier = "dc" + "x" * 80
+        conn = _Connection(returned_rows=[(identifier,)])
+
+        result = self.PostgresDocSyncStore(conn).find_unique_wecom_docid("COMPANY_B", "需求表")
+
+        self.assertEqual(identifier, result)
+        statement, params = conn.statements[-1]
+        self.assertIn("external_sources", statement)
+        self.assertIn("source_type='smartsheet_sheet'", statement)
+        self.assertEqual(("COMPANY_B", "需求表"), params)
+
     def test_doc_read_platform_schedule_is_fail_open(self) -> None:
         class Store:
             closed = 0

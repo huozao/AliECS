@@ -22,19 +22,20 @@ class ExportsFrontendTests(unittest.TestCase):
         self.assertIn('<script src="/common/admin-auth.js"></script>', self.html)
         self.assertIn("window.downloadExport=", self.html)
 
-    def test_has_copy_export_doc(self) -> None:
-        self.assertIn("function copyExportDoc(", self.html)
+    def test_is_download_only_and_points_to_sync_center(self) -> None:
+        self.assertIn('href="/sync/"', self.html)
+        self.assertNotIn("function copyExportDoc(", self.html)
+        self.assertNotIn("function syncExportDoc(", self.html)
+        self.assertNotIn("function syncAllExports(", self.html)
+        self.assertNotIn("method:'POST'", self.html)
+        self.assertNotIn("method:'PUT'", self.html)
 
     def test_has_back_link_to_health(self) -> None:
         self.assertIn('href="/health/"', self.html)
 
-    def test_has_doc_sync_config_card(self) -> None:
-        self.assertIn("function loadDocSyncConfig(", self.html)
-        self.assertIn("function saveDocSyncConfig(", self.html)
-        self.assertIn("/v1/ops/doc-sync/sync-config", self.html)
-        self.assertIn('id="docSyncAnchorTime"', self.html)
-        self.assertIn('id="docSyncPullPaused"', self.html)
-        self.assertIn("loadDocSyncConfig()", self.html)  # applyGate 管理员分支触发加载
+    def test_has_no_sync_configuration_or_copy_controls(self) -> None:
+        for marker in ("docSyncSaveBtn", "docSyncEnabled", "syncAllBtn", "创建副本", "立即同步"):
+            self.assertNotIn(marker, self.html)
 
 
 if __name__ == "__main__":

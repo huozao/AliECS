@@ -5,12 +5,145 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app import sync_read
+from app import sync_control, sync_read
 from app.core import _conn, require_admin
+from app.routers import exports as exports_router
 
 
 router = APIRouter(prefix="/v1/sync", tags=["sync-center"])
 RunStatus = Literal["running", "success", "partial", "failed"]
+
+
+def _write_failure(exc: Exception) -> HTTPException:
+    return HTTPException(
+        status_code=500,
+        detail=f"操作同步中心失败：{type(exc).__name__}",
+    )
+
+
+@router.get("/assets")
+def sync_assets(
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    try:
+        with closing(_conn()) as conn:
+            return sync_control.assets(
+                conn,
+                tplus_items=exports_router._latest_tplus_exports(),
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"读取同步中心失败：{type(exc).__name__}",
+        ) from exc
+
+
+@router.get("/config/doc")
+def sync_doc_config_get(
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    return sync_control.read_doc_config(_conn)
+
+
+@router.put("/config/doc")
+def sync_doc_config_put(
+    body: sync_control.DocSyncConfigUpdate,
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    try:
+        return sync_control.save_doc_config(
+            _conn,
+            body,
+            str(user.get("sub") or ""),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _write_failure(exc) from exc
+
+
+@router.get("/config/tplus")
+def sync_tplus_config_get(
+    _: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    return sync_control.read_tplus_config(_conn)
+
+
+@router.put("/config/tplus")
+def sync_tplus_config_put(
+    body: sync_control.SyncConfigUpdate,
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    try:
+        return sync_control.save_tplus_config(
+            _conn,
+            body,
+            str(user.get("sub") or ""),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _write_failure(exc) from exc
+
+
+@router.post("/run-all")
+def sync_run_all(
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    try:
+        with closing(_conn()) as conn:
+            return sync_control.enqueue_all(conn, str(user.get("sub") or ""))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _write_failure(exc) from exc
+
+
+@router.post("/assets/{source_id}/run")
+def sync_asset_run(
+    source_id: int,
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    try:
+        with closing(_conn()) as conn:
+            return sync_control.enqueue_doc_asset(
+                conn,
+                source_id,
+                str(user.get("sub") or ""),
+            )
+    except sync_control.InvalidSyncTarget as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _write_failure(exc) from exc
+
+
+@router.post("/jobs/{job_key}/run")
+def sync_job_run(
+    job_key: str,
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    try:
+        with closing(_conn()) as conn:
+            if job_key == "chanjet.full":
+                return sync_control.enqueue_tplus_full(
+                    conn,
+                    str(user.get("sub") or ""),
+                )
+            return sync_control.enqueue_doc_job(
+                conn,
+                job_key,
+                str(user.get("sub") or ""),
+            )
+    except sync_control.InvalidSyncTarget as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _write_failure(exc) from exc
 
 
 @router.get("/overview")

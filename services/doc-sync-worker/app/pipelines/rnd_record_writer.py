@@ -8,7 +8,7 @@ import requests
 
 from app.pipelines.backfill_smartsheet_images import _field_id_by_title, _field_list, _sheet_id_by_title
 from app.pipelines.group_message_listener import (
-    DEFAULT_DOCID,
+    DEFAULT_SHEET_TITLE,
     _default_smartsheet_factory,
     resolve_groupbot_profile,
 )
@@ -107,7 +107,7 @@ def run_write_rnd_records(
     *,
     store: Any | None = None,
     smartsheet_factory: Callable[[str], Any] = _default_smartsheet_factory,
-    docid: str = DEFAULT_DOCID,
+    docid: str = "",
     limit: int = 50,
 ) -> int:
     """把已标节点、有归属、未写表的群消息写入「研发过程记录」子表。返回写入条数。"""
@@ -116,6 +116,11 @@ def run_write_rnd_records(
         return 0
     owned_store = store is None
     store = store or open_store()
+    docid = str(docid or "").strip() or store.find_unique_wecom_docid(profile, DEFAULT_SHEET_TITLE)
+    if not docid:
+        if owned_store:
+            close_store(store)
+        return 0
     written = 0
     try:
         pending = store.list_pending_node_messages(limit=limit)

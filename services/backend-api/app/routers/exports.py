@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
+from app import sync_control
 from app.core import _audit, _conn, require_admin, require_login
 
 
@@ -625,16 +626,21 @@ def _create_doc_sync_request(cur: Any, doc_row_id: int, provider: str, env_profi
 @router.post("/v1/exports/external-doc/{source_id}/sync-requests")
 def exports_external_doc_sync(source_id: int, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     """为该工作簿创建 doc 级同步请求（worker 整簿重扫，含新 sheet 发现），约 30 秒内开始。"""
-    with closing(_conn()) as conn:
-        with conn.cursor() as cur:
-            provider, env_profile, external_doc_id, document_name = _external_doc_anchor(cur, source_id)
-            doc_row_id = _ensure_doc_row(cur, str(provider), str(env_profile), str(external_doc_id), str(document_name or ""))
-            _create_doc_sync_request(cur, doc_row_id, str(provider), str(env_profile), str(user.get("sub") or ""))
-        conn.commit()
+    try:
+        with closing(_conn()) as conn:
+            result = sync_control.enqueue_doc_asset(conn, source_id, str(user.get("sub") or ""))
+    except sync_control.InvalidSyncTarget as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
-        "document_name": document_name,
-        "requests_created": 1,
-        "message": f"已为「{document_name}」创建整簿同步请求，约 30 秒内开始同步。",
+        "document_name": result["document_name"],
+        "requests_created": 1 if result["queued"] else 0,
+        "request_id": result["request_id"],
+        "status": result["status"],
+        "message": (
+            f"已为「{result['document_name']}」创建整簿同步请求，约 30 秒内开始同步。"
+            if result["queued"]
+            else f"「{result['document_name']}」已有同步请求在排队或执行中。"
+        ),
     }
 
 
@@ -642,21 +648,11 @@ def exports_external_doc_sync(source_id: int, user: dict[str, Any] = Depends(req
 def exports_sync_all(user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     """同步数据列表：为全部已登记文档各建一条 doc 级同步请求（发现新文档/新表/改名/新记录）。"""
     with closing(_conn()) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, provider, env_profile FROM external_sources
-                WHERE external_sheet_id = '' AND status = 'active' AND external_doc_id <> ''
-                ORDER BY id
-                """
-            )
-            doc_rows = cur.fetchall()
-            for doc_row_id, provider, env_profile in doc_rows:
-                _create_doc_sync_request(cur, int(doc_row_id), str(provider), str(env_profile), str(user.get("sub") or ""))
-        conn.commit()
+        result = sync_control.enqueue_all(conn, str(user.get("sub") or ""))
     return {
-        "requests_created": len(doc_rows),
-        "message": f"已为 {len(doc_rows)} 个文档创建同步请求，列表将在 1-2 分钟内陆续刷新。",
+        "requests_created": int(result["documents_queued"]),
+        "requests_skipped": int(result["documents_skipped"]),
+        "message": result["message"],
     }
 
 

@@ -36,19 +36,28 @@ class SyncApiTests(unittest.TestCase):
         if sync_router is None:
             self.fail("app.routers.sync is not implemented")
 
-    def test_sync_get_routes_are_mounted_and_require_admin(self):
-        for path in (
-            "/v1/sync/overview",
-            "/v1/sync/alerts",
-            "/v1/sync/runs",
-            "/v1/sync/jobs/{job_key}/runs",
-            "/v1/sync/runs/{run_id}",
-        ):
-            route = route_for(app, path, "GET")
+    def test_sync_routes_are_mounted_and_require_admin(self):
+        routes = (
+            ("GET", "/v1/sync/overview"),
+            ("GET", "/v1/sync/alerts"),
+            ("GET", "/v1/sync/runs"),
+            ("GET", "/v1/sync/jobs/{job_key}/runs"),
+            ("GET", "/v1/sync/runs/{run_id}"),
+            ("GET", "/v1/sync/assets"),
+            ("GET", "/v1/sync/config/doc"),
+            ("PUT", "/v1/sync/config/doc"),
+            ("GET", "/v1/sync/config/tplus"),
+            ("PUT", "/v1/sync/config/tplus"),
+            ("POST", "/v1/sync/run-all"),
+            ("POST", "/v1/sync/assets/{source_id}/run"),
+            ("POST", "/v1/sync/jobs/{job_key}/run"),
+        )
+        for method, path in routes:
+            route = route_for(app, path, method)
             calls = {dependency.call for dependency in route.dependant.dependencies}
             self.assertIn(require_admin, calls)
 
-    def test_sync_router_registers_no_write_methods(self):
+    def test_sync_router_registers_only_documented_methods(self):
         methods = {
             method
             for route in sync_router.router.routes
@@ -56,7 +65,85 @@ class SyncApiTests(unittest.TestCase):
         }
 
         self.assertTrue(methods)
-        self.assertTrue(methods <= {"GET"})
+        self.assertTrue(methods <= {"GET", "POST", "PUT"})
+
+    def test_assets_forwards_tplus_catalog_without_leaking_router_state(self):
+        expected = {"groups": [{"key": "tplus", "items": []}]}
+
+        with patch.object(sync_router, "_conn"), patch.object(
+            sync_router.exports_router, "_latest_tplus_exports", return_value=[]
+        ) as latest, patch.object(
+            sync_router.sync_control, "assets", return_value=expected
+        ) as assets:
+            result = sync_router.sync_assets(_={})
+
+        self.assertEqual(expected, result)
+        latest.assert_called_once_with()
+        assets.assert_called_once_with(unittest.mock.ANY, tplus_items=[])
+
+    def test_config_routes_delegate_to_shared_service(self):
+        doc_body = sync_router.sync_control.DocSyncConfigUpdate(
+            enabled=True, interval_hours=24, anchor_time="02:00", pull_paused=False
+        )
+        tplus_body = sync_router.sync_control.SyncConfigUpdate(
+            enabled=True, interval_hours=24, anchor_time="01:00"
+        )
+        with patch.object(sync_router.sync_control, "read_doc_config", return_value={"kind": "doc"}) as read_doc, patch.object(
+            sync_router.sync_control, "read_tplus_config", return_value={"kind": "tplus"}
+        ) as read_tplus, patch.object(
+            sync_router.sync_control, "save_doc_config", return_value={"saved": "doc"}
+        ) as save_doc, patch.object(
+            sync_router.sync_control, "save_tplus_config", return_value={"saved": "tplus"}
+        ) as save_tplus:
+            self.assertEqual({"kind": "doc"}, sync_router.sync_doc_config_get(_={}))
+            self.assertEqual({"kind": "tplus"}, sync_router.sync_tplus_config_get(_={}))
+            self.assertEqual({"saved": "doc"}, sync_router.sync_doc_config_put(doc_body, user={"sub": "admin"}))
+            self.assertEqual({"saved": "tplus"}, sync_router.sync_tplus_config_put(tplus_body, user={"sub": "admin"}))
+
+        read_doc.assert_called_once_with(sync_router._conn)
+        read_tplus.assert_called_once_with(sync_router._conn)
+        save_doc.assert_called_once_with(sync_router._conn, doc_body, "admin")
+        save_tplus.assert_called_once_with(sync_router._conn, tplus_body, "admin")
+
+    def test_run_routes_delegate_and_map_invalid_targets_to_400(self):
+        with patch.object(sync_router, "_conn") as connect, patch.object(
+            sync_router.sync_control, "enqueue_all", return_value={"documents_queued": 2}
+        ) as enqueue_all, patch.object(
+            sync_router.sync_control, "enqueue_doc_asset", return_value={"queued": True}
+        ) as enqueue_asset, patch.object(
+            sync_router.sync_control, "enqueue_doc_job", return_value={"queued": True}
+        ) as enqueue_job, patch.object(
+            sync_router.sync_control, "enqueue_tplus_full", return_value={"queued": True}
+        ) as enqueue_tplus:
+            self.assertEqual({"documents_queued": 2}, sync_router.sync_run_all(user={"sub": "admin"}))
+            self.assertEqual({"queued": True}, sync_router.sync_asset_run(17, user={"sub": "admin"}))
+            self.assertEqual({"queued": True}, sync_router.sync_job_run("wecom.doc.17", user={"sub": "admin"}))
+            self.assertEqual({"queued": True}, sync_router.sync_job_run("chanjet.full", user={"sub": "admin"}))
+
+        enqueue_all.assert_called_once_with(unittest.mock.ANY, "admin")
+        enqueue_asset.assert_called_once_with(unittest.mock.ANY, 17, "admin")
+        enqueue_job.assert_called_once_with(unittest.mock.ANY, "wecom.doc.17", "admin")
+        enqueue_tplus.assert_called_once_with(unittest.mock.ANY, "admin")
+        self.assertEqual(4, connect.call_count)
+
+        with patch.object(sync_router, "_conn"), patch.object(
+            sync_router.sync_control,
+            "enqueue_doc_asset",
+            side_effect=sync_router.sync_control.InvalidSyncTarget("缺少有效企微 docid"),
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                sync_router.sync_asset_run(18, user={"sub": "admin"})
+        self.assertEqual(400, raised.exception.status_code)
+        self.assertEqual("缺少有效企微 docid", raised.exception.detail)
+
+    def test_write_route_database_error_is_sanitized(self):
+        with patch.object(sync_router, "_conn", side_effect=RuntimeError("password=secret SELECT credentials")):
+            with self.assertRaises(HTTPException) as raised:
+                sync_router.sync_run_all(user={"sub": "admin"})
+
+        self.assertEqual(500, raised.exception.status_code)
+        self.assertEqual("操作同步中心失败：RuntimeError", raised.exception.detail)
+        self.assertNotIn("secret", raised.exception.detail)
 
     def test_invalid_alert_state_returns_422_before_database_access(self):
         isolated = FastAPI()
