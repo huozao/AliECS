@@ -125,9 +125,13 @@ def ops_tplus_sync_config_put(
                         UPDATE sync_jobs
                         SET schedule = %s, updated_at = NOW()
                         WHERE job_key = 'chanjet.full'
+                        RETURNING job_key
                         """,
                         (Jsonb(schedule),),
                     )
+                    updated_job_keys = [str(row[0]) for row in cur.fetchall()]
+                    if updated_job_keys != ["chanjet.full"]:
+                        raise RuntimeError("统一调度作业 chanjet.full 不存在或重复")
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -285,9 +289,12 @@ def ops_doc_sync_config_put(
                         UPDATE sync_jobs
                         SET schedule = %s, updated_at = NOW()
                         WHERE kind = 'pull' AND provider IN ('wecom', 'feishu')
+                        RETURNING id
                         """,
                         (Jsonb(schedule),),
                     )
+                    if not cur.fetchall():
+                        raise RuntimeError("未找到文档同步 pull 作业")
                 conn.commit()
             except Exception:
                 conn.rollback()

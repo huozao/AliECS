@@ -1200,7 +1200,7 @@ class PostgresDocSyncStore:
                       WHERE r.trigger = 'schedule'
                         AND j.kind = 'pull'
                         AND j.provider IN ('wecom', 'feishu')
-                      ORDER BY r.job_id, r.started_at DESC
+                      ORDER BY r.job_id, r.started_at DESC, r.id DESC
                     )
                     UPDATE sync_job_runs r
                     SET detail_json = jsonb_set(r.detail_json, '{shadow}', %s, true)

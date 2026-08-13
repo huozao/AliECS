@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import unittest
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
@@ -55,6 +56,11 @@ class _Cursor:
         return self.returned_rows.pop(0) if self.returned_rows else None
 
     def fetchall(self) -> list[tuple[object, ...]]:
+        normalized = _normalized(self.last_sql)
+        if "update sync_jobs" in normalized and "returning job_key" in normalized:
+            return [("chanjet.full",)]
+        if "update sync_jobs" in normalized and "returning id" in normalized:
+            return [(1,), (2,)]
         rows = list(self.returned_rows)
         self.returned_rows.clear()
         return rows
@@ -75,6 +81,207 @@ class _Connection:
         self.commits += 1
 
     def rollback(self) -> None:
+        self.rollbacks += 1
+
+    def close(self) -> None:
+        return None
+
+
+class _StatefulCursor:
+    def __init__(self, conn: "_StatefulConnection") -> None:
+        self.conn = conn
+        self.rows: list[tuple[object, ...]] = []
+        self.rowcount = -1
+
+    def __enter__(self) -> "_StatefulCursor":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def execute(self, sql: str, params: tuple[object, ...] = ()) -> None:
+        normalized = _normalized(sql)
+        self.conn.statements.append((sql, params))
+        if self.conn.fail_on and self.conn.fail_on in normalized:
+            raise RuntimeError("database unavailable")
+        self.rows = []
+        self.rowcount = -1
+        if normalized.startswith("savepoint "):
+            name = normalized.split()[-1]
+            self.conn.savepoints[name] = deepcopy(self.conn.working)
+            return
+        if normalized.startswith("rollback to savepoint "):
+            name = normalized.split()[-1]
+            self.conn.working = deepcopy(self.conn.savepoints[name])
+            return
+        if normalized.startswith("release savepoint "):
+            self.conn.savepoints.pop(normalized.split()[-1], None)
+            return
+        if "insert into integration_sync_config" in normalized:
+            if "values ('chanjet'" in normalized:
+                provider, values = "chanjet", params
+            elif "values ('doc_sync'" in normalized:
+                provider, values = "doc_sync", params
+            else:
+                provider, values = str(params[0]), params[1:]
+            config = {
+                "enabled": bool(values[0]),
+                "interval_seconds": int(values[1]),
+                "anchor_time": str(values[2] or ""),
+                "pull_paused": bool(values[3]) if provider == "doc_sync" and "pull_paused" in normalized else False,
+                "updated_by": str(values[-1]),
+            }
+            self.conn.working["configs"][provider] = config
+            self.rowcount = 1
+            return
+        if normalized.startswith("select enabled"):
+            provider = "doc_sync" if "provider = 'doc_sync'" in normalized else str(params[0])
+            config = self.conn.working["configs"].get(provider)
+            if config is not None:
+                if "pull_paused" in normalized:
+                    self.rows = [
+                        (
+                            config["enabled"],
+                            config["interval_seconds"],
+                            config["anchor_time"],
+                            config["pull_paused"],
+                            None,
+                            config["updated_by"],
+                        )
+                    ]
+                else:
+                    self.rows = [
+                        (
+                            config["enabled"],
+                            config["interval_seconds"],
+                            config["anchor_time"],
+                            None,
+                            config["updated_by"],
+                        )
+                    ]
+            return
+        if normalized.startswith("select schedule from sync_jobs"):
+            if "job_key = %s" in normalized:
+                jobs = [job for job in self.conn.working["jobs"] if job["job_key"] == params[0]]
+            else:
+                jobs = [
+                    job
+                    for job in self.conn.working["jobs"]
+                    if job["kind"] == "pull" and job["provider"] in {"wecom", "feishu"} and job["schedule"]
+                ]
+            self.rows = [(deepcopy(jobs[0]["schedule"]),)] if jobs else []
+            return
+        if normalized.startswith("update sync_jobs"):
+            if "job_key = 'chanjet.full'" in normalized:
+                jobs = [job for job in self.conn.working["jobs"] if job["job_key"] == "chanjet.full"]
+            elif "job_key = %s" in normalized:
+                jobs = [job for job in self.conn.working["jobs"] if job["job_key"] == params[-1]]
+            else:
+                jobs = [
+                    job
+                    for job in self.conn.working["jobs"]
+                    if job["kind"] == "pull" and job["provider"] in {"wecom", "feishu"}
+                ]
+            if "schedule = '{}'::jsonb" in normalized:
+                jobs = [job for job in jobs if job["schedule"] == {}]
+            schedule = deepcopy(_json_value(params[0]))
+            for job in jobs:
+                job["schedule"] = schedule
+            self.rowcount = len(jobs)
+            if "returning job_key" in normalized:
+                self.rows = [(job["job_key"],) for job in jobs]
+            elif "returning id" in normalized:
+                self.rows = [(job["id"],) for job in jobs]
+            return
+        if normalized.startswith("with latest as"):
+            if "j.job_key = %s" in normalized:
+                jobs = {job["id"]: job for job in self.conn.working["jobs"] if job["job_key"] == params[0]}
+                payload = deepcopy(_json_value(params[1]))
+            else:
+                jobs = {
+                    job["id"]: job
+                    for job in self.conn.working["jobs"]
+                    if job["kind"] == "pull" and job["provider"] in {"wecom", "feishu"}
+                }
+                payload = deepcopy(_json_value(params[0]))
+            latest: list[dict[str, object]] = []
+            for job_id in jobs:
+                matches = [
+                    run
+                    for run in self.conn.working["runs"]
+                    if run["job_id"] == job_id and run["trigger"] == "schedule"
+                ]
+                if matches:
+                    if "r.id desc" in normalized:
+                        matches.sort(key=lambda run: (str(run["started_at"]), int(run["id"])), reverse=True)
+                    else:
+                        matches.sort(key=lambda run: str(run["started_at"]), reverse=True)
+                    latest.append(matches[0])
+            for run in latest:
+                run["detail_json"]["shadow"] = deepcopy(payload)
+            self.rows = [(run["id"],) for run in latest]
+            self.rowcount = len(latest)
+            return
+        if normalized.startswith("update sync_job_runs r"):
+            observed_sleep_seconds, candidate_would_wake, run_ids = params
+            for run in self.conn.working["runs"]:
+                if run["id"] in run_ids:
+                    if "coalesce" in normalized:
+                        shadow = deepcopy(run["detail_json"].get("shadow") or {})
+                        shadow.update(
+                            {
+                                "observed_sleep_seconds": int(observed_sleep_seconds),
+                                "candidate_would_wake": bool(candidate_would_wake),
+                            }
+                        )
+                        run["detail_json"]["shadow"] = shadow
+                    else:
+                        run["detail_json"]["shadow"] = {
+                            "observed_sleep_seconds": int(observed_sleep_seconds),
+                            "candidate_would_wake": bool(candidate_would_wake),
+                        }
+            return
+        raise AssertionError(f"unmodeled SQL: {sql}")
+
+    def fetchone(self) -> tuple[object, ...] | None:
+        return self.rows.pop(0) if self.rows else None
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        rows = list(self.rows)
+        self.rows.clear()
+        return rows
+
+
+class _StatefulConnection:
+    def __init__(
+        self,
+        *,
+        jobs: list[dict[str, object]] | None = None,
+        runs: list[dict[str, object]] | None = None,
+        configs: dict[str, dict[str, object]] | None = None,
+        fail_on: str = "",
+    ) -> None:
+        self.persistent = {
+            "jobs": deepcopy(jobs or []),
+            "runs": deepcopy(runs or []),
+            "configs": deepcopy(configs or {}),
+        }
+        self.working = deepcopy(self.persistent)
+        self.fail_on = fail_on
+        self.statements: list[tuple[str, tuple[object, ...]]] = []
+        self.commits = 0
+        self.rollbacks = 0
+        self.savepoints: dict[str, dict[str, object]] = {}
+
+    def cursor(self) -> _StatefulCursor:
+        return _StatefulCursor(self)
+
+    def commit(self) -> None:
+        self.persistent = deepcopy(self.working)
+        self.commits += 1
+
+    def rollback(self) -> None:
+        self.working = deepcopy(self.persistent)
         self.rollbacks += 1
 
     def close(self) -> None:
@@ -161,6 +368,75 @@ class BackendDualWriteTests(unittest.TestCase):
         self.assertEqual(500, response.status_code)
         self.assertEqual(0, conn.commits)
         self.assertEqual(1, conn.rollbacks)
+
+    def test_tplus_zero_platform_target_rolls_back_legacy_state(self) -> None:
+        conn = _StatefulConnection(
+            configs={
+                "chanjet": {
+                    "enabled": False,
+                    "interval_seconds": 86400,
+                    "anchor_time": "",
+                    "pull_paused": False,
+                    "updated_by": "before",
+                }
+            }
+        )
+        before = deepcopy(conn.persistent)
+
+        with patch.object(self.ops, "_conn", return_value=conn):
+            response = self.TestClient(self.app, raise_server_exceptions=False).put(
+                "/v1/ops/tplus/sync-config",
+                json={"enabled": True, "interval_hours": 6, "anchor_time": "02:00"},
+                headers=self._headers(),
+            )
+
+        self.assertEqual(500, response.status_code)
+        self.assertEqual(before, conn.persistent)
+        self.assertEqual(0, conn.commits)
+        self.assertEqual(1, conn.rollbacks)
+
+    def test_doc_put_updates_every_matching_job_and_zero_target_rolls_back(self) -> None:
+        jobs = [
+            {"id": 1, "job_key": "wecom.one", "kind": "pull", "provider": "wecom", "schedule": {}},
+            {"id": 2, "job_key": "feishu.one", "kind": "pull", "provider": "feishu", "schedule": {}},
+            {"id": 3, "job_key": "wecom.write", "kind": "writeback", "provider": "wecom", "schedule": {}},
+        ]
+        conn = _StatefulConnection(jobs=jobs)
+        with patch.object(self.ops, "_conn", return_value=conn):
+            response = self.TestClient(self.app).put(
+                "/v1/ops/doc-sync/sync-config",
+                json={"enabled": True, "interval_hours": 6, "anchor_time": "02:00", "pull_paused": False},
+                headers=self._headers(),
+            )
+
+        self.assertEqual(200, response.status_code)
+        schedules = {job["job_key"]: job["schedule"] for job in conn.persistent["jobs"]}
+        self.assertEqual(SCHEDULE, schedules["wecom.one"])
+        self.assertEqual(SCHEDULE, schedules["feishu.one"])
+        self.assertEqual({}, schedules["wecom.write"])
+
+        zero_target = _StatefulConnection(
+            configs={
+                "doc_sync": {
+                    "enabled": False,
+                    "interval_seconds": 86400,
+                    "anchor_time": "",
+                    "pull_paused": False,
+                    "updated_by": "before",
+                }
+            }
+        )
+        before = deepcopy(zero_target.persistent)
+        with patch.object(self.ops, "_conn", return_value=zero_target):
+            response = self.TestClient(self.app, raise_server_exceptions=False).put(
+                "/v1/ops/doc-sync/sync-config",
+                json={"enabled": True, "interval_hours": 6, "anchor_time": "02:00", "pull_paused": False},
+                headers=self._headers(),
+            )
+
+        self.assertEqual(500, response.status_code)
+        self.assertEqual(before, zero_target.persistent)
+        self.assertEqual(1, zero_target.rollbacks)
 
 
 class DocScheduleStorageTests(unittest.TestCase):
@@ -251,6 +527,54 @@ class DocScheduleStorageTests(unittest.TestCase):
         self.assertEqual(0, conn.commits)
         self.assertEqual(1, conn.rollbacks)
 
+    def test_doc_seed_changes_only_empty_schedule_and_shadow_finishes_returned_ids(self) -> None:
+        jobs = [
+            {"id": 1, "job_key": "wecom.one", "kind": "pull", "provider": "wecom", "schedule": {}},
+            {"id": 2, "job_key": "feishu.one", "kind": "pull", "provider": "feishu", "schedule": {"enabled": False}},
+        ]
+        runs = [
+            {"id": 101, "job_id": 1, "trigger": "schedule", "started_at": "2026-08-13T11:00:00+00:00", "detail_json": {}},
+            {"id": 102, "job_id": 2, "trigger": "schedule", "started_at": "2026-08-13T11:00:00+00:00", "detail_json": {}},
+            {"id": 103, "job_id": 1, "trigger": "schedule", "started_at": "2026-08-13T12:00:00+00:00", "detail_json": {}},
+        ]
+        conn = _StatefulConnection(jobs=jobs, runs=runs)
+        store = self.PostgresDocSyncStore(conn)
+
+        store.seed_platform_schedule(SCHEDULE)
+        self.assertEqual(SCHEDULE, conn.persistent["jobs"][0]["schedule"])
+        self.assertEqual({"enabled": False}, conn.persistent["jobs"][1]["schedule"])
+
+        run_ids = store.record_scheduler_shadow(SHADOW_PAYLOAD)
+        self.assertEqual([103, 102], run_ids)
+        later_run = {run["id"]: run for run in conn.persistent["runs"]}[103]
+        self.assertEqual(SHADOW_PAYLOAD, later_run["detail_json"]["shadow"])
+        conn.working["runs"].append(
+            {"id": 104, "job_id": 1, "trigger": "schedule", "started_at": "2026-08-13T13:00:00+00:00", "detail_json": {}}
+        )
+
+        store.finish_scheduler_shadow(run_ids, observed_sleep_seconds=17, candidate_would_wake=True)
+        by_id = {run["id"]: run for run in conn.persistent["runs"]}
+        self.assertEqual(17, by_id[103]["detail_json"]["shadow"]["observed_sleep_seconds"])
+        self.assertTrue(by_id[103]["detail_json"]["shadow"]["candidate_would_wake"])
+        self.assertEqual(SHADOW_PAYLOAD["legacy"], by_id[103]["detail_json"]["shadow"]["legacy"])
+        self.assertNotIn("shadow", by_id[104]["detail_json"])
+
+    def test_doc_latest_tie_chooses_highest_run_id(self) -> None:
+        conn = _StatefulConnection(
+            jobs=[{"id": 1, "job_key": "wecom.one", "kind": "pull", "provider": "wecom", "schedule": SCHEDULE}],
+            runs=[
+                {"id": 101, "job_id": 1, "trigger": "schedule", "started_at": "2026-08-13T11:00:00+00:00", "detail_json": {}},
+                {"id": 102, "job_id": 1, "trigger": "schedule", "started_at": "2026-08-13T11:00:00+00:00", "detail_json": {}},
+            ],
+        )
+
+        run_ids = self.PostgresDocSyncStore(conn).record_scheduler_shadow(SHADOW_PAYLOAD)
+
+        self.assertEqual([102], run_ids)
+        by_id = {run["id"]: run for run in conn.persistent["runs"]}
+        self.assertNotIn("shadow", by_id[101]["detail_json"])
+        self.assertEqual(SHADOW_PAYLOAD, by_id[102]["detail_json"]["shadow"])
+
 
 class TplusScheduleStorageTests(unittest.TestCase):
     @classmethod
@@ -279,13 +603,14 @@ class TplusScheduleStorageTests(unittest.TestCase):
 
         self.module.seed_platform_schedule(SCHEDULE, conn=conn)
 
-        normalized = _normalized(conn.statements[0][0])
+        statement, params = next((item for item in conn.statements if "UPDATE sync_jobs" in item[0]))
+        normalized = _normalized(statement)
         self.assertIn("update sync_jobs", normalized)
         self.assertIn("job_key = %s", normalized)
         self.assertIn("schedule = '{}'::jsonb", normalized)
         self.assertIn("updated_at = now()", normalized)
-        self.assertEqual((SCHEDULE, "chanjet.full"), tuple(_json_value(value) for value in conn.statements[0][1]))
-        self.assertEqual(1, conn.commits)
+        self.assertEqual((SCHEDULE, "chanjet.full"), tuple(_json_value(value) for value in params))
+        self.assertEqual(0, conn.commits)
 
     def test_tplus_shadow_updates_latest_real_schedule_run_and_returns_its_id(self) -> None:
         conn = _Connection(returned_rows=[(301,)])
@@ -293,25 +618,70 @@ class TplusScheduleStorageTests(unittest.TestCase):
         run_ids = self.module.record_scheduler_shadow(SHADOW_PAYLOAD, conn=conn)
 
         self.assertEqual([301], run_ids)
-        normalized = _normalized(conn.statements[0][0])
+        statement, params = next((item for item in conn.statements if "WITH latest" in item[0]))
+        normalized = _normalized(statement)
         self.assertIn("trigger = 'schedule'", normalized)
         self.assertIn("j.job_key = %s", normalized)
         self.assertNotIn("insert into sync_job_runs", normalized)
-        self.assertEqual(("chanjet.full", SHADOW_PAYLOAD), tuple(_json_value(value) for value in conn.statements[0][1]))
+        self.assertEqual(("chanjet.full", SHADOW_PAYLOAD), tuple(_json_value(value) for value in params))
 
     def test_tplus_shadow_finish_uses_recorded_ids_and_failure_is_fail_open(self) -> None:
         conn = _Connection()
 
         self.module.finish_scheduler_shadow([301], observed_sleep_seconds=31, candidate_would_wake=False, conn=conn)
 
-        normalized = _normalized(conn.statements[0][0])
+        statement, params = next((item for item in conn.statements if "UPDATE sync_job_runs" in item[0]))
+        normalized = _normalized(statement)
         self.assertIn("where r.id = any(%s)", normalized)
         self.assertNotIn("distinct on", normalized)
-        self.assertEqual((31, False, [301]), conn.statements[0][1])
+        self.assertEqual((31, False, [301]), params)
 
         failing = _Connection(fail_on="update sync_job_runs")
         self.assertEqual([], self.module.record_scheduler_shadow(SHADOW_PAYLOAD, conn=failing))
-        self.assertEqual(1, failing.rollbacks)
+        self.assertEqual(0, failing.rollbacks)
+
+    def test_tplus_borrowed_connection_never_commits_or_rolls_back_outer_work(self) -> None:
+        conn = _StatefulConnection(
+            jobs=[{"id": 1, "job_key": "chanjet.full", "kind": "pull", "provider": "chanjet", "schedule": {}}],
+            runs=[{"id": 301, "job_id": 1, "trigger": "schedule", "started_at": "2026-08-13T11:00:00+00:00", "detail_json": {}}],
+        )
+        conn.working["outer_legacy_write"] = {"request_id": 9}
+
+        self.module.seed_platform_schedule(SCHEDULE, conn=conn)
+
+        self.assertEqual(0, conn.commits)
+        self.assertEqual(0, conn.rollbacks)
+        self.assertEqual(SCHEDULE, conn.working["jobs"][0]["schedule"])
+        self.assertEqual({}, conn.persistent["jobs"][0]["schedule"])
+
+        conn.fail_on = "with latest"
+        self.assertEqual([], self.module.record_scheduler_shadow(SHADOW_PAYLOAD, conn=conn))
+
+        self.assertEqual({"request_id": 9}, conn.working["outer_legacy_write"])
+        self.assertEqual(0, conn.commits)
+        self.assertEqual(0, conn.rollbacks)
+        statements = "\n".join(statement for statement, _params in conn.statements).lower()
+        self.assertIn("savepoint", statements)
+        self.assertIn("rollback to savepoint", statements)
+        self.assertIn("release savepoint", statements)
+
+    def test_tplus_latest_tie_chooses_highest_id_and_finish_merges_shadow_json(self) -> None:
+        conn = _StatefulConnection(
+            jobs=[{"id": 1, "job_key": "chanjet.full", "kind": "pull", "provider": "chanjet", "schedule": SCHEDULE}],
+            runs=[
+                {"id": 301, "job_id": 1, "trigger": "schedule", "started_at": "2026-08-13T11:00:00+00:00", "detail_json": {}},
+                {"id": 302, "job_id": 1, "trigger": "schedule", "started_at": "2026-08-13T11:00:00+00:00", "detail_json": {}},
+            ],
+        )
+
+        run_ids = self.module.record_scheduler_shadow(SHADOW_PAYLOAD, conn=conn)
+        self.assertEqual([302], run_ids)
+        self.module.finish_scheduler_shadow(run_ids, observed_sleep_seconds=31, candidate_would_wake=False, conn=conn)
+
+        shadow = {run["id"]: run for run in conn.working["runs"]}[302]["detail_json"]["shadow"]
+        self.assertEqual(SHADOW_PAYLOAD["candidate"], shadow["candidate"])
+        self.assertEqual(31, shadow["observed_sleep_seconds"])
+        self.assertFalse(shadow["candidate_would_wake"])
 
 
 if __name__ == "__main__":
