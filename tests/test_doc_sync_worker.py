@@ -764,6 +764,286 @@ class WorkerLoopTests(WorkerImportTestCase):
             self.assertEqual(watermark_calls[i], f"wm-{i}")
 
 
+    def test_legacy_never_reads_or_writes_platform_scheduler(self) -> None:
+        import unittest.mock as mock
+        from datetime import datetime, timezone
+
+        from app.pipelines import worker_loop as module
+
+        started = datetime(2026, 8, 13, tzinfo=timezone.utc)
+        full_runs: list[datetime] = []
+        platform_calls: list[str] = []
+
+        with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}), \
+                mock.patch.object(module, "_maybe_start_group_listener"):
+            code = module.run_worker_loop(
+                full_sync=lambda: full_runs.append(started) or 0,
+                consume_requests=lambda: 0,
+                sleep=lambda _seconds: None,
+                max_cycles=1,
+                schedule_reader=self._one_minute_schedule,
+                config_puller=lambda: "noop",
+                now_fn=lambda: started,
+                last_full_reader=lambda: None,
+                scheduler_mode_reader=lambda: "legacy",
+                platform_schedule_reader=lambda: platform_calls.append("read") or self._one_minute_schedule(),
+                shadow_recorder=lambda _payload: platform_calls.append("record") or [1],
+                shadow_finisher=lambda *_args: platform_calls.append("finish"),
+            )
+
+        self.assertEqual(0, code)
+        self.assertEqual([started], full_runs)
+        self.assertEqual([], platform_calls)
+
+    def test_unknown_scheduler_mode_is_legacy_without_platform_access(self) -> None:
+        import unittest.mock as mock
+        from datetime import datetime, timezone
+
+        from app.pipelines import worker_loop as module
+
+        started = datetime(2026, 8, 13, tzinfo=timezone.utc)
+        full_runs: list[datetime] = []
+
+        def platform_access_must_not_happen() -> dict:
+            raise AssertionError("unknown mode must not read platform scheduling")
+
+        with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}), \
+                mock.patch.object(module, "_maybe_start_group_listener"):
+            code = module.run_worker_loop(
+                full_sync=lambda: full_runs.append(started) or 0,
+                consume_requests=lambda: 0,
+                sleep=lambda _seconds: None,
+                max_cycles=1,
+                schedule_reader=self._one_minute_schedule,
+                config_puller=lambda: "noop",
+                now_fn=lambda: started,
+                last_full_reader=lambda: None,
+                scheduler_mode_reader=lambda: "unrecognized-mode",
+                platform_schedule_reader=platform_access_must_not_happen,
+            )
+
+        self.assertEqual(0, code)
+        self.assertEqual([started], full_runs)
+
+    def test_shadow_records_candidate_but_legacy_still_drives_run(self) -> None:
+        import unittest.mock as mock
+        from datetime import datetime, timedelta, timezone
+
+        from app.pipelines import worker_loop as module
+
+        started = datetime(2026, 8, 13, tzinfo=timezone.utc)
+        clock = {"now": started}
+        full_runs: list[datetime] = []
+        pending_calls: list[datetime] = []
+        notifier_calls: list[datetime] = []
+        shadows: list[dict] = []
+        finishes: list[tuple[list[int], int, bool]] = []
+
+        def advance(seconds: float) -> None:
+            clock["now"] += timedelta(seconds=seconds)
+
+        with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}), \
+                mock.patch.object(module, "_maybe_start_group_listener"):
+            code = module.run_worker_loop(
+                full_sync=lambda: full_runs.append(clock["now"]) or 0,
+                consume_requests=lambda: pending_calls.append(clock["now"]) or 0,
+                notifier_once=lambda: notifier_calls.append(clock["now"]) or {},
+                sleep=advance,
+                max_cycles=1,
+                schedule_reader=self._one_minute_schedule,
+                config_puller=lambda: "noop",
+                now_fn=lambda: clock["now"],
+                last_full_reader=lambda: None,
+                scheduler_mode_reader=lambda: "shadow",
+                platform_schedule_reader=lambda: {
+                    "enabled": False, "interval_seconds": 60, "anchor_time": "", "pull_paused": False,
+                },
+                shadow_recorder=lambda payload: shadows.append(payload) or [731, 932],
+                shadow_finisher=lambda run_ids, seconds, would_wake: finishes.append((run_ids, seconds, would_wake)),
+            )
+
+        self.assertEqual(0, code)
+        self.assertEqual([started], full_runs)
+        self.assertEqual(2, len(pending_calls))
+        self.assertEqual(3, len(notifier_calls))  # full preflight + two unchanged legacy polls
+        self.assertEqual(1, len(shadows))
+        self.assertFalse(shadows[0]["decision_match"])
+        self.assertEqual(([731, 932], 60, False), finishes[0])
+
+    def test_shadow_scheduler_storage_failure_is_fail_open(self) -> None:
+        import unittest.mock as mock
+        from datetime import datetime, timezone
+
+        from app.pipelines import worker_loop as module
+
+        started = datetime(2026, 8, 13, tzinfo=timezone.utc)
+        full_runs: list[datetime] = []
+        record_attempts: list[dict] = []
+
+        def fail_record(payload: dict) -> list[int]:
+            record_attempts.append(payload)
+            raise RuntimeError("shadow storage unavailable")
+
+        with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}), \
+                mock.patch.object(module, "_maybe_start_group_listener"):
+            code = module.run_worker_loop(
+                full_sync=lambda: full_runs.append(started) or 0,
+                consume_requests=lambda: 0,
+                sleep=lambda _seconds: None,
+                max_cycles=1,
+                schedule_reader=self._one_minute_schedule,
+                config_puller=lambda: "noop",
+                now_fn=lambda: started,
+                last_full_reader=lambda: None,
+                scheduler_mode_reader=lambda: "shadow",
+                platform_schedule_reader=self._one_minute_schedule,
+                shadow_recorder=fail_record,
+            )
+
+        self.assertEqual(0, code)
+        self.assertEqual([started], full_runs)
+        self.assertEqual(1, len(record_attempts))
+
+    def test_shadow_finisher_failure_is_fail_open(self) -> None:
+        import unittest.mock as mock
+        from datetime import datetime, timedelta, timezone
+
+        from app.pipelines import worker_loop as module
+
+        started = datetime(2026, 8, 13, tzinfo=timezone.utc)
+        clock = {"now": started}
+        full_runs: list[datetime] = []
+        finish_attempts: list[tuple[list[int], int, bool]] = []
+
+        def advance(seconds: float) -> None:
+            clock["now"] += timedelta(seconds=seconds)
+
+        def fail_finish(run_ids: list[int], seconds: int, would_wake: bool) -> None:
+            finish_attempts.append((run_ids, seconds, would_wake))
+            raise RuntimeError("shadow finish unavailable")
+
+        with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}), \
+                mock.patch.object(module, "_maybe_start_group_listener"):
+            code = module.run_worker_loop(
+                full_sync=lambda: full_runs.append(clock["now"]) or 0,
+                consume_requests=lambda: 0,
+                sleep=advance,
+                max_cycles=1,
+                schedule_reader=self._one_minute_schedule,
+                config_puller=lambda: "noop",
+                now_fn=lambda: clock["now"],
+                last_full_reader=lambda: None,
+                scheduler_mode_reader=lambda: "shadow",
+                platform_schedule_reader=self._one_minute_schedule,
+                shadow_recorder=lambda _payload: [44],
+                shadow_finisher=fail_finish,
+            )
+
+        self.assertEqual(0, code)
+        self.assertEqual([started], full_runs)
+        self.assertEqual([([44], 60, False)], finish_attempts)
+
+    def test_shadow_records_earlier_candidate_wake_without_shortening_legacy_sleep(self) -> None:
+        import unittest.mock as mock
+        from datetime import datetime, timedelta, timezone
+
+        from app.pipelines import worker_loop as module
+
+        started = datetime(2026, 8, 13, tzinfo=timezone.utc)
+        clock = {"now": started}
+        sleeps: list[float] = []
+        pending_calls: list[datetime] = []
+        notifier_calls: list[datetime] = []
+        platform_reads = {"count": 0}
+        finishes: list[tuple[list[int], int, bool]] = []
+
+        def advance(seconds: float) -> None:
+            sleeps.append(seconds)
+            clock["now"] += timedelta(seconds=seconds)
+
+        def platform_schedule() -> dict:
+            platform_reads["count"] += 1
+            return {
+                "enabled": True,
+                "interval_seconds": 120 if platform_reads["count"] == 1 else 60,
+                "anchor_time": "",
+                "pull_paused": False,
+            }
+
+        with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}), \
+                mock.patch.object(module, "_maybe_start_group_listener"):
+            code = module.run_worker_loop(
+                full_sync=lambda: self.fail("legacy full must remain not due"),
+                consume_requests=lambda: pending_calls.append(clock["now"]) or 0,
+                notifier_once=lambda: notifier_calls.append(clock["now"]) or {},
+                sleep=advance,
+                max_cycles=1,
+                schedule_reader=self._one_minute_schedule,
+                config_puller=lambda: "noop",
+                now_fn=lambda: clock["now"],
+                last_full_reader=lambda: started,
+                scheduler_mode_reader=lambda: "shadow",
+                platform_schedule_reader=platform_schedule,
+                shadow_recorder=lambda _payload: [17, 18],
+                shadow_finisher=lambda run_ids, seconds, would_wake: finishes.append((run_ids, seconds, would_wake)),
+            )
+
+        self.assertEqual(0, code)
+        self.assertEqual([30, 30], sleeps)
+        self.assertEqual(2, len(pending_calls))
+        self.assertEqual(2, len(notifier_calls))
+        self.assertEqual([([17, 18], 60, True)], finishes)
+
+    def test_active_uses_candidate_and_hot_wakes_within_one_poll(self) -> None:
+        import unittest.mock as mock
+        from datetime import datetime, timedelta, timezone
+
+        from app.pipelines import worker_loop as module
+
+        started = datetime(2026, 8, 13, tzinfo=timezone.utc)
+        clock = {"now": started}
+        sleeps: list[float] = []
+        full_runs: list[datetime] = []
+        pending_calls: list[datetime] = []
+        notifier_calls: list[datetime] = []
+        platform_reads = {"count": 0}
+
+        def advance(seconds: float) -> None:
+            sleeps.append(seconds)
+            clock["now"] += timedelta(seconds=seconds)
+
+        def platform_schedule() -> dict:
+            platform_reads["count"] += 1
+            return {
+                "enabled": True,
+                "interval_seconds": 120 if platform_reads["count"] == 1 else 60,
+                "anchor_time": "",
+                "pull_paused": False,
+            }
+
+        with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}), \
+                mock.patch.object(module, "_maybe_start_group_listener"):
+            code = module.run_worker_loop(
+                full_sync=lambda: full_runs.append(clock["now"]) or 0,
+                consume_requests=lambda: pending_calls.append(clock["now"]) or 0,
+                notifier_once=lambda: notifier_calls.append(clock["now"]) or {},
+                sleep=advance,
+                max_cycles=1,
+                schedule_reader=self._one_minute_schedule,
+                config_puller=lambda: "noop",
+                now_fn=lambda: clock["now"],
+                last_full_reader=lambda: started - timedelta(seconds=60),
+                scheduler_mode_reader=lambda: "active",
+                platform_schedule_reader=platform_schedule,
+            )
+
+        self.assertEqual(0, code)
+        self.assertEqual([], full_runs)
+        self.assertEqual([30], sleeps)
+        self.assertEqual(1, len(pending_calls))
+        self.assertEqual(1, len(notifier_calls))
+
+
 class SyncScheduleTests(WorkerImportTestCase):
     def test_parse_config_rows_accepts_typed_singleton_row(self) -> None:
         from app.pipelines.sync_schedule import parse_config_rows
