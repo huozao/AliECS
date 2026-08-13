@@ -102,7 +102,14 @@ class _StatefulCursor:
     def execute(self, sql: str, params: tuple[object, ...] = ()) -> None:
         normalized = _normalized(sql)
         self.conn.statements.append((sql, params))
+        if self.conn.aborted and not normalized.startswith("rollback to savepoint "):
+            raise RuntimeError("current transaction is aborted")
+        if self.conn.fail_once and self.conn.fail_once in normalized:
+            self.conn.fail_once = ""
+            self.conn.aborted = True
+            raise RuntimeError("database unavailable")
         if self.conn.fail_on and self.conn.fail_on in normalized:
+            self.conn.aborted = True
             raise RuntimeError("database unavailable")
         self.rows = []
         self.rowcount = -1
@@ -113,6 +120,7 @@ class _StatefulCursor:
         if normalized.startswith("rollback to savepoint "):
             name = normalized.split()[-1]
             self.conn.working = deepcopy(self.conn.savepoints[name])
+            self.conn.aborted = False
             return
         if normalized.startswith("release savepoint "):
             self.conn.savepoints.pop(normalized.split()[-1], None)
@@ -260,6 +268,7 @@ class _StatefulConnection:
         runs: list[dict[str, object]] | None = None,
         configs: dict[str, dict[str, object]] | None = None,
         fail_on: str = "",
+        fail_once: str = "",
     ) -> None:
         self.persistent = {
             "jobs": deepcopy(jobs or []),
@@ -268,6 +277,8 @@ class _StatefulConnection:
         }
         self.working = deepcopy(self.persistent)
         self.fail_on = fail_on
+        self.fail_once = fail_once
+        self.aborted = False
         self.statements: list[tuple[str, tuple[object, ...]]] = []
         self.commits = 0
         self.rollbacks = 0
@@ -282,6 +293,7 @@ class _StatefulConnection:
 
     def rollback(self) -> None:
         self.working = deepcopy(self.persistent)
+        self.aborted = False
         self.rollbacks += 1
 
     def close(self) -> None:
@@ -593,10 +605,88 @@ class TplusScheduleStorageTests(unittest.TestCase):
         conn = _Connection(returned_rows=[(SCHEDULE,)])
 
         self.assertEqual(SCHEDULE, self.module.fetch_platform_schedule(conn=conn))
-        normalized = _normalized(conn.statements[0][0])
+        statement, params = next((item for item in conn.statements if "SELECT schedule" in item[0]))
+        normalized = _normalized(statement)
         self.assertIn("from sync_jobs", normalized)
         self.assertIn("job_key = %s", normalized)
-        self.assertEqual(("chanjet.full",), conn.statements[0][1])
+        self.assertEqual(("chanjet.full",), params)
+
+    def test_tplus_borrowed_read_failure_restores_transaction_and_legacy_sql_can_continue(self) -> None:
+        conn = _StatefulConnection(
+            jobs=[{"id": 1, "job_key": "chanjet.full", "kind": "pull", "provider": "chanjet", "schedule": SCHEDULE}],
+            fail_once="select schedule from sync_jobs",
+        )
+        conn.working["outer_legacy_write"] = {"request_id": 9}
+
+        self.assertIsNone(self.module.fetch_platform_schedule(conn=conn))
+
+        self.assertFalse(conn.aborted)
+        self.assertEqual({"request_id": 9}, conn.working["outer_legacy_write"])
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO integration_sync_config(provider, enabled, interval_seconds, anchor_time, updated_at, updated_by) VALUES (%s, %s, %s, %s, NOW(), %s)",
+                ("chanjet", True, 3600, "", "legacy-worker"),
+            )
+        self.assertEqual(3600, conn.working["configs"]["chanjet"]["interval_seconds"])
+        self.assertEqual(0, conn.commits)
+        self.assertEqual(0, conn.rollbacks)
+        statements = "\n".join(statement for statement, _params in conn.statements).lower()
+        self.assertIn("savepoint", statements)
+        self.assertIn("rollback to savepoint", statements)
+        self.assertIn("release savepoint", statements)
+
+    def test_tplus_borrowed_read_release_failure_is_recovered_before_fallback(self) -> None:
+        conn = _StatefulConnection(
+            jobs=[{"id": 1, "job_key": "chanjet.full", "kind": "pull", "provider": "chanjet", "schedule": SCHEDULE}],
+            fail_once="release savepoint",
+        )
+
+        self.assertIsNone(self.module.fetch_platform_schedule(conn=conn))
+
+        self.assertFalse(conn.aborted)
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO integration_sync_config(provider, enabled, interval_seconds, anchor_time, updated_at, updated_by) VALUES (%s, %s, %s, %s, NOW(), %s)",
+                ("chanjet", True, 3600, "", "legacy-worker"),
+            )
+        statements = "\n".join(statement for statement, _params in conn.statements).lower()
+        self.assertGreaterEqual(statements.count("release savepoint"), 2)
+        self.assertIn("rollback to savepoint", statements)
+        self.assertEqual(0, conn.commits)
+        self.assertEqual(0, conn.rollbacks)
+
+    def test_tplus_borrowed_savepoint_or_cleanup_failure_requires_connection_discard(self) -> None:
+        cases = (
+            ("savepoint creation", "savepoint tplus_scheduler_shadow", ""),
+            ("rollback-to cleanup", "select schedule from sync_jobs", "rollback to savepoint"),
+            ("release cleanup", "select schedule from sync_jobs", "release savepoint"),
+        )
+        for name, fail_once, fail_on in cases:
+            with self.subTest(name=name):
+                conn = _StatefulConnection(
+                    jobs=[{"id": 1, "job_key": "chanjet.full", "kind": "pull", "provider": "chanjet", "schedule": SCHEDULE}],
+                    fail_once=fail_once,
+                    fail_on=fail_on,
+                )
+
+                with self.assertRaisesRegex(RuntimeError, "borrowed connection.*discard"):
+                    self.module.fetch_platform_schedule(conn=conn)
+
+                self.assertTrue(conn.aborted)
+                self.assertEqual(0, conn.commits)
+                self.assertEqual(0, conn.rollbacks)
+
+    def test_tplus_owned_read_failure_rolls_back_and_returns_fallback(self) -> None:
+        conn = _StatefulConnection(
+            jobs=[{"id": 1, "job_key": "chanjet.full", "kind": "pull", "provider": "chanjet", "schedule": SCHEDULE}],
+            fail_once="select schedule from sync_jobs",
+        )
+        with patch.object(self.module, "connect_if_configured", return_value=conn):
+            self.assertIsNone(self.module.fetch_platform_schedule())
+
+        self.assertFalse(conn.aborted)
+        self.assertEqual(1, conn.rollbacks)
+        self.assertEqual(0, conn.commits)
 
     def test_tplus_seed_only_updates_empty_platform_schedule(self) -> None:
         conn = _Connection()

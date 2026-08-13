@@ -19,6 +19,10 @@ T = TypeVar("T")
 _SCHEDULER_SAVEPOINT = "tplus_scheduler_shadow"
 
 
+class BorrowedConnectionRecoveryError(RuntimeError):
+    """借用连接的 savepoint 无法恢复；调用方必须丢弃该连接。"""
+
+
 def attach_legacy_ref(platform_run_id: int, legacy_run_id: int) -> None:
     from tplus_datahub.jobs import sync_job_platform
 
@@ -125,56 +129,68 @@ def fetch_sync_config(provider: str = "chanjet", conn: Any | None = None) -> dic
         }
 
 
-def _run_scheduler_write(conn: Any, *, owned: bool, operation: Callable[[], T], fallback: T) -> T:
-    if owned:
-        try:
-            result = operation()
-            conn.commit()
-            return result
-        except Exception:
-            conn.rollback()
-            return fallback
+def _run_borrowed_scheduler_operation(conn: Any, *, operation: Callable[[], T], fallback: T) -> T:
     savepoint_started = False
     try:
         with conn.cursor() as cur:
             cur.execute(f"SAVEPOINT {_SCHEDULER_SAVEPOINT}")
         savepoint_started = True
         result = operation()
-    except Exception:
-        if savepoint_started:
-            try:
-                with conn.cursor() as cur:
-                    cur.execute(f"ROLLBACK TO SAVEPOINT {_SCHEDULER_SAVEPOINT}")
-                    cur.execute(f"RELEASE SAVEPOINT {_SCHEDULER_SAVEPOINT}")
-            except Exception:
-                pass
-        return fallback
-    with conn.cursor() as cur:
-        cur.execute(f"RELEASE SAVEPOINT {_SCHEDULER_SAVEPOINT}")
-    return result
-
-
-def _fetch_platform_schedule(job_key: str, conn: Any, *, owned: bool) -> dict[str, Any] | None:
-    try:
         with conn.cursor() as cur:
-            cur.execute("SELECT schedule FROM sync_jobs WHERE job_key = %s", (job_key,))
-            row = cur.fetchone()
-        schedule = row[0] if row else None
-        return dict(schedule) if isinstance(schedule, dict) and schedule else None
+            cur.execute(f"RELEASE SAVEPOINT {_SCHEDULER_SAVEPOINT}")
+        return result
+    except Exception as exc:
+        if not savepoint_started:
+            raise BorrowedConnectionRecoveryError(
+                "borrowed connection savepoint was not created; caller must discard it"
+            ) from exc
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"ROLLBACK TO SAVEPOINT {_SCHEDULER_SAVEPOINT}")
+                cur.execute(f"RELEASE SAVEPOINT {_SCHEDULER_SAVEPOINT}")
+        except Exception as cleanup_exc:
+            raise BorrowedConnectionRecoveryError(
+                "borrowed connection was not restored; caller must discard it"
+            ) from cleanup_exc
+        return fallback
+
+
+def _run_scheduler_write(conn: Any, *, owned: bool, operation: Callable[[], T], fallback: T) -> T:
+    if not owned:
+        return _run_borrowed_scheduler_operation(conn, operation=operation, fallback=fallback)
+    try:
+        result = operation()
+        conn.commit()
+        return result
     except Exception:
-        if owned:
-            conn.rollback()
-        return None
+        conn.rollback()
+        return fallback
+
+
+def _fetch_platform_schedule(job_key: str, conn: Any) -> dict[str, Any] | None:
+    with conn.cursor() as cur:
+        cur.execute("SELECT schedule FROM sync_jobs WHERE job_key = %s", (job_key,))
+        row = cur.fetchone()
+    schedule = row[0] if row else None
+    return dict(schedule) if isinstance(schedule, dict) and schedule else None
 
 
 def fetch_platform_schedule(job_key: str = "chanjet.full", conn: Any | None = None) -> dict[str, Any] | None:
     if conn is not None:
-        return _fetch_platform_schedule(job_key, conn, owned=False)
+        return _run_borrowed_scheduler_operation(
+            conn,
+            operation=lambda: _fetch_platform_schedule(job_key, conn),
+            fallback=None,
+        )
     owned_conn = connect_if_configured()
     if owned_conn is None:
         return None
     with closing(owned_conn):
-        return _fetch_platform_schedule(job_key, owned_conn, owned=True)
+        try:
+            return _fetch_platform_schedule(job_key, owned_conn)
+        except Exception:
+            owned_conn.rollback()
+            return None
 
 
 def _seed_platform_schedule(schedule: dict[str, Any], job_key: str, conn: Any) -> None:
