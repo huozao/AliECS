@@ -5,11 +5,9 @@ from __future__ import annotations
 import base64
 import hmac
 import json
-import logging
 import os
 import psycopg
 import shutil
-import threading
 import time
 import urllib.error
 import urllib.parse
@@ -33,7 +31,6 @@ from app.routers.backups import backup_summary_from_db
 
 
 router = APIRouter()
-LOGGER = logging.getLogger(__name__)
 
 class ReconciliationActionRequest(BaseModel):
     action: str = Field(pattern="^(use_current|use_previous|use_full|use_incremental|ignore)$")
@@ -492,7 +489,6 @@ def ops_status(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
         "reconciliation": _reconciliation_status_from_db() if db_ok else {"needs_review": 0, "recent": []},
         "backups": backup_summary_from_db() if db_ok else {"status": "unknown", "total": 0, "monitored": 0},
         "hosts": _configured_host_statuses(),
-        "chanjet_token": _chanjet_token_status(),
     }
     status["attention_items"] = build_ops_attention_items(status)
     if status["attention_items"]:
@@ -1088,251 +1084,3 @@ def readyz() -> dict[str, object]:
 @router.get("/v1/ping")
 def ping() -> dict[str, str]:
     return {"message": "pong"}
-
-
-# ---------- T+ openToken 有效期监控 ----------
-# openToken 有效期只有 6 天，全靠畅捷通每约 10 分钟推送 appTicket 到
-# /v1/webhooks/chanjet 续期，服务端无法主动申请。链路一断（迁移、停机、消息地址
-# 被平台标记「不再发送」）就静默失效，整条 T+ 同步与 BOM builder 一起挂。
-# 正常时剩余始终贴近 6 天；掉到阈值以下即说明续期链路已断。详见
-# docs/runbooks/tplus.md 的「openToken 续期链路」。
-
-CHANJET_TOKEN_ALERT_THRESHOLD_SECONDS = 4 * 86400
-CHANJET_TOKEN_ALERT_INTERVAL_SECONDS = 86400
-CHANJET_ALERT_FEISHU_RECEIVE_ID = "oc_84d1130542509e374f7ea20c13d11ca4"
-
-
-def _jwt_expiry(token: str) -> datetime | None:
-    """取 JWT payload 里的 exp。非 JWT 或缺 exp 返回 None。"""
-    parts = token.split(".")
-    if len(parts) < 2:
-        return None
-    payload = parts[1]
-    payload += "=" * (-len(payload) % 4)
-    try:
-        claims = json.loads(base64.urlsafe_b64decode(payload).decode("utf-8"))
-        return datetime.fromtimestamp(int(claims["exp"]), tz=timezone.utc)
-    except Exception:
-        return None
-
-
-def _chanjet_token_status() -> dict[str, Any]:
-    path = os.getenv("CHANJET_OPEN_TOKEN_FILE", "").strip()
-    if not path:
-        return {"configured": False, "ok": True, "message": "未配置 CHANJET_OPEN_TOKEN_FILE"}
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            token = handle.read().strip()
-    except OSError as exc:
-        return {"configured": True, "ok": False, "message": f"读取 token 文件失败：{type(exc).__name__}"}
-    if not token:
-        return {"configured": True, "ok": False, "message": "token 文件为空"}
-    expires_at = _jwt_expiry(token)
-    if expires_at is None:
-        return {"configured": True, "ok": False, "message": "token 解析不出有效期"}
-    remaining = (expires_at - datetime.now(timezone.utc)).total_seconds()
-    expired = remaining <= 0
-    return {
-        "configured": True,
-        "ok": remaining >= CHANJET_TOKEN_ALERT_THRESHOLD_SECONDS,
-        "expired": expired,
-        "expires_at": expires_at.isoformat(),
-        "remaining_hours": round(remaining / 3600, 1),
-        "message": (
-            "openToken 已失效" if expired
-            else f"剩余 {round(remaining / 3600, 1)} 小时"
-        ),
-    }
-
-
-def _chanjet_token_alert_text(status: dict[str, Any]) -> str:
-    head = "⛔ T+ openToken 已失效" if status.get("expired") else "⚠️ T+ openToken 即将失效"
-    lines = [head, status.get("message", "")]
-    if status.get("expires_at"):
-        lines.append(f"到期时间：{status['expires_at']}")
-    lines += [
-        "",
-        "续期靠畅捷通推送 appTicket，链路断了不会自愈。",
-        "处置：畅捷通开放平台 →「消息配置」→ 若「当前平台消息发送状态」显示"
-        "「不再发送」，点「重置消息地址状态并发送AppTicket」。",
-        "详见 AliECS/docs/runbooks/tplus.md",
-    ]
-    return "\n".join(line for line in lines if line is not None)
-
-
-def _send_chanjet_token_alert(status: dict[str, Any]) -> bool:
-    from app.routers.versions import send_feishu_text
-
-    return send_feishu_text(
-        os.getenv("OPS_ALERT_FEISHU_RECEIVE_ID", CHANJET_ALERT_FEISHU_RECEIVE_ID).strip(),
-        _chanjet_token_alert_text(status),
-        app_id=os.getenv("OPS_ALERT_FEISHU_APP_ID", os.getenv("VERSION_DIGEST_FEISHU_APP_ID", "")).strip(),
-        app_secret=os.getenv("OPS_ALERT_FEISHU_APP_SECRET", os.getenv("VERSION_DIGEST_FEISHU_APP_SECRET", "")).strip(),
-    )
-
-
-def chanjet_token_alert_once() -> dict[str, Any]:
-    """检查一次；异常就发飞书。不做去重——每天一次，坏着就每天提醒。"""
-    status = _chanjet_token_status()
-    if not status.get("configured") or status.get("ok"):
-        return {"alerted": False, "status": status}
-    return {"alerted": _send_chanjet_token_alert(status), "status": status}
-
-
-def _chanjet_token_alert_loop() -> None:
-    interval = _read_alert_interval()
-    while True:
-        try:
-            chanjet_token_alert_once()
-        except Exception:
-            LOGGER.exception("chanjet openToken alert check failed")
-        time.sleep(interval)
-
-
-def _read_alert_interval() -> int:
-    try:
-        value = int(os.getenv("CHANJET_TOKEN_ALERT_INTERVAL_SECONDS", "").strip())
-        return value if value > 0 else CHANJET_TOKEN_ALERT_INTERVAL_SECONDS
-    except ValueError:
-        return CHANJET_TOKEN_ALERT_INTERVAL_SECONDS
-
-
-@router.on_event("startup")
-def _start_chanjet_token_watcher() -> None:
-    if os.getenv("CHANJET_TOKEN_ALERT_ENABLED", "1").strip() != "1":
-        return
-    threading.Thread(target=_chanjet_token_alert_loop, name="chanjet-token-watcher", daemon=True).start()
-
-
-# ---------- T+ 定时全量同步结果监控 ----------
-# tplus-sync-worker 跑完一轮定时全量会写 integration_sync_runs(provider='chanjet',
-# mode='scheduled_full')，但失败时它只记日志、不重试，直接睡到下一个锚点（约 24h）。
-# 2026-08-07 18:00 的失败就是这样没人知道，直到 /formula/colors/ 冒出 41 个「编码失联」
-# 才被发现（存货档案只有这一轮会落库）。这里在 backend 侧盯这张表：
-# 失败、部分模块失败、或久无成功记录都告警，复用 openToken 告警那组飞书凭据。
-
-TPLUS_FULL_SYNC_STALE_SECONDS = 2 * 86400
-TPLUS_FULL_SYNC_ALERT_INTERVAL_SECONDS = 3600
-
-_TPLUS_FULL_SYNC_SQL = """
-SELECT status, finished_at, exit_code, detail_json
-FROM integration_sync_runs
-WHERE provider = 'chanjet' AND mode = 'scheduled_full'
-ORDER BY started_at DESC, id DESC
-LIMIT 1
-"""
-
-
-def evaluate_tplus_full_sync(latest: dict[str, Any] | None, *, now: datetime,
-                             stale_after_seconds: int = TPLUS_FULL_SYNC_STALE_SECONDS) -> dict[str, Any]:
-    """判定最近一轮定时全量是否健康。纯函数，方便测；查库在调用方。"""
-    if not latest:
-        return {"ok": False, "status": "missing", "failed_modules": [], "stale": True,
-                "message": "从未见到定时全量同步记录"}
-    status = str(latest.get("status") or "")
-    detail = latest.get("detail_json") or {}
-    failed_modules = [str(item) for item in (detail.get("failed_modules") or [])]
-    finished_at = latest.get("finished_at")
-    age_seconds = (now - finished_at).total_seconds() if finished_at else None
-    stale = age_seconds is not None and age_seconds > stale_after_seconds
-    # status=success 但 failed_modules 非空 = 模块独立容错后的部分失败，同样要报。
-    ok = status == "success" and not failed_modules and not stale
-    if status != "success":
-        message = f"最近一轮定时全量失败（exit_code={latest.get('exit_code')}）"
-    elif failed_modules:
-        message = f"最近一轮定时全量部分模块失败：{'、'.join(failed_modules)}"
-    elif stale:
-        message = f"已 {round((age_seconds or 0) / 3600)} 小时没有成功的定时全量"
-    else:
-        message = "正常"
-    return {
-        "ok": ok,
-        "status": status,
-        "exit_code": latest.get("exit_code"),
-        "failed_modules": failed_modules,
-        "finished_at": finished_at.isoformat() if hasattr(finished_at, "isoformat") else finished_at,
-        "stale": stale,
-        "message": message,
-    }
-
-
-def _tplus_full_sync_status() -> dict[str, Any]:
-    with closing(_conn()) as conn:
-        with conn.cursor() as cur:
-            cur.execute(_TPLUS_FULL_SYNC_SQL)
-            row = cur.fetchone()
-    latest = None
-    if row:
-        latest = {"status": row[0], "finished_at": row[1], "exit_code": row[2], "detail_json": row[3] or {}}
-    return evaluate_tplus_full_sync(latest, now=datetime.now(timezone.utc))
-
-
-def _tplus_full_sync_alert_text(status: dict[str, Any]) -> str:
-    lines = ["⛔ T+ 定时全量同步异常", status.get("message", "")]
-    if status.get("failed_modules"):
-        lines.append(f"失败模块：{'、'.join(status['failed_modules'])}")
-    if status.get("finished_at"):
-        lines.append(f"最近一轮结束于：{status['finished_at']}")
-    lines += [
-        "",
-        "影响：存货档案只在定时全量里落库，缺了会让 /formula/colors/ 的父件误判「编码失联」。",
-        "worker 失败后不重试，会一直等到下一个锚点。",
-        "详见 AliECS/docs/runbooks/tplus.md",
-    ]
-    return "\n".join(line for line in lines if line)
-
-
-def _send_tplus_full_sync_alert(status: dict[str, Any]) -> bool:
-    from app.routers.versions import send_feishu_text
-
-    return send_feishu_text(
-        os.getenv("OPS_ALERT_FEISHU_RECEIVE_ID", CHANJET_ALERT_FEISHU_RECEIVE_ID).strip(),
-        _tplus_full_sync_alert_text(status),
-        app_id=os.getenv("OPS_ALERT_FEISHU_APP_ID", os.getenv("VERSION_DIGEST_FEISHU_APP_ID", "")).strip(),
-        app_secret=os.getenv("OPS_ALERT_FEISHU_APP_SECRET", os.getenv("VERSION_DIGEST_FEISHU_APP_SECRET", "")).strip(),
-    )
-
-
-def tplus_full_sync_alert_once() -> dict[str, Any]:
-    """检查一次；异常就发飞书。同一轮失败只报一次，靠 finished_at 去重——
-    否则每小时一条会把群刷爆。"""
-    global _TPLUS_LAST_ALERTED_RUN
-    status = _tplus_full_sync_status()
-    if status.get("ok"):
-        _TPLUS_LAST_ALERTED_RUN = None
-        return {"alerted": False, "status": status}
-    marker = str(status.get("finished_at") or status.get("status"))
-    if marker == _TPLUS_LAST_ALERTED_RUN:
-        return {"alerted": False, "status": status, "deduped": True}
-    alerted = _send_tplus_full_sync_alert(status)
-    if alerted:
-        _TPLUS_LAST_ALERTED_RUN = marker
-    return {"alerted": alerted, "status": status}
-
-
-_TPLUS_LAST_ALERTED_RUN: str | None = None
-
-
-def _read_tplus_alert_interval() -> int:
-    try:
-        value = int(os.getenv("TPLUS_SYNC_ALERT_INTERVAL_SECONDS", "").strip())
-        return value if value > 0 else TPLUS_FULL_SYNC_ALERT_INTERVAL_SECONDS
-    except ValueError:
-        return TPLUS_FULL_SYNC_ALERT_INTERVAL_SECONDS
-
-
-def _tplus_full_sync_alert_loop() -> None:
-    interval = _read_tplus_alert_interval()
-    while True:
-        try:
-            tplus_full_sync_alert_once()
-        except Exception:
-            LOGGER.exception("T+ full sync alert check failed")
-        time.sleep(interval)
-
-
-@router.on_event("startup")
-def _start_tplus_full_sync_watcher() -> None:
-    if os.getenv("TPLUS_SYNC_ALERT_ENABLED", "1").strip() != "1":
-        return
-    threading.Thread(target=_tplus_full_sync_alert_loop, name="tplus-full-sync-watcher", daemon=True).start()

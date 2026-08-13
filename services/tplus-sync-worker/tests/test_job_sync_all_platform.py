@@ -1,6 +1,10 @@
 import os
+import tempfile
 import unittest
 from contextlib import ExitStack
+from datetime import datetime, timezone
+import json
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import tplus_datahub.jobs.job_sync_all as job_sync_all
@@ -176,6 +180,7 @@ class JobSyncAllPlatformTests(unittest.TestCase):
         self.assertEqual(
             {
                 "export_files": result.export_files,
+                "artifacts": [],
                 "diff_summary": result.diff_summary,
                 "full_snapshot_id": result.full_snapshot_id,
                 "failed_modules": ["inventory"],
@@ -192,6 +197,59 @@ class JobSyncAllPlatformTests(unittest.TestCase):
             result.export_files,
         )
         self.assertIsNone(result.platform_run_id)
+
+    def test_platform_detail_records_artifact_name_and_mtime_without_path(self):
+        platform = RecordingPlatform()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            export = Path(temporary_directory) / "物料清单合并_20260812.xlsx"
+            export.write_text("fixture", encoding="utf-8")
+            expected_epoch = 1_786_572_800.0
+            os.utime(export, (expected_epoch, expected_epoch))
+
+            self._run(
+                platform,
+                export_bom=patch.object(job_sync_all, "export_bom", return_value=export),
+            )
+
+            detail = platform.finished[-1]["detail_json"]
+            self.assertEqual("物料清单合并_20260812.xlsx", detail["artifacts"][0]["name"])
+            self.assertEqual(expected_epoch, detail["artifacts"][0]["mtime_epoch"])
+            recorded_mtime = datetime.fromisoformat(detail["artifacts"][0]["mtime"])
+            self.assertEqual(timezone.utc, recorded_mtime.tzinfo)
+            self.assertEqual(expected_epoch, recorded_mtime.timestamp())
+            json.dumps(detail)
+            self.assertNotIn(temporary_directory, repr(detail))
+
+    def test_platform_detail_keeps_legacy_export_when_artifact_stat_fails(self):
+        platform = RecordingPlatform()
+
+        self._run(
+            platform,
+            export_bom=patch.object(job_sync_all, "export_bom", return_value="missing.xlsx"),
+        )
+
+        detail = platform.finished[-1]["detail_json"]
+        self.assertEqual("success", platform.finished[-1]["status"])
+        self.assertIn("missing.xlsx", detail["export_files"])
+        self.assertEqual([], detail["artifacts"])
+
+    def test_platform_detail_keeps_confirmed_artifact_after_later_export_failure(self):
+        platform = RecordingPlatform()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            export = Path(temporary_directory) / "bom.xlsx"
+            export.write_text("fixture", encoding="utf-8")
+
+            self._run(
+                platform,
+                export_bom=patch.object(job_sync_all, "export_bom", return_value=export),
+                export_inventory=patch.object(
+                    job_sync_all, "export_inventory", side_effect=RuntimeError("export failed")
+                ),
+            )
+
+            detail = platform.finished[-1]["detail_json"]
+            self.assertEqual("partial", platform.finished[-1]["status"])
+            self.assertEqual(["bom.xlsx"], [artifact["name"] for artifact in detail["artifacts"]])
 
     def test_failed_fetch_records_zero_items_when_no_count_is_reliable(self):
         platform = RecordingPlatform()

@@ -98,13 +98,13 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_USER: aliecs
-          POSTGRES_PASSWORD: aliecs
-          POSTGRES_DB: aliecs
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: app
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U aliecs -d aliecs"
+          --health-cmd "pg_isready -U app -d app"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -119,6 +119,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r services/backend-api/requirements.txt
+          python -m pip install -r services/doc-sync-worker/requirements.txt
           python -m pip install httpx==0.28.1
           python -m pip install pytest==9.0.3
 
@@ -131,24 +132,29 @@ jobs:
         run: |
           for f in db/migrations/*.sql; do
             echo "Applying $f"
-            PGPASSWORD=aliecs psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U aliecs -d aliecs -f "$f"
+            PGPASSWORD=app psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U app -d app -f "$f"
           done
 
       - name: Run sync job platform integration test
         env:
-          DATABASE_URL: postgresql://aliecs:aliecs@127.0.0.1:5432/aliecs
+          DATABASE_URL: postgresql://app:app@127.0.0.1:5432/app
           SYNC_JOB_PLATFORM_INTEGRATION: "1"
         run: python -m unittest discover -s tests -p "test_sync_job_platform_integration.py" -v
 
       - name: Run sync center read integration test
         env:
-          DATABASE_URL: postgresql://aliecs:aliecs@127.0.0.1:5432/aliecs
+          DATABASE_URL: postgresql://app:app@127.0.0.1:5432/app
           SYNC_JOB_PLATFORM_INTEGRATION: "1"
         run: python -m unittest discover -s tests -p "test_sync_read_api_integration.py" -v
 
+      - name: Run sync alert notifier integration test
+        env:
+          SYNC_ALERT_INTEGRATION_DATABASE_URL: postgresql://app:app@localhost:5432/app
+        run: python -m unittest discover -s tests -p "test_sync_alert_notifier_integration.py" -v
+
       - name: Run backend smoke test
         env:
-          DATABASE_URL: postgresql://aliecs:aliecs@127.0.0.1:5432/aliecs
+          DATABASE_URL: postgresql://app:app@127.0.0.1:5432/app
           AUTH_TOKEN_SECRET: ci-test-secret-please-rotate-0123456789
           ENV: dev
           LOCAL_UPLOAD_DIR: /tmp

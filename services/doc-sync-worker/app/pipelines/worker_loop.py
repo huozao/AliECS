@@ -4,13 +4,14 @@ import os
 import threading
 import time
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.pipelines.backfill_smartsheet_images import run_backfill_images
 from app.pipelines.group_message_listener import resolve_groupbot_profile, run_group_listener
 from app.pipelines.rnd_record_writer import run_write_rnd_records
 from app.pipelines.sync_feishu_full import run_sync_feishu_full
+from app.pipelines import sync_alert_notifier
 from app.pipelines.sync_schedule import (
     next_full_sync_due,
     pull_config_from_bitable,
@@ -59,6 +60,7 @@ def run_worker_loop(
     *,
     full_sync: Callable[[], int] | None = None,
     consume_requests: Callable[[], int] | None = None,
+    notifier_once: Callable[[], dict[str, Any]] | None = None,
     sleep: Callable[[float], None] = time.sleep,
     max_cycles: int | None = None,
     schedule_reader: Callable[[], dict[str, Any]] | None = None,
@@ -133,6 +135,18 @@ def run_worker_loop(
 
     run_full = full_sync or _default_full_sync
     run_pending = consume_requests or _default_consume_requests
+    if notifier_once is not None:
+        run_notifier = notifier_once
+    elif is_default_pipeline:
+        run_notifier = sync_alert_notifier.run_notifier_once
+    else:
+        run_notifier = lambda: {}  # noqa: E731
+
+    def _notify_fail_open() -> None:
+        try:
+            run_notifier()
+        except Exception as exc:  # noqa: BLE001 - 告警失败不拖垮同步主循环
+            print(f"[文档同步循环] 告警检查异常：{type(exc).__name__}")
 
     _maybe_start_group_listener()
 
@@ -141,6 +155,8 @@ def run_worker_loop(
     except Exception:  # noqa: BLE001
         last_full = None
     last_pull_monotonic: float | None = None
+    # 仅去重紧邻的 terminal poll / next preflight；每个 poll 仍独立告警。
+    terminal_poll_covered_next_preflight = False
     cycles = 0
     while True:
         config = read_config()
@@ -148,6 +164,8 @@ def run_worker_loop(
         anchor_time = str(config.get("anchor_time") or "")
         enabled = bool(config.get("enabled", True))
         current = now()
+        terminal_poll_covers_preflight = terminal_poll_covered_next_preflight
+        terminal_poll_covered_next_preflight = False
         if not enabled:
             print(f"[文档同步循环] 定时同步已关闭，仅消费手动请求（poll={poll_seconds}s）。")
             remaining = float(min(interval_seconds, DISABLED_RECHECK_MAX_SECONDS))
@@ -159,6 +177,8 @@ def run_worker_loop(
                     f"anchor={anchor_time or '-'}）"
                 )
                 last_full = current
+                if not terminal_poll_covers_preflight:
+                    _notify_fail_open()
                 try:
                     run_full()
                 except Exception as exc:  # noqa: BLE001
@@ -167,6 +187,7 @@ def run_worker_loop(
             else:
                 print(f"[文档同步循环] 上次全量未到期（下次 {due.isoformat()}），跳过启动全量。")
             remaining = max((due - current).total_seconds(), 0.0)
+        expected_terminal_boundary = due if enabled else current + timedelta(seconds=remaining)
         while remaining > 0:
             step = min(poll_seconds, remaining)
             sleep(step)
@@ -175,6 +196,10 @@ def run_worker_loop(
                 run_pending()
             except Exception as exc:  # noqa: BLE001
                 print(f"[文档同步循环] 消费手动请求异常：{exc}")
+            _notify_fail_open()
+            if remaining <= 0:
+                observed = now()
+                terminal_poll_covered_next_preflight = observed >= expected_terminal_boundary
             mono = time.monotonic()
             if last_pull_monotonic is None or mono - last_pull_monotonic >= CONFIG_PULL_MIN_SECONDS:
                 last_pull_monotonic = mono
