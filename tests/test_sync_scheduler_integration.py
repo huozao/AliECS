@@ -17,6 +17,7 @@ from psycopg.types.json import Jsonb
 ROOT = Path(__file__).resolve().parents[1]
 DOC_WORKER_ROOT = (ROOT / "services" / "doc-sync-worker").resolve()
 DOC_STORE_PATH = DOC_WORKER_ROOT / "app" / "storage" / "postgres.py"
+DOC_SCHEDULER_PATH = DOC_WORKER_ROOT / "app" / "pipelines" / "sync_scheduler.py"
 TPLUS_WORKER_ROOT = (ROOT / "services" / "tplus-sync-worker" / "src").resolve()
 
 CONFIG = {
@@ -24,14 +25,27 @@ CONFIG = {
     "interval_seconds": 86400,
     "anchor_time": "01:00",
 }
-SHADOW = {
-    "mode": "shadow",
-    "sampled_at": "2026-08-13T10:00:00+00:00",
-    "legacy": {"run_full": False, "due": "2026-08-13T17:00:00+00:00"},
-    "candidate": {"run_full": False, "due": "2026-08-13T17:00:00+00:00"},
-    "decision_match": True,
-    "due_delta_seconds": 0.0,
-}
+
+
+def _real_shadow_payload() -> dict[str, object]:
+    module_name = "_p4_scheduler_doc_kernel"
+    spec = importlib.util.spec_from_file_location(module_name, DOC_SCHEDULER_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load scheduler from {DOC_SCHEDULER_PATH}")
+    scheduler = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = scheduler
+    spec.loader.exec_module(scheduler)
+    sampled_at = datetime(2026, 8, 13, 10, 0, tzinfo=timezone.utc)
+    decision = scheduler.ScheduleDecision(
+        datetime(2026, 8, 13, 17, 0, tzinfo=timezone.utc),
+        False,
+        25200,
+    )
+    return scheduler.shadow_payload(
+        sampled_at=sampled_at,
+        legacy=decision,
+        candidate=decision,
+    )
 
 
 def _load_repositories() -> tuple[Any, Any]:
@@ -76,6 +90,7 @@ class SyncSchedulerPostgresIntegrationTests(unittest.TestCase):
             )
 
         doc_repository, tplus_repository = _load_repositories()
+        shadow = _real_shadow_payload()
         conn = psycopg.connect(database_url, connect_timeout=5)
         fixture_key = f"ci.p4.{uuid.uuid4().hex}"
         ci_job_id: int | None = None
@@ -201,7 +216,7 @@ class SyncSchedulerPostgresIntegrationTests(unittest.TestCase):
 
             doc_store = doc_repository.PostgresDocSyncStore(conn)
             before_doc_run_count = self._run_count(conn, ci_job_id)
-            exact_doc_updated_ids = doc_store.record_scheduler_shadow(SHADOW)
+            exact_doc_updated_ids = doc_store.record_scheduler_shadow(shadow)
             self.assertEqual([doc_run_id], exact_doc_updated_ids)
             doc_store.finish_scheduler_shadow(
                 exact_doc_updated_ids,
@@ -223,7 +238,7 @@ class SyncSchedulerPostgresIntegrationTests(unittest.TestCase):
             self.assertEqual(CONFIG, stored_schedule)
             before_tplus_run_count = self._run_count(conn, chanjet_job_id)
             exact_updated_ids = tplus_repository.record_scheduler_shadow(
-                SHADOW, conn=conn
+                shadow, conn=conn
             )
             self.assertEqual([chanjet_run_id], exact_updated_ids)
             tplus_repository.finish_scheduler_shadow(

@@ -15,8 +15,7 @@ class ScheduleDecision:
 
 
 def normalize_mode(raw: str | None) -> str:
-    value = str(raw or "").strip().lower()
-    return value if value in {"legacy", "shadow", "active"} else "legacy"
+    return raw if raw in {"legacy", "shadow", "active"} else "legacy"
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -69,6 +68,7 @@ def shadow_payload(*, sampled_at: datetime, legacy: ScheduleDecision, candidate:
     legacy_due = _as_utc(legacy.due)
     candidate_due = _as_utc(candidate.due)
     return {
+        "mode": "shadow",
         "sampled_at": _as_utc(sampled_at).isoformat(),
         "legacy": _decision_payload(legacy),
         "candidate": _decision_payload(candidate),

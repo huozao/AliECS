@@ -868,6 +868,7 @@ class WorkerLoopTests(WorkerImportTestCase):
         self.assertEqual(2, len(pending_calls))
         self.assertEqual(3, len(notifier_calls))  # full preflight + two unchanged legacy polls
         self.assertEqual(1, len(shadows))
+        self.assertEqual("shadow", shadows[0]["mode"])
         self.assertFalse(shadows[0]["decision_match"])
         self.assertEqual(([731, 932], 60, False), finishes[0])
 

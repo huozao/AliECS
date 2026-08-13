@@ -475,6 +475,7 @@ class WorkerLoopTests(unittest.TestCase):
 
         self.assertEqual(["scheduled-full"], calls)
         self.assertEqual(1, len(recorded_shadow))
+        self.assertEqual("shadow", recorded_shadow[0]["mode"])
         self.assertFalse(recorded_shadow[0]["decision_match"])
         self.assertTrue(recorded_shadow[0]["legacy"]["run_full"])
         self.assertFalse(recorded_shadow[0]["candidate"]["run_full"])

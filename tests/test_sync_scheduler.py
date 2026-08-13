@@ -51,11 +51,26 @@ class SchedulerKernelTests(unittest.TestCase):
     def test_worker_scheduler_copies_are_byte_identical(self):
         self.assertEqual(DOC_SCHEDULER.read_bytes(), TPLUS_SCHEDULER.read_bytes())
 
-    def test_normalize_mode_accepts_only_explicit_modes(self):
-        self.assertEqual("legacy", self.scheduler.normalize_mode(None))
-        self.assertEqual("shadow", self.scheduler.normalize_mode(" SHADOW "))
-        self.assertEqual("active", self.scheduler.normalize_mode("active"))
-        self.assertEqual("legacy", self.scheduler.normalize_mode("unknown"))
+    def test_normalize_mode_accepts_only_exact_lowercase_modes(self):
+        cases = {
+            None: "legacy",
+            "": "legacy",
+            " ": "legacy",
+            "legacy": "legacy",
+            "shadow": "shadow",
+            "active": "active",
+            "SHADOW": "legacy",
+            "ACTIVE": "legacy",
+            "Active": "legacy",
+            " shadow": "legacy",
+            "shadow ": "legacy",
+            " active ": "legacy",
+            "unknown": "legacy",
+        }
+        for scheduler in (self.scheduler, self.tplus_scheduler):
+            for raw, expected in cases.items():
+                with self.subTest(module=scheduler.__name__, raw=raw):
+                    self.assertEqual(expected, scheduler.normalize_mode(raw))
 
     def test_literal_schedule_cases(self):
         anchor = "02:00"
@@ -189,6 +204,7 @@ class SchedulerKernelTests(unittest.TestCase):
         legacy = self.scheduler.ScheduleDecision(NOW, True, 0)
         candidate = self.scheduler.ScheduleDecision(NOW, True, 0)
         payload = self.scheduler.shadow_payload(sampled_at=NOW, legacy=legacy, candidate=candidate)
+        self.assertEqual("shadow", payload["mode"])
         self.assertEqual({"decision_match": True, "due_delta_seconds": 0.0}, {
             key: payload[key] for key in ("decision_match", "due_delta_seconds")
         })
