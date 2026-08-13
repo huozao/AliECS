@@ -67,6 +67,7 @@ proxy-providers:
   <provider_key>:
     type: http
     url: <数据库中的订阅 URL>
+    proxy: DIRECT
     interval: 86400
     path: ./providers/<provider_key>.yaml
     health-check:
@@ -78,6 +79,29 @@ proxy-providers:
 `provider_key` 由数据库行 id 生成（`airport1` 形式），不用机场名，避免中文与特殊字符进 YAML key。
 
 mihomo 会解析上游的 `subscription-userinfo` 响应头，因此机场的流量用量与到期时间在 Clash Verge 里照常显示。
+
+#### `proxy: DIRECT` 不是可选项（2026-08-12 补，首版漏了导致节点数 0）
+
+**mihomo 拉 provider 时走自己的规则链，不绕开它。** 本地探针实测（配置里只有 `MATCH,g`）：
+
+```
+[TCP] dial g (match Match/) mihomo --> 127.0.0.1:28899 error: ...
+initial proxy provider probe error: Get "http://127.0.0.1:28899/sub": EOF
+```
+
+机场订阅域名解析到境外 IP，不命中 `GEOIP,CN`，一路掉到 `MATCH,节点选择` ——「拉订阅」这件事本身要先有可用代理，形成自举依赖，首次导入必然失败。
+
+**且只能直连，不能改走自建节点**，三点实测：
+
+| 出口 | 结果 |
+|---|---|
+| 国内直连（txecs） | 200 |
+| 境外自建节点所在机房（aliecs） | 156ms 快速拒绝 |
+| 国内家宽直连（devbox） | 200（后因短时间密集拉取被源 IP 拦截，见「已知风险」） |
+
+机场拒绝境外机房 IP，所以把拉取走代理反而是确定失败的路径。`DIRECT` 也正是 Clash Verge 现有 remote profile 的既有行为——它默认不带 `self_proxy`，同样直连拉取，周期同为 24 小时。
+
+`path` 指向的缓存副本提供了容错：实测把 URL 指向死端口重启，缓存里的节点照常加载且不报 error。**只要首次导入成功一次，之后偶发拉取失败不会清空节点。**
 
 ### 改动 2：重建 `proxy-groups`
 
@@ -242,7 +266,15 @@ admin-ui 新增页签，复用现有 `common/toast.js` 风格：
 
 ### 手工验证（单测覆盖不到）
 
-1. **配置语法校验**：用 Clash Verge 自带的 mihomo 核心跑 `verge-mihomo -t -f <生成的配置>`。这一步比任何单测都硬，能抓出拼接产生的缩进与结构错误。不进 CI（CI 环境没有 mihomo 二进制），作为部署前必做步骤。
+1. **配置语法校验**：用 Clash Verge 自带的 mihomo 核心跑 `clash-meta -t -d <目录> -f <生成的配置>`（目录里要放 `geosite.dat`/`geoip.dat`/`Country.mmdb`，否则只会因缺 geodata 报错）。能抓出拼接产生的缩进与结构错误。不进 CI（CI 环境没有 mihomo 二进制），作为部署前必做步骤。
+
+   ⚠️ **`-t` 不覆盖 provider 拉取**。它只做静态校验，`proxy-providers` 拉不拉得到、拉回来能不能解析，全都测不出来——首版就是这样漏掉 `proxy: DIRECT` 的：`-t` 报 `test is successful`，实跑 provider 节点数 0。要验拉取必须**真跑一次实例**再查 `GET /providers/proxies` 的节点数：
+
+   ```bash
+   # 换端口、关 tun、加 external-controller，避免干扰正在使用的 Clash Verge
+   clash-meta -d <目录> -f <改造后的配置>
+   curl -s http://127.0.0.1:29090/providers/proxies | jq '.providers[] | select(.vehicleType=="HTTP") | {name, count:(.proxies|length)}'
+   ```
 2. **Windows Clash Verge 导入**：确认两类节点都出现在 `节点选择` 组；确认机场流量与到期信息正常显示。
 3. **机场节点连通性**：切到一个机场节点访问境外站点。重点验证 TUN 模式下机场节点不会因为缺少防回环规则而失败。
 4. **DNS 未回归**：切到机场节点后访问 YouTube 等依赖 `nameserver-policy` 的站点，确认境外 DNS 仍走代理查询。
@@ -254,6 +286,7 @@ admin-ui 新增页签，复用现有 `common/toast.js` 风格：
 | 风险 | 说明 |
 |---|---|
 | geodata 先有鸡先有蛋 | `GEOSITE,CN` 依赖 `geosite.dat`。手机首次导入时若尚无该文件且无法直连下载，需要先手动选节点连上 |
+| 机场按源 IP 拦截 | 2026-08-12 实测：同一条成都电信家宽在密集拉取（约 5 分钟内 7 次）后被静默丢包，**持续 30 分钟以上未恢复**，同刻 txecs 仍 200。traceroute 显示包正常出境（香港 PCCW 191ms）后才断，说明是目的端按源 IP 丢弃，不是 GFW 边界拦截。正常运行是一天一次，不会触发；**但排障时不要反复手动拉取**，会把自己的出口打进黑名单，连带影响现有 Clash Verge 订阅更新 |
 | 防回环规则覆盖不到机场节点 | 见上文，依赖 mihomo TUN 自身机制，列入验证清单 |
 | 规则调整需要走部署 | 相比现在直接编辑本地文件变慢。若后续觉得难受，再考虑把规则段做成 DB 可编辑，但那会牺牲可追溯性，本次不做 |
 | 配置文件含自建节点凭据 | 下载后的文件与现在 Clash Verge 里存的内容同等敏感，按同样方式保管。若经飞书投递，等于把 UUID 过一遍第三方服务器 |

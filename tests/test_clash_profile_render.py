@@ -64,6 +64,17 @@ class ClashProfileRenderTests(unittest.TestCase):
         auto = next(g for g in groups if g["name"] == "自动选择")
         self.assertEqual(auto["use"], ["airport7"])
 
+    def test_provider_fetch_bypasses_rule_chain(self) -> None:
+        """回归保护：删掉 proxy: DIRECT，首次导入必然拉不到机场节点。
+
+        mihomo 拉 provider 时走自己的规则链，机场域名解析到境外 IP 后掉到
+        MATCH,节点选择，于是"拉订阅"本身先要有可用代理（2026-08-12 实测 EOF、节点数 0）。
+        走自建节点也不行——机场拒绝境外机房 IP，只能直连。
+        """
+        out = self.render.render_profile([self.node], [self.provider])
+        providers = _section(out, "proxy-providers")
+        self.assertEqual(providers["airport7"]["proxy"], "DIRECT")
+
     def test_select_group_name_is_locked(self) -> None:
         # DNS 段有约 24 处 "#节点选择" 引用组名，改名会让境外 DNS 全部失效。
         out = self.render.render_profile([self.node], [self.provider])
