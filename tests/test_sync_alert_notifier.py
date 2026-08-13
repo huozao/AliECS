@@ -951,6 +951,19 @@ class SyncAlertOrchestrationTests(unittest.TestCase):
             )
             self.assertEqual(1, result["resolved"])
 
+    def test_artifact_live_glob_empty_is_stale_despite_fresh_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.job["artifact_glob"] = str(Path(tmp) / "*.xlsx")
+            snapshot = [{"name": "export.xlsx", "mtime_epoch": self.now.timestamp()}]
+
+            result = self.run_with_latest(
+                status="success", run_id=10, latest_success_at=self.now,
+                latest_success_detail={"artifacts": snapshot},
+            )
+
+        self.assertEqual(1, result["opened"])
+        self.assertEqual("artifact_stale", self.repository.alerts[1]["alert_kind"])
+
     def test_chanjet_token_expiring_opens_and_refresh_resolves_without_token_or_path(self) -> None:
         self.job["job_key"] = "chanjet.full"
         with tempfile.TemporaryDirectory() as tmp:

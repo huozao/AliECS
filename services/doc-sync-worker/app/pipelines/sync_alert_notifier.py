@@ -290,12 +290,7 @@ def _alert_conditions(
 
     artifact_pattern = str(job.get("artifact_glob") or "").strip()
     if artifact_pattern:
-        snapshot_artifacts: list[dict[str, Any]] = []
-        if latest_success:
-            detail = latest_success.get("detail_json")
-            if isinstance(detail, dict) and isinstance(detail.get("artifacts"), list):
-                snapshot_artifacts = [item for item in detail["artifacts"] if isinstance(item, dict)]
-        artifacts = [*snapshot_artifacts, *_live_artifacts(artifact_pattern)]
+        artifacts = _live_artifacts(artifact_pattern)
         success_started_at = latest_success.get("started_at") if latest_success else None
         if artifact_is_stale(
             success_started_at, artifacts, grace_seconds=artifact_grace_seconds
