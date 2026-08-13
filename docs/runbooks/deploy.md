@@ -127,6 +127,36 @@ ssh txecs "sudo docker ps --format '{{.Names}}\t{{.Status}}\t{{.Image}}'"   # �
 curl -s https://hydwang.xyz/<改动页面> | grep -c '<本次新增的标记>'            # 外部实证
 ```
 
+## 同一个 commit 重复部署：ACK 按「每次部署」命名（2026-08-13 修复）
+
+**修改前行为**：`stage-business-cn-peer` 轮询的 ACK 文件按 `release_id`（`sha-<commit前12位>`）
+命名。同 commit 第二次 dispatch 时三处同时跳过——aliecs 的 `peer-release-stage` 判定
+「already staged」、txecs 的 `peer-release-consume` 判定「ACK 已存在」、workflow 第一圈轮询
+直接读到上一次留下的 ACK——于是 1 秒返回 success，容器完全没动。
+2026-08-12 实测：run 31566654644 的该步骤 05:29:44 启动，读到的却是 05:15:18 的 ACK，
+是 17 分钟前 run 31565751714 写的。同 commit 内容一致，那次没造成实际损失；
+**真正会咬人的是改了 runtime env 后重建**——秒绿让人以为已生效，其实容器没动。
+
+**修改后行为**：release request 增加 `deployment_id = sha-<12>-r<run_id>.<attempt>`，
+staged 目录和 ACK 都按它命名；workflow 再校验 ACK 里的 `deployment_id`、`github_run_id`、
+`github_run_attempt` 与本次 run 相等。同 commit 重投必然是一个新身份，会真正重新 stage、
+重新同步、重新部署（txecs 侧重跑 `render.sh` + `deploy-role.sh`）。bridge 路径同样处理。
+
+`release_id` **未改动**，仍是 `sha-<12>`：它同时是 GHCR commit alias 标签和 `deploy-role.sh`
+的 IMAGE_TAG，受 `deploy/ecs/deploy.sh` 的 `^(sha-[0-9a-f]{12,40}|v…|V…)$` 校验约束，
+把它改成带 run 后缀会被当场打回。
+
+**发布触发语义未变**：仍然只有 `workflow_dispatch` 才部署，push 只构建。
+
+**代价**：同 commit 重投不再复用已 staged 的包，会重新导出并经 Syncthing 重传整套镜像 tar。
+`peer-release-stage.sh` 的保留策略（每类型保留 2 个已 ACK 的 release）和 6 GiB 空间下限不变。
+
+**上线顺序**：infra 的 `peer-release-stage.sh` / `peer-release-consume.sh` 必须**先**发到
+aliecs 与 txecs。两个脚本对缺 `deployment_id` 的旧 request 会回落到 `release_id`，
+所以先上 infra 不改变任何现有行为；顺序反了则 workflow 找不到新命名的 ACK，会卡满 30 分钟超时。
+
+**回退方式**：revert AliECS 这个 PR 即可，infra 侧向后兼容不必同时回退。
+
 ## 症状表
 
 | 症状 | 先查 | 处置 |
