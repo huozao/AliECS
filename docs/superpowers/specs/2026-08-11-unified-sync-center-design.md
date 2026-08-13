@@ -358,12 +358,13 @@ DB 那半由「业务数据不搬」覆盖；文件那半平台只**读** mtime 
 | P0 建表 + 抽 common 前端资产 | 2026-08-12 | [#294](https://github.com/huozao/AliECS/pull/294) | `unittest discover -s tests` 646 项全绿（基线 640）；两页 smoke 通过：`admin.css` 生效（`.btn` 圆角 999px）、`window.AliECSAdmin` 13 个契约字段齐、**零 pageerror 零 console error**、SSO 跳转正常；`check_navigation.py` 通过；迁移 0048 由 CI `migration-dry-run` 在 postgres:16-alpine 上实际执行，全 job 日志零 ERROR/FATAL。**未验证重复执行**（CI 只在全新库上跑一遍，`psql` 未带 `ON_ERROR_STOP`，可重复性目前只有 `IF NOT EXISTS` 与文本断言两层保障） |
 | P1 两个 worker 双写 runs/steps | 2026-08-12 | [#299](https://github.com/huozao/AliECS/pull/299) | 企微、飞书、`chanjet.full`、`tplus.parent_match` 已接入 fail-open 双写并保留 legacy 写入；根 unittest 705 项 exit 0（3 skipped），T+ 子项目 158 项全绿，PostgreSQL 16 全迁移集成 1 项通过且测试数据清理为 0；导航与 Compose config 通过；全分支终审无 open Critical/Important。已 squash 合并为 `341df950`；发布 run [31583374908](https://github.com/huozao/AliECS/actions/runs/31583374908) 的 `stage-business-cn-peer` success（`deploy-business-cn` skipped 为正常），txecs 两个 worker 已换新镜像。生产真实执行后：企微 9 个 success run、飞书 13 个、T+ 全量 2 个、父件核对 2 个；文档 22/22 回指 `sync_runs`，manual full 回指 `integration_sync_runs` 且旧行存在。 |
 | P2 只读统一同步中心 | 2026-08-12 | [#302](https://github.com/huozao/AliECS/pull/302) | 新增管理员 GET-only 的 overview、全局/按 job 时间线、run/steps 详情与 alerts，以及 `/sync/` 页面；为跨作业正确排序分页补充 `GET /v1/sync/runs`。NULL SLA 显示未监控，空 schedule 不推导 next run，T+ 差异明细复用既有 reconciliation GET。根 unittest、T+ 158 项、严格 Node 竞态、PostgreSQL 16 真实读集成、导航和两套 Compose 均通过；全分支终审无 open Critical/Important。旧 `/exports/`、`/tplus-sync/` 未改，P2 无 POST/PUT、迁移、worker、notifier 或调度行为。已 squash 合并为 `16950647`；发布 run [31596532543](https://github.com/huozao/AliECS/actions/runs/31596532543) 的 `stage-business-cn-peer` success（`deploy-business-cn` skipped 正常），txecs 的 public-web/backend-api 已换为 `t-2818aa858d18` / `t-73643247d84a` 且 backend healthy。公网 `/sync/`、共享资产及两旧页全 200，未登录 overview 401；生产只读层返回 24 个 job、最近状态全 success、0 open alert，`chanjet.full` 最新 run 的 19 个 step 按序全 success。登录态视觉检查因浏览器控制超时留作非阻塞人工确认。 |
+| P3 统一 notifier + 退役 legacy watcher | 2026-08-13 | [#306](https://github.com/huozao/AliECS/pull/306) | 六类告警统一由 doc worker notifier 写入 `sync_job_alerts`，接管后删除 backend 的畅捷通凭据与 T+ 全量两个 watcher；T+ 产物目录以只读 volume 供 live freshness 判定。根 unittest 818 项全绿（5 skipped）、T+ 161 项全绿，整分支终审无 open Critical/Important。CI run [31685769895](https://github.com/huozao/AliECS/actions/runs/31685769895) 的 `migration-dry-run` 在 PostgreSQL 16 上实际跑通真实双连接 claim/投递、恢复重开及 30/90 天边界测试（1 test OK，非 skip）。squash merge 为 `1e94c506`；infra `1684360a` 以 SOPS 把旧告警目标迁移到两个 txecs profile 的 `SYNC_ALERT_CHAT_ID`。发布 run [31686270585](https://github.com/huozao/AliECS/actions/runs/31686270585) 的 `stage-business-cn-peer` success（`deploy-business-cn` skipped 正常）；txecs backend/doc/T+ 三容器在 `2026-08-13T09:25:49Z` 重建，运行 source commit 为 `1e94c506`。生产 `chanjet.full` 默认值为 SLA `172800`、glob `/app/tplus-output/excel/*.xlsx`，doc worker 可见 370 个 xlsx，部署后 notifier 已刷新 job `updated_at`，告警表 0 行；legacy watcher 符号不存在，doc worker 最近 10 分钟无 notifier error/traceback，内部 health 正常，公网 `/health/`、`/sync/` 均 200。 |
 
-P3 接手须知：
+P3 完结说明：
 
 - P2 的 `/v1/sync/*` 目前全部是管理员 GET；P3 notifier 直接写 `sync_job_alerts`，页面和 `GET /v1/sync/alerts` 已能读取，禁止为告警再造第二套页面状态表。
-- P3 开始前 `sync_job_alerts` 为空是合法状态；不要用测试数据或 legacy 告警伪造生产 open alert。
-- `ops.py` 的 `_chanjet_token_alert_loop` 与 `_tplus_full_sync_alert_loop` 仍在运行。P3 必须先让 notifier 接管并验证真实消息，再按“先接管、后下线”顺序移除，不能反过来。
+- P3 部署后 `sync_job_alerts` 仍为空是合法生产状态；未用测试数据或 legacy 告警伪造 open alert。
+- `ops.py` 的 `_chanjet_token_alert_loop` 与 `_tplus_full_sync_alert_loop` 已在 notifier 接管后移除；回滚时必须避免 notifier 与 legacy watcher 并发双发。
 - `/exports/` 与 `/tplus-sync/` 仍保持原行为；重定向和瘦身属于 P5，不要在 P3 顺手处理。
 - 计划文档里写的 `python -m unittest tests.<module>` 在本仓跑不通（`tests/` 无
   `__init__.py`），正确写法是 `python -m unittest discover -s tests -p "test_xxx.py"`。
@@ -377,3 +378,4 @@ P3 接手须知：
 
 - P4 只能在 P3 notifier 事实源之上增加 scheduler shadow，不能修改 notifier 的生产语义或另建告警事实源。
 - P4 必须独立 PR、独立部署，不得与 P3 同批上线；本轮只到 shadow，绝不切 active。
+- 单用户已明确授权不等待完整 14 天 baseline；P4 可用现有运行历史、全量人工核对和可恢复能力替代等待，但不得因此跳过 shadow 对账、回滚开关或把任何 worker 切为 active。
