@@ -30,6 +30,16 @@ HEALTH_CHECK_URL = "https://www.gstatic.com/generate_204"
 PROVIDER_INTERVAL = 86400
 HEALTH_CHECK_INTERVAL = 300
 
+# ⚠️ mihomo 拉取 proxy-provider 时会走自己的规则链，而不是绕开它（2026-08-12 本地探针实测：
+# 只有 MATCH 规则时，日志出现 "dial <组名> mihomo --> <订阅地址>"，拉取被丢进代理组）。
+# 机场订阅域名通常解析到境外 IP，不命中 GEOIP,CN，于是一路掉到 MATCH,节点选择 ——
+# 「拉订阅」这件事本身要先有可用代理，形成自举依赖，首次导入时必然失败（节点数 0）。
+#
+# 只能直连，不能走自建节点：实测机场对境外机房 IP 是拒绝的（aliecs 156ms 快速失败），
+# 而国内直连正常（txecs 200）。这也正是 Clash Verge 现有 remote profile 的既有行为
+# ——它默认不带 self_proxy，同样是直连拉取，周期同为 24 小时。
+PROVIDER_FETCH_PROXY = "DIRECT"
+
 
 def provider_key(provider_id: int) -> str:
     """provider 的 YAML key。用数据库 id 而非机场名，避免中文与特殊字符进 key。"""
@@ -72,7 +82,10 @@ def render_profile(self_nodes: list[dict], providers: list[dict]) -> str:
             provider_key(p["id"]): {
                 "type": "http",
                 "url": p["url"],
+                "proxy": PROVIDER_FETCH_PROXY,
                 "interval": PROVIDER_INTERVAL,
+                # 已拉取过的副本落在这里；后续拉取失败时 mihomo 从它恢复节点，不会清空
+                # （2026-08-12 实测：URL 指向死端口重启，缓存里的节点照常加载且不报 error）。
                 "path": f"./providers/{provider_key(p['id'])}.yaml",
                 "health-check": {
                     "enable": True,
