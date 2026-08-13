@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import psycopg
 from psycopg.types.json import Jsonb
@@ -19,6 +20,9 @@ DOC_WORKER_ROOT = (ROOT / "services" / "doc-sync-worker").resolve()
 DOC_STORE_PATH = DOC_WORKER_ROOT / "app" / "storage" / "postgres.py"
 DOC_SCHEDULER_PATH = DOC_WORKER_ROOT / "app" / "pipelines" / "sync_scheduler.py"
 TPLUS_WORKER_ROOT = (ROOT / "services" / "tplus-sync-worker" / "src").resolve()
+DOC_REPOSITORY_MODULE = "_p4_scheduler_doc_repository"
+DOC_SCHEDULER_MODULE = "_p4_scheduler_doc_kernel"
+_MISSING = object()
 
 CONFIG = {
     "enabled": True,
@@ -28,24 +32,31 @@ CONFIG = {
 
 
 def _real_shadow_payload() -> dict[str, object]:
-    module_name = "_p4_scheduler_doc_kernel"
+    module_name = DOC_SCHEDULER_MODULE
+    previous_module = sys.modules.get(module_name, _MISSING)
     spec = importlib.util.spec_from_file_location(module_name, DOC_SCHEDULER_PATH)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load scheduler from {DOC_SCHEDULER_PATH}")
     scheduler = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = scheduler
-    spec.loader.exec_module(scheduler)
-    sampled_at = datetime(2026, 8, 13, 10, 0, tzinfo=timezone.utc)
-    decision = scheduler.ScheduleDecision(
-        datetime(2026, 8, 13, 17, 0, tzinfo=timezone.utc),
-        False,
-        25200,
-    )
-    return scheduler.shadow_payload(
-        sampled_at=sampled_at,
-        legacy=decision,
-        candidate=decision,
-    )
+    try:
+        sys.modules[module_name] = scheduler
+        spec.loader.exec_module(scheduler)
+        sampled_at = datetime(2026, 8, 13, 10, 0, tzinfo=timezone.utc)
+        decision = scheduler.ScheduleDecision(
+            datetime(2026, 8, 13, 17, 0, tzinfo=timezone.utc),
+            False,
+            25200,
+        )
+        return scheduler.shadow_payload(
+            sampled_at=sampled_at,
+            legacy=decision,
+            candidate=decision,
+        )
+    finally:
+        if previous_module is _MISSING:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = previous_module
 
 
 def _load_repositories() -> tuple[Any, Any]:
@@ -56,16 +67,18 @@ def _load_repositories() -> tuple[Any, Any]:
         for name, module in sys.modules.items()
         if name == "app" or name.startswith("app.")
     }
+    previous_repository_module = sys.modules.get(DOC_REPOSITORY_MODULE, _MISSING)
     try:
         for name in tuple(old_app_modules):
             sys.modules.pop(name, None)
         sys.path.insert(0, str(DOC_WORKER_ROOT))
         spec = importlib.util.spec_from_file_location(
-            "_p4_scheduler_doc_repository", DOC_STORE_PATH
+            DOC_REPOSITORY_MODULE, DOC_STORE_PATH
         )
         if spec is None or spec.loader is None:
             raise RuntimeError(f"cannot load doc repository from {DOC_STORE_PATH}")
         doc_repository = importlib.util.module_from_spec(spec)
+        sys.modules[DOC_REPOSITORY_MODULE] = doc_repository
         spec.loader.exec_module(doc_repository)
 
         sys.path.insert(0, str(TPLUS_WORKER_ROOT))
@@ -75,10 +88,81 @@ def _load_repositories() -> tuple[Any, Any]:
         return doc_repository, tplus_repository
     finally:
         sys.path[:] = old_path
+        if previous_repository_module is _MISSING:
+            sys.modules.pop(DOC_REPOSITORY_MODULE, None)
+        else:
+            sys.modules[DOC_REPOSITORY_MODULE] = previous_repository_module
         for name in tuple(sys.modules):
             if name == "app" or name.startswith("app."):
                 sys.modules.pop(name, None)
         sys.modules.update(old_app_modules)
+
+
+class SyncSchedulerIntegrationHelperTests(unittest.TestCase):
+    def test_load_repositories_imports_dataclasses_and_restores_process_state(self) -> None:
+        sentinel = object()
+        previous = sys.modules.get(DOC_REPOSITORY_MODULE)
+        had_previous = DOC_REPOSITORY_MODULE in sys.modules
+        original_path = list(sys.path)
+        sys.modules[DOC_REPOSITORY_MODULE] = sentinel
+        try:
+            doc_repository, tplus_repository = _load_repositories()
+            self.assertTrue(hasattr(doc_repository, "PostgresDocSyncStore"))
+            self.assertTrue(hasattr(tplus_repository, "record_scheduler_shadow"))
+            self.assertIs(sentinel, sys.modules[DOC_REPOSITORY_MODULE])
+            self.assertEqual(original_path, sys.path)
+        finally:
+            if had_previous:
+                sys.modules[DOC_REPOSITORY_MODULE] = previous
+            else:
+                sys.modules.pop(DOC_REPOSITORY_MODULE, None)
+
+    def test_real_shadow_payload_restores_existing_temporary_module(self) -> None:
+        sentinel = object()
+        previous = sys.modules.get(DOC_SCHEDULER_MODULE)
+        had_previous = DOC_SCHEDULER_MODULE in sys.modules
+        original_path = list(sys.path)
+        sys.modules[DOC_SCHEDULER_MODULE] = sentinel
+        try:
+            payload = _real_shadow_payload()
+            self.assertEqual("shadow", payload["mode"])
+            self.assertIs(sentinel, sys.modules[DOC_SCHEDULER_MODULE])
+            self.assertEqual(original_path, sys.path)
+        finally:
+            if had_previous:
+                sys.modules[DOC_SCHEDULER_MODULE] = previous
+            else:
+                sys.modules.pop(DOC_SCHEDULER_MODULE, None)
+
+    def test_nonempty_database_url_reaches_mocked_connection_after_real_imports(self) -> None:
+        case = SyncSchedulerPostgresIntegrationTests(
+            "test_real_shadow_writers_update_only_existing_scheduled_runs"
+        )
+        previous_modules = {
+            name: sys.modules.pop(name, _MISSING)
+            for name in (DOC_REPOSITORY_MODULE, DOC_SCHEDULER_MODULE)
+        }
+        try:
+            with mock.patch.dict(
+                os.environ,
+                {"SYNC_SCHEDULER_INTEGRATION_DATABASE_URL": "postgresql://invalid.example/ci"},
+            ), mock.patch.object(
+                psycopg,
+                "connect",
+                side_effect=RuntimeError("mock connection boundary"),
+            ) as connect:
+                with self.assertRaisesRegex(RuntimeError, "mock connection boundary"):
+                    case.test_real_shadow_writers_update_only_existing_scheduled_runs()
+            connect.assert_called_once_with(
+                "postgresql://invalid.example/ci",
+                connect_timeout=5,
+            )
+            self.assertNotIn(DOC_REPOSITORY_MODULE, sys.modules)
+            self.assertNotIn(DOC_SCHEDULER_MODULE, sys.modules)
+        finally:
+            for name, previous in previous_modules.items():
+                if previous is not _MISSING:
+                    sys.modules[name] = previous
 
 
 class SyncSchedulerPostgresIntegrationTests(unittest.TestCase):
