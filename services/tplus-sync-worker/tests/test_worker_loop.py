@@ -542,8 +542,8 @@ class WorkerLoopTests(unittest.TestCase):
 
         self.assertEqual([30], sleeps)
 
-    def test_active_platform_failure_after_full_replans_current_legacy_control(self):
-        """active wait 的 platform 故障按当前 T+ no-anchor legacy control 立即重规划。"""
+    def test_active_platform_failure_after_full_completes_legacy_wait_before_retry(self):
+        """full 后 platform 故障须完成一整个 legacy wait，再进入下一次重试。"""
         current = datetime(2026, 8, 13, 0, 0, tzinfo=self.UTC)
         reader_calls = 0
         sleeps = []
@@ -566,7 +566,7 @@ class WorkerLoopTests(unittest.TestCase):
             max_runs=2,
         )
 
-        self.assertEqual([30], sleeps)
+        self.assertEqual([30, 30], sleeps)
 
     def test_active_platform_poll_error_replans_immediate_legacy_full_without_seeding(self):
         """待机中的 platform 读取失败不能把 T+ no-anchor legacy full 延迟到旧 candidate due。"""
@@ -604,6 +604,103 @@ class WorkerLoopTests(unittest.TestCase):
         self.assertEqual([30], sleeps)
         self.assertEqual([start + timedelta(seconds=30)], scheduled_at)
         self.assertEqual([], seeded)
+
+    def test_active_persistent_platform_error_runs_one_full_per_legacy_interval_and_retries_next_cycle(self):
+        """fallback full 后须完成 legacy wait；每个新 outer cycle 才能重试 platform。"""
+        start = datetime(2026, 8, 13, 0, 0, tzinfo=self.UTC)
+        clock = [start]
+        read_at = []
+        scheduled_at = []
+        sleeps = []
+        request_polls = []
+        finished_requests = []
+        old_poll = os.environ.get("TPLUS_SYNC_POLL_SECONDS")
+        old_enabled = os.environ.get("TPLUS_DB_SYNC_REQUESTS_ENABLED")
+        os.environ["TPLUS_SYNC_POLL_SECONDS"] = "30"
+        os.environ["TPLUS_DB_SYNC_REQUESTS_ENABLED"] = "true"
+        try:
+            def read_platform():
+                read_at.append(clock[0])
+                if len(read_at) == 1:
+                    return self._schedule(interval_seconds=120)
+                raise RuntimeError("platform read failed")
+
+            def advance_sleep(seconds):
+                sleeps.append(seconds)
+                clock[0] += timedelta(seconds=seconds)
+
+            def fetch_request(limit=5):
+                request_polls.append(clock[0])
+                return {"id": len(request_polls), "mode": "manual_full", "target_json": {}}
+
+            run_forever(
+                sync_once=lambda: 0,
+                record_sync_run=lambda **_kwargs: scheduled_at.append(clock[0]) or 41,
+                read_last_full=lambda: start,
+                read_sync_config=lambda: self._schedule(interval_seconds=60),
+                scheduler_mode_reader=lambda: "active",
+                platform_schedule_reader=read_platform,
+                fetch_db_full_request=fetch_request,
+                finish_db_full_request=lambda request_id, *_args: finished_requests.append(request_id),
+                now=lambda: clock[0],
+                sleep=advance_sleep,
+                max_runs=4,
+            )
+        finally:
+            for key, value in {
+                "TPLUS_SYNC_POLL_SECONDS": old_poll,
+                "TPLUS_DB_SYNC_REQUESTS_ENABLED": old_enabled,
+            }.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        self.assertEqual([30, 30, 30, 30, 30], sleeps)
+        self.assertEqual(
+            [start + timedelta(seconds=seconds) for seconds in (30, 90, 150)],
+            scheduled_at,
+        )
+        self.assertEqual(
+            [start + timedelta(seconds=seconds) for seconds in (0, 30, 90, 150)],
+            read_at,
+        )
+        self.assertEqual([start + timedelta(seconds=seconds) for seconds in (30, 60, 90, 120, 150)], request_polls)
+        self.assertEqual([1, 2, 3, 4, 5], finished_requests)
+
+    def test_active_error_fallback_uses_anchored_legacy_wait_before_retrying_platform(self):
+        """active 退化后也必须保留 anchored legacy 的 pending wait，而非立即 full。"""
+        start = datetime(2026, 8, 13, 0, 0, tzinfo=self.UTC)
+        clock = [start]
+        read_at = []
+        scheduled_at = []
+        sleeps = []
+
+        def read_platform():
+            read_at.append(clock[0])
+            if len(read_at) == 1:
+                return self._schedule(interval_seconds=120)
+            raise RuntimeError("platform read failed")
+
+        def advance_sleep(seconds):
+            sleeps.append(seconds)
+            clock[0] += timedelta(seconds=seconds)
+
+        run_forever(
+            sync_once=lambda: 0,
+            record_sync_run=lambda **_kwargs: scheduled_at.append(clock[0]) or 41,
+            read_last_full=lambda: start,
+            read_sync_config=lambda: self._schedule(interval_seconds=60, anchor_time="08:01"),
+            scheduler_mode_reader=lambda: "active",
+            platform_schedule_reader=read_platform,
+            now=lambda: clock[0],
+            sleep=advance_sleep,
+            max_runs=3,
+        )
+
+        self.assertEqual([30, 30], sleeps)
+        self.assertEqual([start + timedelta(seconds=60)], scheduled_at)
+        self.assertEqual([start, start + timedelta(seconds=30), start + timedelta(seconds=60)], read_at)
 
     def test_active_manual_full_crossing_candidate_due_replans_scheduled_full_in_same_slice(self):
         """手动 full 耗时越过 candidate due 后，active 不得继续旧 remaining。"""

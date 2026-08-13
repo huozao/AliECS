@@ -467,6 +467,9 @@ def run_forever(
         last_full = read_last_full()
     except Exception:
         last_full = None
+    # active candidate wait 读失败后，下一外层必须完整跑一次当前 legacy control。
+    # 该周期的 sleep 不可再读 platform，否则无 anchor 会按 poll 周期 full storm。
+    active_degraded_to_legacy = False
 
     def _run_scheduled_full(current: datetime, anchor_time: str) -> None:
         nonlocal last_full, last_exit_code
@@ -568,11 +571,13 @@ def run_forever(
             mode = normalize_mode(read_scheduler_mode())
         except Exception:
             mode = "legacy"
+        force_active_legacy = mode == "active" and active_degraded_to_legacy
+        active_degraded_to_legacy = False
         legacy_control = _legacy_control_decision(current, last_full, enabled, interval_seconds, anchor_time)
 
         candidate_read = _CandidateRead("missing")
         candidate = None
-        if mode != "legacy":
+        if mode != "legacy" and not force_active_legacy:
             candidate_read = _read_candidate_decision(current, last_full, read_platform_schedule)
             candidate = candidate_read.decision
             if candidate_read.state == "missing":
@@ -582,28 +587,37 @@ def run_forever(
                     pass
 
         if mode == "active":
-            active_decision = candidate or legacy_control
+            active_uses_legacy = force_active_legacy or candidate is None
+            active_decision = legacy_control if active_uses_legacy else candidate
+            active_wait_uses_legacy = active_uses_legacy
             if active_decision.run_full:
                 _run_scheduled_full(current, anchor_time)
                 after_full = now()
-                refreshed = _read_candidate_decision(after_full, last_full, read_platform_schedule)
-                active_decision = refreshed.decision or _legacy_sleep_decision(
-                    after_full, last_full, enabled, interval_seconds, anchor_time
-                )
+                if active_uses_legacy:
+                    active_decision = _legacy_sleep_decision(
+                        after_full, last_full, enabled, interval_seconds, anchor_time
+                    )
+                else:
+                    refreshed = _read_candidate_decision(after_full, last_full, read_platform_schedule)
+                    active_decision = refreshed.decision or _legacy_sleep_decision(
+                        after_full, last_full, enabled, interval_seconds, anchor_time
+                    )
+                    active_wait_uses_legacy = refreshed.decision is None
             if max_runs is not None and run_count >= max_runs:
                 return last_exit_code
 
             planned_candidate_due = active_decision.due
 
             def _active_target_moved_earlier() -> bool:
-                nonlocal planned_candidate_due
+                nonlocal active_degraded_to_legacy, planned_candidate_due
                 observed = now()
                 refreshed = _read_candidate_decision(observed, last_full, read_platform_schedule)
                 if refreshed.decision is None:
-                    # 每 slice 读不到 candidate 就立刻重规划；T+ 无 anchor 的 legacy control
-                    # 在该时刻是立即 full，绝不能用「full 后 sleep」投影继续等待。
+                    # candidate-backed wait 才可因读不到 platform break；下一外层标记为
+                    # 完整 legacy control + legacy wait，期间不得继续 platform poll。
                     fallback = _legacy_control_decision(observed, last_full, enabled, interval_seconds, anchor_time)
                     planned_candidate_due = fallback.due
+                    active_degraded_to_legacy = True
                     return True
                 fresh_decision = refreshed.decision
                 moved = target_moved_earlier(planned_candidate_due, fresh_decision.due)
@@ -614,7 +628,7 @@ def run_forever(
 
             manual_exit_code = _sleep_with_request_polling(
                 interval_seconds=active_decision.wait_seconds,
-                should_wake=_active_target_moved_earlier,
+                should_wake=None if active_wait_uses_legacy else _active_target_moved_earlier,
                 monotonic=monotonic,
                 sleep=sleep,
                 sync_once=sync_once,
