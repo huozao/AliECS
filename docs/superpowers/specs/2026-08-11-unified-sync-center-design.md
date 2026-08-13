@@ -154,7 +154,7 @@ doc-sync 的配置能被飞书「同步配置」表覆盖（`pull_config_from_bi
 
 ### 5.3 搬法：共享内核 + 统一配置面
 
-新增 `sync_scheduler` 模块（算 due、判 run_full、算 wait_seconds、热唤醒判据）。两个 worker 各自 `COPY` 同一份源文件，加一致性断言测试（沿用隧道配置"共享文件两 role 同装 + verify 断言"的做法）。配置面统一到 `sync_jobs.schedule`。
+新增 `sync_scheduler` 模块（算 due、判 run_full、算 wait_seconds、热唤醒判据）。两个 worker 各自 `COPY` 同一份源文件，加一致性断言测试（沿用隧道配置"共享文件两 role 同装 + verify 断言"的做法）。P4 shadow 期 `sync_jobs.schedule` 是候选配置面，legacy `integration_sync_config` 继续驱动真实执行并保留为回滚面。
 
 **不建中央调度进程**：那意味着 worker 定时路径要删掉、全靠新服务投递，新服务一挂全部同步停摆，为一点集中度换一个新单点，不划算。
 
@@ -379,3 +379,9 @@ P3 完结说明：
 - P4 只能在 P3 notifier 事实源之上增加 scheduler shadow，不能修改 notifier 的生产语义或另建告警事实源。
 - P4 必须独立 PR、独立部署，不得与 P3 同批上线；本轮只到 shadow，绝不切 active。
 - 单用户已明确授权不等待完整 14 天 baseline；P4 可用现有运行历史、全量人工核对和可恢复能力替代等待，但不得因此跳过 shadow 对账、回滚开关或把任何 worker 切为 active。
+
+### P4 shadow 上线交接
+
+- 2026-08-13 生产实读配置基线：`doc_sync` enabled、间隔 86400 秒、北京时间 `15:30`；`chanjet` enabled、间隔 86400 秒、北京时间 `01:00`。两者都有锚点。
+- 本次 P4 发布只开始 shadow 观测：两个 worker 容器的 `SYNC_SCHEDULER_MODE` 必须均为 `shadow`，不得出现 `active`。真实 run/due/wait 仍由上述 legacy 配置控制，回滚是将对应 worker mode 改回 `legacy` 并重启。
+- `sync_jobs.schedule` 只作候选输入；自动证据只写入已有真实 `trigger='schedule'` run 的 `detail_json.shadow`，不插入合成 run，不刷新 notifier 成功水位。
