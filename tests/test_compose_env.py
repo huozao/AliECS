@@ -170,6 +170,27 @@ class DocWorkerComposeEnvTests(unittest.TestCase):
         )
         self.assertEqual(("shadow", "shadow"), self._scheduler_modes(rendered))
 
+    def test_production_runtime_example_keeps_scheduler_modes_independent(self) -> None:
+        rendered = self._render_compose(
+            "deploy/ecs/compose.business-cn.yml",
+            env_file="deploy/ecs/runtime.env.example",
+        )
+        self.assertEqual(("shadow", "shadow"), self._scheduler_modes(rendered))
+
+        doc_active = self._render_compose(
+            "deploy/ecs/compose.business-cn.yml",
+            env_file="deploy/ecs/runtime.env.example",
+            overrides={"DOC_SYNC_SCHEDULER_MODE": "active"},
+        )
+        self.assertEqual(("active", "shadow"), self._scheduler_modes(doc_active))
+
+        tplus_legacy = self._render_compose(
+            "deploy/ecs/compose.business-cn.yml",
+            env_file="deploy/ecs/runtime.env.example",
+            overrides={"TPLUS_SYNC_SCHEDULER_MODE": "legacy"},
+        )
+        self.assertEqual(("shadow", "legacy"), self._scheduler_modes(tplus_legacy))
+
     def test_scheduler_mode_defaults_are_legacy_when_host_inputs_are_missing(self) -> None:
         local = self._render_compose("local/docker-compose.local.yml", profiles=("tplus",))
         production = self._render_compose(
