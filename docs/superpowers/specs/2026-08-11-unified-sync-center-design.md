@@ -370,8 +370,8 @@ P3 接手须知：
 
 ### P3 实施摘要
 
-- `sync_job_alerts` 与 notifier loop 是 P3 的生产事实源：partial unique open claim 防重复，行锁内完成投递与恢复，resolved 后允许同类告警重开；步骤清理由成功 30 天、非成功 90 天的保留边界控制。
-- `tests/test_sync_alert_notifier_integration.py` 在 opt-in PostgreSQL 16 上以两条真实连接验证 claim、锁投递、恢复、重开、30/90 天清理及 `chanjet.full` 的 `COALESCE` 不覆盖已有 operator 值；sender 仅记录文本，不调用飞书。
+- `sync_job_alerts` 与 notifier loop 是 P3 的生产事实源：partial unique open claim 防重复，行锁只保护投递与恢复，resolved 后由 partial unique 允许同类告警重开；步骤清理由独立 DELETE 以成功 30 天、非成功 90 天为严格保留边界。
+- `tests/test_sync_alert_notifier_integration.py` 在 opt-in PostgreSQL 16 上以两条真实连接验证 claim、锁竞争投递、恢复、重开、30/90 天精确边界清理及 `chanjet.full` 的 `COALESCE` 不覆盖已有 operator 值；sender 仅记录文本，不调用飞书。
 
 ### P4 接手须知
 
