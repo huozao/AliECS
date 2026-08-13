@@ -13,7 +13,6 @@ from app.pipelines.rnd_record_writer import run_write_rnd_records
 from app.pipelines.sync_feishu_full import run_sync_feishu_full
 from app.pipelines import sync_alert_notifier
 from app.pipelines.sync_schedule import (
-    next_full_sync_due,
     pull_config_from_bitable,
     read_last_full_run,
     read_platform_schedule,
@@ -84,25 +83,31 @@ def _finish_scheduler_shadow(run_ids: list[int], observed_sleep_seconds: int, ca
 
 
 def _schedule_decision(current: datetime, last_full: datetime | None, config: dict[str, Any]) -> ScheduleDecision:
-    return decide(
+    enabled = bool(config.get("enabled", True))
+    interval_seconds = max(int(config.get("interval_seconds") or 86400), 60)
+    decision = decide(
         current,
         last_full,
-        enabled=bool(config.get("enabled", True)),
-        interval_seconds=max(int(config.get("interval_seconds") or 86400), 60),
+        enabled=enabled,
+        interval_seconds=interval_seconds,
         anchor_time=str(config.get("anchor_time") or ""),
     )
+    if enabled:
+        return decision
+    wait_seconds = min(interval_seconds, DISABLED_RECHECK_MAX_SECONDS)
+    return ScheduleDecision(current + timedelta(seconds=wait_seconds), False, wait_seconds)
 
 
 def _read_candidate_decision(
     current: datetime,
     last_full: datetime | None,
     reader: Callable[[], dict[str, Any] | None],
-) -> ScheduleDecision | None:
+) -> tuple[ScheduleDecision, bool] | None:
     try:
         config = reader()
         if not config:
             return None
-        return _schedule_decision(current, last_full, config)
+        return _schedule_decision(current, last_full, config), bool(config.get("enabled", True))
     except Exception:  # noqa: BLE001 - platform 调度读取异常一律回退 legacy
         return None
 
@@ -117,6 +122,7 @@ def run_worker_loop(
     schedule_reader: Callable[[], dict[str, Any]] | None = None,
     config_puller: Callable[[], str] | None = None,
     now_fn: Callable[[], datetime] | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
     last_full_reader: Callable[[], datetime | None] | None = None,
     scheduler_mode_reader: Callable[[], str | None] | None = None,
     platform_schedule_reader: Callable[[], dict[str, Any] | None] | None = None,
@@ -214,6 +220,64 @@ def run_worker_loop(
     except Exception:  # noqa: BLE001
         last_full = None
     last_pull_monotonic: float | None = None
+
+    def _poll_once(
+        step: float,
+        *,
+        observe_clock: bool,
+        on_sleep_elapsed: Callable[[float], None] | None = None,
+    ) -> datetime | None:
+        """跑一个既有 poll；睡眠测量仅包住 sleep，且测量异常不能覆盖业务异常。"""
+        nonlocal last_pull_monotonic
+        sleep_started: float | None = None
+        try:
+            sleep_started = monotonic()
+        except Exception:  # noqa: BLE001 - 观测时钟故障不影响 worker
+            pass
+        elapsed = 0.0
+        try:
+            sleep(step)
+        finally:
+            if sleep_started is not None:
+                try:
+                    elapsed = max(monotonic() - sleep_started, 0.0)
+                except Exception:  # noqa: BLE001 - 不让观测覆盖 sleep 的原异常
+                    pass
+            if on_sleep_elapsed is not None:
+                try:
+                    on_sleep_elapsed(elapsed)
+                except Exception:  # noqa: BLE001 - 影子观测回调不得影响主循环
+                    pass
+        try:
+            run_pending()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[文档同步循环] 消费手动请求异常：{exc}")
+        _notify_fail_open()
+        try:
+            mono = monotonic()
+        except Exception:  # noqa: BLE001 - 配置拉取节流时钟故障，保留本轮主流程
+            mono = None
+        if mono is not None and (last_pull_monotonic is None or mono - last_pull_monotonic >= CONFIG_PULL_MIN_SECONDS):
+            last_pull_monotonic = mono
+            try:
+                result = pull_config()
+                if result and not result.startswith("noop"):
+                    print(f"[文档同步循环] 配置表拉取：{result}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[文档同步循环] 配置表拉取异常：{exc}")
+        return now() if observe_clock else None
+
+    def _run_scheduled_full(current: datetime, message: str) -> None:
+        nonlocal last_full
+        print(message)
+        last_full = current
+        if not terminal_poll_covers_preflight:
+            _notify_fail_open()
+        try:
+            run_full()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[文档同步循环] 全量同步异常：{exc}")
+
     # 仅去重紧邻的 terminal poll / next preflight；每个 poll 仍独立告警。
     terminal_poll_covered_next_preflight = False
     cycles = 0
@@ -229,54 +293,24 @@ def run_worker_loop(
             mode = "legacy"
         terminal_poll_covers_preflight = terminal_poll_covered_next_preflight
         terminal_poll_covered_next_preflight = False
+        legacy_decision = _schedule_decision(current, last_full, config)
 
-        if enabled:
-            legacy_due = next_full_sync_due(current, last_full, interval_seconds, anchor_time)
-            legacy_decision = ScheduleDecision(
-                legacy_due,
-                legacy_due <= current,
-                max(int((legacy_due - current).total_seconds()), 0),
-            )
-        else:
-            legacy_wait_seconds = min(interval_seconds, DISABLED_RECHECK_MAX_SECONDS)
-            legacy_decision = ScheduleDecision(
-                current + timedelta(seconds=legacy_wait_seconds),
-                False,
-                legacy_wait_seconds,
-            )
-
-        candidate = None
-        shadow_run_ids: list[int] = []
-        planned_candidate_due: datetime | None = None
-        candidate_would_wake = False
-        if mode in {"shadow", "active"}:
+        if mode == "active":
             candidate = _read_candidate_decision(current, last_full, read_platform_schedule_config)
-            if candidate is not None:
-                planned_candidate_due = candidate.due
-        if mode == "shadow" and candidate is not None:
-            try:
-                shadow_run_ids = record_shadow(
-                    shadow_payload(sampled_at=current, legacy=legacy_decision, candidate=candidate)
-                )
-            except Exception:  # noqa: BLE001 - 注入 writer 也必须 fail-open
-                shadow_run_ids = []
-
-        if mode == "active" and candidate is not None:
-            active_decision = candidate
+            active_decision = candidate[0] if candidate is not None else legacy_decision
+            active_disabled_recheck = candidate is not None and not candidate[1]
             if active_decision.run_full:
-                print(
-                    f"[文档同步循环] 开始全量同步（platform due={active_decision.due.isoformat()} "
-                    f"poll={poll_seconds}s）"
+                prefix = "platform" if candidate is not None else "legacy fallback"
+                _run_scheduled_full(
+                    current,
+                    f"[文档同步循环] 开始全量同步（{prefix} due={active_decision.due.isoformat()} "
+                    f"poll={poll_seconds}s）",
                 )
-                last_full = current
-                if not terminal_poll_covers_preflight:
-                    _notify_fail_open()
-                try:
-                    run_full()
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[文档同步循环] 全量同步异常：{exc}")
-                candidate = _read_candidate_decision(current, last_full, read_platform_schedule_config)
-                active_decision = candidate or legacy_decision
+                after_full = now()
+                legacy_decision = _schedule_decision(after_full, last_full, config)
+                candidate = _read_candidate_decision(after_full, last_full, read_platform_schedule_config)
+                active_decision = candidate[0] if candidate is not None else legacy_decision
+                active_disabled_recheck = candidate is not None and not candidate[1]
             else:
                 print(
                     f"[文档同步循环] platform 全量未到期（下次 {active_decision.due.isoformat()}），跳过启动全量。"
@@ -286,100 +320,102 @@ def run_worker_loop(
             expected_terminal_boundary = active_decision.due
             while remaining > 0:
                 step = min(poll_seconds, remaining)
-                sleep(step)
                 remaining -= step
-                try:
-                    run_pending()
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[文档同步循环] 消费手动请求异常：{exc}")
-                _notify_fail_open()
-                observed = now()
+                observed = _poll_once(step, observe_clock=True)
+                assert observed is not None
                 if remaining <= 0:
                     terminal_poll_covered_next_preflight = observed >= expected_terminal_boundary
-                mono = time.monotonic()
-                if last_pull_monotonic is None or mono - last_pull_monotonic >= CONFIG_PULL_MIN_SECONDS:
-                    last_pull_monotonic = mono
-                    try:
-                        result = pull_config()
-                        if result and not result.startswith("noop"):
-                            print(f"[文档同步循环] 配置表拉取：{result}")
-                    except Exception as exc:  # noqa: BLE001
-                        print(f"[文档同步循环] 配置表拉取异常：{exc}")
                 refreshed_candidate = _read_candidate_decision(observed, last_full, read_platform_schedule_config)
-                if refreshed_candidate is not None:
-                    if planned_candidate_due is not None and target_moved_earlier(
-                        planned_candidate_due, refreshed_candidate.due
-                    ):
-                        break
-                    planned_candidate_due = refreshed_candidate.due
-                    expected_terminal_boundary = refreshed_candidate.due
-                    remaining = max((refreshed_candidate.due - observed).total_seconds(), 0.0)
+                if refreshed_candidate is None:
+                    active_decision = _schedule_decision(observed, last_full, config)
+                    active_disabled_recheck = False
+                    planned_candidate_due = active_decision.due
+                    expected_terminal_boundary = active_decision.due
+                    remaining = float(active_decision.wait_seconds)
                     if remaining <= 0:
                         terminal_poll_covered_next_preflight = observed >= expected_terminal_boundary
+                    continue
+                refreshed_decision, refreshed_enabled = refreshed_candidate
+                if not refreshed_enabled and active_disabled_recheck:
+                    # disabled 的 bounded recheck 是固定本轮目标，不能每个 poll 从 now 重新滚动 60s。
+                    continue
+                if target_moved_earlier(planned_candidate_due, refreshed_decision.due):
+                    if refreshed_decision.run_full:
+                        terminal_poll_covered_next_preflight = True
+                    break
+                active_decision = refreshed_decision
+                active_disabled_recheck = not refreshed_enabled
+                planned_candidate_due = refreshed_decision.due
+                expected_terminal_boundary = refreshed_decision.due
+                remaining = float(refreshed_decision.wait_seconds)
+                if remaining <= 0:
+                    terminal_poll_covered_next_preflight = observed >= expected_terminal_boundary
             cycles += 1
             if max_cycles is not None and cycles >= max_cycles:
                 return 0
             continue
 
-        # legacy 和 shadow 共用这段既有调度，shadow 只做旁路观测，绝不改变 run/due/wait。
+        # legacy 和 shadow 共用既有实际调度。shadow 必须等本轮真实 scheduled run 建立后再绑定证据。
+        sleep_decision = legacy_decision
         if not enabled:
             print(f"[文档同步循环] 定时同步已关闭，仅消费手动请求（poll={poll_seconds}s）。")
-            remaining = float(min(interval_seconds, DISABLED_RECHECK_MAX_SECONDS))
+        elif legacy_decision.run_full:
+            _run_scheduled_full(
+                current,
+                f"[文档同步循环] 开始全量同步（interval={interval_seconds}s poll={poll_seconds}s "
+                f"anchor={anchor_time or '-'}）",
+            )
+            sleep_decision = _schedule_decision(current, last_full, config)
         else:
-            due = legacy_decision.due
-            if due <= current:
-                print(
-                    f"[文档同步循环] 开始全量同步（interval={interval_seconds}s poll={poll_seconds}s "
-                    f"anchor={anchor_time or '-'}）"
-                )
-                last_full = current
-                if not terminal_poll_covers_preflight:
-                    _notify_fail_open()
+            print(f"[文档同步循环] 上次全量未到期（下次 {legacy_decision.due.isoformat()}），跳过启动全量。")
+
+        shadow_run_ids: list[int] = []
+        planned_candidate_due: datetime | None = None
+        candidate_would_wake = False
+        if mode == "shadow":
+            candidate = _read_candidate_decision(current, last_full, read_platform_schedule_config)
+            if candidate is not None:
+                candidate_decision, _ = candidate
+                planned_candidate_due = candidate_decision.due
                 try:
-                    run_full()
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[文档同步循环] 全量同步异常：{exc}")
-                due = next_full_sync_due(current, last_full, interval_seconds, anchor_time)
-            else:
-                print(f"[文档同步循环] 上次全量未到期（下次 {due.isoformat()}），跳过启动全量。")
-            remaining = max((due - current).total_seconds(), 0.0)
-        expected_terminal_boundary = due if enabled else current + timedelta(seconds=remaining)
-        shadow_wait_started_at = now() if shadow_run_ids else None
+                    shadow_run_ids = record_shadow(
+                        shadow_payload(sampled_at=current, legacy=sleep_decision, candidate=candidate_decision)
+                    )
+                except Exception:  # noqa: BLE001 - 注入 writer 也必须 fail-open
+                    shadow_run_ids = []
+
+        remaining = float(sleep_decision.wait_seconds)
+        expected_terminal_boundary = sleep_decision.due
+        observed_sleep_seconds = 0.0
+
+        def _add_observed_sleep(seconds: float) -> None:
+            nonlocal observed_sleep_seconds
+            observed_sleep_seconds += seconds
+
         try:
             while remaining > 0:
                 step = min(poll_seconds, remaining)
-                sleep(step)
                 remaining -= step
-                try:
-                    run_pending()
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[文档同步循环] 消费手动请求异常：{exc}")
-                _notify_fail_open()
-                observed = now() if remaining <= 0 or planned_candidate_due is not None else None
+                observed = _poll_once(
+                    step,
+                    observe_clock=remaining <= 0 or planned_candidate_due is not None,
+                    on_sleep_elapsed=_add_observed_sleep if shadow_run_ids else None,
+                )
                 if remaining <= 0:
                     assert observed is not None
                     terminal_poll_covered_next_preflight = observed >= expected_terminal_boundary
-                mono = time.monotonic()
-                if last_pull_monotonic is None or mono - last_pull_monotonic >= CONFIG_PULL_MIN_SECONDS:
-                    last_pull_monotonic = mono
-                    try:
-                        result = pull_config()
-                        if result and not result.startswith("noop"):
-                            print(f"[文档同步循环] 配置表拉取：{result}")
-                    except Exception as exc:  # noqa: BLE001
-                        print(f"[文档同步循环] 配置表拉取异常：{exc}")
                 if planned_candidate_due is not None:
                     assert observed is not None
                     refreshed_candidate = _read_candidate_decision(observed, last_full, read_platform_schedule_config)
-                    if refreshed_candidate is not None and target_moved_earlier(
-                        planned_candidate_due, refreshed_candidate.due
-                    ):
-                        candidate_would_wake = True
+                    if refreshed_candidate is not None:
+                        refreshed_decision, _ = refreshed_candidate
+                        if target_moved_earlier(planned_candidate_due, refreshed_decision.due):
+                            candidate_would_wake = True
+                        planned_candidate_due = refreshed_decision.due
         finally:
-            if shadow_run_ids and shadow_wait_started_at is not None:
-                observed_sleep_seconds = max(int((now() - shadow_wait_started_at).total_seconds()), 0)
+            if shadow_run_ids:
                 try:
-                    finish_shadow(shadow_run_ids, observed_sleep_seconds, candidate_would_wake)
+                    finish_shadow(shadow_run_ids, int(observed_sleep_seconds), candidate_would_wake)
                 except Exception:  # noqa: BLE001 - 注入 finisher 也必须 fail-open
                     pass
         cycles += 1
