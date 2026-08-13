@@ -1309,6 +1309,86 @@ class WorkerLoopTests(WorkerImportTestCase):
         self.assertEqual(["full", "record", "finish"], events)
         self.assertEqual([([901], 60, False)], finished)
 
+    def test_shadow_due_full_resamples_decisions_at_actual_completion_time(self) -> None:
+        import unittest.mock as mock
+        from datetime import datetime, timedelta, timezone
+
+        from app.pipelines import worker_loop as module
+
+        started = datetime(2026, 8, 13, tzinfo=timezone.utc)
+        clock = {"now": started}
+        payloads: list[dict] = []
+
+        def full_sync() -> int:
+            clock["now"] += timedelta(seconds=90)
+            return 0
+
+        with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}), \
+                mock.patch.object(module, "_maybe_start_group_listener"):
+            code = module.run_worker_loop(
+                full_sync=full_sync,
+                consume_requests=lambda: 0,
+                sleep=lambda _seconds: None,
+                max_cycles=1,
+                schedule_reader=self._one_minute_schedule,
+                config_puller=lambda: "noop",
+                now_fn=lambda: clock["now"],
+                last_full_reader=lambda: None,
+                scheduler_mode_reader=lambda: "shadow",
+                platform_schedule_reader=self._one_minute_schedule,
+                shadow_recorder=lambda payload: payloads.append(payload) or [901],
+            )
+
+        self.assertEqual(0, code)
+        self.assertEqual(1, len(payloads))
+        self.assertEqual("2026-08-13T00:01:30+00:00", payloads[0]["sampled_at"])
+        self.assertEqual(
+            {"due": "2026-08-13T00:01:00+00:00", "run_full": True, "wait_seconds": 0},
+            payloads[0]["legacy"],
+        )
+        self.assertEqual(payloads[0]["legacy"], payloads[0]["candidate"])
+        self.assertTrue(payloads[0]["decision_match"])
+
+    def test_shadow_failed_full_resamples_decisions_at_actual_completion_time(self) -> None:
+        import unittest.mock as mock
+        from datetime import datetime, timedelta, timezone
+
+        from app.pipelines import worker_loop as module
+
+        started = datetime(2026, 8, 13, tzinfo=timezone.utc)
+        clock = {"now": started}
+        payloads: list[dict] = []
+
+        def full_sync() -> int:
+            clock["now"] += timedelta(seconds=90)
+            raise RuntimeError("full elapsed failure")
+
+        with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}), \
+                mock.patch.object(module, "_maybe_start_group_listener"):
+            code = module.run_worker_loop(
+                full_sync=full_sync,
+                consume_requests=lambda: 0,
+                sleep=lambda _seconds: None,
+                max_cycles=1,
+                schedule_reader=self._one_minute_schedule,
+                config_puller=lambda: "noop",
+                now_fn=lambda: clock["now"],
+                last_full_reader=lambda: None,
+                scheduler_mode_reader=lambda: "shadow",
+                platform_schedule_reader=self._one_minute_schedule,
+                shadow_recorder=lambda payload: payloads.append(payload) or [902],
+            )
+
+        self.assertEqual(0, code)
+        self.assertEqual(1, len(payloads))
+        self.assertEqual("2026-08-13T00:01:30+00:00", payloads[0]["sampled_at"])
+        self.assertEqual(
+            {"due": "2026-08-13T00:01:00+00:00", "run_full": True, "wait_seconds": 0},
+            payloads[0]["legacy"],
+        )
+        self.assertEqual(payloads[0]["legacy"], payloads[0]["candidate"])
+        self.assertTrue(payloads[0]["decision_match"])
+
     def test_shadow_advances_planned_candidate_before_later_earlier_wake(self) -> None:
         import unittest.mock as mock
         from datetime import datetime, timedelta, timezone

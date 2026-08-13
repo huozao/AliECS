@@ -357,6 +357,7 @@ def run_worker_loop(
 
         # legacy 和 shadow 共用既有实际调度。shadow 必须等本轮真实 scheduled run 建立后再绑定证据。
         sleep_decision = legacy_decision
+        shadow_sampled_at = current
         if not enabled:
             print(f"[文档同步循环] 定时同步已关闭，仅消费手动请求（poll={poll_seconds}s）。")
         elif legacy_decision.run_full:
@@ -365,7 +366,11 @@ def run_worker_loop(
                 f"[文档同步循环] 开始全量同步（interval={interval_seconds}s poll={poll_seconds}s "
                 f"anchor={anchor_time or '-'}）",
             )
-            sleep_decision = _schedule_decision(current, last_full, config)
+            if mode == "shadow":
+                shadow_sampled_at = now()
+                sleep_decision = _schedule_decision(shadow_sampled_at, last_full, config)
+            else:
+                sleep_decision = _schedule_decision(current, last_full, config)
         else:
             print(f"[文档同步循环] 上次全量未到期（下次 {legacy_decision.due.isoformat()}），跳过启动全量。")
 
@@ -373,13 +378,13 @@ def run_worker_loop(
         planned_candidate_due: datetime | None = None
         candidate_would_wake = False
         if mode == "shadow":
-            candidate = _read_candidate_decision(current, last_full, read_platform_schedule_config)
+            candidate = _read_candidate_decision(shadow_sampled_at, last_full, read_platform_schedule_config)
             if candidate is not None:
                 candidate_decision, _ = candidate
                 planned_candidate_due = candidate_decision.due
                 try:
                     shadow_run_ids = record_shadow(
-                        shadow_payload(sampled_at=current, legacy=sleep_decision, candidate=candidate_decision)
+                        shadow_payload(sampled_at=shadow_sampled_at, legacy=sleep_decision, candidate=candidate_decision)
                     )
                 except Exception:  # noqa: BLE001 - 注入 writer 也必须 fail-open
                     shadow_run_ids = []
