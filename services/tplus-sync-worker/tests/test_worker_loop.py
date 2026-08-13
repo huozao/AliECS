@@ -542,8 +542,8 @@ class WorkerLoopTests(unittest.TestCase):
 
         self.assertEqual([30], sleeps)
 
-    def test_active_platform_failure_after_full_falls_back_to_legacy_full_wait(self):
-        """平台读故障不能把 T+ 无锚点 legacy 的一整周期 wait 变成 zero-wait 重跑。"""
+    def test_active_platform_failure_after_full_replans_current_legacy_control(self):
+        """active wait 的 platform 故障按当前 T+ no-anchor legacy control 立即重规划。"""
         current = datetime(2026, 8, 13, 0, 0, tzinfo=self.UTC)
         reader_calls = 0
         sleeps = []
@@ -566,7 +566,93 @@ class WorkerLoopTests(unittest.TestCase):
             max_runs=2,
         )
 
-        self.assertEqual([30, 30], sleeps)
+        self.assertEqual([30], sleeps)
+
+    def test_active_platform_poll_error_replans_immediate_legacy_full_without_seeding(self):
+        """待机中的 platform 读取失败不能把 T+ no-anchor legacy full 延迟到旧 candidate due。"""
+        start = datetime(2026, 8, 13, 0, 0, tzinfo=self.UTC)
+        clock = [start]
+        reads = 0
+        seeded = []
+        scheduled_at = []
+        sleeps = []
+
+        def read_platform():
+            nonlocal reads
+            reads += 1
+            if reads == 1:
+                return self._schedule(interval_seconds=120)
+            raise RuntimeError("platform read failed")
+
+        def advance_sleep(seconds):
+            sleeps.append(seconds)
+            clock[0] += timedelta(seconds=seconds)
+
+        run_forever(
+            sync_once=lambda: 0,
+            record_sync_run=lambda **_kwargs: scheduled_at.append(clock[0]) or 41,
+            read_last_full=lambda: start,
+            read_sync_config=lambda: self._schedule(interval_seconds=60),
+            scheduler_mode_reader=lambda: "active",
+            platform_schedule_reader=read_platform,
+            platform_schedule_seeder=seeded.append,
+            now=lambda: clock[0],
+            sleep=advance_sleep,
+            max_runs=2,
+        )
+
+        self.assertEqual([30], sleeps)
+        self.assertEqual([start + timedelta(seconds=30)], scheduled_at)
+        self.assertEqual([], seeded)
+
+    def test_active_manual_full_crossing_candidate_due_replans_scheduled_full_in_same_slice(self):
+        """手动 full 耗时越过 candidate due 后，active 不得继续旧 remaining。"""
+        start = datetime(2026, 8, 13, 0, 0, tzinfo=self.UTC)
+        clock = [start]
+        requests = [{"id": 9, "mode": "manual_full", "target_json": {}}]
+        scheduled_at = []
+        sleeps = []
+        sync_calls = []
+        old_poll = os.environ.get("TPLUS_SYNC_POLL_SECONDS")
+        old_enabled = os.environ.get("TPLUS_DB_SYNC_REQUESTS_ENABLED")
+        os.environ["TPLUS_SYNC_POLL_SECONDS"] = "30"
+        os.environ["TPLUS_DB_SYNC_REQUESTS_ENABLED"] = "true"
+        try:
+            def advance_sleep(seconds):
+                sleeps.append(seconds)
+                clock[0] += timedelta(seconds=seconds)
+
+            def sync_once():
+                sync_calls.append(clock[0])
+                if len(sync_calls) == 1:  # 第一个调用是 sleep slice 中消费的 manual full。
+                    clock[0] += timedelta(seconds=90)
+                return 0
+
+            run_forever(
+                sync_once=sync_once,
+                record_sync_run=lambda **_kwargs: scheduled_at.append(clock[0]) or 41,
+                read_last_full=lambda: start,
+                read_sync_config=lambda: self._schedule(interval_seconds=60),
+                scheduler_mode_reader=lambda: "active",
+                platform_schedule_reader=lambda: self._schedule(interval_seconds=60),
+                fetch_db_full_request=lambda limit=5: requests.pop(0) if requests else None,
+                finish_db_full_request=lambda *_args: None,
+                now=lambda: clock[0],
+                sleep=advance_sleep,
+                max_runs=2,
+            )
+        finally:
+            for key, value in {
+                "TPLUS_SYNC_POLL_SECONDS": old_poll,
+                "TPLUS_DB_SYNC_REQUESTS_ENABLED": old_enabled,
+            }.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        self.assertEqual([30], sleeps)
+        self.assertEqual([start + timedelta(seconds=120)], scheduled_at)
 
     def test_shadow_writer_failure_is_fail_open_and_keeps_legacy_full(self):
         current = datetime(2026, 8, 13, 0, 0, tzinfo=self.UTC)

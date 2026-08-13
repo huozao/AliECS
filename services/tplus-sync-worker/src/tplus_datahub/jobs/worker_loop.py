@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,13 @@ from tplus_datahub.jobs.sync_state import record_tplus_sync_run_if_configured
 
 BEIJING = timezone(timedelta(hours=8))  # 锚点时刻按北京时间解释；容器内是 UTC，中国无夏令时
 DISABLED_RECHECK_MAX_SECONDS = 600
+
+
+@dataclass(frozen=True)
+class _CandidateRead:
+    state: str
+    decision: ScheduleDecision | None = None
+    config: dict | None = None
 
 
 def _read_positive_int(name: str, default: int) -> int:
@@ -204,11 +212,14 @@ def _read_candidate_decision(
     current: datetime,
     last_full: datetime | None,
     reader: Callable[[], dict | None],
-) -> tuple[ScheduleDecision, dict] | None:
+) -> _CandidateRead:
     try:
         config = reader()
-        if not config:
-            return None
+    except Exception:
+        return _CandidateRead("error")
+    if not config:
+        return _CandidateRead("missing")
+    try:
         enabled = bool(config.get("enabled", True))
         interval_seconds = max(int(config.get("interval_seconds") or 86400), 60)
         anchor_time = _normalize_anchor_time(config.get("anchor_time"))
@@ -216,13 +227,17 @@ def _read_candidate_decision(
         if not enabled:
             wait_seconds = min(interval_seconds, DISABLED_RECHECK_MAX_SECONDS)
             decision = ScheduleDecision(current + timedelta(seconds=wait_seconds), False, wait_seconds)
-        return decision, {
-            "enabled": enabled,
-            "interval_seconds": interval_seconds,
-            "anchor_time": anchor_time,
-        }
+        return _CandidateRead(
+            "valid",
+            decision,
+            {
+                "enabled": enabled,
+                "interval_seconds": interval_seconds,
+                "anchor_time": anchor_time,
+            },
+        )
     except Exception:
-        return None
+        return _CandidateRead("error")
 
 
 def _run_pending_db_bom_request(
@@ -555,22 +570,24 @@ def run_forever(
             mode = "legacy"
         legacy_control = _legacy_control_decision(current, last_full, enabled, interval_seconds, anchor_time)
 
+        candidate_read = _CandidateRead("missing")
         candidate = None
         if mode != "legacy":
-            candidate = _read_candidate_decision(current, last_full, read_platform_schedule)
-            if candidate is None:
+            candidate_read = _read_candidate_decision(current, last_full, read_platform_schedule)
+            candidate = candidate_read.decision
+            if candidate_read.state == "missing":
                 try:
                     seed_platform_schedule_if_empty(legacy_config)
                 except Exception:
                     pass
 
         if mode == "active":
-            active_decision = candidate[0] if candidate is not None else legacy_control
+            active_decision = candidate or legacy_control
             if active_decision.run_full:
                 _run_scheduled_full(current, anchor_time)
                 after_full = now()
                 refreshed = _read_candidate_decision(after_full, last_full, read_platform_schedule)
-                active_decision = refreshed[0] if refreshed is not None else _legacy_sleep_decision(
+                active_decision = refreshed.decision or _legacy_sleep_decision(
                     after_full, last_full, enabled, interval_seconds, anchor_time
                 )
             if max_runs is not None and run_count >= max_runs:
@@ -582,14 +599,18 @@ def run_forever(
                 nonlocal planned_candidate_due
                 observed = now()
                 refreshed = _read_candidate_decision(observed, last_full, read_platform_schedule)
-                if refreshed is None:
-                    fallback = _legacy_sleep_decision(observed, last_full, enabled, interval_seconds, anchor_time)
-                    moved = target_moved_earlier(planned_candidate_due, fallback.due)
+                if refreshed.decision is None:
+                    # 每 slice 读不到 candidate 就立刻重规划；T+ 无 anchor 的 legacy control
+                    # 在该时刻是立即 full，绝不能用「full 后 sleep」投影继续等待。
+                    fallback = _legacy_control_decision(observed, last_full, enabled, interval_seconds, anchor_time)
                     planned_candidate_due = fallback.due
-                    return moved
-                moved = target_moved_earlier(planned_candidate_due, refreshed[0].due)
-                planned_candidate_due = refreshed[0].due
-                return moved
+                    return True
+                fresh_decision = refreshed.decision
+                moved = target_moved_earlier(planned_candidate_due, fresh_decision.due)
+                planned_candidate_due = fresh_decision.due
+                # manual BOM/DB/full 可在本 slice 推进 wall clock；即使 due 没有改早，
+                # 当前 candidate 已 due 也必须让外层按 current 立即执行 scheduled full。
+                return fresh_decision.run_full or moved
 
             manual_exit_code = _sleep_with_request_polling(
                 interval_seconds=active_decision.wait_seconds,
@@ -626,10 +647,10 @@ def run_forever(
             observed_candidate = (
                 _read_candidate_decision(sampled_at, last_full, read_platform_schedule)
                 if legacy_control.run_full
-                else candidate
+                else candidate_read
             )
-            if observed_candidate is not None:
-                candidate_decision, _ = observed_candidate
+            if observed_candidate.decision is not None:
+                candidate_decision = observed_candidate.decision
                 planned_candidate_due = candidate_decision.due
                 try:
                     shadow_run_ids = record_shadow(
@@ -661,9 +682,9 @@ def run_forever(
             if planned_candidate_due is None:
                 return
             refreshed = _read_candidate_decision(now(), last_full, read_platform_schedule)
-            if refreshed is None:
+            if refreshed.decision is None:
                 return
-            refreshed_decision, _ = refreshed
+            refreshed_decision = refreshed.decision
             if target_moved_earlier(planned_candidate_due, refreshed_decision.due):
                 candidate_would_wake = True
             planned_candidate_due = refreshed_decision.due
