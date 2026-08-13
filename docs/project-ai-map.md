@@ -32,6 +32,9 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 企微智能表格 + 飞书多维表 → Postgres 的独立 worker。约束必读：`docs/constraints/doc-sync.md`。
 输出表：`external_sources/fields/records`、`sync_runs`、`sync_requests`、`sync_jobs/runs/steps`。
 统一同步作业双写入口：`app/storage/sync_job_platform.py`。
+`app/pipelines/sync_alert_notifier.py` 是 P3 告警事实源：轮询 `sync_jobs` 与 `sync_job_runs`，以
+`sync_job_alerts` 的 partial unique open claim 去重，并在行锁内投递、恢复、重开和按 30/90 天清理步骤。
+验证：`SYNC_ALERT_INTEGRATION_DATABASE_URL=<postgres-url> python -m unittest discover -s tests -p "test_sync_alert_notifier_integration.py" -v`。
 
 ## services/tplus-sync-worker
 
