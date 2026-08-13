@@ -181,6 +181,18 @@ def read_platform_schedule() -> dict[str, Any] | None:
         return None
 
 
+def seed_platform_schedule(schedule: dict[str, Any]) -> None:
+    """首次启用 platform 调度时写入 legacy 快照；独立连接且始终 fail-open。"""
+    try:
+        store = open_store()
+        try:
+            store.seed_platform_schedule(schedule)
+        finally:
+            store.close()
+    except Exception:  # noqa: BLE001 - bootstrap 失败不得改变 legacy 调度
+        pass
+
+
 def read_last_full_run() -> datetime | None:
     try:
         store = open_store()

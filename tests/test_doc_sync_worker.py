@@ -787,6 +787,7 @@ class WorkerLoopTests(WorkerImportTestCase):
                 last_full_reader=lambda: None,
                 scheduler_mode_reader=lambda: "legacy",
                 platform_schedule_reader=lambda: platform_calls.append("read") or self._one_minute_schedule(),
+                platform_schedule_seeder=lambda _config: platform_calls.append("seed"),
                 shadow_recorder=lambda _payload: platform_calls.append("record") or [1],
                 shadow_finisher=lambda *_args: platform_calls.append("finish"),
             )
@@ -820,10 +821,155 @@ class WorkerLoopTests(WorkerImportTestCase):
                 last_full_reader=lambda: None,
                 scheduler_mode_reader=lambda: "unrecognized-mode",
                 platform_schedule_reader=platform_access_must_not_happen,
+                platform_schedule_seeder=lambda _config: platform_access_must_not_happen(),
             )
 
         self.assertEqual(0, code)
         self.assertEqual([started], full_runs)
+
+    def test_shadow_bootstraps_missing_candidate_and_records_same_preflight(self) -> None:
+        import unittest.mock as mock
+        from datetime import datetime, timedelta, timezone
+
+        from app.pipelines import worker_loop as module
+
+        started = datetime(2026, 8, 13, tzinfo=timezone.utc)
+        clock = {"now": started}
+        legacy_config = self._one_minute_schedule()
+        state = {"seeded": False}
+        reads: list[bool] = []
+        seeded: list[dict] = []
+        full_runs: list[datetime] = []
+        pending_calls: list[datetime] = []
+        notifier_calls: list[datetime] = []
+        sleeps: list[float] = []
+        shadows: list[dict] = []
+
+        def read_platform_schedule() -> dict | None:
+            reads.append(state["seeded"])
+            return dict(legacy_config) if state["seeded"] else None
+
+        def seed_platform_schedule(config: dict) -> None:
+            seeded.append(dict(config))
+            state["seeded"] = True
+
+        def advance(seconds: float) -> None:
+            sleeps.append(seconds)
+            clock["now"] += timedelta(seconds=seconds)
+
+        with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}), \
+                mock.patch.object(module, "_maybe_start_group_listener"):
+            code = module.run_worker_loop(
+                full_sync=lambda: full_runs.append(clock["now"]) or 0,
+                consume_requests=lambda: pending_calls.append(clock["now"]) or 0,
+                notifier_once=lambda: notifier_calls.append(clock["now"]) or {},
+                sleep=advance,
+                max_cycles=1,
+                schedule_reader=lambda: dict(legacy_config),
+                config_puller=lambda: "noop",
+                now_fn=lambda: clock["now"],
+                monotonic=lambda: (clock["now"] - started).total_seconds(),
+                last_full_reader=lambda: started,
+                scheduler_mode_reader=lambda: "shadow",
+                platform_schedule_reader=read_platform_schedule,
+                platform_schedule_seeder=seed_platform_schedule,
+                shadow_recorder=lambda payload: shadows.append(payload) or [81],
+                shadow_finisher=lambda *_args: None,
+            )
+
+        self.assertEqual(0, code)
+        self.assertEqual(
+            [{"enabled": True, "interval_seconds": 60, "anchor_time": ""}],
+            seeded,
+        )
+        self.assertEqual([False, True], reads[:2])
+        self.assertEqual([], full_runs)
+        self.assertEqual([30, 30], sleeps)
+        self.assertEqual(2, len(pending_calls))
+        self.assertEqual(2, len(notifier_calls))
+        self.assertEqual(1, len(shadows))
+        self.assertTrue(shadows[0]["decision_match"])
+        self.assertEqual(
+            (started + timedelta(seconds=60)).isoformat(),
+            shadows[0]["candidate"]["due"],
+        )
+
+    def test_shadow_seed_failure_is_fail_open_to_legacy_behavior(self) -> None:
+        import unittest.mock as mock
+        from datetime import datetime, timezone
+
+        from app.pipelines import worker_loop as module
+
+        started = datetime(2026, 8, 13, tzinfo=timezone.utc)
+        events: list[str] = []
+
+        with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}), \
+                mock.patch.object(module, "_maybe_start_group_listener"):
+            code = module.run_worker_loop(
+                full_sync=lambda: events.append("full") or 0,
+                consume_requests=lambda: events.append("pending") or 0,
+                notifier_once=lambda: events.append("notifier") or {},
+                sleep=lambda _seconds: events.append("sleep"),
+                max_cycles=1,
+                schedule_reader=self._one_minute_schedule,
+                config_puller=lambda: "noop",
+                now_fn=lambda: started,
+                last_full_reader=lambda: None,
+                scheduler_mode_reader=lambda: "shadow",
+                platform_schedule_reader=lambda: None,
+                platform_schedule_seeder=lambda _config: (_ for _ in ()).throw(RuntimeError("seed unavailable")),
+                shadow_recorder=lambda _payload: events.append("record") or [1],
+                shadow_finisher=lambda *_args: events.append("finish"),
+            )
+
+        self.assertEqual(0, code)
+        self.assertEqual(["notifier", "full", "sleep", "pending", "notifier", "sleep", "pending", "notifier"], events)
+
+    def test_active_bootstraps_missing_candidate_before_using_fallback(self) -> None:
+        import unittest.mock as mock
+        from datetime import datetime, timedelta, timezone
+
+        from app.pipelines import worker_loop as module
+
+        started = datetime(2026, 8, 13, tzinfo=timezone.utc)
+        clock = {"now": started}
+        state = {"seeded": False}
+        reads: list[bool] = []
+        seeded: list[dict] = []
+
+        def read_platform_schedule() -> dict | None:
+            reads.append(state["seeded"])
+            return self._one_minute_schedule() if state["seeded"] else None
+
+        def seed_platform_schedule(config: dict) -> None:
+            seeded.append(dict(config))
+            state["seeded"] = True
+
+        def advance(seconds: float) -> None:
+            clock["now"] += timedelta(seconds=seconds)
+
+        with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}), \
+                mock.patch.object(module, "_maybe_start_group_listener"):
+            code = module.run_worker_loop(
+                full_sync=lambda: 0,
+                consume_requests=lambda: 0,
+                sleep=advance,
+                max_cycles=1,
+                schedule_reader=self._one_minute_schedule,
+                config_puller=lambda: "noop",
+                now_fn=lambda: clock["now"],
+                last_full_reader=lambda: None,
+                scheduler_mode_reader=lambda: "active",
+                platform_schedule_reader=read_platform_schedule,
+                platform_schedule_seeder=seed_platform_schedule,
+            )
+
+        self.assertEqual(0, code)
+        self.assertEqual(
+            [{"enabled": True, "interval_seconds": 60, "anchor_time": ""}],
+            seeded,
+        )
+        self.assertEqual([False, True], reads[:2])
 
     def test_shadow_records_candidate_but_legacy_still_drives_run(self) -> None:
         import unittest.mock as mock
@@ -1586,6 +1732,46 @@ class WorkerLoopTests(WorkerImportTestCase):
 
 
 class SyncScheduleTests(WorkerImportTestCase):
+    def test_platform_schedule_seeder_owns_store_lifecycle(self) -> None:
+        import unittest.mock as mock
+
+        from app.pipelines import sync_schedule as module
+
+        events: list[object] = []
+        schedule = {"enabled": True, "interval_seconds": 86400, "anchor_time": "15:30"}
+
+        class Store:
+            def seed_platform_schedule(self, payload: dict) -> None:
+                events.append(("seed", dict(payload)))
+
+            def close(self) -> None:
+                events.append("close")
+
+        with mock.patch.object(module, "open_store", side_effect=lambda: events.append("open") or Store()):
+            module.seed_platform_schedule(schedule)
+
+        self.assertEqual(["open", ("seed", schedule), "close"], events)
+
+    def test_platform_schedule_seeder_is_fail_open_and_closes_store(self) -> None:
+        import unittest.mock as mock
+
+        from app.pipelines import sync_schedule as module
+
+        events: list[str] = []
+
+        class Store:
+            def seed_platform_schedule(self, _payload: dict) -> None:
+                events.append("seed")
+                raise RuntimeError("database unavailable")
+
+            def close(self) -> None:
+                events.append("close")
+
+        with mock.patch.object(module, "open_store", return_value=Store()):
+            module.seed_platform_schedule({"enabled": True, "interval_seconds": 60, "anchor_time": ""})
+
+        self.assertEqual(["seed", "close"], events)
+
     def test_parse_config_rows_accepts_typed_singleton_row(self) -> None:
         from app.pipelines.sync_schedule import parse_config_rows
 
