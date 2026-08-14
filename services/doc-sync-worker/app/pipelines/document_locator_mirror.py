@@ -163,6 +163,14 @@ def _event_values(payload: dict[str, Any]) -> dict[str, str] | None:
     }
 
 
+def _cells(values: dict[str, str]) -> dict[str, list[dict[str, str]]]:
+    """企微智能表格的每个单元格必须是 cell 数组。
+
+    传裸字符串时接口照样返回 errcode=0，但值不会落库，写进去的是空行。
+    """
+    return {title: [{"type": "text", "text": str(text or "")}] for title, text in values.items()}
+
+
 def write_locator_mirror(
     client: Any,
     *,
@@ -178,9 +186,11 @@ def write_locator_mirror(
         record_id = str(current.get("record_id") or current.get("id") or "")
         if not record_id:
             raise DocumentLocatorMirrorError("定位档案当前行缺少 record_id。")
-        client.update_records(backup_docid, current_sheet_id, [{"record_id": record_id, "values": current_values}])
+        client.update_records(
+            backup_docid, current_sheet_id, [{"record_id": record_id, "values": _cells(current_values)}]
+        )
     else:
-        client.add_records(backup_docid, current_sheet_id, [{"values": current_values}])
+        client.add_records(backup_docid, current_sheet_id, [{"values": _cells(current_values)}])
 
     event_added = False
     event_values = _event_values(payload)
@@ -188,7 +198,7 @@ def write_locator_mirror(
         event_sheet_id = sheet_ids[EVENT_SHEET]
         event_index = _record_index(client, backup_docid, event_sheet_id, "唯一键")
         if event_values["唯一键"] not in event_index:
-            client.add_records(backup_docid, event_sheet_id, [{"values": event_values}])
+            client.add_records(backup_docid, event_sheet_id, [{"values": _cells(event_values)}])
             event_added = True
     return {"current_written": True, "event_added": event_added}
 
