@@ -3318,6 +3318,33 @@ def test_placeholder_rotation_disabled_by_switch(monkeypatch):
     assert "om_rotate" not in bridge._placeholder_rotations
 
 
+def test_progress_callback_feeds_rotation_instead_of_killing_it(monkeypatch):
+    """生命周期阶段必须并进轮播，而不是自己 patch。
+
+    自己 patch 会走 feishu_patch_card 的终局保护掐停轮播，而 WebDock 的第一个
+    phase 在提交那一刻就到 —— 那样占位卡刚发出去就没有了「/新对话」提示和等待秒数。
+    """
+    monkeypatch.setenv("OPENCLAW_BRIDGE_PLACEHOLDER_TIPS", "💡 提示：/新对话 开启新会话")
+    bridge = load_bridge()
+    calls = _start_rotation_with_recorder(bridge, monkeypatch, "om_phase")
+    callback = bridge.processing_card_progress_callback({"feishu_placeholder_msg_id": "om_phase"})
+
+    callback({"schema_version": 1, "phase": "processing", "elapsed_seconds": 3})
+    assert "om_phase" in bridge._placeholder_rotations  # 轮播没被掐
+
+    time.sleep(0.4)
+    bridge.stop_placeholder_rotation("om_phase")
+    rendered = " ".join(payload["content"] for _path, _method, payload in calls)
+    assert "ChatGPT 页面正在处理" in rendered  # 网页阶段
+    assert "/新对话" in rendered  # 提示文案还在轮换
+    assert "已等待" in rendered  # 等待秒数还在
+
+
+def test_set_placeholder_status_reports_when_there_is_no_rotation():
+    bridge = load_bridge()
+    assert bridge.set_placeholder_status("om_absent", "ChatGPT 页面正在处理") is False
+
+
 def test_placeholder_rotation_tips_from_env_multiline(monkeypatch):
     monkeypatch.setenv("OPENCLAW_BRIDGE_PLACEHOLDER_TIPS", "提示一\n\n提示二  \n")
     bridge = load_bridge()

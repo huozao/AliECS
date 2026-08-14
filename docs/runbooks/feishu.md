@@ -35,7 +35,7 @@
 | 收到「暂不可用」但怀疑其实答了 | 存档查该条 inbound：`status=ok` 有 outbound = 回程黑洞，非 WebDock 慢；算 bridge flush 时间+320s 是否=超时时刻 | 同上隧道问题；消息无法补送，需用户重发 |
 | 回复只有半截/只有开场白 | 存档 `outbound.chars`；WebDock detector 完成判定 | ⛔ stop 按钮(`data-testid='stop-button'`)是完成判定权威信号，别改回以 streaming 为准 |
 | 回复图片变成链接 | bridge 环境变量 FEISHU_APP_ID/SECRET 是否在 | 缺凭据静默退 fallback；补后必须 force-recreate（restart 不重读 env_file） |
-| 图改图只回"Edit"/文件名 | imagegen_pending 窗口、预览层兜底、copy 按钮信号 | 07-18 已修（webdock 6550a70+c1bd76a+c9bf9a5） |
+| 图改图只回"Edit"/文件名 | imagegen_pending 窗口、预览层兜底、copy 按钮信号 | 07-18 已修（webdock 6550a70+c1bd76a+c9bf9a5）；08-14 因 08-12 的协议快通道绕过 scaffold 闸门而回归，已二修，详见 `webdock/docs/runbooks/browser.md`「图改图的完成判据只有一个能信」 |
 | 串频道/消息进错项目 | bridge channel 识别、`feishu_projects.json`、Sender 信封剥离 | 06-15 已修（PR#118/#119）；真实 metadata 是 `peer_id:"user:ou_…"` 无 channel 字段 |
 | 全链路每条都失败、bridge `chain_result` 全是 `http_500` 且十几秒就返回 | WebDock `api.log` 是否 `TargetClosedError`；容器内 Chrome 启动时间是否晚于 api 进程（`ps -eo pid,lstart,args`） | Chrome 被重启后 api 仍抓着死句柄，`started` 只判 `_page is not None` 导致永不重连；07-25 已修（webdock `29c163c`，`started` 加 `is_connected()` 校验）。应急：容器内 `POST /browser/detach` 再 `/browser/attach`，CDP 模式不会关 Chrome、不碰登录态 |
 | supervisord 报 `exited: chrome (exit status 0; expected)`，Chrome 无故重启 | 前一条请求是否卡满 310s 硬顶触发车道重建（`api.log` 找 `RESPONSE_TIMEOUT ... lane reset`） | 车道重建先关旧 tab 再开新 tab，关掉的是最后一个窗口 → Chrome 干净自退，随后 `new_page` 报 `Failed to open a new tab`；07-25 已修（webdock `08c4550` 改为先开新 tab） |
@@ -73,9 +73,12 @@ ssh webdock2 "wsl -d Ubuntu-24.04-WebDock -- docker ps"  # WebDock 容器状态
 - WebDock HTTP 429 会读取错误体：`LANE_BUSY` 的错误码和“已等待/未执行”文案会进入飞书诊断卡片；旧 `BUSY` 仍保留原 browser-lock 文案。
 - bridge 默认先提交 WebDock 异步 job，再以不超过 30s 的短 HTTP 查询状态；提交响应必须带合法的 `X-Webdock-Route`，后续固定轮询 `11810`（primary）或 `11811`（standby）。短暂超时/5xx 在总时限内重试；若提交响应丢失，bridge 用确定性 job id 到两节点找回已接单任务。只有 job 接口明确返回 404/405 才降级旧同步接口，避免重复执行。这项粘性不能去掉，否则 standby 接单后 primary 恢复会查到错误节点。
 - job 运行期间飞书占位卡轮播不会停止：基础文案/提示文案继续轮换并附 `已等待 Ns`；只有终局答案或诊断卡 patch 时才停止。这样“页面仍在处理”和“结果已完成/失败”在用户侧可见。
+- **WebDock 生命周期阶段与轮播提示是同一张卡、同一个 patch 源**。阶段文案由 `set_placeholder_status` 写进轮播状态，顶替基础占位文案坐第一格，提示文案照常轮换：用户既看得到「ChatGPT 页面正在处理」，也看得到「/新对话」「勿重复提问」和等待秒数。⚠️ 阶段回调**不能**自己调 `feishu_patch_card`——非轮播 patch 会触发终局保护掐停轮播，而第一个 phase（`queued`）在提交那一刻就到，等于占位卡刚发出去提示就全灭（08-12 `#301` 引入，08-14 修）。只有这条消息没有轮播（轮播关闭或提示文案为空）时才退回自己 patch。
 
 <!-- 本文点名的符号，改名时本文必须同批更新；校验器会拦 -->
 <!-- nav-check-python: deploy/openclaw-bridge/openclaw_bridge.py:FEISHU_BITABLE_LIST_CACHE_SECONDS -->
 <!-- nav-check-python: deploy/openclaw-bridge/openclaw_bridge.py:FEISHU_BITABLE_RECONCILE_AT -->
 <!-- nav-check-python: deploy/openclaw-bridge/openclaw_bridge.py:FEISHU_BITABLE_SNAPSHOT_REFRESH_SECONDS -->
 <!-- nav-check-python: deploy/openclaw-bridge/openclaw_bridge.py:FEISHU_CONFIG_RUNTIME_FIELDS -->
+<!-- nav-check-python: deploy/openclaw-bridge/openclaw_bridge.py:set_placeholder_status -->
+<!-- nav-check-python: deploy/openclaw-bridge/openclaw_bridge.py:feishu_patch_card -->
