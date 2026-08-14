@@ -255,8 +255,11 @@ def copy_asset(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, status, new_api_doc_id, locator_id, sync_request_id, source_id, requested_name
-                FROM document_copy_requests WHERE idempotency_key = %s
+                SELECT c.id, c.status, c.new_api_doc_id, c.locator_id, c.sync_request_id,
+                       c.source_id, c.requested_name, r.external_source_id
+                FROM document_copy_requests c
+                LEFT JOIN document_locator_registry r ON r.id = c.locator_id
+                WHERE c.idempotency_key = %s
                 """,
                 (key,),
             )
@@ -267,7 +270,7 @@ def copy_asset(
                 return {
                     "status": "registered",
                     "copy_request_id": int(existing[0]),
-                    "source_id": source_id,
+                    "source_id": int(existing[7] or source_id),
                     "locator_id": int(existing[3]),
                     "sync_request_id": int(existing[4]),
                 }

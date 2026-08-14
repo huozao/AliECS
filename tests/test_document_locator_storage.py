@@ -8,9 +8,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKER = ROOT / "services" / "doc-sync-worker"
-sys.path.insert(0, str(WORKER))
-
-from app.storage.postgres import PostgresDocSyncStore  # noqa: E402
+PostgresDocSyncStore: Any = None
 
 
 class FakeCursor:
@@ -87,6 +85,26 @@ def locator() -> dict[str, Any]:
 
 
 class DocumentLocatorStorageTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        global PostgresDocSyncStore
+        cls._old_path = list(sys.path)
+        cls._old_app = {name: module for name, module in sys.modules.items() if name == "app" or name.startswith("app.")}
+        for name in cls._old_app:
+            sys.modules.pop(name, None)
+        sys.path.insert(0, str(WORKER))
+        from app.storage.postgres import PostgresDocSyncStore as Store
+
+        PostgresDocSyncStore = Store
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        for name in tuple(sys.modules):
+            if name == "app" or name.startswith("app."):
+                sys.modules.pop(name, None)
+        sys.modules.update(cls._old_app)
+        sys.path[:] = cls._old_path
+
     def test_store_exposes_locator_and_mirror_job_contract(self) -> None:
         for name in (
             "upsert_document_locator",

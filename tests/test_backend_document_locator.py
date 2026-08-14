@@ -125,6 +125,26 @@ class DocumentLocatorBackendTests(unittest.TestCase):
         self.assertNotIn(VALID_DOCID, json.dumps(result))
         self.assertEqual(1, register.commits)
 
+    def test_copy_registered_retry_returns_the_created_source_id(self) -> None:
+        lookup = QueueConnection([[
+            (5, "registered", VALID_DOCID, 9, 77, 11, "生产表-副本", 42),
+        ]])
+        copier = mock.Mock(side_effect=AssertionError("registered retry must not call provider"))
+
+        result = document_locator.copy_asset(
+            ConnectionQueue([lookup]),
+            source_id=11,
+            idempotency_key="copy-action-registered",
+            requested_by="admin",
+            copier=copier,
+        )
+
+        self.assertEqual(
+            {"status": "registered", "copy_request_id": 5, "source_id": 42, "locator_id": 9, "sync_request_id": 77},
+            result,
+        )
+        copier.assert_not_called()
+
     def test_new_copy_persists_external_identity_before_registration(self) -> None:
         prepare = QueueConnection([
             [],

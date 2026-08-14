@@ -210,3 +210,10 @@ PostgreSQL 是机器执行的唯一主数据；企微文档是面向人的异地
 - mirror worker 回滚时停止新任务消费，pending job 保留；旧结构表仍在，不丢历史。
 - public-web 回滚可恢复旧页面；兼容 API 保留使旧入口不立即失效。
 - 若 copy 新流程失败，只回滚本地未提交事务；已经创建的远端副本按 recovery key重新登记，不自动删除远端文档。
+
+## 13. 实施状态（2026-08-14）
+
+- 生产私有定位档案、registry 脱敏导入、同步后对账和企微双表镜像已实现。
+- `/v1/sync/assets` 与 legacy exports catalog 已共用同一动态资产服务；下载、副本幂等登记和 docid 修复已收口到 `/sync/`。
+- `/exports/` 与 `/tplus-sync/` 仅保留相对跳转；旧 API 作为回滚兼容别名保留。
+- 调度模式继续为 `shadow`，本阶段不切 `active`。

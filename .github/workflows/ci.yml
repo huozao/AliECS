@@ -163,6 +163,11 @@ jobs:
           SYNC_CONTROL_INTEGRATION_DATABASE_URL: postgresql://app:app@localhost:5432/app
         run: python -m unittest discover -s tests -p "test_sync_control_integration.py" -v
 
+      - name: Run document locator convergence integration test
+        env:
+          DOCUMENT_LOCATOR_INTEGRATION_DATABASE_URL: postgresql://app:app@localhost:5432/app
+        run: python -m unittest discover -s tests -p "test_document_locator_integration.py" -v
+
       - name: Run backend smoke test
         env:
           DATABASE_URL: postgresql://app:app@127.0.0.1:5432/app

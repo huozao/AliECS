@@ -6,8 +6,9 @@ import unittest
 from pathlib import Path
 
 
+ROOT = Path(__file__).resolve().parents[1]
 SYNC_PAGE = (
-    Path(__file__).resolve().parents[1]
+    ROOT
     / "services"
     / "public-web"
     / "sync"
@@ -130,6 +131,11 @@ class SyncFrontendTests(unittest.TestCase):
             self.assertIn(label, self.html)
         self.assertNotIn("external_doc_id", self.html)
         self.assertNotIn("api_doc_id}</", self.html)
+
+    def test_static_preview_does_not_publish_external_identifiers(self) -> None:
+        preview = (ROOT / "preview" / "doc-sync-table-preview.html").read_text(encoding="utf-8")
+        self.assertNotRegex(preview, r"docid:\s*dc[A-Za-z0-9_-]+")
+        self.assertNotRegex(preview, r"sheet_id:\s*[A-Za-z0-9_-]+")
 
     def test_failed_copy_retry_reuses_one_idempotency_key(self) -> None:
         self._run_timeline_probe(

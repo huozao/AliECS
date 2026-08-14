@@ -10,7 +10,6 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKER = ROOT / "services" / "doc-sync-worker"
-sys.path.insert(0, str(WORKER))
 
 
 VALID_DOCID = "d" + "c" + ("m" * 86)
@@ -165,8 +164,21 @@ def mirror_payload() -> dict[str, Any]:
 class DocumentLocatorMirrorTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        cls._old_path = list(sys.path)
+        cls._old_app = {name: module for name, module in sys.modules.items() if name == "app" or name.startswith("app.")}
+        for name in cls._old_app:
+            sys.modules.pop(name, None)
+        sys.path.insert(0, str(WORKER))
         cls.locator = importlib.import_module("app.pipelines.document_locator")
         cls.mirror = importlib.import_module("app.pipelines.document_locator_mirror")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        for name in tuple(sys.modules):
+            if name == "app" or name.startswith("app."):
+                sys.modules.pop(name, None)
+        sys.modules.update(cls._old_app)
+        sys.path[:] = cls._old_path
 
     def test_reconcile_marks_synced_doc_read_verified_without_overwriting_private_metadata(self) -> None:
         store = FakeLocatorStore()
