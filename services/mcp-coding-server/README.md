@@ -26,3 +26,6 @@ Nginx 需要在同一个秘密路径下代理现有 MCP 路由、`/healthz`、`/
 3. 置 `MCP_OAUTH_ENABLED=true` 部署；浏览器访问 `issuer + /.well-known/oauth-authorization-server` 应见 JSON。
 4. ChatGPT 连接器当前 auth=无时，可能需先取消关联，再用同一 URL 重新添加，使其走 OAuth；浏览器弹同意页时输入口令。
 5. 验证 `server_info` / `ping` 仍可用（已带 token）。再考虑接入写工具。
+
+<!-- 本文点名的符号，改名时本文必须同批更新；校验器会拦 -->
+<!-- nav-check-python: services/mcp-coding-server/app/main.py:server_info -->

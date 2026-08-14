@@ -73,3 +73,9 @@ ssh webdock2 "wsl -d Ubuntu-24.04-WebDock -- docker ps"  # WebDock 容器状态
 - WebDock HTTP 429 会读取错误体：`LANE_BUSY` 的错误码和“已等待/未执行”文案会进入飞书诊断卡片；旧 `BUSY` 仍保留原 browser-lock 文案。
 - bridge 默认先提交 WebDock 异步 job，再以不超过 30s 的短 HTTP 查询状态；提交响应必须带合法的 `X-Webdock-Route`，后续固定轮询 `11810`（primary）或 `11811`（standby）。短暂超时/5xx 在总时限内重试；若提交响应丢失，bridge 用确定性 job id 到两节点找回已接单任务。只有 job 接口明确返回 404/405 才降级旧同步接口，避免重复执行。这项粘性不能去掉，否则 standby 接单后 primary 恢复会查到错误节点。
 - job 运行期间飞书占位卡轮播不会停止：基础文案/提示文案继续轮换并附 `已等待 Ns`；只有终局答案或诊断卡 patch 时才停止。这样“页面仍在处理”和“结果已完成/失败”在用户侧可见。
+
+<!-- 本文点名的符号，改名时本文必须同批更新；校验器会拦 -->
+<!-- nav-check-python: deploy/openclaw-bridge/openclaw_bridge.py:FEISHU_BITABLE_LIST_CACHE_SECONDS -->
+<!-- nav-check-python: deploy/openclaw-bridge/openclaw_bridge.py:FEISHU_BITABLE_RECONCILE_AT -->
+<!-- nav-check-python: deploy/openclaw-bridge/openclaw_bridge.py:FEISHU_BITABLE_SNAPSHOT_REFRESH_SECONDS -->
+<!-- nav-check-python: deploy/openclaw-bridge/openclaw_bridge.py:FEISHU_CONFIG_RUNTIME_FIELDS -->

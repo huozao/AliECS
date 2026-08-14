@@ -168,3 +168,14 @@ SELECT record_key, last_seen_at, missing_since FROM tplus_bom_records WHERE reco
 - worker 测试要 `PYTHONPATH="src;."`（config 在 worker 根不在 src），且 CI 不覆盖 worker——改 worker 必须本地跑。
 - 当前生产 psql：`ssh txecs 'sudo docker exec -i business-cn-postgres-1 psql -U app -d app'`；
   只读诊断无需写权限，执行迁移须按 deploy runbook 获授权。
+
+<!-- 本文点名的符号，改名时本文必须同批更新；校验器会拦 -->
+<!-- nav-check-python: services/tplus-sync-worker/src/tplus_datahub/chanjet/client.py:ChanjetClient -->
+<!-- nav-check-python: services/tplus-sync-worker/src/tplus_datahub/chanjet/pagination.py:paginate_query -->
+<!-- nav-check-python: services/tplus-sync-worker/src/tplus_datahub/jobs/job_sync_all.py:failed_modules -->
+<!-- nav-check-python: services/tplus-sync-worker/src/tplus_datahub/jobs/sync_state.py:persist_inventory_records -->
+<!-- nav-check-python: services/tplus-sync-worker/src/tplus_datahub/jobs/db_sync_requests.py:fetch_last_scheduled_full_at -->
+<!-- nav-check-python: services/tplus-sync-worker/src/tplus_datahub/jobs/worker_loop.py:next_scheduled_full_due -->
+<!-- nav-check-python: services/tplus-sync-worker/tests/test_worker_loop_anchor.py:test_overrunning_full_sync_does_not_busy_loop -->
+<!-- nav-check-python: services/backend-api/app/sync_control.py:anchor_time -->
+<!-- nav-check-python: services/doc-sync-worker/app/pipelines/sync_schedule.py:next_full_sync_due -->
