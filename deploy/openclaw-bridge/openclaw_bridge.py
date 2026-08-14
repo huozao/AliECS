@@ -2993,7 +2993,12 @@ def lifecycle_progress_text(progress: dict[str, Any]) -> str:
 def processing_card_progress_callback(
     details: dict[str, Any],
 ) -> Callable[[dict[str, Any]], None]:
-    """Build a best-effort phase updater for one Feishu placeholder card."""
+    """Build a best-effort phase updater for one Feishu placeholder card.
+
+    阶段文案交给占位轮播线程一起渲染，不自己 patch：非轮播的 patch 会掐停轮播
+    （feishu_patch_card 的终局保护），而 WebDock 的第一个 phase 在提交那一刻就到，
+    等于刚发出占位卡就把「/新对话」「勿重复提问」提示和「已等待 Ns」全灭掉。
+    只有在这条消息没有轮播（轮播关闭或没有提示文案）时才退回自己 patch。"""
     placeholder_id = str(details.get("feishu_placeholder_msg_id") or "").strip()
     last_phase = ""
 
@@ -3006,6 +3011,8 @@ def processing_card_progress_callback(
         if not text or phase == last_phase:
             return
         last_phase = phase
+        if set_placeholder_status(placeholder_id, text):
+            return
         try:
             auth_token = feishu_tenant_access_token()
             if not auth_token:
@@ -3022,11 +3029,15 @@ def processing_card_progress_callback(
 
 
 class _PlaceholderRotation:
-    """占位卡轮播状态：lock 串行化轮播 patch 与终局 patch，cancelled 置位后轮播立即停。"""
+    """占位卡轮播状态：lock 串行化轮播 patch 与终局 patch，cancelled 置位后轮播立即停。
+
+    status_text 是 WebDock 生命周期阶段（同一把 lock 保护），由轮播线程与提示文案
+    一起渲染，避免两个 patch 源互相覆盖。"""
 
     def __init__(self) -> None:
         self.lock = Lock()
         self.cancelled = False
+        self.status_text = ""
 
 
 _placeholder_rotations: dict[str, _PlaceholderRotation] = {}
@@ -3049,6 +3060,20 @@ def placeholder_rotate_seconds() -> float:
 def placeholder_rotation_tips() -> list[str]:
     """轮播提示列表：规则表「轮播提示文案」一行一条（>env>默认），空行忽略。"""
     return [line.strip() for line in _rule_text("轮播提示文案").splitlines() if line.strip()]
+
+
+def set_placeholder_status(message_id: str, text: str) -> bool:
+    """把生命周期阶段文案交给轮播线程渲染。返回 False 表示该消息没有轮播，
+    调用方需要自己 patch。"""
+    with _placeholder_rotations_lock:
+        entry = _placeholder_rotations.get(str(message_id))
+    if entry is None:
+        return False
+    with entry.lock:
+        if entry.cancelled:
+            return False
+        entry.status_text = text
+    return True
 
 
 def stop_placeholder_rotation(message_id: str) -> None:
@@ -3078,7 +3103,7 @@ def start_placeholder_rotation(message_id: str, base_text: str) -> None:
 
 
 def _placeholder_rotation_loop(message_id: str, base_text: str, entry: _PlaceholderRotation) -> None:
-    texts = [base_text] + placeholder_rotation_tips()
+    tips = placeholder_rotation_tips()
     interval = placeholder_rotate_seconds()
     started = time.monotonic()
     index = 0
@@ -3091,6 +3116,9 @@ def _placeholder_rotation_loop(message_id: str, base_text: str, entry: _Placehol
                 if entry.cancelled:
                     return
                 elapsed = int(time.monotonic() - started)
+                # 有 WebDock 阶段文案时它顶替基础占位文案坐第一格，提示照常轮换，
+                # 于是「页面在哪一步」和「怎么用/别连发」在同一张卡上都看得到。
+                texts = [entry.status_text or base_text, *tips]
                 text = f"{texts[index % len(texts)]}\n\n⏳ 已等待 {elapsed}s"
                 try:
                     auth_token = feishu_tenant_access_token()
