@@ -126,6 +126,7 @@
     const {api, fetchMe, esc, fmtTime, chip, clearAuthToken, ssoLogin} = AliECSAdmin;
     const $=(id)=>document.getElementById(id);
     const state={overview:null,assets:[],visibleJobs:[],visibleAssets:[],activeAssetGroup:'tplus',alerts:[],runs:[],limit:20,offset:0,total:0,timelineRequestId:0,timelineLoading:false,controlBusy:false};
+    const copyIdempotencyKeys=new Map();
     const initialParams=new URLSearchParams(location.search);
     const initialJob=initialParams.get('job')||'';
     const initialGroup=initialParams.get('group')||'';
@@ -190,9 +191,15 @@
       if(!group){$('assetList').innerHTML='<span class="muted">暂无同步资产。</span>';return;}
       state.visibleAssets=group.items||[];
       const rows=state.visibleAssets.map((item,index)=>{
-        const reason=item.syncable?'':`<div class="muted">不可自动同步：${esc(item.reason||'来源无有效 API 标识')}</div>`;
-        const action=item.syncable?`<button class="btn" type="button" ${state.controlBusy?'disabled':''} onclick="runVisibleAsset(${index},this)">立即同步</button>`:'<span class="chip failed">不可自动同步</span>';
-        return `<tr><td><strong>${esc(item.name)}</strong>${reason}</td><td>${esc(item.sheets??'-')}</td><td>${esc(item.jobs??'-')}</td><td>${esc(fmtTime(item.updated_at))}</td><td>${action}</td></tr>`;
+        const reason=item.can_sync?'':`<div class="muted">${esc(item.reason||'来源无有效 API 标识')}</div>`;
+        const system=item.system_managed?'<span class="chip warning">系统管理资产</span>':'';
+        const actions=[];
+        if(item.can_download)actions.push(`<button class="btn primary" type="button" onclick="downloadVisibleAsset(${index})">下载</button>`);
+        if(item.can_sync)actions.push(`<button class="btn" type="button" ${state.controlBusy?'disabled':''} onclick="runVisibleAsset(${index},this)">立即同步</button>`);
+        if(item.can_copy)actions.push(`<button class="btn" type="button" ${state.controlBusy?'disabled':''} onclick="copyVisibleAsset(${index},this)">创建副本</button>`);
+        if(!item.can_sync&&item.source_id!=null&&!item.system_managed&&String(item.reason||'').includes('docid'))actions.push(`<button class="btn" type="button" ${state.controlBusy?'disabled':''} onclick="repairVisibleAsset(${index},this)">补录 docid</button>`);
+        if(!actions.length)actions.push('<span class="chip failed">暂无可用操作</span>');
+        return `<tr><td><strong>${esc(item.name)}</strong> ${system}${reason}</td><td>${esc(item.sheets??'-')}</td><td>${esc(item.jobs??'-')}</td><td>${esc(fmtTime(item.updated_at))}</td><td><div class="row">${actions.join('')}</div></td></tr>`;
       }).join('');
       $('assetList').innerHTML=`<table><thead><tr><th>资产</th><th>表数</th><th>作业数</th><th>最近同步</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="5" class="muted">该分类暂无资产。</td></tr>'}</tbody></table>`;
     }
@@ -419,11 +426,37 @@
     async function runAsset(sourceId,button){
       await withControlBusy(button,async(session)=>{const data=await api(`/v1/sync/assets/${sourceId}/run`,{method:'POST'});if(session!==sessionGeneration)return;AliECSToast.show(data.queued?'同步请求已排队。':'已有请求正在执行。','success');await loadAll();});
     }
+    function newCopyActionKey(){
+      if(globalThis.crypto&&typeof crypto.randomUUID==='function')return crypto.randomUUID();
+      return `copy-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+    async function copyAsset(sourceId,button){
+      const key=copyIdempotencyKeys.get(sourceId)||newCopyActionKey();
+      copyIdempotencyKeys.set(sourceId,key);
+      await withControlBusy(button,async(session)=>{
+        await api(`/v1/sync/assets/${sourceId}/copy`,{method:'POST',body:JSON.stringify({idempotency_key:key})});
+        if(session!==sessionGeneration)return;
+        copyIdempotencyKeys.delete(sourceId);
+        AliECSToast.show('副本已创建并登记，首次同步已排队。','success');
+        try{await loadAll();}catch(error){AliECSToast.show(`副本已创建，但列表刷新失败：${error.message}`,'warning');}
+      });
+    }
+    async function repairAsset(sourceId,apiDocId,button){
+      await withControlBusy(button,async(session)=>{
+        await api(`/v1/sync/assets/${sourceId}/docid`,{method:'PUT',body:JSON.stringify({api_doc_id:apiDocId})});
+        if(session!==sessionGeneration)return;
+        AliECSToast.show('docid 已验证并登记，同步已排队。','success');
+        await loadAll();
+      });
+    }
     async function runJob(jobKey,button){
       await withControlBusy(button,async(session)=>{const data=await api(`/v1/sync/jobs/${encodeURIComponent(jobKey)}/run`,{method:'POST'});if(session!==sessionGeneration)return;AliECSToast.show(data.queued?'同步请求已排队。':'已有请求正在执行。','success');await loadAll();});
     }
     function runVisibleJob(index,button){const item=state.visibleJobs[index];if(item)runJob(item.job_key,button).catch((error)=>AliECSToast.show(`作业同步失败：${error.message}`,'error'));}
     function runVisibleAsset(index,button){const item=state.visibleAssets[index];if(!item)return;if(item.source_id!=null)runAsset(Number(item.source_id),button).catch((error)=>AliECSToast.show(`资产同步失败：${error.message}`,'error'));else runJob(item.job_key,button).catch((error)=>AliECSToast.show(`资产同步失败：${error.message}`,'error'));}
+    function downloadVisibleAsset(index){const item=state.visibleAssets[index];if(!item||!item.can_download||!item.download_url)return;AliECSAdmin.downloadExport(item.download_url,item.file_name||item.name).catch((error)=>AliECSToast.show(`下载失败：${error.message}`,'error'));}
+    function copyVisibleAsset(index,button){const item=state.visibleAssets[index];if(!item||!item.can_copy||item.source_id==null)return;copyAsset(Number(item.source_id),button).catch((error)=>AliECSToast.show(`创建副本失败：${error.message}`,'error'));}
+    function repairVisibleAsset(index,button){const item=state.visibleAssets[index];if(!item||item.source_id==null)return;const value=window.prompt('请粘贴企微 API 可用的 dc 开头 docid（不是 s3_ 分享 ID）：','');if(!value)return;repairAsset(Number(item.source_id),value.trim(),button).catch((error)=>AliECSToast.show(`补录 docid 失败：${error.message}`,'error'));}
     async function saveConfig(kind,button){
       const prefix=kind==='doc'?'doc':'tplus',interval_hours=Number($(`${prefix}ConfigHours`).value),anchor_time=$(`${prefix}ConfigAnchor`).value||'';
       if(!(interval_hours>=1&&interval_hours<=168)){AliECSToast.show('周期必须为 1 至 168 小时。','error');return;}
@@ -457,6 +490,7 @@
     loginBtn.onclick=ssoLogin;
     function clearAdminData(){
       state.overview=null;state.assets=[];state.visibleJobs=[];state.visibleAssets=[];state.alerts=[];state.runs=[];state.offset=0;state.total=0;state.timelineLoading=false;state.controlBusy=false;
+      copyIdempotencyKeys.clear();
       for(const id of ['syncSummary','assetTabs','assetList','jobList','alertList','timelineList','runDetailBody'])$(id).innerHTML='';
       $('timelinePageInfo').textContent='';$('jobFilter').innerHTML='<option value="">全部</option>';
       $('timelinePrevBtn').disabled=true;$('timelineNextBtn').disabled=true;

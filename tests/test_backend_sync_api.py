@@ -50,6 +50,10 @@ class SyncApiTests(unittest.TestCase):
             ("PUT", "/v1/sync/config/tplus"),
             ("POST", "/v1/sync/run-all"),
             ("POST", "/v1/sync/assets/{source_id}/run"),
+            ("POST", "/v1/sync/assets/{source_id}/copy"),
+            ("GET", "/v1/sync/assets/{source_id}/download"),
+            ("PUT", "/v1/sync/assets/{source_id}/docid"),
+            ("GET", "/v1/sync/exports/tplus/{file_name}"),
             ("POST", "/v1/sync/jobs/{job_key}/run"),
         )
         for method, path in routes:
@@ -135,6 +139,66 @@ class SyncApiTests(unittest.TestCase):
                 sync_router.sync_asset_run(18, user={"sub": "admin"})
         self.assertEqual(400, raised.exception.status_code)
         self.assertEqual("缺少有效企微 docid", raised.exception.detail)
+
+    def test_asset_copy_and_docid_repair_delegate_without_echoing_identifiers(self):
+        copy_body = sync_router.CopyAssetBody(idempotency_key="action-1")
+        repair_body = sync_router.RepairDocIdBody(api_doc_id="dc" + "q" * 86)
+        expected_copy = {"status": "registered", "copy_request_id": 3, "source_id": 18}
+        expected_repair = {"status": "registered", "source_id": 19, "locator_id": 8}
+
+        with patch.object(sync_router.document_locator, "copy_asset", return_value=expected_copy) as copy_asset, patch.object(
+            sync_router.document_locator, "repair_docid", return_value=expected_repair
+        ) as repair_docid:
+            self.assertEqual(expected_copy, sync_router.sync_asset_copy(17, copy_body, user={"sub": "admin"}))
+            self.assertEqual(expected_repair, sync_router.sync_asset_docid(18, repair_body, user={"sub": "admin"}))
+
+        copy_asset.assert_called_once_with(
+            sync_router._conn,
+            source_id=17,
+            idempotency_key="action-1",
+            requested_by="admin",
+        )
+        repair_docid.assert_called_once_with(
+            sync_router._conn,
+            source_id=18,
+            api_doc_id=repair_body.api_doc_id,
+            requested_by="admin",
+        )
+        self.assertNotIn(repair_body.api_doc_id, str(expected_repair))
+
+    def test_canonical_download_routes_delegate_to_legacy_adapters(self):
+        external = object()
+        tplus = object()
+        with patch.object(sync_router.exports_router, "exports_external_doc_download", return_value=external) as doc_download, patch.object(
+            sync_router.exports_router, "exports_tplus_download", return_value=tplus
+        ) as tplus_download:
+            self.assertIs(external, sync_router.sync_asset_download(17, _={}))
+            self.assertIs(tplus, sync_router.sync_tplus_download("bom.xlsx", _={}))
+
+        doc_download.assert_called_once_with(17, {})
+        tplus_download.assert_called_once_with("bom.xlsx", {})
+
+    def test_asset_action_invalid_target_is_400_and_unexpected_error_is_sanitized(self):
+        copy_body = sync_router.CopyAssetBody(idempotency_key="action-2")
+        with patch.object(
+            sync_router.document_locator,
+            "copy_asset",
+            side_effect=sync_router.document_locator.InvalidLocatorAction("不支持创建副本"),
+        ):
+            with self.assertRaises(HTTPException) as invalid:
+                sync_router.sync_asset_copy(17, copy_body, user={"sub": "admin"})
+        self.assertEqual(400, invalid.exception.status_code)
+
+        repair_body = sync_router.RepairDocIdBody(api_doc_id="dc" + "q" * 86)
+        with patch.object(
+            sync_router.document_locator,
+            "repair_docid",
+            side_effect=RuntimeError("password=secret"),
+        ):
+            with self.assertRaises(HTTPException) as failed:
+                sync_router.sync_asset_docid(18, repair_body, user={"sub": "admin"})
+        self.assertEqual(500, failed.exception.status_code)
+        self.assertNotIn("secret", failed.exception.detail)
 
     def test_write_route_database_error_is_sanitized(self):
         with patch.object(sync_router, "_conn", side_effect=RuntimeError("password=secret SELECT credentials")):

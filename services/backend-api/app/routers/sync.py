@@ -5,13 +5,22 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app import sync_control, sync_read
+from app import document_locator, sync_control, sync_read
+from pydantic import BaseModel, Field
 from app.core import _conn, require_admin
 from app.routers import exports as exports_router
 
 
 router = APIRouter(prefix="/v1/sync", tags=["sync-center"])
 RunStatus = Literal["running", "success", "partial", "failed"]
+
+
+class CopyAssetBody(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
+class RepairDocIdBody(BaseModel):
+    api_doc_id: str = Field(min_length=80, max_length=256)
 
 
 def _write_failure(exc: Exception) -> HTTPException:
@@ -38,6 +47,22 @@ def sync_assets(
             status_code=500,
             detail=f"读取同步中心失败：{type(exc).__name__}",
         ) from exc
+
+
+@router.get("/assets/{source_id}/download")
+def sync_asset_download(
+    source_id: int,
+    _: dict[str, Any] = Depends(require_admin),
+):
+    return exports_router.exports_external_doc_download(source_id, _)
+
+
+@router.get("/exports/tplus/{file_name}")
+def sync_tplus_download(
+    file_name: str,
+    _: dict[str, Any] = Depends(require_admin),
+):
+    return exports_router.exports_tplus_download(file_name, _)
 
 
 @router.get("/config/doc")
@@ -114,6 +139,48 @@ def sync_asset_run(
                 str(user.get("sub") or ""),
             )
     except sync_control.InvalidSyncTarget as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _write_failure(exc) from exc
+
+
+@router.post("/assets/{source_id}/copy")
+def sync_asset_copy(
+    source_id: int,
+    body: CopyAssetBody,
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    try:
+        return document_locator.copy_asset(
+            _conn,
+            source_id=source_id,
+            idempotency_key=body.idempotency_key,
+            requested_by=str(user.get("sub") or ""),
+        )
+    except document_locator.InvalidLocatorAction as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _write_failure(exc) from exc
+
+
+@router.put("/assets/{source_id}/docid")
+def sync_asset_docid(
+    source_id: int,
+    body: RepairDocIdBody,
+    user: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    try:
+        return document_locator.repair_docid(
+            _conn,
+            source_id=source_id,
+            api_doc_id=body.api_doc_id,
+            requested_by=str(user.get("sub") or ""),
+        )
+    except document_locator.InvalidLocatorAction as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HTTPException:
         raise

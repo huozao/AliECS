@@ -14,7 +14,6 @@ ADMIN_UI_TOAST = ROOT / "services" / "admin-ui" / "common" / "toast.js"
 # 用 AliECSToast 弹消息的页面（相对 services/ 的路径）。
 TOAST_PAGES = [
     "public-web/index.html",
-    "public-web/exports/index.html",
     "public-web/formula/index.html",
     "public-web/health/index.html",
     "public-web/health/versions/index.html",

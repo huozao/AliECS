@@ -73,9 +73,9 @@ class SyncControlTests(unittest.TestCase):
         valid_docid = "dc" + "d" * 86
         conn = FakeConn(
             [[
-                ("wecom", "COMPANY_A", valid_docid, "smartsheet_doc", "生产表", "生产表", 11, 2, 2, None),
-                ("wecom", "COMPANY_B", "s3_" + "x" * 40, "smartsheet_link", "历史链接", "历史链接", 12, 0, 0, None),
-                ("feishu", "COMPANY_A", "app-test-token", "bitable_app", "飞书表", "飞书表", 13, 3, 2, None),
+                ("wecom", "COMPANY_A", valid_docid, "smartsheet_doc", "生产表", "生产表", 11, 2, 2, None, "verified", {"read": "verified", "copy": "allowed"}, "active"),
+                ("wecom", "COMPANY_B", "s3_" + "x" * 40, "smartsheet_link", "历史链接", "历史链接", 12, 0, 0, None, "invalid-id", {"read": "unavailable", "copy": "unavailable"}, "unresolved"),
+                ("feishu", "COMPANY_A", "app-test-token", "bitable_app", "飞书表", "飞书表", 13, 3, 2, None, "verified", {"read": "verified", "copy": "unavailable"}, "active"),
             ]]
         )
 
@@ -95,7 +95,8 @@ class SyncControlTests(unittest.TestCase):
         company_b = result["groups"][2]["items"][0]
         self.assertFalse(company_b["syncable"])
         self.assertEqual("缺少有效企微 docid", company_b["reason"])
-        self.assertNotIn("source_id", company_b)
+        self.assertEqual(12, company_b["source_id"])
+        self.assertFalse(company_b["can_download"] or company_b["can_copy"])
         feishu = result["groups"][3]["items"][0]
         self.assertTrue(feishu["syncable"])
         self.assertEqual(13, feishu["source_id"])

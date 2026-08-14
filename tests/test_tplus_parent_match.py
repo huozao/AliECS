@@ -308,8 +308,7 @@ class TplusParentMatchTests(unittest.TestCase):
                     target_count=0, scanned_count=0, updated_count=0, error_count=0,
                 )), \
                 patch.object(worker_loop, "run_sync_feishu_full", return_value=0), \
-                patch.object(worker_loop, "run_enqueue_daily_structure_backup_jobs", return_value=0), \
-                patch.object(worker_loop, "run_pending_structure_backup_jobs", return_value=0), \
+                patch.object(worker_loop, "run_pending_document_locator_mirror_jobs", return_value=0), \
                 patch.object(worker_loop, "run_tplus_parent_match", side_effect=lambda **kwargs: calls.append(kwargs) or 0), \
                 patch.object(worker_loop, "run_pending_sync_requests", return_value=0), \
                 patch.object(worker_loop, "run_write_rnd_records", return_value=0), \

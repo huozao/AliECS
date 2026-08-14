@@ -8,6 +8,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.pipelines.backfill_smartsheet_images import run_backfill_images
+from app.pipelines.document_locator import reconcile_document_locators
+from app.pipelines.document_locator_mirror import run_pending_document_locator_mirror_jobs
 from app.pipelines.group_message_listener import resolve_groupbot_profile, run_group_listener
 from app.pipelines.rnd_record_writer import run_write_rnd_records
 from app.pipelines.sync_feishu_full import run_sync_feishu_full
@@ -22,10 +24,6 @@ from app.pipelines.sync_schedule import (
 from app.pipelines.sync_scheduler import ScheduleDecision, decide, normalize_mode, shadow_payload, target_moved_earlier
 from app.pipelines.sync_wecom_full import run_pending_sync_requests, run_sync_wecom_full
 from app.pipelines.tplus_parent_match import run_backfill_if_bom_synced, run_tplus_parent_match
-from app.pipelines.wecom_structure_backup import (
-    run_enqueue_daily_structure_backup_jobs,
-    run_pending_structure_backup_jobs,
-)
 from app.storage.postgres import open_store
 from app.storage.job_catalog import reconcile_document_jobs_fail_open
 
@@ -93,6 +91,18 @@ def _reconcile_platform_catalog() -> None:
         finally:
             store.close()
     except Exception:  # noqa: BLE001 - catalog bootstrap must not block legacy sync
+        pass
+
+
+def _reconcile_locator_catalog() -> None:
+    """Refresh the private locator archive at startup without blocking legacy sync."""
+    try:
+        store = open_store()
+        try:
+            reconcile_document_locators(store, trigger="worker-startup")
+        finally:
+            store.close()
+    except Exception:  # noqa: BLE001 - locator observability must remain fail-open
         pass
 
 
@@ -184,10 +194,9 @@ def run_worker_loop(
         except Exception as exc:  # noqa: BLE001 - 飞书未配置源时不拖垮 wecom 周期
             print(f"[文档同步循环] 飞书全量跳过：{exc}")
         try:
-            run_enqueue_daily_structure_backup_jobs()
-            run_pending_structure_backup_jobs(limit=1000)
-        except Exception as exc:  # noqa: BLE001 - 备份失败由持久化任务重试，不拖垮源同步。
-            print(f"[文档同步循环] 企微结构备份异常：{exc}")
+            run_pending_document_locator_mirror_jobs(limit=1000)
+        except Exception as exc:  # noqa: BLE001 - durable locator jobs retry independently.
+            print(f"[文档同步循环] 文档定位档案镜像异常：{type(exc).__name__}")
         # 放在全量同步之后：核对要读刚同步下来的 T+ BOM 与表格最新内容。
         try:
             run_tplus_parent_match(trigger="schedule")
@@ -198,7 +207,7 @@ def run_worker_loop(
     def _default_consume_requests() -> int:
         nonlocal bom_watermark
         code = run_pending_sync_requests(limit=10)
-        backup_code = run_pending_structure_backup_jobs(limit=10)
+        mirror_code = run_pending_document_locator_mirror_jobs(limit=10)
         try:
             written = run_write_rnd_records()
             if written:
@@ -212,7 +221,7 @@ def run_worker_loop(
                 print("[文档同步循环] 检测到 T+ BOM 新同步，已跑一次父件核对与补建。")
         except Exception as exc:  # noqa: BLE001 - 核对失败不拖垮轮询
             print(f"[文档同步循环] T+ 事件触发核对异常：{exc}")
-        return code or backup_code
+        return code or mirror_code
 
     run_full = full_sync or _default_full_sync
     run_pending = consume_requests or _default_consume_requests
@@ -231,6 +240,7 @@ def run_worker_loop(
 
     if is_default_pipeline:
         _reconcile_platform_catalog()
+        _reconcile_locator_catalog()
     _maybe_start_group_listener()
 
     try:

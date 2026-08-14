@@ -7,6 +7,8 @@ from typing import Any, Callable
 from pydantic import BaseModel, Field
 from psycopg.types.json import Jsonb
 
+from app import document_locator
+
 
 WECOM_DOC_TYPES = {"smartsheet_doc", "registry_doc"}
 WECOM_TABLE_TYPE = "smartsheet_sheet"
@@ -60,7 +62,7 @@ def source_group(provider: str, env_profile: str) -> str:
 
 
 def valid_wecom_docid(value: str) -> bool:
-    return value.startswith("dc") and len(value) >= 80
+    return document_locator.valid_wecom_docid(value)
 
 
 def _doc_syncability(provider: str, source_type: str, external_doc_id: str, status: str = "active") -> tuple[bool, str]:
@@ -113,35 +115,7 @@ ORDER BY d.provider, d.env_profile, d.id
 
 
 def assets(conn: Any, *, tplus_items: list[dict[str, Any]]) -> dict[str, Any]:
-    groups = {key: {"key": key, "title": title, "items": []} for key, title in _GROUPS}
-    groups["tplus"]["items"] = [
-        {**dict(item), "job_key": "chanjet.full", "syncable": True, "reason": ""}
-        for item in tplus_items
-    ]
-    with conn.cursor() as cur:
-        cur.execute(_ASSETS_SQL)
-        rows = cur.fetchall()
-    for row in rows:
-        provider = str(row[0] or "")
-        env_profile = str(row[1] or "")
-        external_doc_id = str(row[2] or "")
-        source_type = str(row[3] or "")
-        group_key = source_group(provider, env_profile)
-        if group_key not in groups:
-            continue
-        syncable, reason = _doc_syncability(provider, source_type, external_doc_id)
-        item = {
-            "name": str(row[4] or row[5] or "未命名文档"),
-            "sheets": int(row[7] or 0),
-            "jobs": int(row[8] or 0),
-            "updated_at": row[9],
-            "syncable": syncable,
-            "reason": reason,
-        }
-        if syncable:
-            item["source_id"] = int(row[6])
-        groups[group_key]["items"].append(item)
-    return {"groups": list(groups.values())}
+    return document_locator.asset_catalog(conn, tplus_items=tplus_items)
 
 
 def _config_response(row: dict[str, Any], *, document: bool) -> dict[str, Any]:

@@ -18,7 +18,7 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 | `wecom_assistant.py` | 企微统一助手 |
 | `system_config.py` | 同步调度等系统配置（DB 生效面） |
 | `ops.py` | /v1/ops/*（T+ timeline、sync-config） |
-| `app/routers/sync.py` | `/v1/sync/*` 统一同步中心，查询层为 `app/sync_read.py`，控制层为 `app/sync_control.py`；统一提供资产、调度与手动运行入口 |
+| `app/routers/sync.py` | `/v1/sync/*` 统一同步中心，查询层为 `app/sync_read.py`，控制层为 `app/sync_control.py`；`app/document_locator.py` 统一资产下载、副本幂等登记与 docid 修复，响应不返回外部文档 ID |
 | `versions.py` | 版本看板 |
 | `backups.py` | 企微结构备份看板、镜像清理策略看板 |
 | `clash_profile.py` | Clash 配置合成器（人类叫法：订阅合并 / 一个订阅选所有节点）。机场订阅源 CRUD + 合成配置下载；渲染逻辑在 `app/clash_profile/render.py`，自建节点走 env `CLASH_SELF_NODES_B64`。验证：`python -m unittest discover -s tests -p "test_clash_profile_render.py"` |
@@ -35,6 +35,7 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 `app/pipelines/sync_alert_notifier.py` 是 P3 告警事实源：轮询 `sync_jobs` 与 `sync_job_runs`，以
 `sync_job_alerts` 的 partial unique open claim 去重；行锁只保护投递和恢复，resolved 后由 partial unique 允许重开，步骤清理由独立 DELETE 按 30/90 天执行。
 调度候选内核在 `app/pipelines/sync_scheduler.py`；`sync_jobs.schedule` 是候选配置面，legacy `integration_sync_config` 仍驱动 shadow 期的真实执行并作为回滚面。shadow 证据只合并到已有真实 `trigger='schedule'` run 的 `detail_json.shadow`，不创建伪 run。
+文档定位档案在 `document_locator_registry/events/mirror_jobs/copy_requests`；导入为 `app/pipelines/document_locator_import.py`，源同步后对账为 `document_locator.py`，企微人工镜像为 `document_locator_mirror.py`。真实 docid、分享标识、管理员与凭据引用只落生产私有库/企微镜像，不进公开仓。
 验证：`SYNC_ALERT_INTEGRATION_DATABASE_URL=<postgres-url> python -m unittest discover -s tests -p "test_sync_alert_notifier_integration.py" -v`。
 
 ## services/tplus-sync-worker
@@ -47,7 +48,7 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 ## services/public-web
 
 公网首页（纯 nginx 静态）：功能卡片、登录、formula 入口、工具分区（灰分计算器）。
-`services/public-web/sync/index.html` 对应 `/sync/` 管理员统一同步中心，按 T+ ERP、企微 A、企微 B、飞书分类展示资产和作业，并统一提供调度、立即运行、时间线、步骤详情与告警。`/exports/` 只负责分类下载，`/tplus-sync/` 跳转到 `/sync/?group=tplus`。
+`services/public-web/sync/index.html` 对应 `/sync/` 管理员统一同步中心，按 T+ ERP、企微 A、企微 B、飞书分类展示资产和作业，统一提供下载、复制、docid 修复、调度、立即运行、时间线、步骤详情与告警。`/exports/` 相对 301 到 `/sync/?view=assets`，`/tplus-sync/` 相对 301 到 `/sync/?group=tplus`。
 `formula/colors/` 是标准型号色彩空间（three.js + camera-controls，数据走 `/v1/formula/colors`，
 需登录且有 `formula.read`）；`mock-data.js` 是默认隐藏的参考示例，惰性加载。视图设置已从画布浮层移到顶部 `#settingsPanel`；色点标签由 `rebuildLabels()` / `syncLabels()` 的 DOM 层渲染，偏好存 `localStorage['aliecs_formula_colors_view_prefs']`。
 「刷新数据」按钮走 `POST /v1/formula/colors/refresh` 入队 `sync_requests` 后轮询 `meta.last_sync_at`（死线 180s）——

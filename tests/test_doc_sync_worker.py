@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
 import unittest
 from unittest.mock import patch
@@ -624,7 +626,7 @@ class WorkerLoopTests(WorkerImportTestCase):
         with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}), \
                 mock.patch.object(module, "_maybe_start_group_listener"), \
                 mock.patch.object(module, "run_pending_sync_requests", return_value=0), \
-                mock.patch.object(module, "run_pending_structure_backup_jobs", return_value=0), \
+                mock.patch.object(module, "run_pending_document_locator_mirror_jobs", return_value=0), \
                 mock.patch.object(module, "run_write_rnd_records", return_value=0), \
                 mock.patch.object(module, "run_backfill_if_bom_synced", return_value=(None, False)), \
                 mock.patch.object(module.sync_alert_notifier, "run_notifier_once") as default_notifier:
@@ -672,8 +674,7 @@ class WorkerLoopTests(WorkerImportTestCase):
                 mock.patch.object(module, "run_sync_wecom_full", return_value=0), \
                 mock.patch.object(module, "run_backfill_images", side_effect=RuntimeError("skip")), \
                 mock.patch.object(module, "run_sync_feishu_full", return_value=0), \
-                mock.patch.object(module, "run_enqueue_daily_structure_backup_jobs", return_value=0), \
-                mock.patch.object(module, "run_pending_structure_backup_jobs", return_value=0), \
+                mock.patch.object(module, "run_pending_document_locator_mirror_jobs", return_value=0), \
                 mock.patch.object(module, "run_tplus_parent_match", return_value=0), \
                 mock.patch.object(module, "run_pending_sync_requests", return_value=0), \
                 mock.patch.object(module, "run_write_rnd_records", return_value=0), \
@@ -814,7 +815,7 @@ class WorkerLoopTests(WorkerImportTestCase):
 
         with mock.patch.object(module, "run_backfill_if_bom_synced", side_effect=fake_backfill), \
                 mock.patch.object(module, "run_pending_sync_requests", return_value=0), \
-                mock.patch.object(module, "run_pending_structure_backup_jobs", return_value=0), \
+                mock.patch.object(module, "run_pending_document_locator_mirror_jobs", return_value=0), \
                 mock.patch.object(module, "run_write_rnd_records", return_value=0):
             code = module.run_worker_loop(
                 full_sync=lambda: 0,
@@ -2733,7 +2734,9 @@ class FeishuBitableSyncTests(WorkerImportTestCase):
             module, "env_profiles", return_value=["COMPANY_A"]
         ), mock.patch.object(module, "credentials_for_profile", return_value=[Cred()]), mock.patch.object(
             module, "FeishuBitableClient", return_value=FakeClient()
-        ), mock.patch.object(module, "discover_profile_sources", return_value=[]):
+        ), mock.patch.object(module, "discover_profile_sources", return_value=[]), mock.patch.object(
+            module, "reconcile_document_locators", return_value={"seen": 1}
+        ) as reconcile:
             exit_code = module.run_sync_feishu_full()
 
         self.assertEqual(0, exit_code)
@@ -2743,6 +2746,7 @@ class FeishuBitableSyncTests(WorkerImportTestCase):
         self.assertEqual(["schedule", "schedule"], [run["trigger"] for run in store.sync_jobs.started])
         self.assertEqual(["success", "success"], [run["status"] for run in store.sync_jobs.finished])
         self.assertEqual(1, store.sync_jobs.reconciled)
+        reconcile.assert_called_once_with(store, trigger="feishu-full")
         registered = {item["external_sheet_id"] for item in store.sources}
         self.assertIn("tbl_new", registered)
 
@@ -3095,10 +3099,16 @@ class WeComDynamicPlatformSyncTests(WorkerImportTestCase):
             module, "env_profiles", return_value=["COMPANY_A"]
         ), mock.patch.object(module, "credentials_for_profile", return_value=[self._credential()]), mock.patch.object(
             module, "discover_profile_sources", return_value=[WeComDocSource("COMPANY_A", "dc_parent", "生产点检表", "")]
-        ), mock.patch.object(module, "WeComSmartsheetClient", return_value=self._Client("sheet_b")):
-            self.assertEqual(1, module.run_sync_wecom_full())
+        ), mock.patch.object(module, "WeComSmartsheetClient", return_value=self._Client("sheet_b")), mock.patch.object(
+            module, "reconcile_document_locators", return_value={"seen": 1}
+        ) as reconcile, mock.patch.object(module, "record_locator_failure", return_value=True) as record_failure:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(1, module.run_sync_wecom_full())
 
         self.assertEqual("partial_failed", store.finished["status"])
+        reconcile.assert_not_called()
+        record_failure.assert_called_once_with(store, source_id=None, error=unittest.mock.ANY)
         self.assertEqual(["schedule", "schedule"], [item["trigger"] for item in store.sync_jobs.started])
         self.assertEqual(["success", "partial"], [item["status"] for item in store.sync_jobs.finished])
         failed_step = next(step for step in store.sync_jobs.steps if step["run_id"] == 101 and step["status"] == "failed")
@@ -3107,11 +3117,39 @@ class WeComDynamicPlatformSyncTests(WorkerImportTestCase):
         self.assertEqual("auth", partial["error_kind"])
         self.assertNotIn("secret-value", str(partial["error"]))
         self.assertNotIn("dc_sensitive", str(partial["error"]))
+        persisted_and_logged = str(store.finished) + output.getvalue()
+        self.assertNotIn("secret-value", persisted_and_logged)
+        self.assertNotIn("dc_sensitive", persisted_and_logged)
+        self.assertNotIn("dc_parent", persisted_and_logged)
         legacy_index = next(index for index, event in enumerate(store.events) if event[0] == "legacy_finish")
         failed_step_index = next(index for index, event in enumerate(store.events) if event == ("platform_step_terminal", 101, 3, "failed"))
         self.assertGreater(failed_step_index, legacy_index)
         terminal_indexes = [index for index, event in enumerate(store.events) if event[0] in {"platform_step_terminal", "platform_finish"}]
         self.assertTrue(all(index > legacy_index for index in terminal_indexes if store.events[index][0] == "platform_finish"))
+
+    def test_unchanged_live_read_clears_stale_locator_permission_failure(self) -> None:
+        import unittest.mock as mock
+
+        from app.pipelines import sync_wecom_full as module
+
+        store = self._Store()
+        store.get_doc_modified = lambda *_args: "1"
+        counts = {"skipped_doc_count": 0}
+        with mock.patch.object(module, "record_locator_read_success", return_value=True) as restored:
+            module._sync_doc(
+                store,
+                self._Client(),
+                profile="COMPANY_A",
+                docid="dc_parent",
+                fallback_name="生产点检表",
+                source_url="",
+                counts=counts,
+                errors=[],
+                skip_unchanged=True,
+            )
+
+        restored.assert_called_once_with(store, env_profile="COMPANY_A", api_doc_id="dc_parent")
+        self.assertEqual(1, counts["skipped_doc_count"])
 
     def test_dynamic_writer_failures_are_fail_open_for_each_stage(self) -> None:
         for stage in ("start", "step", "finish"):
@@ -3457,14 +3495,51 @@ class SyncRequestDispatchTests(WorkerImportTestCase):
         with mock.patch.object(module, "open_store", return_value=store), mock.patch.object(
             module, "sync_feishu_source", side_effect=fake_feishu
         ), mock.patch.object(module, "sync_wecom_source", side_effect=fake_wecom), mock.patch.object(
-            module, "structure_backup_enabled", return_value=False
-        ):
+            module, "record_locator_after_request", return_value=True
+        ) as record_locator:
             exit_code = module.run_pending_sync_requests(limit=10)
 
         self.assertEqual(0, exit_code)
         self.assertEqual([("feishu", 1619), ("wecom", 100)], calls)
         self.assertEqual([(1, "success"), (2, "success")], store.finished)
+        self.assertEqual(
+            [mock.call(store, request, "success") for request in store.pending_sync_requests(10)],
+            record_locator.call_args_list,
+        )
         self.assertEqual(1, store.sync_jobs.reconciled)
+
+    def test_failed_request_does_not_mark_locator_verified(self) -> None:
+        import unittest.mock as mock
+
+        from app.pipelines import sync_wecom_full as module
+
+        class FakeStore:
+            sync_jobs = WeComManualSyncTests.FakePlatformWriter()
+
+            def pending_sync_requests(self, limit: int) -> list[dict]:
+                del limit
+                return [{"id": 3, "source_id": 100, "provider": "wecom", "mode": "manual"}]
+
+            def mark_sync_request_running(self, request_id: int) -> None:
+                del request_id
+
+            def finish_sync_request(self, *args: object) -> None:
+                del args
+
+            def close(self) -> None:
+                return None
+
+        store = FakeStore()
+        with mock.patch.object(module, "open_store", return_value=store), mock.patch.object(
+            module, "sync_wecom_source", return_value=("failed", 44, {"error": "synthetic"})
+        ), mock.patch.object(module, "record_locator_after_request", return_value=False) as record_locator:
+            self.assertEqual(1, module.run_pending_sync_requests(limit=10))
+
+        record_locator.assert_called_once_with(
+            store,
+            {"id": 3, "source_id": 100, "provider": "wecom", "mode": "manual"},
+            "failed",
+        )
 
 
 if __name__ == "__main__":

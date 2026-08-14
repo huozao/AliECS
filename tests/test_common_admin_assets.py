@@ -28,7 +28,7 @@ class AdminCssTests(unittest.TestCase):
             self.assertIn(selector, css, f"admin.css 缺少 {selector}")
 
     def test_admin_pages_link_admin_css(self) -> None:
-        for page in (EXPORTS_PAGE, SYNC_PAGE):
+        for page in (SYNC_PAGE,):
             html = page.read_text(encoding="utf-8")
             self.assertIn('<link rel="stylesheet" href="/common/admin.css"/>', html,
                           f"{page.name} 未引用 admin.css")
@@ -63,7 +63,7 @@ class AdminAuthJsTests(unittest.TestCase):
         self.assertIn("function applyGate(me, onAdmin)", self.js)
 
     def test_admin_pages_load_admin_auth_before_use(self) -> None:
-        for page in (EXPORTS_PAGE, SYNC_PAGE):
+        for page in (SYNC_PAGE,):
             html = page.read_text(encoding="utf-8")
             self.assertIn('<script src="/common/admin-auth.js"></script>', html,
                           f"{page.name} 未引用 admin-auth.js")
@@ -77,9 +77,10 @@ class AdminAuthJsTests(unittest.TestCase):
                              f"{page.name} 仍自带一份 downloadExport()")
 
     def test_pages_still_pass_their_own_admin_loader(self) -> None:
-        # 抽取不能把「登录后加载什么」丢掉。
+        # exports 已是静态兼容跳转，唯一管理页 sync 仍必须保留加载器。
         exports_html = EXPORTS_PAGE.read_text(encoding="utf-8")
-        self.assertIn("loadExports", exports_html)
+        self.assertIn("/sync/?view=assets", exports_html)
+        self.assertNotIn("loadExports", exports_html)
         sync_html = SYNC_PAGE.read_text(encoding="utf-8")
         self.assertIn("loadControl", sync_html)
         self.assertIn("loadTimeline", sync_html)

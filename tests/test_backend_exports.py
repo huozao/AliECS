@@ -156,10 +156,10 @@ class BackendExportsTests(unittest.TestCase):
 
             def execute(self, sql: str, params=None) -> None:
                 executed_sql.append(sql)
-                if "WHERE s.external_sheet_id <> '' AND s.status" in sql:
-                    self.rows = []
-                else:
-                    self.rows = [("wecom", "COMPANY_A", "doc-new", "新副本", 42, 0, 0, None)]
+                self.rows = [(
+                    "wecom", "COMPANY_A", "dc" + "x" * 86, "smartsheet_doc", "新副本", "新副本",
+                    42, 0, 0, None, "verified", {"read": "verified", "copy": "allowed"}, "active",
+                )]
 
             def fetchall(self):
                 return self.rows
@@ -182,20 +182,12 @@ class BackendExportsTests(unittest.TestCase):
             self.main._latest_tplus_exports = old_latest
 
         wecom_a = next(tab for tab in catalog["tabs"] if tab["key"] == "wecom_company_a")
-        self.assertIn("MAX(s.document_name) FILTER (WHERE s.external_sheet_id = '')", executed_sql[0])
-        self.assertEqual(
-            [
-                {
-                    "name": "新副本",
-                    "source_id": 42,
-                    "sheets": 0,
-                    "rows": 0,
-                    "updated_at": None,
-                    "download_url": None,
-                }
-            ],
-            wecom_a["items"],
-        )
+        self.assertIn("document_locator_registry", executed_sql[0])
+        self.assertEqual(1, len(wecom_a["items"]))
+        self.assertEqual(42, wecom_a["items"][0]["source_id"])
+        self.assertEqual("新副本", wecom_a["items"][0]["name"])
+        self.assertTrue(wecom_a["items"][0]["can_sync"])
+        self.assertFalse(wecom_a["items"][0]["can_download"])
 
     def test_legacy_sync_routes_delegate_to_shared_control_service(self) -> None:
         with patch.object(self.main, "_conn"), patch.object(
@@ -214,6 +206,47 @@ class BackendExportsTests(unittest.TestCase):
         self.assertEqual(2, all_result["requests_created"])
         enqueue_doc.assert_called_once_with(unittest.mock.ANY, 17, "admin")
         enqueue_all.assert_called_once_with(unittest.mock.ANY, "admin")
+
+    def test_structure_backup_download_uses_authoritative_locator_tables(self) -> None:
+        from openpyxl import Workbook
+
+        class FakeCursor:
+            def __init__(self) -> None:
+                self.query_index = 0
+
+            def execute(self, sql: str, params=None) -> None:
+                del params
+                self.query_index += 1
+                self.last_sql = sql
+
+            def fetchall(self):
+                if self.query_index == 1:
+                    return [(
+                        41, "wecom", "COMPANY_A", "生产表", "dc-synthetic", "https://example.invalid/share",
+                        ["admin-one"], "COMPANY_A#1", "registry", "active", "unverified", "企微同步验证失败",
+                        {"read": "verified", "write": "unknown", "copy": "allowed"}, 3,
+                        "2026-08-13", "2026-08-14", "2026-08-14", "2026-08-14", "wecom-timeout",
+                    )]
+                return [(
+                    "2026-08-14", "生产表", "sync-success", "worker", ["last_sync_at"],
+                    {"syncability_status": "verified"}, 41,
+                )]
+
+        workbook = Workbook()
+        workbook.remove(workbook.active)
+        cursor = FakeCursor()
+
+        self.main._append_locator_archive_worksheets(workbook, cursor)
+
+        self.assertEqual(["文档定位档案", "定位档案变更历史"], workbook.sheetnames)
+        self.assertEqual(list(self.main._LOCATOR_CURRENT_FIELDS), [cell.value for cell in workbook["文档定位档案"][1]])
+        self.assertEqual(list(self.main._LOCATOR_EVENT_FIELDS), [cell.value for cell in workbook["定位档案变更历史"][1]])
+        self.assertEqual("dc-synthetic", workbook["文档定位档案"]["D2"].value)
+        self.assertEqual("locator:41", workbook["文档定位档案"]["T2"].value)
+        # 原因列给人读，错误代码列给排障用，两列不能是同一个值。
+        self.assertEqual("企微同步验证失败", workbook["文档定位档案"]["K2"].value)
+        self.assertEqual("wecom-timeout", workbook["文档定位档案"]["U2"].value)
+        self.assertEqual("locator:41", workbook["定位档案变更历史"]["G2"].value)
 
     def test_match_export_files_buckets_to_first_run_at_or_after_file_time(self):
         from app.routers.exports import _match_export_files_to_runs
