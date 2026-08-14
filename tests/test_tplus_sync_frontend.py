@@ -13,7 +13,13 @@ class TplusSyncFrontendTests(unittest.TestCase):
     def test_nginx_redirects_legacy_page_to_unified_center(self) -> None:
         config = NGINX.read_text(encoding="utf-8")
         self.assertIn("location = /tplus-sync/", config)
+        self.assertIn("absolute_redirect off;", config)
         self.assertIn("return 301 /sync/?group=tplus;", config)
+
+    def test_nginx_redirects_exports_to_asset_view_without_https_downgrade(self) -> None:
+        config = NGINX.read_text(encoding="utf-8")
+        self.assertIn("location = /exports/", config)
+        self.assertIn("return 301 /sync/?view=assets;", config)
 
     def test_static_fallback_has_no_control_surface(self) -> None:
         html = TPLUS_PAGE.read_text(encoding="utf-8")

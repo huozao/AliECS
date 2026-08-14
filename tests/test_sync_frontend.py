@@ -59,6 +59,9 @@ class SyncFrontendTests(unittest.TestCase):
         self.assertIn("method:'PUT'", self.html)
         self.assertNotIn("/v1/ops/doc-sync", self.html)
         self.assertNotIn("/v1/exports/sync-all", self.html)
+        self.assertIn("/copy`,{method:'POST'", self.html)
+        self.assertIn("/docid`,{method:'PUT'", self.html)
+        self.assertIn("AliECSAdmin.downloadExport", self.html)
 
     def test_has_global_filters_paging_and_query_preselection(self) -> None:
         for dom_id in (
@@ -113,10 +116,61 @@ class SyncFrontendTests(unittest.TestCase):
         self.assertNotIn("detail_json", self.html)
 
     def test_write_actions_have_loading_guards(self) -> None:
-        for marker in ("function runJob(", "function runAsset(", "function runAll(", "function saveConfig("):
+        for marker in ("function runJob(", "function runAsset(", "function copyAsset(", "function repairAsset(", "function runAll(", "function saveConfig("):
             self.assertIn(marker, self.html)
         self.assertIn("controlBusy", self.html)
         self.assertIn("session!==sessionGeneration", self.html)
+        self.assertIn("copyIdempotencyKeys", self.html)
+        self.assertIn("crypto.randomUUID", self.html)
+
+    def test_asset_actions_follow_capabilities_and_system_assets_are_download_only(self) -> None:
+        for marker in ("item.can_download", "item.can_sync", "item.can_copy", "item.system_managed"):
+            self.assertIn(marker, self.html)
+        for label in ("下载", "创建副本", "补录 docid", "系统管理资产"):
+            self.assertIn(label, self.html)
+        self.assertNotIn("external_doc_id", self.html)
+        self.assertNotIn("api_doc_id}</", self.html)
+
+    def test_failed_copy_retry_reuses_one_idempotency_key(self) -> None:
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                (async()=>{
+                  const first=vm.runInContext('copyAsset(17,null)',context).catch(()=>{});
+                  await Promise.resolve();
+                  if(pending.length!==1)throw new Error(`expected first copy request, got ${pending.length}`);
+                  const firstBody=pending[0].path+':'+String(pending[0].promise);
+                  const firstKey=vm.runInContext('copyIdempotencyKeys.get(17)',context);
+                  pending[0].reject(new Error('network'));
+                  await first;
+                  const second=vm.runInContext('copyAsset(17,null)',context).catch(()=>{});
+                  await Promise.resolve();
+                  if(pending.length!==2)throw new Error(`expected retry request, got ${pending.length}`);
+                  const secondKey=vm.runInContext('copyIdempotencyKeys.get(17)',context);
+                  if(!firstKey||firstKey!==secondKey)throw new Error('copy retry changed idempotency key');
+                  pending[1].reject(new Error('network-again'));
+                  await second;
+                  if(firstBody.split(':')[0]!==pending[1].path)throw new Error('copy retry changed endpoint');
+                })().catch((error)=>{console.error(error.stack||error);process.exitCode=1;});
+                """
+            )
+        )
+
+    def test_system_asset_renders_download_without_sync_or_copy(self) -> None:
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                vm.runInContext(`state.assets=[{key:'wecom_company_a',title:'企微A',items:[{
+                  name:'backup',source_id:12,sheets:2,jobs:0,updated_at:null,
+                  can_download:true,can_sync:false,can_copy:false,system_managed:true,
+                  reason:'系统管理资产，仅提供下载',download_url:'/v1/exports/external-doc/12'
+                }]}];state.activeAssetGroup='wecom_company_a';renderAssets()`,context);
+                const renderedAssets=elements.assetList.innerHTML;
+                if(!renderedAssets.includes('下载')||!renderedAssets.includes('系统管理资产'))throw new Error('system download action missing');
+                if(renderedAssets.includes('立即同步')||renderedAssets.includes('创建副本'))throw new Error('system asset exposed write action');
+                """
+            )
+        )
 
     def test_dynamic_job_keys_never_enter_inline_handlers(self) -> None:
         self.assertIn("function runVisibleJob(", self.html)

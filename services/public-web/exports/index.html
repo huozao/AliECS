@@ -1,54 +1,5 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>AliECS · 数据导出</title>
-  <link rel="stylesheet" href="/common/admin.css"/>
-</head>
-<body>
-  <div class="wrap">
-    <header class="topbar">
-      <div><h1>数据导出</h1><p class="subtitle">按来源查找并下载数据文件；同步与调度统一在同步中心管理。</p></div>
-      <nav class="actions"><a class="btn" href="/health/">← 返回 API Health</a><a class="btn primary" href="/sync/">打开统一同步中心</a><button id="loginBtn" class="btn" type="button">登录（SSO）</button><button id="logoutBtn" class="btn hidden" type="button">退出登录</button><button id="refreshBtn" class="btn primary hidden" type="button">刷新</button></nav>
-    </header>
-    <div id="gateHint" class="band">此页面仅管理员可见。请点右上角「登录（SSO）」。</div>
-    <main id="adminContent" class="hidden">
-      <section class="band">
-        <h2>数据导出</h2>
-        <div id="exportTabs" class="row" style="margin:10px 0"></div>
-        <div id="exportList" class="muted">加载中...</div>
-      </section>
-    </main>
-  </div>
-  <script src="/common/toast.js"></script>
-  <script src="/common/admin-auth.js"></script>
-  <script>
-    const {api,fetchMe,esc,clearAuthToken,ssoLogin}=AliECSAdmin;
-    const $=(id)=>document.getElementById(id);
-    function showError(message){AliECSToast.show(message,'error');}
-    function showSuccess(message){AliECSToast.show(message,'success');}
-    window.downloadExport=(url,name)=>AliECSAdmin.downloadExport(url,name).catch((error)=>showError(`下载失败：${error.message}`));
-    let exportCatalog=null,activeExportTab='tplus';
-    async function loadExports(){exportCatalog=await api('/v1/exports/catalog');renderExports();}
-    function fmtSize(bytes){if(bytes==null)return'';if(bytes>=1048576)return `${(bytes/1048576).toFixed(1)} MB`;if(bytes>=1024)return `${(bytes/1024).toFixed(0)} KB`;return `${bytes} B`;}
-    function renderExports(){
-      const tabs=(exportCatalog&&exportCatalog.tabs)||[];
-      $('exportTabs').innerHTML=tabs.map((tab)=>`<button class="btn ${tab.key===activeExportTab?'primary':''}" type="button" onclick="selectExportTab('${esc(tab.key)}')">${esc(tab.title)}（${(tab.items||[]).length}）</button>`).join('');
-      const tab=tabs.find((item)=>item.key===activeExportTab)||tabs[0];
-      if(!tab){$('exportList').innerHTML='<span class="muted">暂无可导出数据。</span>';return;}
-      const rows=(tab.items||[]).map((item)=>{
-        const scale=item.sheets!=null?`${item.sheets} 表 / ${item.rows} 行`:(item.rows!=null?`${item.rows} 行`:fmtSize(item.size_bytes));
-        const download=item.download_url?`<button class="btn primary" type="button" onclick="downloadExport('${esc(item.download_url)}','${esc(item.file_name||item.name)}')">下载</button>`:'<span class="muted">暂无文件</span>';
-        return `<tr><td>${esc(item.name)}</td><td>${esc(item.description||'-')}</td><td>${esc(scale)}</td><td>${esc(item.updated_at?String(item.updated_at).slice(0,19).replace('T',' '):'-')}</td><td>${download}</td></tr>`;
-      }).join('');
-      $('exportList').innerHTML=`<table><thead><tr><th>名称</th><th>描述</th><th>规模</th><th>更新时间</th><th>下载</th></tr></thead><tbody>${rows||'<tr><td colspan="5" class="muted">该来源暂无导出文件。</td></tr>'}</tbody></table>`;
-    }
-    function selectExportTab(key){activeExportTab=key;renderExports();}
-    refreshBtn.onclick=()=>loadExports().catch((error)=>showError(`导出目录加载失败：${error.message}`));
-    loginBtn.onclick=ssoLogin;
-    logoutBtn.onclick=()=>{clearAuthToken();$('exportTabs').innerHTML='';$('exportList').innerHTML='';AliECSAdmin.applyGate(null);showSuccess('已退出登录。');};
-    (async()=>{AliECSAdmin.applyGate(await fetchMe(),()=>loadExports().catch((error)=>{$('exportList').innerHTML=`<span class="chip failed">导出目录加载失败：${esc(error.message)}</span>`;}));})();
-  </script>
-</body>
+<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><meta http-equiv="refresh" content="0;url=/sync/?view=assets"/><title>正在前往统一同步中心</title></head>
+<body><p><a href="/sync/?view=assets">数据下载与副本创建已迁移到统一同步中心</a></p></body>
 </html>
