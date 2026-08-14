@@ -5,6 +5,7 @@ import json
 import sys
 
 from app.pipelines.backfill_smartsheet_images import run_backfill_images, run_backfill_probe
+from app.pipelines.document_locator_import import run_import_document_locators_from_stdin
 from app.pipelines.group_message_listener import run_group_listener
 from app.pipelines.rnd_record_writer import run_write_rnd_records
 from app.pipelines.sync_feishu_full import run_sync_feishu_full
@@ -84,6 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     match_parser.add_argument("--no-notify", action="store_true", help="写表但不推飞书。")
 
     subparsers.add_parser("run-loop", help="常驻循环：周期全量 + 轮询消费手动同步请求")
+    subparsers.add_parser("import-document-locators", help="从 stdin 导入私有文档定位 registry（仅输出计数）")
 
     args = parser.parse_args(argv)
     if args.command == "sync-wecom-full":
@@ -118,6 +120,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_tplus_parent_match(dry_run=args.dry_run, notify=not args.no_notify)
     if args.command == "run-loop":
         return run_worker_loop()
+    if args.command == "import-document-locators":
+        return run_import_document_locators_from_stdin()
 
     parser.print_help()
     return 2

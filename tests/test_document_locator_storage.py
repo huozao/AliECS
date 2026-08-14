@@ -103,7 +103,10 @@ class DocumentLocatorStorageTests(unittest.TestCase):
 
         result = store.upsert_document_locator(locator(), event_type="registry-import", actor="importer")
 
-        self.assertEqual({"id": 41, "locator_version": 1, "changed": True, "mirror_job_id": 81}, result)
+        self.assertEqual(
+            {"id": 41, "locator_version": 1, "changed": True, "created": True, "mirror_job_id": 81},
+            result,
+        )
         statements = [sql for sql, _ in conn.calls]
         self.assertTrue(any("insert into document_locator_registry" in sql for sql in statements))
         locator_insert = next(sql for sql in statements if "insert into document_locator_registry" in sql)

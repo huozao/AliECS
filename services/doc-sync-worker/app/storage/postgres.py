@@ -524,6 +524,65 @@ class PostgresDocSyncStore:
             "sheet_name": row[9] or "",
         }
 
+    def find_document_locator_sources(
+        self,
+        *,
+        api_doc_id: str = "",
+        share_ref: str = "",
+    ) -> list[dict[str, Any]]:
+        identity = str(api_doc_id or share_ref or "")
+        if not identity:
+            return []
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    env_profile,
+                    COALESCE(
+                        MAX(NULLIF(document_name, '')) FILTER (WHERE external_sheet_id = ''),
+                        MAX(NULLIF(document_name, '')),
+                        MAX(NULLIF(source_name, '')),
+                        ''
+                    ) AS document_name,
+                    COALESCE(
+                        MIN(id) FILTER (WHERE external_sheet_id = ''),
+                        MIN(id)
+                    ) AS source_id,
+                    COALESCE(
+                        MAX(source_type) FILTER (WHERE external_sheet_id = ''),
+                        MAX(source_type),
+                        ''
+                    ) AS source_type,
+                    BOOL_OR(status = 'active') AS active,
+                    COUNT(DISTINCT id) FILTER (
+                        WHERE external_sheet_id <> '' AND status = 'active'
+                    ) AS sheet_count,
+                    MAX(last_sync_at) FILTER (
+                        WHERE external_sheet_id <> '' AND status = 'active'
+                    ) AS last_sync_at,
+                    COALESCE(MAX(NULLIF(source_url, '')), '') AS source_url
+                FROM external_sources
+                WHERE provider = 'wecom' AND external_doc_id = %s
+                GROUP BY env_profile, external_doc_id
+                ORDER BY env_profile
+                """,
+                (identity,),
+            )
+            rows = cur.fetchall()
+        return [
+            {
+                "id": int(row[2]),
+                "env_profile": str(row[0]),
+                "document_name": str(row[1] or ""),
+                "source_type": str(row[3] or ""),
+                "status": "active" if row[4] else "disabled",
+                "sheet_count": int(row[5] or 0),
+                "last_sync_at": row[6],
+                "source_url": str(row[7] or ""),
+            }
+            for row in rows
+        ]
+
     def pending_sync_requests(self, limit: int) -> list[dict[str, Any]]:
         with self.conn.cursor() as cur:
             cur.execute(
@@ -690,6 +749,7 @@ class PostgresDocSyncStore:
                     (values["provider"], values["env_profile"], identity_value),
                 )
                 existing = cur.fetchone()
+                created = existing is None
                 if existing:
                     current = dict(zip(comparable, existing[2:]))
                     changed_fields = [name for name in comparable if current.get(name) != values.get(name)]
@@ -807,6 +867,7 @@ class PostgresDocSyncStore:
                 "id": locator_id,
                 "locator_version": locator_version,
                 "changed": changed,
+                "created": created,
                 "mirror_job_id": mirror_job_id,
             }
         except Exception:
