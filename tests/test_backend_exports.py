@@ -159,7 +159,7 @@ class BackendExportsTests(unittest.TestCase):
                 if "WHERE s.external_sheet_id <> '' AND s.status" in sql:
                     self.rows = []
                 else:
-                    self.rows = [("wecom", "COMPANY_A", "doc-new", "新副本", 42, 0, 0, None)]
+                    self.rows = [("wecom", "COMPANY_A", "dc" + "x" * 86, "smartsheet_doc", "新副本", "新副本", 42, 0, 0, None)]
 
             def fetchall(self):
                 return self.rows
@@ -182,20 +182,12 @@ class BackendExportsTests(unittest.TestCase):
             self.main._latest_tplus_exports = old_latest
 
         wecom_a = next(tab for tab in catalog["tabs"] if tab["key"] == "wecom_company_a")
-        self.assertIn("MAX(s.document_name) FILTER (WHERE s.external_sheet_id = '')", executed_sql[0])
-        self.assertEqual(
-            [
-                {
-                    "name": "新副本",
-                    "source_id": 42,
-                    "sheets": 0,
-                    "rows": 0,
-                    "updated_at": None,
-                    "download_url": None,
-                }
-            ],
-            wecom_a["items"],
-        )
+        self.assertIn("structure_backup_doc", executed_sql[0])
+        self.assertEqual(1, len(wecom_a["items"]))
+        self.assertEqual(42, wecom_a["items"][0]["source_id"])
+        self.assertEqual("新副本", wecom_a["items"][0]["name"])
+        self.assertTrue(wecom_a["items"][0]["can_sync"])
+        self.assertFalse(wecom_a["items"][0]["can_download"])
 
     def test_legacy_sync_routes_delegate_to_shared_control_service(self) -> None:
         with patch.object(self.main, "_conn"), patch.object(

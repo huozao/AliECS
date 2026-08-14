@@ -77,6 +77,11 @@ class WeComDocClient:
         sheets = data.get("sheets") or data.get("sheet_list") or []
         return sheets if isinstance(sheets, list) else []
 
+    def get_doc_name(self, docid: str) -> str:
+        data = self.post("/wedoc/get_doc_base_info", {"docid": docid})
+        info = data.get("doc_base_info") if isinstance(data.get("doc_base_info"), dict) else data
+        return str(info.get("doc_name") or "").strip()
+
     def get_fields(self, docid: str, sheet_id: str) -> list[dict[str, Any]]:
         data = self.post("/wedoc/smartsheet/get_fields", {"docid": docid, "sheet_id": sheet_id})
         fields = data.get("fields") or data.get("field_list") or []

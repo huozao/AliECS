@@ -12,7 +12,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
-from app import sync_control
+from app import document_locator, sync_control
 from app.core import _audit, _conn, require_admin, require_login
 
 
@@ -215,49 +215,9 @@ def _external_source_tab_key(provider: str, env_profile: str) -> str:
 
 @router.get("/v1/exports/catalog")
 def exports_catalog(_: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    tabs: dict[str, dict[str, Any]] = {
-        "tplus": {"key": "tplus", "title": "T+ ERP", "items": _latest_tplus_exports()},
-        "wecom_company_a": {"key": "wecom_company_a", "title": "企微A", "items": []},
-        "wecom_company_b": {"key": "wecom_company_b", "title": "企微B", "items": []},
-        "feishu": {"key": "feishu", "title": "飞书", "items": []},
-    }
     with closing(_conn()) as conn:
-        with conn.cursor() as cur:
-            # 按工作簿（文档）聚合：每个智能表格文档一条，下载时整簿多 sheet 导出。
-            cur.execute(
-                """
-                SELECT s.provider, s.env_profile, s.external_doc_id,
-                       COALESCE(
-                           MAX(s.document_name) FILTER (WHERE s.external_sheet_id = ''),
-                           MAX(NULLIF(s.document_name, '')),
-                           MAX(NULLIF(s.source_name, ''))
-                       ) AS document_name,
-                       COALESCE(MIN(s.id) FILTER (WHERE s.external_sheet_id = ''), MIN(s.id)) AS first_source_id,
-                       COUNT(DISTINCT s.id) FILTER (WHERE s.external_sheet_id <> '') AS sheet_count,
-                       COUNT(r.id) FILTER (WHERE s.external_sheet_id <> '') AS row_count,
-                       MAX(s.last_sync_at) FILTER (WHERE s.external_sheet_id <> '') AS last_sync_at
-                FROM external_sources s
-                LEFT JOIN external_records r ON r.source_id = s.id AND s.external_sheet_id <> ''
-                WHERE s.status = 'active' AND s.external_doc_id <> ''
-                GROUP BY s.provider, s.env_profile, s.external_doc_id
-                ORDER BY MIN(s.id)
-                """
-            )
-            rows = cur.fetchall()
-    for provider, env_profile, _doc_id, document_name, first_source_id, sheet_count, row_count, last_sync_at in rows:
-        key = _external_source_tab_key(str(provider or ""), str(env_profile or ""))
-        tab = tabs.setdefault(key, {"key": key, "title": key, "items": []})
-        tab["items"].append(
-            {
-                "name": document_name or f"{provider} 文档",
-                "source_id": first_source_id,
-                "sheets": int(sheet_count or 0),
-                "rows": int(row_count or 0),
-                "updated_at": str(last_sync_at) if last_sync_at else None,
-                "download_url": f"/v1/exports/external-doc/{first_source_id}" if int(sheet_count or 0) > 0 else None,
-            }
-        )
-    return {"tabs": list(tabs.values())}
+        catalog = document_locator.asset_catalog(conn, tplus_items=_latest_tplus_exports())
+    return {"tabs": catalog["groups"]}
 
 
 _STOCK_COLUMNS = {
@@ -658,31 +618,17 @@ def exports_sync_all(user: dict[str, Any] = Depends(require_admin)) -> dict[str,
 
 @router.post("/v1/exports/external-doc/{source_id}/copy")
 def exports_external_doc_copy(source_id: int, _: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    """在企业微信中创建该智能表格的完整副本（全部工作表结构 + 全部记录）。"""
-    from app.integrations.wecom_docs import WeComDocError, copy_smartsheet_doc
-
-    with closing(_conn()) as conn:
-        with conn.cursor() as cur:
-            provider, env_profile, external_doc_id, document_name = _external_doc_anchor(cur, source_id)
-    if provider != "wecom":
-        raise HTTPException(status_code=400, detail="仅支持企业微信智能表格创建副本")
-
-    new_name = f"{document_name or '智能表格'}-副本{datetime.now(tz=timezone.utc).strftime('%y%m%d_%H%M')}"
     try:
-        result = copy_smartsheet_doc(env_profile=str(env_profile), source_docid=str(external_doc_id), new_doc_name=new_name)
-    except WeComDocError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        from uuid import uuid4
 
-    # 新副本自动登记为同步源并触发首次整簿同步，30 秒内出现在数据导出列表。
-    new_docid = str(result.get("new_docid") or "")
-    if new_docid:
-        with closing(_conn()) as conn:
-            with conn.cursor() as cur:
-                doc_row_id = _ensure_doc_row(cur, str(provider), str(env_profile), new_docid, new_name)
-                _create_doc_sync_request(cur, doc_row_id, str(provider), str(env_profile), "copy-auto")
-            conn.commit()
-        result["registered"] = True
-    return {"document_name": document_name, "new_doc_name": new_name, **result}
+        return document_locator.copy_asset(
+            _conn,
+            source_id=source_id,
+            idempotency_key=f"legacy-export-{uuid4()}",
+            requested_by="legacy-exports",
+        )
+    except document_locator.InvalidLocatorAction as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/v1/admin/doc-sync/sources")

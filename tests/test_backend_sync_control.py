@@ -95,7 +95,8 @@ class SyncControlTests(unittest.TestCase):
         company_b = result["groups"][2]["items"][0]
         self.assertFalse(company_b["syncable"])
         self.assertEqual("缺少有效企微 docid", company_b["reason"])
-        self.assertNotIn("source_id", company_b)
+        self.assertEqual(12, company_b["source_id"])
+        self.assertFalse(company_b["can_download"] or company_b["can_copy"])
         feishu = result["groups"][3]["items"][0]
         self.assertTrue(feishu["syncable"])
         self.assertEqual(13, feishu["source_id"])
