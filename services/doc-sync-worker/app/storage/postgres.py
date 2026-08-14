@@ -605,13 +605,20 @@ class PostgresDocSyncStore:
                     COALESCE(NULLIF(d.document_name, ''), NULLIF(d.source_name, ''), ''),
                     d.source_url, d.source_type, d.status,
                     COUNT(DISTINCT s.id) FILTER (WHERE s.status='active') AS sheet_count,
-                    MAX(s.last_sync_at) FILTER (WHERE s.status='active') AS last_sync_at
+                    MAX(s.last_sync_at) FILTER (WHERE s.status='active') AS last_sync_at,
+                    l.syncability_status, l.updated_at, l.last_error_code, l.last_error_summary
                 FROM external_sources d
                 LEFT JOIN external_sources s
                   ON s.provider=d.provider
                  AND s.env_profile=d.env_profile
                  AND s.external_doc_id=d.external_doc_id
                  AND s.external_sheet_id<>''
+                LEFT JOIN LATERAL (
+                    SELECT syncability_status, updated_at, last_error_code, last_error_summary
+                    FROM document_locator_registry
+                    WHERE external_source_id=d.id
+                    ORDER BY updated_at DESC, id DESC LIMIT 1
+                ) l ON TRUE
                 WHERE d.external_sheet_id=''
                   AND (
                        (d.provider='wecom' AND d.source_type IN (
@@ -620,7 +627,7 @@ class PostgresDocSyncStore:
                     OR (d.provider='feishu' AND d.source_type='bitable_app')
                   )
                   {selected_filter}
-                GROUP BY d.id
+                GROUP BY d.id, l.syncability_status, l.updated_at, l.last_error_code, l.last_error_summary
                 ORDER BY d.id
                 """,
                 params,
@@ -638,6 +645,10 @@ class PostgresDocSyncStore:
                 "status": str(row[7] or ""),
                 "sheet_count": int(row[8] or 0),
                 "last_sync_at": row[9],
+                "locator_syncability_status": str(row[10] or ""),
+                "locator_updated_at": row[11],
+                "locator_last_error_code": str(row[12] or ""),
+                "locator_last_error_summary": str(row[13] or ""),
             }
             for row in rows
         ]

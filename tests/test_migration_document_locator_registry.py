@@ -47,6 +47,7 @@ class DocumentLocatorRegistryMigrationTests(unittest.TestCase):
         )
         self.assertIn("CHECK (api_doc_id IS NOT NULL OR share_ref IS NOT NULL)", sql)
         self.assertIn("CHECK (status IN ('pending', 'running', 'success', 'failed'))", sql)
+        self.assertIn("CHECK (status IN ('prepared', 'creating', 'copying', 'external_created', 'registered', 'failed'))", sql)
         self.assertNotRegex(sql, re.compile(r"api_doc_id\s*=\s*share_ref", re.IGNORECASE))
 
 

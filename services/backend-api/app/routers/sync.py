@@ -49,6 +49,22 @@ def sync_assets(
         ) from exc
 
 
+@router.get("/assets/{source_id}/download")
+def sync_asset_download(
+    source_id: int,
+    _: dict[str, Any] = Depends(require_admin),
+):
+    return exports_router.exports_external_doc_download(source_id, _)
+
+
+@router.get("/exports/tplus/{file_name}")
+def sync_tplus_download(
+    file_name: str,
+    _: dict[str, Any] = Depends(require_admin),
+):
+    return exports_router.exports_tplus_download(file_name, _)
+
+
 @router.get("/config/doc")
 def sync_doc_config_get(
     _: dict[str, Any] = Depends(require_admin),

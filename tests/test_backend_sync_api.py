@@ -51,7 +51,9 @@ class SyncApiTests(unittest.TestCase):
             ("POST", "/v1/sync/run-all"),
             ("POST", "/v1/sync/assets/{source_id}/run"),
             ("POST", "/v1/sync/assets/{source_id}/copy"),
+            ("GET", "/v1/sync/assets/{source_id}/download"),
             ("PUT", "/v1/sync/assets/{source_id}/docid"),
+            ("GET", "/v1/sync/exports/tplus/{file_name}"),
             ("POST", "/v1/sync/jobs/{job_key}/run"),
         )
         for method, path in routes:
@@ -163,6 +165,18 @@ class SyncApiTests(unittest.TestCase):
             requested_by="admin",
         )
         self.assertNotIn(repair_body.api_doc_id, str(expected_repair))
+
+    def test_canonical_download_routes_delegate_to_legacy_adapters(self):
+        external = object()
+        tplus = object()
+        with patch.object(sync_router.exports_router, "exports_external_doc_download", return_value=external) as doc_download, patch.object(
+            sync_router.exports_router, "exports_tplus_download", return_value=tplus
+        ) as tplus_download:
+            self.assertIs(external, sync_router.sync_asset_download(17, _={}))
+            self.assertIs(tplus, sync_router.sync_tplus_download("bom.xlsx", _={}))
+
+        doc_download.assert_called_once_with(17, {})
+        tplus_download.assert_called_once_with("bom.xlsx", {})
 
     def test_asset_action_invalid_target_is_400_and_unexpected_error_is_sanitized(self):
         copy_body = sync_router.CopyAssetBody(idempotency_key="action-2")

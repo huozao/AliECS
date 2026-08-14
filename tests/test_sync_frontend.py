@@ -162,6 +162,30 @@ class SyncFrontendTests(unittest.TestCase):
             )
         )
 
+    def test_copy_success_is_not_reported_as_failure_when_refresh_rejects(self) -> None:
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                (async()=>{
+                  let rejected=false;
+                  const action=vm.runInContext('copyAsset(17,null)',context).catch(()=>{rejected=true;});
+                  await Promise.resolve();
+                  pending[0].resolve({status:'registered'});
+                  await Promise.resolve();await Promise.resolve();
+                  if(pending.length!==7)throw new Error(`expected copy plus six refresh requests, got ${pending.length}`);
+                  pending[1].reject(new Error('refresh unavailable'));
+                  for(let i=2;i<7;i++)pending[i].resolve(i===2?{items:[]}:(i===6?{items:[],total:0}:{}));
+                  await action;
+                  if(rejected)throw new Error('copy promise rejected after successful provider response');
+                  if(vm.runInContext('copyIdempotencyKeys.has(17)',context))throw new Error('successful copy key retained');
+                  if(!toasts.some((item)=>item.text.includes('副本已创建并登记')))throw new Error('success toast missing');
+                  if(!toasts.some((item)=>item.text.includes('列表刷新失败')))throw new Error('refresh warning missing');
+                  if(toasts.some((item)=>item.text.includes('创建副本失败')))throw new Error('copy falsely reported failed');
+                })().catch((error)=>{console.error(error.stack||error);process.exitCode=1;});
+                """
+            )
+        )
+
     def test_system_asset_renders_download_without_sync_or_copy(self) -> None:
         self._run_timeline_probe(
             textwrap.dedent(

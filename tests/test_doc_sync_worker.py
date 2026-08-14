@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
 import unittest
 from unittest.mock import patch
@@ -3099,11 +3101,14 @@ class WeComDynamicPlatformSyncTests(WorkerImportTestCase):
             module, "discover_profile_sources", return_value=[WeComDocSource("COMPANY_A", "dc_parent", "生产点检表", "")]
         ), mock.patch.object(module, "WeComSmartsheetClient", return_value=self._Client("sheet_b")), mock.patch.object(
             module, "reconcile_document_locators", return_value={"seen": 1}
-        ) as reconcile:
-            self.assertEqual(1, module.run_sync_wecom_full())
+        ) as reconcile, mock.patch.object(module, "record_locator_failure", return_value=True) as record_failure:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(1, module.run_sync_wecom_full())
 
         self.assertEqual("partial_failed", store.finished["status"])
-        reconcile.assert_called_once_with(store, trigger="wecom-full")
+        reconcile.assert_not_called()
+        record_failure.assert_called_once_with(store, source_id=None, error=unittest.mock.ANY)
         self.assertEqual(["schedule", "schedule"], [item["trigger"] for item in store.sync_jobs.started])
         self.assertEqual(["success", "partial"], [item["status"] for item in store.sync_jobs.finished])
         failed_step = next(step for step in store.sync_jobs.steps if step["run_id"] == 101 and step["status"] == "failed")
@@ -3112,11 +3117,39 @@ class WeComDynamicPlatformSyncTests(WorkerImportTestCase):
         self.assertEqual("auth", partial["error_kind"])
         self.assertNotIn("secret-value", str(partial["error"]))
         self.assertNotIn("dc_sensitive", str(partial["error"]))
+        persisted_and_logged = str(store.finished) + output.getvalue()
+        self.assertNotIn("secret-value", persisted_and_logged)
+        self.assertNotIn("dc_sensitive", persisted_and_logged)
+        self.assertNotIn("dc_parent", persisted_and_logged)
         legacy_index = next(index for index, event in enumerate(store.events) if event[0] == "legacy_finish")
         failed_step_index = next(index for index, event in enumerate(store.events) if event == ("platform_step_terminal", 101, 3, "failed"))
         self.assertGreater(failed_step_index, legacy_index)
         terminal_indexes = [index for index, event in enumerate(store.events) if event[0] in {"platform_step_terminal", "platform_finish"}]
         self.assertTrue(all(index > legacy_index for index in terminal_indexes if store.events[index][0] == "platform_finish"))
+
+    def test_unchanged_live_read_clears_stale_locator_permission_failure(self) -> None:
+        import unittest.mock as mock
+
+        from app.pipelines import sync_wecom_full as module
+
+        store = self._Store()
+        store.get_doc_modified = lambda *_args: "1"
+        counts = {"skipped_doc_count": 0}
+        with mock.patch.object(module, "record_locator_read_success", return_value=True) as restored:
+            module._sync_doc(
+                store,
+                self._Client(),
+                profile="COMPANY_A",
+                docid="dc_parent",
+                fallback_name="生产点检表",
+                source_url="",
+                counts=counts,
+                errors=[],
+                skip_unchanged=True,
+            )
+
+        restored.assert_called_once_with(store, env_profile="COMPANY_A", api_doc_id="dc_parent")
+        self.assertEqual(1, counts["skipped_doc_count"])
 
     def test_dynamic_writer_failures_are_fail_open_for_each_stage(self) -> None:
         for stage in ("start", "step", "finish"):

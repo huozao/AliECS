@@ -143,7 +143,7 @@ def mirror_payload() -> dict[str, Any]:
             "source_kind": "registry",
             "lifecycle_status": "active",
             "syncability_status": "verified",
-            "capabilities": {"read": "verified", "write": "unknown", "copy": "unverified"},
+            "capabilities": {"read": "verified", "write": "unknown", "copy": "allowed"},
             "sheet_count": 3,
             "registered_at": "2026-08-13T00:00:00Z",
             "last_verified_at": "2026-08-14T00:00:00Z",
@@ -202,6 +202,58 @@ class DocumentLocatorMirrorTests(unittest.TestCase):
         self.assertEqual("sync-request:7", store.upserts[0][1])
         self.assertFalse(self.locator.record_locator_after_request(store, request, "failed"))
         self.assertEqual(1, len(store.upserts))
+
+    def test_permission_failure_is_written_and_not_erased_by_historical_last_sync(self) -> None:
+        store = FakeLocatorStore()
+        failed_source = source()
+        failed_source.update(
+            {
+                "locator_updated_at": "2026-08-14T01:00:00Z",
+                "locator_syncability_status": "permission-denied",
+                "locator_last_error_code": "auth",
+                "locator_last_error_summary": "企微权限验证失败",
+            }
+        )
+        store.sources = [failed_source]
+
+        self.assertTrue(
+            self.locator.record_locator_failure(store, source_id=17, error=RuntimeError("403 forbidden"))
+        )
+        written = store.upserts[-1][0]
+        self.assertEqual("permission-denied", written["syncability_status"])
+        self.assertEqual("unavailable", written["capabilities"]["read"])
+        self.assertNotIn("403", written["last_error_summary"])
+
+        preserved = self.locator.locator_from_source(failed_source)
+        self.assertEqual("permission-denied", preserved["syncability_status"])
+        self.assertEqual("auth", preserved["last_error_code"])
+
+    def test_live_read_success_clears_stale_permission_failure(self) -> None:
+        store = FakeLocatorStore()
+        failed_source = source()
+        failed_source.update(
+            {
+                "locator_updated_at": "2026-08-14T01:00:00Z",
+                "locator_syncability_status": "permission-denied",
+                "locator_last_error_code": "auth",
+                "locator_last_error_summary": "企微权限验证失败",
+            }
+        )
+        store.sources = [failed_source]
+
+        self.assertTrue(
+            self.locator.record_locator_read_success(
+                store, env_profile="COMPANY_A", api_doc_id=VALID_DOCID,
+            )
+        )
+
+        restored, event_type = store.upserts[-1]
+        self.assertEqual("permission-restored", event_type)
+        self.assertEqual("verified", restored["syncability_status"])
+        self.assertEqual("verified", restored["capabilities"]["read"])
+        self.assertEqual("allowed", restored["capabilities"]["copy"])
+        self.assertEqual("", restored["last_error_code"])
+        self.assertEqual("", restored["last_error_summary"])
 
     def test_workbook_adds_only_two_authoritative_sheets_and_fixed_fields(self) -> None:
         client = FakeMirrorClient()

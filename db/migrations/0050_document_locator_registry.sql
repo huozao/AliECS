@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS document_copy_requests (
     requested_by TEXT NOT NULL DEFAULT '',
     requested_name TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'prepared'
-        CHECK (status IN ('prepared', 'external_created', 'registered', 'failed')),
+        CHECK (status IN ('prepared', 'creating', 'copying', 'external_created', 'registered', 'failed')),
     new_api_doc_id TEXT,
     new_source_url TEXT NOT NULL DEFAULT '',
     locator_id BIGINT REFERENCES document_locator_registry(id) ON DELETE SET NULL,

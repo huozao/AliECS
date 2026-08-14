@@ -438,7 +438,7 @@
         if(session!==sessionGeneration)return;
         copyIdempotencyKeys.delete(sourceId);
         AliECSToast.show('副本已创建并登记，首次同步已排队。','success');
-        await loadAll();
+        try{await loadAll();}catch(error){AliECSToast.show(`副本已创建，但列表刷新失败：${error.message}`,'warning');}
       });
     }
     async function repairAsset(sourceId,apiDocId,button){

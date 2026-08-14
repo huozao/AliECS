@@ -8,11 +8,15 @@ from app.providers.wecom import (
     credentials_for_profile,
     discover_profile_sources,
     env_profiles,
-    summarize_wecom_error,
 )
 from app.pipelines.managed_contacts import CONTACT_SHEET_CHANNELS, SESSION_INDEX_SHEETS, sync_managed_contact_from_row
 from app.pipelines.sync_feishu_full import sync_feishu_source
-from app.pipelines.document_locator import record_locator_after_request, reconcile_document_locators
+from app.pipelines.document_locator import (
+    record_locator_after_request,
+    record_locator_failure,
+    record_locator_read_success,
+    reconcile_document_locators,
+)
 from app.storage.postgres import build_record_snapshot, compose_source_name, open_store
 from app.storage.job_catalog import reconcile_document_jobs_fail_open
 from app.storage.sync_job_platform import classify_error, platform_writer_for
@@ -30,6 +34,12 @@ def _platform_error(exc: Exception) -> RuntimeError:
         "unknown": "sync failure",
     }
     return RuntimeError(messages[kind])
+
+
+def _safe_error_detail(exc: Exception, **context: Any) -> dict[str, Any]:
+    """Return diagnostics safe for persisted JSON and worker stdout."""
+    kind = classify_error(exc)
+    return {**context, "error_kind": kind, "error": str(_platform_error(exc))}
 
 
 class _PlatformRun:
@@ -162,7 +172,7 @@ def _sync_sheet_records(
     counts["sheet_count"] += 1
     counts["record_count"] += len(records)
     print(
-        f"[企业微信同步] docid={docid} sheet_id={sheet_id} "
+        f"[企业微信同步] source_id={source_id} sheet={sheet_name or '未命名'} "
         f"完整拉取 {len(records)} 条，分页 {records_response.get('page_count', 1)} 页。"
     )
     seen_record_ids: list[str] = []
@@ -224,14 +234,19 @@ def _sync_doc(
     if skip_unchanged and modify_time and not is_control_plane:
         last_seen = store.get_doc_modified("wecom", profile, docid)
         if last_seen and last_seen == modify_time:
+            try:
+                record_locator_read_success(store, env_profile=profile, api_doc_id=docid)
+            except Exception:  # noqa: BLE001 - locator recovery must not block synchronization.
+                pass
             counts["skipped_doc_count"] = counts.get("skipped_doc_count", 0) + 1
             print(f"[企业微信同步] {profile} 「{document_name}」modify_time 未变化（{modify_time}），整簿跳过。")
             return
 
     initial_error_count = int(counts.get("error_count", 0) or 0)
+    document_failure: Exception | None = None
     seen_sheet_ids: list[str] = []
     if not sheets:
-        print(f"[企业微信同步] {profile} docid={docid} 未返回 sheet。")
+        print(f"[企业微信同步] {profile} 文档未返回 sheet。")
     for sheet in sheets:
         sheet_id = _sheet_id(sheet)
         if not sheet_id:
@@ -273,24 +288,15 @@ def _sync_doc(
             if platform_outcomes is not None:
                 platform_outcomes.append(platform_run)
         except Exception as sheet_exc:  # noqa: BLE001
+            document_failure = sheet_exc
             platform_run.queue_outcome({"error_count": 1}, error=_platform_error(sheet_exc))
             if platform_outcomes is not None:
                 platform_outcomes.append(platform_run)
             counts["error_count"] += 1
-            sheet_error = str(sheet_exc)
-            errors.append(
-                {
-                    "env_profile": profile,
-                    "docid": docid,
-                    "sheet_id": sheet_id,
-                    "sheet_name": sheet_name,
-                    "error": sheet_error,
-                    "summary": summarize_wecom_error(sheet_error),
-                }
-            )
+            errors.append(_safe_error_detail(sheet_exc, env_profile=profile, sheet_name=sheet_name))
             print(
-                f"[企业微信同步] {profile} docid={docid} "
-                f"sheet={sheet_name} 同步失败（已跳过，继续其余表）：{sheet_exc}"
+                f"[企业微信同步] {profile} sheet={sheet_name} "
+                f"同步失败（已跳过，继续其余表）：{_platform_error(sheet_exc)}"
             )
     if (
         seen_sheet_ids
@@ -300,7 +306,7 @@ def _sync_doc(
         disabled_count = store.disable_missing_sheets("wecom", profile, docid, seen_sheet_ids)
         counts["disabled_sheet_count"] = counts.get("disabled_sheet_count", 0) + int(disabled_count or 0)
     # 全簿处理完才登记 modify_time，半途失败下轮不会被跳过。
-    store.upsert_doc_source(
+    document_source_id = store.upsert_doc_source(
         provider="wecom",
         env_profile=profile,
         external_doc_id=docid,
@@ -308,6 +314,13 @@ def _sync_doc(
         source_url=source_url,
         external_modified_at=modify_time,
     )
+    try:
+        if document_failure is not None:
+            record_locator_failure(store, source_id=document_source_id, error=document_failure)
+        else:
+            reconcile_document_locators(store, trigger="wecom-full", source_id=document_source_id)
+    except Exception:  # noqa: BLE001 - locator metadata must not block source synchronization.
+        pass
 
 
 def run_sync_wecom_full(profiles_arg: str = "") -> int:
@@ -374,26 +387,23 @@ def run_sync_wecom_full(profiles_arg: str = "") -> int:
                             break
                         except Exception as exc:  # noqa: BLE001 - sync should keep collecting useful diagnostics.
                             last_error = exc
-                            print(f"[企业微信同步] {profile} 凭证 {credential.label} 同步失败：{exc}")
+                            print(f"[企业微信同步] {profile} 凭证轮换同步失败：{_platform_error(exc)}")
                     if not doc_synced and last_error is not None:
                         counts["error_count"] += 1
-                        error_text = str(last_error)
-                        errors.append(
-                            {
-                                "env_profile": profile,
-                                "docid": source.docid,
-                                "error": error_text,
-                                "summary": summarize_wecom_error(error_text),
-                            }
-                        )
+                        errors.append(_safe_error_detail(last_error, env_profile=profile))
+                        try:
+                            record_locator_failure(
+                                store, env_profile=profile, api_doc_id=source.docid, error=last_error,
+                            )
+                        except Exception:  # noqa: BLE001 - locator failure reporting is fail-open.
+                            pass
                 status = "success" if counts["error_count"] == 0 else "partial_failed"
             except Exception as exc:  # noqa: BLE001
                 exit_code = 1
                 counts["error_count"] += 1
-                error_text = str(exc)
-                errors.append({"env_profile": profile, "error": error_text, "summary": summarize_wecom_error(error_text)})
+                errors.append(_safe_error_detail(exc, env_profile=profile))
                 status = "failed"
-                print(f"[企业微信同步] {profile} 同步失败：{exc}")
+                print(f"[企业微信同步] {profile} 同步失败：{_platform_error(exc)}")
 
             store.finish_run(run_id, status=status, counts=counts, error_json=errors)
             for platform_run in platform_outcomes:
@@ -406,10 +416,6 @@ def run_sync_wecom_full(profiles_arg: str = "") -> int:
             if counts["error_count"]:
                 exit_code = 1
     finally:
-        try:
-            reconcile_document_locators(store, trigger="wecom-full")
-        except Exception:  # noqa: BLE001 - locator metadata must not block source synchronization.
-            pass
         reconcile_document_jobs_fail_open(store)
         store.close()
 
@@ -492,15 +498,18 @@ def sync_wecom_source(store: Any, source_id: int, mode: str = "manual") -> tuple
                 break
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
-                print(f"[企业微信同步] source_id={source_id} 凭证 {credential.label} 同步失败：{exc}")
+                print(f"[企业微信同步] source_id={source_id} 凭证轮换同步失败：{_platform_error(exc)}")
         if last_error is not None:
             raise last_error
     except Exception as exc:  # noqa: BLE001
         failure = exc
         counts["error_count"] += 1
-        error_text = str(exc)
-        errors.append({"source_id": source_id, "error": error_text, "summary": summarize_wecom_error(error_text)})
+        errors.append(_safe_error_detail(exc, source_id=source_id))
         status = "failed"
+        try:
+            record_locator_failure(store, source_id=source_id, error=exc)
+        except Exception:  # noqa: BLE001 - locator failure reporting is fail-open.
+            pass
 
     store.finish_run(run_id, status=status, counts=counts, error_json=errors)
     if platform_run:

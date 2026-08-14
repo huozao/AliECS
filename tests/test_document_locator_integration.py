@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 import unittest
@@ -66,7 +67,7 @@ class DocumentLocatorPostgresIntegrationTests(unittest.TestCase):
         source_ids: list[int] = []
         locator_ids: list[int] = []
         copy_request_id: int | None = None
-        sync_request_id: int | None = None
+        sync_request_ids: list[int] = []
         try:
             with conn.cursor() as cur:
                 for external_id, source_type, name in (
@@ -92,7 +93,7 @@ class DocumentLocatorPostgresIntegrationTests(unittest.TestCase):
                     "provider": "wecom", "env_profile": "COMPANY_A", "api_doc_id": resolved_docid,
                     "document_name": "CI resolved locator", "source_kind": "registry",
                     "lifecycle_status": "active", "syncability_status": "verified",
-                    "capabilities": {"read": "verified", "write": "unknown", "copy": "unverified"},
+                    "capabilities": {"read": "verified", "write": "unknown", "copy": "allowed"},
                     "external_source_id": source_ids[0],
                 },
                 event_type="ci-import", actor="ci",
@@ -108,6 +109,12 @@ class DocumentLocatorPostgresIntegrationTests(unittest.TestCase):
                 event_type="ci-import", actor="ci",
             )
             locator_ids.extend([int(resolved["id"]), int(unresolved["id"])])
+            catalog = backend_module.asset_catalog(conn, tplus_items=[])
+            company_a = next(group for group in catalog["groups"] if group["key"] == "wecom_company_a")
+            self.assertEqual(set(source_ids), {item["source_id"] for item in company_a["items"]})
+            serialized_catalog = json.dumps(catalog, default=str)
+            self.assertNotIn(resolved_docid, serialized_catalog)
+            self.assertNotIn(share_ref, serialized_catalog)
             jobs = store.claim_document_locator_mirror_jobs(limit=10)
             self.assertEqual(set(locator_ids), {int(job["locator_id"]) for job in jobs})
             store.finish_document_locator_mirror_job(int(jobs[0]["id"]))
@@ -136,6 +143,28 @@ class DocumentLocatorPostgresIntegrationTests(unittest.TestCase):
                     cur.execute("SELECT 1")
                     self.assertEqual(1, cur.fetchone()[0])
 
+            class RepairClient:
+                def get_doc_name(self, _docid: str) -> str:
+                    return "CI resolved locator"
+
+                def get_sheets(self, _docid: str) -> list[dict[str, str]]:
+                    return [{"sheet_id": "synthetic-sheet"}]
+
+            repaired = backend_module.repair_docid(
+                lambda: psycopg.connect(database_url, connect_timeout=5),
+                source_id=source_ids[1], api_doc_id=resolved_docid, requested_by="ci",
+                client_factory=lambda _profile: RepairClient(),
+            )
+            self.assertEqual(source_ids[0], int(repaired["source_id"]))
+            self.assertEqual(locator_ids[0], int(repaired["locator_id"]))
+            sync_request_ids.append(int(repaired["sync_request_id"]))
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT api_doc_id, lifecycle_status, external_source_id FROM document_locator_registry WHERE id = %s",
+                    (locator_ids[1],),
+                )
+                self.assertEqual((None, "disabled", None), cur.fetchone())
+
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -157,7 +186,7 @@ class DocumentLocatorPostgresIntegrationTests(unittest.TestCase):
             )
             source_ids.append(int(registered["source_id"]))
             locator_ids.append(int(registered["locator_id"]))
-            sync_request_id = int(registered["sync_request_id"])
+            sync_request_ids.append(int(registered["sync_request_id"]))
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -167,7 +196,7 @@ class DocumentLocatorPostgresIntegrationTests(unittest.TestCase):
                         (SELECT COUNT(*) FROM sync_requests WHERE id = %s),
                         (SELECT status FROM document_copy_requests WHERE id = %s)
                     """,
-                    (locator_ids[-1], locator_ids[-1], sync_request_id, copy_request_id),
+                    (locator_ids[-1], locator_ids[-1], sync_request_ids[-1], copy_request_id),
                 )
                 self.assertEqual((1, 1, 1, "registered"), cur.fetchone())
         finally:
@@ -175,8 +204,8 @@ class DocumentLocatorPostgresIntegrationTests(unittest.TestCase):
                 with conn.cursor() as cur:
                     if copy_request_id is not None:
                         cur.execute("DELETE FROM document_copy_requests WHERE id = %s", (copy_request_id,))
-                    if sync_request_id is not None:
-                        cur.execute("DELETE FROM sync_requests WHERE id = %s", (sync_request_id,))
+                    if sync_request_ids:
+                        cur.execute("DELETE FROM sync_requests WHERE id = ANY(%s)", (sync_request_ids,))
                     if locator_ids:
                         cur.execute("DELETE FROM document_locator_registry WHERE id = ANY(%s)", (locator_ids,))
                     if source_ids:

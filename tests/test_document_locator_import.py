@@ -24,8 +24,12 @@ class FakeStore:
     def __init__(self, sources: dict[str, list[dict[str, Any]]] | None = None) -> None:
         self.sources = sources or {}
         self.upserts: list[tuple[dict[str, Any], str, str]] = []
+        self.fail_names: set[str] = set()
+        self.fail_lookups: set[str] = set()
 
     def find_document_locator_sources(self, *, api_doc_id: str = "", share_ref: str = "") -> list[dict[str, Any]]:
+        if (api_doc_id or share_ref) in self.fail_lookups:
+            raise RuntimeError("synthetic lookup failure")
         return list(self.sources.get(api_doc_id or share_ref, []))
 
     def upsert_document_locator(
@@ -35,6 +39,8 @@ class FakeStore:
         event_type: str,
         actor: str,
     ) -> dict[str, Any]:
+        if locator["document_name"] in self.fail_names:
+            raise RuntimeError("synthetic database conflict")
         self.upserts.append((locator, event_type, actor))
         return {
             "id": len(self.upserts),
@@ -129,6 +135,7 @@ class DocumentLocatorImportTests(unittest.TestCase):
         self.assertEqual(SHARE_REF, resolved["share_ref"])
         self.assertEqual("verified", resolved["syncability_status"])
         self.assertEqual("verified", resolved["capabilities"]["read"])
+        self.assertEqual("allowed", resolved["capabilities"]["copy"])
         self.assertIsNone(unresolved["api_doc_id"])
         self.assertEqual(SHARE_REF, unresolved["share_ref"])
         self.assertEqual("unresolved", unresolved["lifecycle_status"])
@@ -211,6 +218,42 @@ class DocumentLocatorImportTests(unittest.TestCase):
         with mock.patch.object(main_module, "run_import_document_locators_from_stdin", return_value=0) as run:
             self.assertEqual(0, main_module.main(["import-document-locators"]))
         run.assert_called_once_with()
+
+    def test_main_no_longer_exposes_legacy_structure_backup_writers(self) -> None:
+        main_module = importlib.import_module("app.main")
+        for command in ("sync-wecom-structure-backup", "consume-structure-backup-jobs"):
+            with self.subTest(command=command), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                main_module.main([command])
+
+    def test_database_conflict_isolated_and_later_entries_continue(self) -> None:
+        store = FakeStore()
+        store.fail_names.add("first")
+        payload = {
+            "docs": {
+                VALID_DOCID: {"docid": VALID_DOCID, "doc_name": "first", "env_profile": "COMPANY_A"},
+                OTHER_DOCID: {"docid": OTHER_DOCID, "doc_name": "second", "env_profile": "COMPANY_A"},
+            }
+        }
+
+        result = self.module.import_document_locators(payload, store)
+
+        self.assertEqual({"inserted": 1, "updated": 0, "linked": 0, "unresolved": 0, "conflicts": 1}, result)
+        self.assertEqual("second", store.upserts[0][0]["document_name"])
+
+    def test_lookup_failure_isolated_and_later_entries_continue(self) -> None:
+        store = FakeStore()
+        store.fail_lookups.add(VALID_DOCID)
+        payload = {
+            "docs": {
+                VALID_DOCID: {"docid": VALID_DOCID, "doc_name": "first", "env_profile": "COMPANY_A"},
+                OTHER_DOCID: {"docid": OTHER_DOCID, "doc_name": "second", "env_profile": "COMPANY_A"},
+            }
+        }
+
+        result = self.module.import_document_locators(payload, store)
+
+        self.assertEqual(1, result["conflicts"])
+        self.assertEqual("second", store.upserts[0][0]["document_name"])
 
 
 if __name__ == "__main__":

@@ -59,13 +59,27 @@ def registry_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return entries
 
 
+def _rollback_failed_item(store: Any) -> None:
+    connection = getattr(store, "conn", None)
+    if connection is not None:
+        try:
+            connection.rollback()
+        except Exception:
+            pass
+
+
 def import_document_locators(payload: dict[str, Any], store: Any) -> dict[str, int]:
     counts = {"inserted": 0, "updated": 0, "linked": 0, "unresolved": 0, "conflicts": 0}
     for entry in registry_entries(payload):
-        sources = store.find_document_locator_sources(
-            api_doc_id=entry["api_doc_id"],
-            share_ref=entry["share_ref"] if not entry["api_doc_id"] else "",
-        )
+        try:
+            sources = store.find_document_locator_sources(
+                api_doc_id=entry["api_doc_id"],
+                share_ref=entry["share_ref"] if not entry["api_doc_id"] else "",
+            )
+        except Exception:  # noqa: BLE001 - isolate one malformed/conflicting registry item.
+            _rollback_failed_item(store)
+            counts["conflicts"] += 1
+            continue
         profiles = {str(source.get("env_profile") or "") for source in sources if source.get("env_profile")}
         explicit_profile = str(entry.get("env_profile") or "")
         if len(profiles) > 1 or (explicit_profile and profiles and explicit_profile not in profiles):
@@ -94,7 +108,7 @@ def import_document_locators(payload: dict[str, Any], store: Any) -> dict[str, i
             "capabilities": {
                 "read": "verified" if resolved and last_sync_at else ("unverified" if resolved else "unavailable"),
                 "write": "unknown",
-                "copy": "unverified" if resolved else "unavailable",
+                "copy": "allowed" if resolved else "unavailable",
             },
             "sheet_count": int(source.get("sheet_count") or entry["sheet_count"] or 0),
             "external_source_id": source.get("id"),
@@ -103,7 +117,12 @@ def import_document_locators(payload: dict[str, Any], store: Any) -> dict[str, i
             "last_error_code": "" if resolved else "invalid-docid",
             "last_error_summary": "" if resolved else "缺少有效企微 docid",
         }
-        result = store.upsert_document_locator(locator, event_type="registry-import", actor="registry-importer")
+        try:
+            result = store.upsert_document_locator(locator, event_type="registry-import", actor="registry-importer")
+        except Exception:  # noqa: BLE001 - repository rolls back the failed item; continue count-only import.
+            _rollback_failed_item(store)
+            counts["conflicts"] += 1
+            continue
         counts["inserted" if result.get("created") else "updated"] += 1
         if resolved and source:
             counts["linked"] += 1

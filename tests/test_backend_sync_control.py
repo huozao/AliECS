@@ -73,9 +73,9 @@ class SyncControlTests(unittest.TestCase):
         valid_docid = "dc" + "d" * 86
         conn = FakeConn(
             [[
-                ("wecom", "COMPANY_A", valid_docid, "smartsheet_doc", "生产表", "生产表", 11, 2, 2, None),
-                ("wecom", "COMPANY_B", "s3_" + "x" * 40, "smartsheet_link", "历史链接", "历史链接", 12, 0, 0, None),
-                ("feishu", "COMPANY_A", "app-test-token", "bitable_app", "飞书表", "飞书表", 13, 3, 2, None),
+                ("wecom", "COMPANY_A", valid_docid, "smartsheet_doc", "生产表", "生产表", 11, 2, 2, None, "verified", {"read": "verified", "copy": "allowed"}, "active"),
+                ("wecom", "COMPANY_B", "s3_" + "x" * 40, "smartsheet_link", "历史链接", "历史链接", 12, 0, 0, None, "invalid-id", {"read": "unavailable", "copy": "unavailable"}, "unresolved"),
+                ("feishu", "COMPANY_A", "app-test-token", "bitable_app", "飞书表", "飞书表", 13, 3, 2, None, "verified", {"read": "verified", "copy": "unavailable"}, "active"),
             ]]
         )
 

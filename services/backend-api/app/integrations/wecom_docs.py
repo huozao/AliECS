@@ -218,6 +218,7 @@ def copy_smartsheet_doc(
     env_profile: str,
     source_docid: str,
     new_doc_name: str,
+    on_created: Any | None = None,
 ) -> dict[str, Any]:
     corpid, secret = credentials_for_profile(env_profile)
     admin_users = doc_admin_users()
@@ -228,6 +229,9 @@ def copy_smartsheet_doc(
         raise WeComDocError("源文档没有可复制的工作表")
 
     new_docid = client.create_doc(new_doc_name, admin_users)
+    new_url = f"https://doc.weixin.qq.com/smartsheet/{new_docid}"
+    if on_created is not None:
+        on_created(new_docid, new_url)
     default_sheet_ids = [str(s.get("sheet_id") or "") for s in client.get_sheets(new_docid) if s.get("sheet_id")]
 
     sheets_created = 0
@@ -272,7 +276,7 @@ def copy_smartsheet_doc(
     client.delete_sheets(new_docid, default_sheet_ids)
     return {
         "new_docid": new_docid,
-        "url": f"https://doc.weixin.qq.com/smartsheet/{new_docid}",
+        "url": new_url,
         "sheets_created": sheets_created,
         "records_written": records_written,
         "records_skipped": records_skipped,

@@ -20,6 +20,15 @@ router = APIRouter()
 
 _XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
+_LOCATOR_CURRENT_FIELDS = (
+    "平台", "企业配置", "文档名称", "文档定位ID", "来源链接", "管理员", "凭据引用", "来源类型",
+    "生命周期状态", "可同步状态", "不可同步原因", "可读", "可写", "可创建副本", "工作表数量",
+    "登记时间", "最后验证时间", "最后同步时间", "最后更新时间", "唯一键", "最近错误",
+)
+_LOCATOR_EVENT_FIELDS = (
+    "事件时间", "文档名称", "事件类型", "触发来源", "变化字段", "状态摘要", "唯一键",
+)
+
 
 _TPLUS_EXPORT_DESCRIPTIONS = {
     "bom": "BOM 父件和子件用量；看成品由哪些原材料组成，不含价格。",
@@ -491,48 +500,107 @@ def _append_records_worksheet(workbook: Any, title: str, records: list[tuple]) -
         sheet.append([record_id, *[data.get(column, "") for column in columns], ext_updated or "", str(synced or "")])
 
 
+def _archive_cell(value: Any) -> str | int:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "是" if value else "否"
+    if isinstance(value, (list, tuple, set)):
+        return ", ".join(str(item) for item in value)
+    if isinstance(value, dict):
+        import json
+
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    if isinstance(value, int):
+        return value
+    return str(value)
+
+
+def _append_locator_archive_worksheets(workbook: Any, cur: Any) -> None:
+    current = workbook.create_sheet(title="文档定位档案")
+    current.append(list(_LOCATOR_CURRENT_FIELDS))
+    cur.execute(
+        """
+        SELECT id, provider, env_profile, document_name, COALESCE(api_doc_id, share_ref, ''),
+               source_url, admin_userids, credential_ref, source_kind, lifecycle_status,
+               syncability_status, last_error_summary, capabilities, sheet_count,
+               registered_at, last_verified_at, last_sync_at, updated_at
+        FROM document_locator_registry
+        ORDER BY provider, env_profile, id
+        """
+    )
+    for row in cur.fetchall():
+        capabilities = row[12] if isinstance(row[12], dict) else {}
+        current.append(
+            [
+                row[1], row[2], row[3], row[4], row[5], _archive_cell(row[6]), row[7], row[8], row[9], row[10],
+                row[11], capabilities.get("read", "unknown"), capabilities.get("write", "unknown"),
+                capabilities.get("copy", "unknown"), int(row[13] or 0), _archive_cell(row[14]),
+                _archive_cell(row[15]), _archive_cell(row[16]), _archive_cell(row[17]), f"locator:{int(row[0])}", row[11],
+            ]
+        )
+
+    history = workbook.create_sheet(title="定位档案变更历史")
+    history.append(list(_LOCATOR_EVENT_FIELDS))
+    cur.execute(
+        """
+        SELECT e.created_at, l.document_name, e.event_type, e.trigger_source,
+               e.changed_fields, e.status_summary, l.id
+        FROM document_locator_events e
+        JOIN document_locator_registry l ON l.id = e.locator_id
+        ORDER BY e.id
+        """
+    )
+    for row in cur.fetchall():
+        history.append(
+            [_archive_cell(row[0]), row[1], row[2], row[3], _archive_cell(row[4]), _archive_cell(row[5]), f"locator:{int(row[6])}"]
+        )
+
+
 @router.get("/v1/exports/external-doc/{source_id}")
 def exports_external_doc_download(source_id: int, _: dict[str, Any] = Depends(require_admin)) -> FileResponse:
     """按所属工作簿导出：同文档的全部 sheet 各占一个工作表。source_id 为该文档任一 sheet 级源。"""
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT provider, env_profile, external_doc_id, document_name FROM external_sources WHERE id = %s",
+                "SELECT provider, env_profile, external_doc_id, document_name, source_type FROM external_sources WHERE id = %s",
                 (source_id,),
             )
             anchor = cur.fetchone()
             if not anchor:
                 raise HTTPException(status_code=404, detail="external source not found")
-            provider, env_profile, external_doc_id, document_name = anchor
-            cur.execute(
-                """
-                SELECT id, sheet_name
-                FROM external_sources
-                WHERE provider = %s AND env_profile = %s AND external_doc_id = %s
-                  AND external_sheet_id <> '' AND status = 'active'
-                ORDER BY id
-                """,
-                (provider, env_profile, external_doc_id),
-            )
-            sheet_sources = cur.fetchall()
-            if not sheet_sources:
-                raise HTTPException(status_code=404, detail="document has no active sheets")
-
+            provider, env_profile, external_doc_id, document_name, source_type = anchor
             from openpyxl import Workbook
 
             workbook = Workbook()
             workbook.remove(workbook.active)
-            for sheet_source_id, sheet_name in sheet_sources:
+            if source_type == "structure_backup_doc":
+                _append_locator_archive_worksheets(workbook, cur)
+            else:
                 cur.execute(
                     """
-                    SELECT external_record_id, normalized_json, external_updated_at, synced_at
-                    FROM external_records
-                    WHERE source_id = %s
+                    SELECT id, sheet_name
+                    FROM external_sources
+                    WHERE provider = %s AND env_profile = %s AND external_doc_id = %s
+                      AND external_sheet_id <> '' AND status = 'active'
                     ORDER BY id
                     """,
-                    (sheet_source_id,),
+                    (provider, env_profile, external_doc_id),
                 )
-                _append_records_worksheet(workbook, str(sheet_name or sheet_source_id), cur.fetchall())
+                sheet_sources = cur.fetchall()
+                if not sheet_sources:
+                    raise HTTPException(status_code=404, detail="document has no active sheets")
+                for sheet_source_id, sheet_name in sheet_sources:
+                    cur.execute(
+                        """
+                        SELECT external_record_id, normalized_json, external_updated_at, synced_at
+                        FROM external_records
+                        WHERE source_id = %s
+                        ORDER BY id
+                        """,
+                        (sheet_source_id,),
+                    )
+                    _append_records_worksheet(workbook, str(sheet_name or sheet_source_id), cur.fetchall())
 
     export_dir = Path(os.getenv("EXTERNAL_EXPORT_DIR", "/tmp/aliecs-external-exports"))
     export_dir.mkdir(parents=True, exist_ok=True)
