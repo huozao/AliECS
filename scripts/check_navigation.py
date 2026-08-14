@@ -38,16 +38,38 @@ def clean_link(raw: str) -> str:
 
 
 def symbol_names(path: Path) -> set[str]:
+    """收集模块级与类级定义，刻意不进入函数体。
+
+    局部变量若也算命中，断言一个随处可见的名字（status、config、click）就会
+    永远为真，等于装了个哑掉的警报器。模块级的 if/try/with/for 仍要下探，
+    否则 try 包着的条件定义会被误判成缺失。
+    """
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     names: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            names.add(node.name)
-        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            for target in targets:
-                if isinstance(target, ast.Name):
-                    names.add(target.id)
+
+    def collect(body: list[ast.stmt]) -> None:
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                names.add(node.name)
+                continue
+            if isinstance(node, ast.ClassDef):
+                names.add(node.name)
+                collect(node.body)
+                continue
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    if isinstance(target, ast.Name):
+                        names.add(target.id)
+                continue
+            for field in ("body", "orelse", "finalbody"):
+                inner = getattr(node, field, None)
+                if isinstance(inner, list):
+                    collect(inner)
+            for handler in getattr(node, "handlers", []):
+                collect(handler.body)
+
+    collect(tree.body)
     return names
 
 

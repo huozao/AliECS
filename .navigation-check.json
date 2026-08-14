@@ -33,8 +33,6 @@
     ".github/workflows/release-deploy.yml",
     ".github/workflows/bridge-cutover.yml"
   ],
-  "python_symbols": [
-    {"file": "services/backend-api/app/main.py", "symbol": "app"}
-  ],
+  "python_symbols": [],
   "optional_link_prefixes": []
 }

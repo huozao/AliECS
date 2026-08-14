@@ -70,3 +70,7 @@ docker compose -f local/docker-compose.local.yml config
   是直接在 T+ 建物料/BOM 时最常见的来源）。`status='success'` 必须过滤，否则一次部分成功的全量
   会把本批未出现的记录标 `missing_since`，触发核对时把大量行误标「编码失联」发大告警。
   **改那边任一写入点的 provider/module/status 语义就要同步改这里**，否则事件触发会静默失效。
+
+<!-- 本文点名的符号，改名时本文必须同批更新；校验器会拦 -->
+<!-- nav-check-python: services/tplus-sync-worker/src/tplus_datahub/jobs/db_sync_requests.py:finish_bom_request -->
+<!-- nav-check-python: services/tplus-sync-worker/src/tplus_datahub/jobs/sync_state.py:record_tplus_sync_run_if_configured -->
