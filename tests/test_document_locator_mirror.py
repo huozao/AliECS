@@ -64,15 +64,27 @@ class FakeMirrorClient:
     def get_records(self, _docid: str, sheet_id: str) -> dict[str, Any]:
         return {"records": list(self.records.get(sheet_id, []))}
 
+    @staticmethod
+    def _accepted(values: dict[str, Any]) -> dict[str, Any]:
+        """企微只认 [{"type": "text", "text": ...}] 形式的单元格；裸字符串会被静默丢成空值。"""
+        return {title: cells for title, cells in values.items() if isinstance(cells, list)}
+
     def add_records(self, _docid: str, sheet_id: str, records: list[dict[str, Any]]) -> dict[str, Any]:
         self.added_records.append((sheet_id, records))
         target = self.records.setdefault(sheet_id, [])
         for record in records:
-            target.append({"record_id": "record-" + str(len(target) + 1), "values": record["values"]})
+            target.append(
+                {"record_id": "record-" + str(len(target) + 1), "values": self._accepted(record["values"])}
+            )
         return {}
 
     def update_records(self, _docid: str, sheet_id: str, records: list[dict[str, Any]]) -> dict[str, Any]:
         self.updated_records.append((sheet_id, records))
+        stored = {str(item.get("record_id")): item for item in self.records.get(sheet_id, [])}
+        for record in records:
+            target = stored.get(str(record.get("record_id")))
+            if target is not None:
+                target["values"] = self._accepted(record["values"])
         return {}
 
 
@@ -293,6 +305,21 @@ class DocumentLocatorMirrorTests(unittest.TestCase):
         all_titles = {key for _, batches in client.added_records for batch in batches for key in batch["values"]}
         self.assertNotIn("字段结构", all_titles)
         self.assertNotIn("工作表01名称", all_titles)
+        # 每个单元格都必须是企微要求的 cell 数组，否则写进去的是空行。
+        written = [
+            (title, cells)
+            for _, batches in client.added_records + client.updated_records
+            for batch in batches
+            for title, cells in batch["values"].items()
+        ]
+        self.assertTrue(written)
+        for title, cells in written:
+            self.assertIsInstance(cells, list, f"{title} 必须是 cell 数组")
+            for cell in cells:
+                self.assertEqual("text", cell.get("type"), f"{title} 单元格缺少 type=text")
+                self.assertIsInstance(cell.get("text"), str, f"{title} 单元格缺少文本")
+        current_rows = client.records[workbook["sheets"][self.mirror.CURRENT_SHEET]]
+        self.assertEqual(1, len(current_rows), "同一份档案不应重复插行")
 
     def test_pending_jobs_finish_or_retry_without_leaking_error(self) -> None:
         store = FakeLocatorStore()
