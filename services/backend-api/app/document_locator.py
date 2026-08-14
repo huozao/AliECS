@@ -145,16 +145,19 @@ def asset_catalog(conn: Any, *, tplus_items: list[dict[str, Any]]) -> dict[str, 
             provider, source_type, external_doc_id, sheet_count,
             str(row[10] or ""), locator_capabilities, str(row[12] or ""), source_id,
         )
+        downloadable = capabilities["can_download"] and source_id is not None
         item = {
             "name": str(row[4] or row[5] or "未命名文档"),
-            "source_id": source_id,
             "sheets": sheet_count,
             "jobs": int(row[8] or 0),
             "updated_at": row[9],
             **capabilities,
             "syncable": capabilities["can_sync"],
-            "download_url": f"/v1/sync/assets/{source_id}/download" if capabilities["can_download"] else None,
+            "download_url": f"/v1/sync/assets/{source_id}/download" if downloadable else None,
         }
+        # 未关联内部来源的定位档案只做展示，不给出可点的内部 ID。
+        if source_id is not None:
+            item["source_id"] = source_id
         groups[group_key]["items"].append(item)
     return {"groups": list(groups.values())}
 

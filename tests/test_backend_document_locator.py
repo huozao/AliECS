@@ -86,7 +86,9 @@ class DocumentLocatorBackendTests(unittest.TestCase):
         )
 
         items = result["groups"][1]["items"]
-        self.assertEqual([11, 12, 13, None, 14], [item["source_id"] for item in items])
+        # 未关联内部来源的档案只展示，不带 source_id 键，避免前端拼出无效内部地址。
+        self.assertEqual([11, 12, 13, None, 14], [item.get("source_id") for item in items])
+        self.assertNotIn("source_id", items[3])
         self.assertTrue(items[0]["can_sync"] and items[0]["can_download"] and items[0]["can_copy"])
         self.assertTrue(items[1]["system_managed"])
         self.assertTrue(items[1]["can_download"])

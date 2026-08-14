@@ -58,6 +58,7 @@ class SyncControlPostgresIntegrationTests(unittest.TestCase):
         conn = psycopg.connect(database_url, connect_timeout=5)
         token = uuid.uuid4().hex
         source_ids: list[int] = []
+        locator_ids: list[int] = []
         request_ids: list[int] = []
         tplus_request_id: int | None = None
         try:
@@ -80,6 +81,26 @@ class SyncControlPostgresIntegrationTests(unittest.TestCase):
                         (provider, profile, name, source_type, docid, sheetid, document, sheet),
                     )
                     source_ids.append(int(cur.fetchone()[0]))
+                # 资产目录以定位档案为主数据，来源行本身不再直接进目录。
+                locator_fixtures = [
+                    ("wecom", "COMPANY_A", "dc" + token * 3, None, "P5 企微A", "active", "verified",
+                     '{"read":"verified","write":"unknown","copy":"allowed"}', source_ids[0]),
+                    ("wecom", "COMPANY_B", None, "s3_ci_" + token, "P5 不可同步", "unresolved", "invalid-id",
+                     '{"read":"unavailable","write":"unavailable","copy":"unavailable"}', None),
+                    ("feishu", "COMPANY_A", "ci-app-" + token, None, "P5 飞书", "active", "verified",
+                     '{"read":"verified","write":"unknown","copy":"unavailable"}', source_ids[2]),
+                ]
+                for provider, profile, api_doc_id, share_ref, document, lifecycle, syncability, capabilities, external_id in locator_fixtures:
+                    cur.execute(
+                        """
+                        INSERT INTO document_locator_registry(
+                            provider, env_profile, api_doc_id, share_ref, document_name, source_kind,
+                            lifecycle_status, syncability_status, capabilities, external_source_id, last_verified_at
+                        ) VALUES (%s,%s,%s,%s,%s,'ci-fixture',%s,%s,%s::jsonb,%s,NOW()) RETURNING id
+                        """,
+                        (provider, profile, api_doc_id, share_ref, document, lifecycle, syncability, capabilities, external_id),
+                    )
+                    locator_ids.append(int(cur.fetchone()[0]))
             conn.commit()
 
             reconciled = writer_module.SyncJobPlatformWriter(conn).reconcile_document_jobs()
@@ -125,6 +146,10 @@ class SyncControlPostgresIntegrationTests(unittest.TestCase):
                         cur.execute("DELETE FROM sync_requests WHERE id=ANY(%s)", (request_ids,))
                     if tplus_request_id is not None:
                         cur.execute("DELETE FROM integration_sync_requests WHERE id=%s", (tplus_request_id,))
+                    if locator_ids:
+                        cur.execute("DELETE FROM document_locator_mirror_jobs WHERE locator_id=ANY(%s)", (locator_ids,))
+                        cur.execute("DELETE FROM document_locator_events WHERE locator_id=ANY(%s)", (locator_ids,))
+                        cur.execute("DELETE FROM document_locator_registry WHERE id=ANY(%s)", (locator_ids,))
                     if source_ids:
                         cur.execute("DELETE FROM sync_jobs WHERE source_id=ANY(%s)", (source_ids,))
                         cur.execute("DELETE FROM external_sources WHERE id=ANY(%s)", (source_ids,))
