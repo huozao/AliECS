@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -190,6 +191,13 @@ def decide_record_upsert(existing_hash: str | None, snapshot: RecordSnapshot) ->
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _redact_locator_error(error: str) -> str:
+    value = str(error or "")
+    value = re.sub(r"(?i)(secret|token|password|docid|api_doc_id)\s*[=:]\s*\S+", r"\1=[redacted]", value)
+    value = re.sub(r"dc[A-Za-z0-9_-]{20,}|s3_[A-Za-z0-9_-]{8,}", "[redacted-id]", value)
+    return value[:500]
 
 
 class PostgresDocSyncStore:
@@ -570,6 +578,315 @@ class PostgresDocSyncStore:
                 (status, sync_run_id, Jsonb(error_json or {}), request_id),
             )
         self.conn.commit()
+
+    def _enqueue_document_locator_mirror_on_cursor(
+        self,
+        cur: Any,
+        locator_id: int,
+        locator_version: int,
+        trigger: str,
+    ) -> int:
+        cur.execute(
+            """
+            INSERT INTO document_locator_mirror_jobs(locator_id, locator_version, trigger, updated_at)
+            VALUES (%s, %s, %s, NOW())
+            ON CONFLICT(locator_id, locator_version) DO UPDATE SET
+                trigger = EXCLUDED.trigger,
+                status = CASE
+                    WHEN document_locator_mirror_jobs.status = 'success' THEN 'success'
+                    ELSE 'pending'
+                END,
+                next_attempt_at = CASE
+                    WHEN document_locator_mirror_jobs.status = 'success'
+                    THEN document_locator_mirror_jobs.next_attempt_at
+                    ELSE NOW()
+                END,
+                updated_at = NOW()
+            RETURNING id
+            """,
+            (locator_id, locator_version, trigger),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise RuntimeError("document locator mirror job upsert returned no id")
+        return int(row[0])
+
+    def enqueue_document_locator_mirror(self, locator_id: int, locator_version: int, trigger: str) -> int:
+        try:
+            with self.conn.cursor() as cur:
+                job_id = self._enqueue_document_locator_mirror_on_cursor(
+                    cur,
+                    int(locator_id),
+                    int(locator_version),
+                    str(trigger),
+                )
+            self.conn.commit()
+            return job_id
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def upsert_document_locator(
+        self,
+        locator: dict[str, Any],
+        *,
+        event_type: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        values = {
+            "provider": str(locator.get("provider") or ""),
+            "env_profile": str(locator.get("env_profile") or ""),
+            "api_doc_id": str(locator.get("api_doc_id") or "") or None,
+            "share_ref": str(locator.get("share_ref") or "") or None,
+            "document_name": str(locator.get("document_name") or ""),
+            "source_url": str(locator.get("source_url") or ""),
+            "admin_userids": list(locator.get("admin_userids") or []),
+            "credential_ref": str(locator.get("credential_ref") or ""),
+            "source_kind": str(locator.get("source_kind") or ""),
+            "lifecycle_status": str(locator.get("lifecycle_status") or "unresolved"),
+            "syncability_status": str(locator.get("syncability_status") or "unverified"),
+            "capabilities": dict(locator.get("capabilities") or {}),
+            "sheet_count": max(0, int(locator.get("sheet_count") or 0)),
+            "external_source_id": locator.get("external_source_id"),
+            "last_verified_at": locator.get("last_verified_at"),
+            "last_sync_at": locator.get("last_sync_at"),
+            "last_error_code": str(locator.get("last_error_code") or ""),
+            "last_error_summary": _redact_locator_error(str(locator.get("last_error_summary") or "")),
+        }
+        if not values["provider"] or not values["env_profile"]:
+            raise ValueError("document locator requires provider and env_profile")
+        if not values["api_doc_id"] and not values["share_ref"]:
+            raise ValueError("document locator requires api_doc_id or share_ref")
+
+        identity_column = "api_doc_id" if values["api_doc_id"] else "share_ref"
+        identity_value = values[identity_column]
+        comparable = (
+            "document_name",
+            "source_url",
+            "admin_userids",
+            "credential_ref",
+            "source_kind",
+            "lifecycle_status",
+            "syncability_status",
+            "capabilities",
+            "sheet_count",
+            "external_source_id",
+            "api_doc_id",
+            "share_ref",
+            "last_verified_at",
+            "last_sync_at",
+            "last_error_code",
+            "last_error_summary",
+        )
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT id, locator_version, {', '.join(comparable)}
+                    FROM document_locator_registry
+                    WHERE provider = %s AND env_profile = %s AND {identity_column} = %s
+                    FOR UPDATE
+                    """,
+                    (values["provider"], values["env_profile"], identity_value),
+                )
+                existing = cur.fetchone()
+                if existing:
+                    current = dict(zip(comparable, existing[2:]))
+                    changed_fields = [name for name in comparable if current.get(name) != values.get(name)]
+                    version = int(existing[1]) + (1 if changed_fields else 0)
+                    cur.execute(
+                        """
+                        UPDATE document_locator_registry SET
+                            api_doc_id=%s, share_ref=%s, document_name=%s, source_url=%s,
+                            admin_userids=%s, credential_ref=%s, source_kind=%s,
+                            lifecycle_status=%s, syncability_status=%s, capabilities=%s,
+                            sheet_count=%s, external_source_id=%s, locator_version=%s,
+                            last_verified_at=%s, last_sync_at=%s, last_error_code=%s,
+                            last_error_summary=%s, updated_at=NOW()
+                        WHERE id=%s
+                        RETURNING id, locator_version
+                        """,
+                        (
+                            values["api_doc_id"],
+                            values["share_ref"],
+                            values["document_name"],
+                            values["source_url"],
+                            Jsonb(values["admin_userids"]),
+                            values["credential_ref"],
+                            values["source_kind"],
+                            values["lifecycle_status"],
+                            values["syncability_status"],
+                            Jsonb(values["capabilities"]),
+                            values["sheet_count"],
+                            values["external_source_id"],
+                            version,
+                            values["last_verified_at"],
+                            values["last_sync_at"],
+                            values["last_error_code"],
+                            values["last_error_summary"],
+                            int(existing[0]),
+                        ),
+                    )
+                else:
+                    changed_fields = list(comparable)
+                    cur.execute(
+                        """
+                        INSERT INTO document_locator_registry(
+                            provider, env_profile, api_doc_id, share_ref, document_name,
+                            source_url, admin_userids, credential_ref, source_kind,
+                            lifecycle_status, syncability_status, capabilities, sheet_count,
+                            external_source_id, last_verified_at, last_sync_at,
+                            last_error_code, last_error_summary, updated_at
+                        )
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+                        RETURNING id, locator_version
+                        """,
+                        (
+                            values["provider"],
+                            values["env_profile"],
+                            values["api_doc_id"],
+                            values["share_ref"],
+                            values["document_name"],
+                            values["source_url"],
+                            Jsonb(values["admin_userids"]),
+                            values["credential_ref"],
+                            values["source_kind"],
+                            values["lifecycle_status"],
+                            values["syncability_status"],
+                            Jsonb(values["capabilities"]),
+                            values["sheet_count"],
+                            values["external_source_id"],
+                            values["last_verified_at"],
+                            values["last_sync_at"],
+                            values["last_error_code"],
+                            values["last_error_summary"],
+                        ),
+                    )
+                row = cur.fetchone()
+                if not row:
+                    raise RuntimeError("document locator upsert returned no id")
+                locator_id, locator_version = int(row[0]), int(row[1])
+                changed = bool(changed_fields)
+                if changed:
+                    cur.execute(
+                        """
+                        INSERT INTO document_locator_events(
+                            locator_id, locator_version, event_type, trigger_source,
+                            changed_fields, status_summary, actor
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT(locator_id, locator_version, event_type) DO NOTHING
+                        """,
+                        (
+                            locator_id,
+                            locator_version,
+                            str(event_type),
+                            str(event_type),
+                            Jsonb(changed_fields),
+                            Jsonb(
+                                {
+                                    "lifecycle_status": values["lifecycle_status"],
+                                    "syncability_status": values["syncability_status"],
+                                    "capabilities": values["capabilities"],
+                                    "sheet_count": values["sheet_count"],
+                                }
+                            ),
+                            str(actor),
+                        ),
+                    )
+                    mirror_job_id = self._enqueue_document_locator_mirror_on_cursor(
+                        cur,
+                        locator_id,
+                        locator_version,
+                        str(event_type),
+                    )
+                else:
+                    mirror_job_id = 0
+            self.conn.commit()
+            return {
+                "id": locator_id,
+                "locator_version": locator_version,
+                "changed": changed,
+                "mirror_job_id": mirror_job_id,
+            }
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def claim_document_locator_mirror_jobs(self, limit: int = 10) -> list[dict[str, Any]]:
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    WITH ready AS (
+                        SELECT id
+                        FROM document_locator_mirror_jobs
+                        WHERE (status='pending' AND next_attempt_at <= NOW())
+                           OR (status='running' AND started_at < NOW() - INTERVAL '15 minutes')
+                        ORDER BY next_attempt_at, id
+                        LIMIT %s
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    UPDATE document_locator_mirror_jobs jobs
+                    SET status='running', started_at=NOW(), updated_at=NOW()
+                    FROM ready
+                    WHERE jobs.id=ready.id
+                    RETURNING jobs.id, jobs.locator_id, jobs.locator_version,
+                              jobs.trigger, jobs.attempt_count
+                    """,
+                    (max(1, int(limit)),),
+                )
+                rows = cur.fetchall()
+            self.conn.commit()
+            return [
+                {
+                    "id": int(row[0]),
+                    "locator_id": int(row[1]),
+                    "locator_version": int(row[2]),
+                    "trigger": str(row[3]),
+                    "attempt_count": int(row[4]),
+                }
+                for row in rows
+            ]
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def finish_document_locator_mirror_job(self, job_id: int) -> None:
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE document_locator_mirror_jobs
+                    SET status='success', finished_at=NOW(), last_error='', updated_at=NOW()
+                    WHERE id=%s
+                    """,
+                    (int(job_id),),
+                )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def retry_document_locator_mirror_job(self, job_id: int, error: str, delay_seconds: int) -> None:
+        safe_error = _redact_locator_error(error)
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE document_locator_mirror_jobs
+                    SET status='pending', attempt_count=attempt_count+1,
+                        last_error=%s,
+                        next_attempt_at=NOW() + (%s * INTERVAL '1 second'),
+                        started_at=NULL, updated_at=NOW()
+                    WHERE id=%s
+                    """,
+                    (safe_error, max(1, int(delay_seconds)), int(job_id)),
+                )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def enqueue_structure_backup_job(self, source_id: int, trigger: str, event_key: str) -> None:
         with self.conn.cursor() as cur:
