@@ -223,9 +223,9 @@ class BackendExportsTests(unittest.TestCase):
                 if self.query_index == 1:
                     return [(
                         41, "wecom", "COMPANY_A", "生产表", "dc-synthetic", "https://example.invalid/share",
-                        ["admin-one"], "COMPANY_A#1", "registry", "active", "verified", "",
+                        ["admin-one"], "COMPANY_A#1", "registry", "active", "unverified", "企微同步验证失败",
                         {"read": "verified", "write": "unknown", "copy": "allowed"}, 3,
-                        "2026-08-13", "2026-08-14", "2026-08-14", "2026-08-14",
+                        "2026-08-13", "2026-08-14", "2026-08-14", "2026-08-14", "wecom-timeout",
                     )]
                 return [(
                     "2026-08-14", "生产表", "sync-success", "worker", ["last_sync_at"],
@@ -243,6 +243,9 @@ class BackendExportsTests(unittest.TestCase):
         self.assertEqual(list(self.main._LOCATOR_EVENT_FIELDS), [cell.value for cell in workbook["定位档案变更历史"][1]])
         self.assertEqual("dc-synthetic", workbook["文档定位档案"]["D2"].value)
         self.assertEqual("locator:41", workbook["文档定位档案"]["T2"].value)
+        # 原因列给人读，错误代码列给排障用，两列不能是同一个值。
+        self.assertEqual("企微同步验证失败", workbook["文档定位档案"]["K2"].value)
+        self.assertEqual("wecom-timeout", workbook["文档定位档案"]["U2"].value)
         self.assertEqual("locator:41", workbook["定位档案变更历史"]["G2"].value)
 
     def test_match_export_files_buckets_to_first_run_at_or_after_file_time(self):

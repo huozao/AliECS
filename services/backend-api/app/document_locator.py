@@ -207,6 +207,7 @@ def _register_external_copy(
     source_url: str,
     document_name: str,
     requested_by: str,
+    resumed: bool = False,
 ) -> dict[str, Any]:
     with conn.cursor() as cur:
         cur.execute(
@@ -248,7 +249,12 @@ def _register_external_copy(
             ) VALUES (%s, %s, 'copy-created', 'sync-api', %s, %s, %s)
             ON CONFLICT(locator_id, locator_version, event_type) DO NOTHING
             """,
-            (locator_id, locator_version, Jsonb(["api_doc_id", "external_source_id"]), Jsonb({"status": "registered"}), requested_by),
+            (
+                locator_id, locator_version, Jsonb(["api_doc_id", "external_source_id"]),
+                # resumed=真：企微文档已建但工作表没复制完，内容可能不全，变更历史里要看得见。
+                Jsonb({"status": "registered", "resumed": True} if resumed else {"status": "registered"}),
+                requested_by,
+            ),
         )
         cur.execute(
             """
@@ -320,19 +326,20 @@ def copy_asset(
                     "locator_id": int(existing[3]),
                     "sync_request_id": int(existing[4]),
                 }
-            if existing and str(existing[1]) in {"prepared", "creating", "copying", "failed"}:
+            if existing and str(existing[1]) in {"prepared", "creating", "failed"}:
                 raise InvalidLocatorAction("该副本请求正在处理中或结果不确定，请人工核对并恢复原请求，禁止重复创建")
             if existing:
+                # external_created / copying：企微侧文档已经存在，只补登记，绝不再调一次复制。
                 copy_request_id = int(existing[0])
                 status = str(existing[1])
                 new_api_doc_id = str(existing[2] or "")
                 document_name = str(existing[6] or "")
-                source_url = f"https://doc.weixin.qq.com/smartsheet/{new_api_doc_id}" if new_api_doc_id else ""
+                if not valid_wecom_docid(new_api_doc_id):
+                    raise InvalidLocatorAction("原副本请求没有留下有效 docid，请人工核对企微后再决定是否重建")
+                source_url = f"https://doc.weixin.qq.com/smartsheet/{new_api_doc_id}"
                 source = _source_row(cur, source_id)
                 env_profile = str(source[1])
                 source_docid = str(source[2])
-                if status != "external_created":
-                    _require_copy_capability(cur, source_id)
             else:
                 source = _source_row(cur, source_id)
                 provider, env_profile, source_docid, source_type, document_name, status_value = source
@@ -362,7 +369,7 @@ def copy_asset(
                 source_docid = str(source_docid)
         conn.commit()
 
-    if status != "external_created":
+    if not existing:
         if copier is None:
             from app.integrations.wecom_docs import copy_smartsheet_doc
 
@@ -431,6 +438,7 @@ def copy_asset(
             source_url=source_url,
             document_name=document_name,
             requested_by=requested_by,
+            resumed=bool(existing) and status == "copying",
         )
 
 

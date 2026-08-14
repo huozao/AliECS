@@ -23,7 +23,7 @@ _XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.
 _LOCATOR_CURRENT_FIELDS = (
     "平台", "企业配置", "文档名称", "文档定位ID", "来源链接", "管理员", "凭据引用", "来源类型",
     "生命周期状态", "可同步状态", "不可同步原因", "可读", "可写", "可创建副本", "工作表数量",
-    "登记时间", "最后验证时间", "最后同步时间", "最后更新时间", "唯一键", "最近错误",
+    "登记时间", "最后验证时间", "最后同步时间", "最后更新时间", "唯一键", "最近错误代码",
 )
 _LOCATOR_EVENT_FIELDS = (
     "事件时间", "文档名称", "事件类型", "触发来源", "变化字段", "状态摘要", "唯一键",
@@ -524,7 +524,7 @@ def _append_locator_archive_worksheets(workbook: Any, cur: Any) -> None:
         SELECT id, provider, env_profile, document_name, COALESCE(api_doc_id, share_ref, ''),
                source_url, admin_userids, credential_ref, source_kind, lifecycle_status,
                syncability_status, last_error_summary, capabilities, sheet_count,
-               registered_at, last_verified_at, last_sync_at, updated_at
+               registered_at, last_verified_at, last_sync_at, updated_at, last_error_code
         FROM document_locator_registry
         ORDER BY provider, env_profile, id
         """
@@ -536,7 +536,7 @@ def _append_locator_archive_worksheets(workbook: Any, cur: Any) -> None:
                 row[1], row[2], row[3], row[4], row[5], _archive_cell(row[6]), row[7], row[8], row[9], row[10],
                 row[11], capabilities.get("read", "unknown"), capabilities.get("write", "unknown"),
                 capabilities.get("copy", "unknown"), int(row[13] or 0), _archive_cell(row[14]),
-                _archive_cell(row[15]), _archive_cell(row[16]), _archive_cell(row[17]), f"locator:{int(row[0])}", row[11],
+                _archive_cell(row[15]), _archive_cell(row[16]), _archive_cell(row[17]), f"locator:{int(row[0])}", row[18],
             ]
         )
 

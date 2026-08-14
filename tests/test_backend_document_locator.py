@@ -187,8 +187,9 @@ class DocumentLocatorBackendTests(unittest.TestCase):
         self.assertIn("on conflict", insert_sql)
 
     def test_copy_in_progress_same_key_never_calls_provider_again(self) -> None:
+        # creating：企微还没返回 docid，结果不确定，只能人工核对。
         lookup = QueueConnection([[
-            (7, "copying", VALID_DOCID, None, None, 11, "生产表-副本", None),
+            (7, "creating", None, None, None, 11, "生产表-副本", None),
         ]])
         copier = mock.Mock()
 
@@ -197,6 +198,51 @@ class DocumentLocatorBackendTests(unittest.TestCase):
                 ConnectionQueue([lookup]),
                 source_id=11,
                 idempotency_key="copy-action-in-progress",
+                requested_by="admin",
+                copier=copier,
+            )
+
+        copier.assert_not_called()
+
+    def test_copy_resumes_copying_request_and_records_incomplete_content(self) -> None:
+        # copying：企微文档已建、工作表没复制完；补登记而不是再建一个，历史里留 resumed。
+        lookup = QueueConnection([
+            [(7, "copying", VALID_DOCID, None, None, 11, "生产表-副本")],
+            [("wecom", "COMPANY_A", VALID_DOCID, "smartsheet_doc", "生产表", "active")],
+        ])
+        register = QueueConnection([[(44,)], [(12, 3)], [], [], [(79,)], []])
+        copier = mock.Mock(side_effect=AssertionError("resume must not create another copy"))
+
+        result = document_locator.copy_asset(
+            ConnectionQueue([lookup, register]),
+            source_id=11,
+            idempotency_key="copy-action-resume",
+            requested_by="admin",
+            copier=copier,
+        )
+
+        self.assertEqual("registered", result["status"])
+        self.assertEqual(44, result["source_id"])
+        copier.assert_not_called()
+        event_params = register.cursor_value.executed[2][1]
+        summary = next(
+            param for param in event_params
+            if hasattr(param, "obj") and isinstance(param.obj, dict) and "status" in param.obj
+        )
+        self.assertTrue(summary.obj.get("resumed"))
+        self.assertNotIn(VALID_DOCID, json.dumps(result))
+
+    def test_copy_refuses_to_resume_without_a_valid_docid(self) -> None:
+        lookup = QueueConnection([[
+            (7, "copying", "s3_" + ("z" * 40), None, None, 11, "生产表-副本"),
+        ]])
+        copier = mock.Mock()
+
+        with self.assertRaisesRegex(document_locator.InvalidLocatorAction, "有效 docid"):
+            document_locator.copy_asset(
+                ConnectionQueue([lookup]),
+                source_id=11,
+                idempotency_key="copy-action-resume-invalid",
                 requested_by="admin",
                 copier=copier,
             )
