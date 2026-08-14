@@ -371,6 +371,45 @@ class SyncAlertNotifierTests(unittest.TestCase):
                 for value in ("synthetic-doc-id", "synthetic-token", "synthetic-secret", "synthetic-traceback"):
                     self.assertNotIn(value, text)
 
+    def test_locator_mirror_lag_requires_age_or_repeated_attempts_and_redacts_errors(self) -> None:
+        state = {
+            "job": {
+                "job_key": "wecom.locator_mirror",
+                "display_name": "企微文档定位档案镜像",
+                "freshness_sla_seconds": None,
+                "artifact_glob": None,
+            },
+            "mirror_health": {
+                "pending_count": 2,
+                "oldest_pending_at": NOW - timedelta(minutes=16),
+                "max_attempt_count": 1,
+                "failed_count": 0,
+                "last_error": "docid=dc_sensitive token=secret",
+            },
+        }
+
+        conditions = self.notifier._alert_conditions(state, now=NOW, artifact_grace_seconds=300)
+
+        self.assertEqual({"mirror_lag"}, set(conditions))
+        self.assertEqual(2, conditions["mirror_lag"]["pending_count"])
+        self.assertNotIn("dc_sensitive", str(conditions))
+        self.assertNotIn("secret", str(conditions))
+        text = self.notifier.build_alert_text("open", conditions["mirror_lag"], now=NOW)
+        self.assertIn("定位档案镜像延迟", text)
+
+        state["mirror_health"].update(
+            {"oldest_pending_at": NOW - timedelta(minutes=1), "max_attempt_count": 2}
+        )
+        self.assertEqual(
+            {},
+            self.notifier._alert_conditions(state, now=NOW, artifact_grace_seconds=300),
+        )
+        state["mirror_health"]["max_attempt_count"] = 3
+        self.assertIn(
+            "mirror_lag",
+            self.notifier._alert_conditions(state, now=NOW, artifact_grace_seconds=300),
+        )
+
 
 class SyncAlertRepositoryTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -412,8 +451,28 @@ class SyncAlertRepositoryTests(unittest.TestCase):
         self.assertIn("artifact_glob = COALESCE(artifact_glob, %s)", sql)
         self.assertEqual(
             (172800, "/app/tplus-output/excel/*.xlsx", "chanjet.full"),
-            self.conn.committed[-1][1],
+            self.conn.committed[0][1],
         )
+        self.assertIn("wecom.locator_mirror", str(self.conn.committed))
+
+    def test_load_locator_mirror_health_returns_counts_only(self) -> None:
+        self.conn.rows = [[(2, NOW - timedelta(minutes=20), 4, 0)]]
+
+        health = self.repo.load_locator_mirror_health()
+
+        self.assertEqual(
+            {
+                "pending_count": 2,
+                "oldest_pending_at": NOW - timedelta(minutes=20),
+                "max_attempt_count": 4,
+                "failed_count": 0,
+            },
+            health,
+        )
+        sql = self.conn.joined_sql()
+        self.assertIn("document_locator_mirror_jobs", sql)
+        self.assertNotIn("api_doc_id", sql)
+        self.assertNotIn("share_ref", sql)
 
     def test_notifier_rolls_back_failed_defaults_before_loading_on_same_connection(self) -> None:
         connection = TransactionalDefaultsConnection()

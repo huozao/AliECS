@@ -127,6 +127,40 @@ class DocumentLocatorStorageTests(unittest.TestCase):
         self.assertEqual(0, conn.commits)
         self.assertEqual(1, conn.rollbacks)
 
+    def test_reconcile_without_private_fields_preserves_existing_metadata(self) -> None:
+        existing = (
+            41,
+            2,
+            "old-name",
+            "https://example.invalid/share",
+            ["saved-admin"],
+            "COMPANY_A#1",
+            "registry",
+            "active",
+            "verified",
+            {"read": "verified"},
+            3,
+            17,
+            "dc-fixture",
+            "s3_fixture",
+            None,
+            None,
+            "",
+            "",
+        )
+        conn = FakeConn(responses=[existing, (41, 3), None, (81,)])
+        store = PostgresDocSyncStore(conn)
+        update = locator()
+        update["document_name"] = "new-name"
+        update.pop("admin_userids")
+        update.pop("credential_ref")
+
+        store.upsert_document_locator(update, event_type="full-sync", actor="worker")
+
+        update_call = next(call for call in conn.calls if call[0].startswith("update document_locator_registry"))
+        self.assertIn("saved-admin", repr(update_call[1][4]))
+        self.assertEqual("COMPANY_A#1", update_call[1][5])
+
     def test_claim_uses_skip_locked_and_retry_redacts_error(self) -> None:
         conn = FakeConn(responses=[[(81, 41, 1, "sync-success", 0)]])
         store = PostgresDocSyncStore(conn)

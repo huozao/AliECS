@@ -12,10 +12,7 @@ from app.providers.wecom import (
 )
 from app.pipelines.managed_contacts import CONTACT_SHEET_CHANNELS, SESSION_INDEX_SHEETS, sync_managed_contact_from_row
 from app.pipelines.sync_feishu_full import sync_feishu_source
-from app.pipelines.wecom_structure_backup import (
-    enqueue_copy_auto_structure_backup,
-    structure_backup_enabled,
-)
+from app.pipelines.document_locator import record_locator_after_request, reconcile_document_locators
 from app.storage.postgres import build_record_snapshot, compose_source_name, open_store
 from app.storage.job_catalog import reconcile_document_jobs_fail_open
 from app.storage.sync_job_platform import classify_error, platform_writer_for
@@ -409,6 +406,10 @@ def run_sync_wecom_full(profiles_arg: str = "") -> int:
             if counts["error_count"]:
                 exit_code = 1
     finally:
+        try:
+            reconcile_document_locators(store, trigger="wecom-full")
+        except Exception:  # noqa: BLE001 - locator metadata must not block source synchronization.
+            pass
         reconcile_document_jobs_fail_open(store)
         store.close()
 
@@ -548,8 +549,10 @@ def run_pending_sync_requests(limit: int = 10) -> int:
             # partial_failed（个别表受 API 限制）不视为请求失败。
             request_status = "success" if status in ("success", "partial_failed") else "failed"
             store.finish_sync_request(request_id, request_status, run_id, detail)
-            if structure_backup_enabled() and not is_feishu:
-                enqueue_copy_auto_structure_backup(store, request, request_status=request_status)
+            try:
+                record_locator_after_request(store, request, request_status)
+            except Exception:  # noqa: BLE001 - locator metadata must not change request outcome.
+                pass
             if request_status != "success":
                 exit_code = 1
     finally:

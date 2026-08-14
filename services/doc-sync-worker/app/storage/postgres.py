@@ -583,6 +583,125 @@ class PostgresDocSyncStore:
             for row in rows
         ]
 
+    def list_document_locator_sources(self, source_id: int | None = None) -> list[dict[str, Any]]:
+        params: tuple[Any, ...] = ()
+        selected_filter = ""
+        if source_id is not None:
+            selected_filter = """
+              AND EXISTS (
+                  SELECT 1 FROM external_sources selected
+                  WHERE selected.id = %s
+                    AND selected.provider = d.provider
+                    AND selected.env_profile = d.env_profile
+                    AND selected.external_doc_id = d.external_doc_id
+              )
+            """
+            params = (int(source_id),)
+        with self.conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT
+                    d.id, d.provider, d.env_profile, d.external_doc_id,
+                    COALESCE(NULLIF(d.document_name, ''), NULLIF(d.source_name, ''), ''),
+                    d.source_url, d.source_type, d.status,
+                    COUNT(DISTINCT s.id) FILTER (WHERE s.status='active') AS sheet_count,
+                    MAX(s.last_sync_at) FILTER (WHERE s.status='active') AS last_sync_at
+                FROM external_sources d
+                LEFT JOIN external_sources s
+                  ON s.provider=d.provider
+                 AND s.env_profile=d.env_profile
+                 AND s.external_doc_id=d.external_doc_id
+                 AND s.external_sheet_id<>''
+                WHERE d.external_sheet_id=''
+                  AND (
+                       (d.provider='wecom' AND d.source_type IN (
+                           'smartsheet_doc','registry_doc','smartsheet_link','structure_backup_doc'
+                       ))
+                    OR (d.provider='feishu' AND d.source_type='bitable_app')
+                  )
+                  {selected_filter}
+                GROUP BY d.id
+                ORDER BY d.id
+                """,
+                params,
+            )
+            rows = cur.fetchall()
+        return [
+            {
+                "id": int(row[0]),
+                "provider": str(row[1]),
+                "env_profile": str(row[2]),
+                "external_doc_id": str(row[3] or ""),
+                "document_name": str(row[4] or ""),
+                "source_url": str(row[5] or ""),
+                "source_type": str(row[6] or ""),
+                "status": str(row[7] or ""),
+                "sheet_count": int(row[8] or 0),
+                "last_sync_at": row[9],
+            }
+            for row in rows
+        ]
+
+    def get_document_locator_mirror_payload(
+        self,
+        locator_id: int,
+        locator_version: int,
+    ) -> dict[str, Any] | None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    l.id, l.provider, l.env_profile, l.api_doc_id, l.share_ref,
+                    l.document_name, l.source_url, l.admin_userids, l.credential_ref,
+                    l.source_kind, l.lifecycle_status, l.syncability_status,
+                    l.capabilities, l.sheet_count, l.registered_at,
+                    l.last_verified_at, l.last_sync_at, l.updated_at,
+                    l.last_error_summary,
+                    e.event_type, e.trigger_source, e.changed_fields,
+                    e.status_summary, e.created_at
+                FROM document_locator_registry l
+                LEFT JOIN document_locator_events e
+                  ON e.locator_id=l.id AND e.locator_version=%s
+                WHERE l.id=%s
+                ORDER BY e.id DESC
+                LIMIT 1
+                """,
+                (int(locator_version), int(locator_id)),
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "locator": {
+                "id": int(row[0]),
+                "provider": str(row[1]),
+                "env_profile": str(row[2]),
+                "api_doc_id": str(row[3] or ""),
+                "share_ref": str(row[4] or ""),
+                "document_name": str(row[5] or ""),
+                "source_url": str(row[6] or ""),
+                "admin_userids": list(row[7] or []),
+                "credential_ref": str(row[8] or ""),
+                "source_kind": str(row[9] or ""),
+                "lifecycle_status": str(row[10] or ""),
+                "syncability_status": str(row[11] or ""),
+                "capabilities": dict(row[12] or {}),
+                "sheet_count": int(row[13] or 0),
+                "registered_at": str(row[14]) if row[14] else "",
+                "last_verified_at": str(row[15]) if row[15] else "",
+                "last_sync_at": str(row[16]) if row[16] else "",
+                "updated_at": str(row[17]) if row[17] else "",
+                "last_error_summary": str(row[18] or ""),
+            },
+            "event": {
+                "event_type": str(row[19] or ""),
+                "trigger_source": str(row[20] or ""),
+                "changed_fields": list(row[21] or []),
+                "status_summary": dict(row[22] or {}),
+                "created_at": str(row[23]) if row[23] else "",
+            },
+        }
+
     def pending_sync_requests(self, limit: int) -> list[dict[str, Any]]:
         with self.conn.cursor() as cur:
             cur.execute(
@@ -699,8 +818,8 @@ class PostgresDocSyncStore:
             "share_ref": str(locator.get("share_ref") or "") or None,
             "document_name": str(locator.get("document_name") or ""),
             "source_url": str(locator.get("source_url") or ""),
-            "admin_userids": list(locator.get("admin_userids") or []),
-            "credential_ref": str(locator.get("credential_ref") or ""),
+            "admin_userids": list(locator.get("admin_userids") or []) if "admin_userids" in locator else None,
+            "credential_ref": str(locator.get("credential_ref") or "") if "credential_ref" in locator else None,
             "source_kind": str(locator.get("source_kind") or ""),
             "lifecycle_status": str(locator.get("lifecycle_status") or "unresolved"),
             "syncability_status": str(locator.get("syncability_status") or "unverified"),
@@ -752,6 +871,10 @@ class PostgresDocSyncStore:
                 created = existing is None
                 if existing:
                     current = dict(zip(comparable, existing[2:]))
+                    if values["admin_userids"] is None:
+                        values["admin_userids"] = list(current.get("admin_userids") or [])
+                    if values["credential_ref"] is None:
+                        values["credential_ref"] = str(current.get("credential_ref") or "")
                     changed_fields = [name for name in comparable if current.get(name) != values.get(name)]
                     version = int(existing[1]) + (1 if changed_fields else 0)
                     cur.execute(
@@ -788,6 +911,8 @@ class PostgresDocSyncStore:
                         ),
                     )
                 else:
+                    values["admin_userids"] = list(values["admin_userids"] or [])
+                    values["credential_ref"] = str(values["credential_ref"] or "")
                     changed_fields = list(comparable)
                     cur.execute(
                         """

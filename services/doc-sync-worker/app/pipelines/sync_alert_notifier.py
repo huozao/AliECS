@@ -30,6 +30,9 @@ ERROR_KIND_LABELS = {
 }
 TOKEN_ALERT_THRESHOLD_SECONDS = 4 * 86400
 ARTIFACT_GRACE_SECONDS = 300
+MIRROR_LAG_SECONDS = 900
+MIRROR_RETRY_ALERT_ATTEMPTS = 3
+MIRROR_JOB_KEY = "wecom.locator_mirror"
 
 _EVENT_TITLES = {
     "open": "同步告警",
@@ -41,6 +44,7 @@ _ALERT_KIND_LABELS = {
     "stale": "同步延迟",
     "credential_expiring": "凭据告警",
     "artifact_stale": "产出物延迟",
+    "mirror_lag": "定位档案镜像延迟",
 }
 
 
@@ -161,7 +165,9 @@ def build_alert_text(event: str, alert: dict[str, Any], *, now: datetime) -> str
     if event == "resolved":
         summary = "同步恢复"
     else:
-        summary = _ALERT_KIND_LABELS.get(str(alert.get("alert_kind") or ""), "同步异常")
+        summary = _ALERT_KIND_LABELS.get(
+            str(alert.get("alert_kind") or alert.get("status") or ""), "同步异常"
+        )
 
     lines = [title, f"{summary}：{display_name}"]
     if summary == "同步失败":
@@ -322,6 +328,26 @@ def _alert_conditions(
                     "message": token["message"],
                 }
 
+    if str(job.get("job_key") or "") == MIRROR_JOB_KEY:
+        health = state.get("mirror_health") if isinstance(state.get("mirror_health"), dict) else {}
+        pending_count = int(health.get("pending_count") or 0)
+        max_attempt_count = int(health.get("max_attempt_count") or 0)
+        failed_count = int(health.get("failed_count") or 0)
+        oldest_pending_at = health.get("oldest_pending_at")
+        pending_too_long = bool(
+            pending_count
+            and isinstance(oldest_pending_at, datetime)
+            and (_as_utc(now) - _as_utc(oldest_pending_at)).total_seconds() > MIRROR_LAG_SECONDS
+        )
+        if failed_count or max_attempt_count >= MIRROR_RETRY_ALERT_ATTEMPTS or pending_too_long:
+            conditions["mirror_lag"] = {
+                **base_payload,
+                "status": "mirror_lag",
+                "pending_count": pending_count,
+                "failed_count": failed_count,
+                "max_attempt_count": max_attempt_count,
+            }
+
     return conditions
 
 
@@ -387,6 +413,19 @@ def run_notifier_once(
         except Exception as exc:  # noqa: BLE001 - 默认值写入不能阻断已有告警轮询
             print(f"[sync-alert] chanjet defaults failed: {type(exc).__name__}")
         states = repository.load_job_states()
+        mirror_state = next(
+            (
+                state
+                for state in states
+                if str((state.get("job") or {}).get("job_key") or "") == MIRROR_JOB_KEY
+            ),
+            None,
+        )
+        if mirror_state is not None:
+            try:
+                mirror_state["mirror_health"] = repository.load_locator_mirror_health()
+            except Exception as exc:  # noqa: BLE001 - mirror health must not block other alerts.
+                print(f"[sync-alert] locator mirror health failed: {type(exc).__name__}")
         result["checked"] = len(states)
         contexts: list[dict[str, Any]] = []
         for state in states:
@@ -520,7 +559,46 @@ class SyncAlertRepository:
                     """,
                     (172800, "/app/tplus-output/excel/*.xlsx", "chanjet.full"),
                 )
+                cur.execute(
+                    """
+                    INSERT INTO sync_jobs(job_key, kind, provider, display_name, enabled, alert_enabled, updated_at)
+                    VALUES (%s, 'mirror', 'wecom', %s, TRUE, TRUE, NOW())
+                    ON CONFLICT(job_key) DO UPDATE SET
+                        kind = EXCLUDED.kind,
+                        provider = EXCLUDED.provider,
+                        display_name = EXCLUDED.display_name,
+                        enabled = TRUE,
+                        updated_at = NOW()
+                    """,
+                    (MIRROR_JOB_KEY, "企微文档定位档案镜像"),
+                )
             self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def load_locator_mirror_health(self) -> dict[str, Any]:
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        COUNT(*) FILTER (WHERE status IN ('pending', 'running')),
+                        MIN(created_at) FILTER (WHERE status IN ('pending', 'running')),
+                        COALESCE(MAX(attempt_count) FILTER (WHERE status IN ('pending', 'running')), 0),
+                        COUNT(*) FILTER (WHERE status = 'failed')
+                    FROM document_locator_mirror_jobs
+                    """
+                )
+                rows = cur.fetchall()
+            row = rows[0] if rows else (0, None, 0, 0)
+            self.conn.commit()
+            return {
+                "pending_count": int(row[0] or 0),
+                "oldest_pending_at": row[1],
+                "max_attempt_count": int(row[2] or 0),
+                "failed_count": int(row[3] or 0),
+            }
         except Exception:
             self.conn.rollback()
             raise
