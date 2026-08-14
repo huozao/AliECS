@@ -19,6 +19,37 @@ docker compose -f local/docker-compose.local.yml config
 
 - 如果 Docker 无法运行，必须说明未验证原因，并给出本地补救命令。
 
+## 写企微智能表格：单元格必须是 cell 数组（已坑过两次）
+
+往企微智能表格写数据时，`/wedoc/smartsheet/add_records` 与 `/wedoc/smartsheet/update_records`
+的每个单元格**必须是 cell 数组**：
+
+```python
+{"字段标题": [{"type": "text", "text": "值"}]}
+```
+
+**传裸字符串 `{"字段标题": "值"}` 时接口照样返回 `errcode=0`**，但值不会落库，写进去的是空行。
+没有任何报错、任何重试信号——这是本条最危险的地方：任务全部标成功，人却在文档里看到空表。
+
+连锁后果：空行不带业务唯一键，按唯一键做的 upsert 索引不到它，于是每轮都再 append 一行。
+症状是**行数持续增长且全为空**，而不是简单的"没写进去"。
+
+两次实际发生：
+
+- 2026-08-14 定位档案镜像上线，两张表各堆 43 条空行（档案实际只有 25 条）。
+- 同一写法的旧结构备份「企微A-最新结构」411 行同样是空的，从未真正备份到内容。
+
+判定与排查：
+
+- 判据只有一个——**回读单元格文本**，数"非空行数"。作业状态、`errcode`、重试次数全部无效。
+- 读取端 `_cell_text()` 一直在解析 cell 结构，所以读到的空 `values` 是真空，不是解析问题。
+- 交叉验证：主同步链路读业务表能拿到内容（`external_records.normalized_json` 非空），
+  说明读没问题；能写入的正确样板见 `build_node_row_values`。
+
+写测试时注意：假客户端如果原样存下裸字符串又原样读回，等于替企微"接受"了本该丢弃的数据，
+测试会一路绿灯。**fake 必须丢弃非 cell 数组的值**，否则它锁的是错误契约。
+`write_locator_mirror` 的回归测试已按此写法钉死。
+
 ## 相关背景（运行现状）
 
 - 生产唯一实例运行在 txecs 的 `business-cn-doc-sync-worker-1`；aliecs 旧实例保持停止。
@@ -72,5 +103,7 @@ docker compose -f local/docker-compose.local.yml config
   **改那边任一写入点的 provider/module/status 语义就要同步改这里**，否则事件触发会静默失效。
 
 <!-- 本文点名的符号，改名时本文必须同批更新；校验器会拦 -->
+<!-- nav-check-python: services/doc-sync-worker/app/pipelines/rnd_record_writer.py:build_node_row_values -->
+<!-- nav-check-python: services/doc-sync-worker/app/pipelines/document_locator_mirror.py:write_locator_mirror -->
 <!-- nav-check-python: services/tplus-sync-worker/src/tplus_datahub/jobs/db_sync_requests.py:finish_bom_request -->
 <!-- nav-check-python: services/tplus-sync-worker/src/tplus_datahub/jobs/sync_state.py:record_tplus_sync_run_if_configured -->
