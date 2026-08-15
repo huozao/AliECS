@@ -127,6 +127,21 @@ ssh txecs "sudo docker ps --format '{{.Names}}\t{{.Status}}\t{{.Image}}'"   # �
 curl -s https://hydwang.xyz/<改动页面> | grep -c '<本次新增的标记>'            # 外部实证
 ```
 
+**bridge 的判据是另一套，别套用业务那条。** bridge 在 `deploy/openclaw-bridge/**` 内容变化时
+**push 即部署**（不需要 dispatch），走 `stage-openclaw-bridge-peer`；此时
+`deploy-business-cn` 和 `stage-business-cn-peer` 都是 skipped，属正常——本轮压根没动业务镜像，
+据此判"没部署"是误判。容器侧证据取这两样（2026-08-14 PR #316 实测）：
+
+```bash
+gh run view <run-id> --repo huozao/AliECS --json jobs \
+  --jq '.jobs[] | select(.name|test("stage-openclaw-bridge-peer")) | .conclusion'
+ssh txecs "docker ps --filter name=openclaw-bridge --format '{{.Status}}|{{.CreatedAt}}'"
+ssh txecs "grep -i bridge /srv/internal-stack/release.env"
+```
+
+`OPENCLAW_BRIDGE_VERSION` 的值形如 `sha-<commit12>@<run-id>/<attempt>`，**run-id 能直接和本次
+run 对上**——这是比容器 CreatedAt 更硬的证据（CreatedAt 只能证明"重建过"，证明不了是哪一轮）。
+
 ## 同一个 commit 重复部署：ACK 按「每次部署」命名（2026-08-13 修复）
 
 **修改前行为**：`stage-business-cn-peer` 轮询的 ACK 文件按 `release_id`（`sha-<commit前12位>`）
