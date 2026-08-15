@@ -19,3 +19,4 @@ __pycache__/
 
 .codex-temp/
 .codex-temp-ubuntu/
+.codex-worktrees/
