@@ -58,22 +58,27 @@ class ClashProfileRenderTests(unittest.TestCase):
         out = self.render.render_profile([self.node], [self.provider, disabled])
         providers = _section(out, "proxy-providers")
         self.assertEqual(list(providers), ["airport7"])
-        self.assertEqual(providers["airport7"]["url"], "https://example.com/sub?token=x")
         self.assertEqual(providers["airport7"]["path"], "./providers/airport7.yaml")
         groups = _section(out, "proxy-groups")
         auto = next(g for g in groups if g["name"] == "自动选择")
         self.assertEqual(auto["use"], ["airport7"])
 
-    def test_provider_fetch_bypasses_rule_chain(self) -> None:
-        """回归保护：删掉 proxy: DIRECT，首次导入必然拉不到机场节点。
+    def test_provider_is_file_backed_and_never_hits_airport(self) -> None:
+        """回归保护：产物里的 provider 必须是 type: file，且不得出现订阅 URL。
 
-        mihomo 拉 provider 时走自己的规则链，机场域名解析到境外 IP 后掉到
-        MATCH,节点选择，于是"拉订阅"本身先要有可用代理（2026-08-12 实测 EOF、节点数 0）。
-        走自建节点也不行——机场拒绝境外机房 IP，只能直连。
+        2026-08-15 起拉取在服务端（fetch.py）。客户端一旦回到 type: http，就会在
+        家宽上直接撞机场的源 IP 封禁——实测 ICMP 通、TCP 全端口丢弃，持续 3 天以上，
+        走任何节点也不行（HK/JP/US/SG 全 000，同节点访问 api.ipify.org 却正常）。
+
+        顺带守住"订阅 URL 不进产物"：产物会被下载到客户端、可能被随手转发，
+        而 URL 里的 token 能换出全部节点凭据（33 个节点共用一个账号级 uuid）。
         """
         out = self.render.render_profile([self.node], [self.provider])
         providers = _section(out, "proxy-providers")
-        self.assertEqual(providers["airport7"]["proxy"], "DIRECT")
+        self.assertEqual(providers["airport7"]["type"], "file")
+        self.assertNotIn("url", providers["airport7"])
+        self.assertNotIn("proxy", providers["airport7"])
+        self.assertNotIn("token=x", out)
 
     def test_select_group_name_is_locked(self) -> None:
         # DNS 段有约 24 处 "#节点选择" 引用组名，改名会让境外 DNS 全部失效。
@@ -106,11 +111,57 @@ class ClashProfileRenderTests(unittest.TestCase):
         self.assertIn("  - DOMAIN-SUFFIX,openai.com,AI服务", out.splitlines())
         self.assertNotIn("  - DOMAIN-SUFFIX,openai.com,节点选择", out.splitlines())
 
-    def test_ai_group_prefers_self_node(self) -> None:
+    def test_claude_is_covered_in_rules_and_dns(self) -> None:
+        """规则和 DNS 必须同时覆盖 Claude，缺一不可。
+
+        2026-08-15 发现首版三处（规则、nameserver-policy、fallback-filter）**全漏**了
+        Claude：网页版、桌面版、手机版和终端 CLI（api.anthropic.com）统统落到兜底
+        MATCH,节点选择，走的正是要避开的机场共享 IP。
+
+        只补规则不补 DNS 也不行：连接从自建节点出去、解析却从别的出口查，
+        GeoDNS 会给出与出口不匹配的边缘 IP。
+        """
+        out = self.render.render_profile([self.node], [])
+        lines = out.splitlines()
+        for suffix in ("anthropic.com", "claude.ai", "claudeusercontent.com"):
+            self.assertIn(f"  - DOMAIN-SUFFIX,{suffix},AI服务", lines)
+            self.assertIn(f'"+.{suffix}":', out)
+            self.assertIn(f'      - "+.{suffix}"', lines)
+
+    def test_ai_domains_resolve_through_ai_group(self) -> None:
+        # 规则把连接送去 AI服务，DNS 也必须同组，否则两边出口不一致。
+        out = self.render.render_profile([self.node], [])
+        self.assertIn("https://1.1.1.1/dns-query#AI服务", out)
+        for volatile in ("+.openai.com", "+.chatgpt.com", "+.anthropic.com", "+.claude.ai"):
+            block = out.split(f'"{volatile}":')[1].split('"+.')[0]
+            self.assertIn("#AI服务", block)
+            self.assertNotIn("#节点选择", block)
+
+    def test_cloudflare_suffix_is_not_swallowed_by_ai_group(self) -> None:
+        # 只有验证码子域该走自建节点；整个 cloudflare.com 压进去会把无关流量都塞给它。
+        out = self.render.render_profile([self.node], [])
+        lines = out.splitlines()
+        self.assertIn("  - DOMAIN,challenges.cloudflare.com,AI服务", lines)
+        self.assertNotIn("  - DOMAIN-SUFFIX,cloudflare.com,AI服务", lines)
+
+    def test_ai_group_prefers_self_node_and_can_fall_back_to_a_named_node(self) -> None:
+        """AI服务 默认自建节点，应急项必须是**具体节点**而不是「节点选择」组。
+
+        2026-08-15 修：原先应急项写的是 GROUP_SELECT，而「节点选择」当时也指向自建节点，
+        自建节点真挂了切过去出口不变，等于没切。
+        """
         out = self.render.render_profile([self.node], [self.provider])
         groups = _section(out, "proxy-groups")
         ai = next(g for g in groups if g["name"] == "AI服务")
         self.assertEqual(ai["proxies"][0], "self-a")
+        self.assertEqual(ai["use"], ["airport7"])
+        self.assertNotIn("节点选择", ai["proxies"])
+
+    def test_ai_group_without_provider_has_no_use(self) -> None:
+        # 空 use 会让 mihomo 启动失败，一个订阅源都没有时必须省略。
+        out = self.render.render_profile([self.node], [])
+        groups = _section(out, "proxy-groups")
+        ai = next(g for g in groups if g["name"] == "AI服务")
         self.assertNotIn("use", ai)
 
     def test_empty_self_nodes_raises(self) -> None:

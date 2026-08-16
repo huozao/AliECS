@@ -4,8 +4,13 @@
 （YAML 1.2 是 JSON 超集，mihomo 照常解析），因此本模块零第三方依赖，
 且节点名里的中文、引号、emoji 由标准库正确转义。
 
-机场节点不在这里拉取——它们由客户端 mihomo 通过 proxy-providers 自行获取
-并按 interval 定期刷新，服务端完全不接触机场。
+⚠️ 2026-08-15 起，机场节点由**服务端**拉取（见 fetch.py），产物里的 proxy-provider
+是 `type: file`，客户端只读本地节点文件、不向机场发任何请求。
+
+原先的写法是 `type: http` + 客户端自行按 interval 拉取，"服务端完全不接触机场"。
+该写法自 2026-08-15 起确认在本环境不可用：机场对家宽出口做了源 IP 封禁
+（ICMP 通但 TCP 全端口丢弃，持续 3 天以上），客户端无论怎么配都拉不到；
+同刻境内服务器拉同一 URL 返回 200。详见 docs/superpowers/specs 的 Clash 合成器设计文档。
 """
 
 from __future__ import annotations
@@ -27,18 +32,20 @@ GROUP_AUTO = "自动选择"
 GROUP_AI = "AI服务"
 
 HEALTH_CHECK_URL = "https://www.gstatic.com/generate_204"
-PROVIDER_INTERVAL = 86400
 HEALTH_CHECK_INTERVAL = 300
 
-# ⚠️ mihomo 拉取 proxy-provider 时会走自己的规则链，而不是绕开它（2026-08-12 本地探针实测：
-# 只有 MATCH 规则时，日志出现 "dial <组名> mihomo --> <订阅地址>"，拉取被丢进代理组）。
-# 机场订阅域名通常解析到境外 IP，不命中 GEOIP,CN，于是一路掉到 MATCH,节点选择 ——
-# 「拉订阅」这件事本身要先有可用代理，形成自举依赖，首次导入时必然失败（节点数 0）。
-#
-# 只能直连，不能走自建节点：实测机场对境外机房 IP 是拒绝的（aliecs 156ms 快速失败），
-# 而国内直连正常（txecs 200）。这也正是 Clash Verge 现有 remote profile 的既有行为
-# ——它默认不带 self_proxy，同样是直连拉取，周期同为 24 小时。
-PROVIDER_FETCH_PROXY = "DIRECT"
+# 客户端节点文件的存放位置，相对 mihomo 的工作目录（Clash Verge 是它的 profiles 根）。
+# 本机的每日同步任务往这个路径写，mihomo 监听到文件变化后约 2 秒自动重载
+# （2026-08-15 实测：覆盖文件后 core.log 出现 "[Provider] test's content update"，
+# 节点数从 1 变 3，内核未重启。备用手段 PUT /providers/proxies/<name> 返回 204）。
+PROVIDER_FILE_DIR = "./providers"
+
+# ⚠️ 历史：这里曾是 `type: http` + `proxy: DIRECT` + `interval: 86400`，由客户端自己拉。
+# 那个写法解决的是"mihomo 拉 provider 会走自己的规则链导致自举死锁"（2026-08-12 探针实测：
+# 日志出现 "dial <组名> mihomo --> <订阅地址>"）。该问题真实存在，`proxy: DIRECT` 也确实
+# 修好了它——但自 2026-08-15 起整条 http 路径已被移除，因为机场按源 IP 封了家宽，
+# 直连与走任何节点都拉不到（HK/JP/US/SG 全部 000，同刻同节点访问 api.ipify.org 正常）。
+# 拉取已上移到服务端 fetch.py。不要因为看到"客户端拉不到"就把 http provider 加回来。
 
 
 def provider_key(provider_id: int) -> str:
@@ -80,13 +87,14 @@ def render_profile(self_nodes: list[dict], providers: list[dict]) -> str:
     if active:
         parts.append("proxy-providers: " + _dump({
             provider_key(p["id"]): {
-                "type": "http",
-                "url": p["url"],
-                "proxy": PROVIDER_FETCH_PROXY,
-                "interval": PROVIDER_INTERVAL,
-                # 已拉取过的副本落在这里；后续拉取失败时 mihomo 从它恢复节点，不会清空
-                # （2026-08-12 实测：URL 指向死端口重启，缓存里的节点照常加载且不报 error）。
-                "path": f"./providers/{provider_key(p['id'])}.yaml",
+                "type": "file",
+                # 这个文件由本机每日同步任务从服务端取回覆盖；产物本身不含节点。
+                #
+                # ⚠️ 文件缺失**不会**让 mihomo 启动失败——2026-08-15 实测：内核照常起来，
+                # 该 provider 静默变成 0 节点，组里只剩自建节点。失败形态是"机场节点凭空
+                # 消失"而不是"起不来"，排查时容易往错的方向找。导入配置时务必确认
+                # providers/ 下有对应文件。
+                "path": f"{PROVIDER_FILE_DIR}/{provider_key(p['id'])}.yaml",
                 "health-check": {
                     "enable": True,
                     "url": HEALTH_CHECK_URL,
@@ -116,7 +124,14 @@ def render_profile(self_nodes: list[dict], providers: list[dict]) -> str:
             "tolerance": 50,
         })
     # AI 服务默认锁自建节点：机场共享 IP 容易触发 ChatGPT / Claude 的风控。
-    groups.append({"name": GROUP_AI, "type": "select", "proxies": [*names, GROUP_SELECT]})
+    #
+    # ⚠️ 应急项必须是**具体节点**，不能是「节点选择」组（2026-08-15 修）。原先写的是
+    # [*names, GROUP_SELECT]，而「节点选择」当时也指向自建节点——自建节点真挂了的时候
+    # 切过去出口不变，等于没切，应急路径是坏的。改成挂 use，机场节点逐个可指定。
+    ai_group: dict[str, Any] = {"name": GROUP_AI, "type": "select", "proxies": [*names]}
+    if keys:
+        ai_group["use"] = keys
+    groups.append(ai_group)
 
     parts.append("proxy-groups: " + _dump(groups))
     parts.append("")

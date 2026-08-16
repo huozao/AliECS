@@ -55,8 +55,21 @@ class AdminFrontendTests(unittest.TestCase):
 
     def test_clash_profile_urls_are_masked_by_default(self) -> None:
         # 订阅 URL 含机场分配的 token，列表默认打码，点开才显示。
+        # 只断言 revealed 初值为空，不锁整个 state 字面量——加一个无关字段就会误红。
         self.assertIn("function maskSubscriptionUrl(", self.html)
-        self.assertIn("clashProfile:{items:[],revealed:{}}", self.html)
+        self.assertIn("revealed:{}", self.html)
+        self.assertIn("state.clashProfile.revealed[p.id]?escapeHtml(p.url)", self.html)
+
+    def test_clash_snapshot_panel_shows_change_time_not_just_fetch_time(self) -> None:
+        """后台要显示"节点最后一次变化"，那才对应"需要重新导入"这个动作。
+
+        只显示"上次拉取"没有信息量——它每天都在动，看久了会被忽略，而机场换域名
+        （2026-08-15 那次 ss→vless）是无预警的，必须让它显眼。
+        """
+        self.assertIn('api("/v1/admin/clash-profile/snapshots")', self.html)
+        self.assertIn("节点最后一次变化", self.html)
+        self.assertIn("data-clash-fetch=", self.html)
+        self.assertIn("data-clash-nodes=", self.html)
 
 
 if __name__ == "__main__":

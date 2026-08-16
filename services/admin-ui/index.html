@@ -189,8 +189,12 @@
       <details class="card" id="sec-clash-profile" data-sec="clash-profile">
         <summary><h2><span class="htitle">Clash 配置 <span id="clashProviderCountBadge" class="badge">0</span></span></h2></summary>
         <div class="notice">
-          机场节点由客户端自行定期同步，机场增删节点无需重新导入配置。
-          只有更换机场、改动自建节点或调整分流规则后，才需要重新下载并在各客户端重新导入。
+          机场节点由<strong>服务端</strong>拉取（机场按源 IP 封了家宽出口，客户端自己拉不到）。
+          客户端读本地节点文件：点「立即拉取」再「下载节点文件」，覆盖客户端
+          <code>providers/airportN.yaml</code>，内核约 2 秒自动重载，<strong>不用重启、不用重新导入配置</strong>。
+          <br />
+          只有<strong>「节点最后一次变化」时间更新了</strong>，才需要重新下载配置并在各客户端重新导入；
+          流量数字每天变动不算变更，不会触发提示。
         </div>
         <div class="sec-tools">
           <button id="toggleClashProviderForm" type="button">＋ 新增订阅源</button>
@@ -273,7 +277,7 @@
   <script src="/common/toast.js"></script>
   <script>
     const API_BASE = location.port === "8081" ? "http://localhost:8000" : "/api";
-    const state = {token:"",me:null,users:[],roles:[],permissions:[],features:[],miniappRequests:[],logs:[],systemConfig:[],auditLogs:{items:[],page:1,page_size:50,total:0},clashProfile:{items:[],revealed:{}}};
+    const state = {token:"",me:null,users:[],roles:[],permissions:[],features:[],miniappRequests:[],logs:[],systemConfig:[],auditLogs:{items:[],page:1,page_size:50,total:0},clashProfile:{items:[],revealed:{},snapshots:{}}};
     const $ = (id) => document.getElementById(id);
     const AUTH_KEYS = ["aliecs_auth_token","portal_token","admin_token"];
     const getAuthToken = () => AUTH_KEYS.map((k)=>localStorage.getItem(k)||"").find(Boolean)||"";
@@ -471,23 +475,61 @@
     async function loadClashProviders(){
       const resp=await api("/v1/admin/clash-profile/providers");
       state.clashProfile.items=resp.items||[];
+      try{
+        const snaps=await api("/v1/admin/clash-profile/snapshots");
+        state.clashProfile.snapshots={};
+        (snaps.items||[]).forEach((s)=>{state.clashProfile.snapshots[s.provider_id]=s;});
+      }catch(err){state.clashProfile.snapshots={};}
       renderClashProviders();
+    }
+    function clashLocalTime(iso){
+      if(!iso) return "从未";
+      const d=new Date(iso);
+      if(isNaN(d.getTime())) return escapeHtml(iso);
+      return d.toLocaleString("zh-CN",{hour12:false});
+    }
+    function clashSnapshotLine(snap){
+      if(!snap) return '<div class="muted">尚无快照，点「立即拉取」。</div>';
+      const parts=[];
+      if(snap.last_error){
+        // 拉取失败不清空已有节点，所以这里要同时显示"上次成功是什么时候"。
+        parts.push(`<div style="color:#c0392b">拉取失败（${clashLocalTime(snap.last_error_at)}）：${escapeHtml(snap.last_error)}</div>`);
+      }
+      if(snap.fetched_at){
+        parts.push(`<div class="muted">节点 ${snap.node_count} 个 · 指纹 <code>${escapeHtml((snap.fingerprint||"").slice(0,12))}</code> · 上次成功 ${clashLocalTime(snap.fetched_at)}</div>`);
+        parts.push(`<div class="muted">节点最后一次变化：${clashLocalTime(snap.changed_at)}　—— 变化后需重新下载配置并重新导入</div>`);
+      }else if(!snap.last_error){
+        parts.push('<div class="muted">尚无快照，点「立即拉取」。</div>');
+      }
+      if(snap.userinfo) parts.push(`<div class="muted" style="word-break:break-all">${escapeHtml(snap.userinfo)}</div>`);
+      return parts.join("");
     }
     function renderClashProviders(){
       const items=state.clashProfile.items;
+      const snaps=state.clashProfile.snapshots||{};
       $("clashProviderCountBadge").textContent=items.length;
       $("clashProviderBody").innerHTML=items.map((p)=>{
         const shown=state.clashProfile.revealed[p.id]?escapeHtml(p.url):escapeHtml(maskSubscriptionUrl(p.url));
         return `<div class="entity">
           <div><strong>${escapeHtml(p.name)}</strong> ${p.enabled?"":'<span class="badge">已停用</span>'}</div>
           <div class="muted" style="word-break:break-all">${shown}</div>
+          ${clashSnapshotLine(snaps[p.id])}
           <div class="row">
+            <button type="button" data-clash-fetch="${p.id}">立即拉取</button>
+            <button type="button" data-clash-nodes="${p.id}">下载节点文件</button>
             <button type="button" data-clash-reveal="${p.id}">${state.clashProfile.revealed[p.id]?"隐藏":"显示"} URL</button>
             <button type="button" data-clash-toggle="${p.id}">${p.enabled?"停用":"启用"}</button>
             <button type="button" data-clash-delete="${p.id}">删除</button>
           </div>
         </div>`;
       }).join("")||'<div class="muted">还没有订阅源。</div>';
+    }
+    async function fetchClashProviderNow(id){
+      const resp=await api(`/v1/admin/clash-profile/providers/${id}/fetch`,{method:"POST"});
+      showSuccess(resp.changed
+        ? `拉取成功：${resp.node_count} 个节点，节点已变更，需要重新下载配置并在各客户端重新导入。`
+        : `拉取成功：${resp.node_count} 个节点，与上次一致，客户端无需改动。`);
+      await loadClashProviders();
     }
     async function createClashProvider(){
       const name=$("clashProviderName").value.trim();
@@ -530,6 +572,20 @@
     async function copyClashProfile(){
       await navigator.clipboard.writeText(await fetchClashProfileText());
       showSuccess("配置文本已复制。");
+    }
+    async function downloadClashNodes(id){
+      // 文件名必须与产物里 proxy-provider 的 path 一致（./providers/airportN.yaml），
+      // 放错位置 mihomo 会因为找不到文件而起不来。
+      const headers={};
+      if(state.token)headers.Authorization=`Bearer ${state.token}`;
+      const resp=await fetch(`${API_BASE}/v1/admin/clash-profile/nodes/${id}`,{headers});
+      const text=await resp.text();
+      if(!resp.ok)throw new Error(text||`HTTP ${resp.status}`);
+      const blob=new Blob([text],{type:"text/yaml;charset=utf-8"});
+      const href=URL.createObjectURL(blob);
+      const a=document.createElement("a");
+      a.href=href;a.download=`airport${id}.yaml`;a.click();
+      URL.revokeObjectURL(href);
     }
     async function loadAll(){
       clearMessage();
@@ -648,6 +704,14 @@
       $("clashDownloadBtn").addEventListener("click",()=>downloadClashProfile().catch((e)=>showError(`生成配置失败：${e.message}`)));
       $("clashCopyBtn").addEventListener("click",()=>copyClashProfile().catch((e)=>showError(`复制失败：${e.message}`)));
       $("clashProviderBody").addEventListener("click",(e)=>{
+        const fetchNow=e.target.getAttribute("data-clash-fetch");
+        if(fetchNow){
+          e.target.disabled=true;e.target.textContent="拉取中…";
+          fetchClashProviderNow(fetchNow).catch((err)=>{showError(`拉取失败：${err.message}`);renderClashProviders();});
+          return;
+        }
+        const nodes=e.target.getAttribute("data-clash-nodes");
+        if(nodes){downloadClashNodes(nodes).catch((err)=>showError(`下载节点文件失败：${err.message}`));return;}
         const reveal=e.target.getAttribute("data-clash-reveal");
         if(reveal){state.clashProfile.revealed[reveal]=!state.clashProfile.revealed[reveal];renderClashProviders();return;}
         const toggle=e.target.getAttribute("data-clash-toggle");
