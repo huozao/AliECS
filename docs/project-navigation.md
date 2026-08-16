@@ -14,7 +14,7 @@
 | 数据导出下载 | `services/public-web/exports/`、`services/backend-api/app/routers/exports.py` | [`project-ai-map.md`](project-ai-map.md) |
 | 企微/飞书文档同步 | `services/doc-sync-worker/` | [`constraints/doc-sync.md`](constraints/doc-sync.md) |
 | 飞书 bridge | `deploy/openclaw-bridge/` | [`runbooks/feishu.md`](runbooks/feishu.md) |
-| Clash 配置合成（订阅合并） | `services/backend-api/app/clash_profile/`、`app/routers/clash_profile.py`、admin-ui `sec-clash-profile` | `python -m unittest discover -s tests -p "test_clash_profile_render.py"`，产物再过一遍 `clash-meta -t -f`。⚠️ `-t` 只做静态校验，**测不出机场订阅拉不拉得到**（首版据此误判为通过，实跑节点数 0），改机场相关逻辑必须真跑一次实例查 `/providers/proxies`，见设计文档「手工验证」 |
+| Clash 配置合成（订阅合并） | `services/backend-api/app/clash_profile/`（`render.py` 合成、`fetch.py` 拉机场、`store.py` 落库、`cli.py` 给本机定时任务）、`app/routers/clash_profile.py`、admin-ui `sec-clash-profile` | `python -m unittest discover -s tests -p "test_clash_profile*.py"`。⚠️ `clash-meta -t` 只做静态校验，**测不出节点到底加载没加载**（首版据此误判为通过，实跑节点数 0），改 provider 或分流逻辑必须真跑一次实例查 `/providers/proxies` 与 `/proxies/AI服务`，见设计文档「手工验证」。测试实例要先把 `geosite.dat`/`geoip.dat`/`Country.mmdb` 拷进工作目录，否则 `GEOSITE,CN` 会去 GitHub 下载并超时失败 |
 | 数据库结构 | `db/migrations/` | [`../db/README.md`](../db/README.md) |
 | 构建、部署与回滚 | `.github/workflows/`、`deploy/ecs/` | [`runbooks/deploy.md`](runbooks/deploy.md)、[`../deploy/README.md`](../deploy/README.md) |
 | 本地拓扑 | `local/docker-compose.local.yml` | `docker compose ... config` |

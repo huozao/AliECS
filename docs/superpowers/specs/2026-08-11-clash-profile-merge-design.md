@@ -65,10 +65,7 @@ DNS 配置里有约 24 处 `https://1.1.1.1/dns-query#节点选择` 形式的引
 ```yaml
 proxy-providers:
   <provider_key>:
-    type: http
-    url: <数据库中的订阅 URL>
-    proxy: DIRECT
-    interval: 86400
+    type: file
     path: ./providers/<provider_key>.yaml
     health-check:
       enable: true
@@ -78,9 +75,51 @@ proxy-providers:
 
 `provider_key` 由数据库行 id 生成（`airport1` 形式），不用机场名，避免中文与特殊字符进 YAML key。
 
-mihomo 会解析上游的 `subscription-userinfo` 响应头，因此机场的流量用量与到期时间在 Clash Verge 里照常显示。
+> **⚠️ 上面这段自 2026-08-15 起是 `type: file`；此前是 `type: http` + `url` + `proxy: DIRECT` + `interval: 86400`。**
+> 改的原因不是 http 那套写错了（它当时确实修好了自举死锁），而是机场按源 IP 封了家宽出口，
+> 客户端无论怎么配都拉不到。拉取已上移到服务端。下面「`proxy: DIRECT` 不是可选项」整节
+> 因此变成**历史记录**，不再是当前实现——新情况见〈改动 1b：拉取上移到服务端〉。
+> 保留它是因为"mihomo 拉 provider 会走自己的规则链"这条机制仍然成立，
+> 谁要是把 http provider 加回来还会再撞一次。
+
+### 改动 1b：拉取上移到服务端（2026-08-15）
+
+**触发原因**：机场对家宽出口做了源 IP 封禁，ICMP 通但 TCP 全端口丢弃，持续 3 天以上未恢复。同一条宽带上的 webdock2 出口 IP 与本机相同，同样出局——这一点是决定性的，它排除了"换台设备去拉"这条路，不是架构问题而是根本不在另一个 IP 上。
+
+| 出口 | 订阅端点 | 结果 |
+|---|---|---|
+| 家宽（devbox / webdock2） | 域名与 IP 两个入口都试 | `000`，超时 |
+| txecs（腾讯云广州） | 同上 | `200`，44911 字节 |
+| aliecs（境外机房） | 同上 | 156 ms 快速拒绝 |
+
+**关键排除项**：走代理拉也不行。HK/JP/US/SG 四个机场节点全部 `000`，而同一节点同一时刻访问 `api.ipify.org` 返回 200 —— 说明不是节点坏了，是机场拒绝一切非国内源。
+
+因此 txecs 是唯一可行的拉取方，而 backend-api 正好跑在 txecs 上。
+
+**调度放在消费端，不在服务端**：服务端不新建调度设施，也不新增部署单元（backend-api 无任何后台任务机制，doc-sync-worker 的调度绑定飞书多维表、语义不符）。节点数据的唯一消费者就是客户端，客户端不来取时服务端拉了也没用。
+
+**本阶段：人工触发。** admin-ui 点「立即拉取」→ 下载节点文件 → 放进客户端 `providers/`。`cli.py` 已经写好并可用，但**本机每日计划任务列入下一阶段**，本阶段不做。
+
+判断依据：真正需要动手的时机是节点指纹变化，而那不是每天发生（机场换域名一年几次）。人工模式下的风险是无预警——机场换域名当天会突然全部连不上，得自己想起来去后台看。下一阶段做自动化就是为了消掉这个"想起来"。
+
+下一阶段的形态（已验证可行，未实施）：
+
+```bash
+# 本机计划任务，每日一次；先写临时文件再原子改名，避免半截内容被 mihomo 加载
+ssh <server> "docker exec <backend-container> python -m app.clash_profile.cli refresh"
+ssh <server> "docker exec <backend-container> python -m app.clash_profile.cli nodes airport1" \
+  > providers/airport1.yaml.tmp && mv providers/airport1.yaml.tmp providers/airport1.yaml
+```
+
+⚠️ 这条路会让一个无人值守的定时任务持有管理员 SSH 凭据。更干净的做法是在服务器上加一个 SFTP-only 的受限身份（形如既有的 `artifact-drop`：`ChrootDirectory` + `ForceCommand internal-sftp`），2026-08-15 讨论时用户选择先不加。实施前重新评估一次。
+
+**没有公开下载端点**：合成结果只在 SSO 后台内可取。一个公网可达的 token 订阅 URL 在形式上就是对外分发服务，是这次刻意避开的形态。
+
+**指纹只算 `type`/`server`/`port` 三元组，不含节点名**：机场把「剩余流量：59.34 GB」「距离下次重置剩余：25 天」伪装成节点混在 `proxies` 里，名字每天变。实测两次独立拉取指纹完全一致，而 08-13 那份旧快照指纹不同，正确反映了协议、节点域名、端口段三者同时更换的整批换代。
 
 #### `proxy: DIRECT` 不是可选项（2026-08-12 补，首版漏了导致节点数 0）
+
+> **⚠️ 本节自 2026-08-15 起是历史记录，不是当前实现。** 见上面〈改动 1b〉。
 
 **mihomo 拉 provider 时走自己的规则链，不绕开它。** 本地探针实测（配置里只有 `MATCH,g`）：
 
@@ -140,9 +179,13 @@ proxy-groups:
 | 文件 | 内容 |
 |---|---|
 | `db/migrations/0049_clash_profile.sql` | 新表 `clash_profile_providers` |
+| `db/migrations/0051_clash_profile_snapshots.sql` | 新表 `clash_profile_snapshots`（2026-08-15，服务端拉取结果） |
 | `services/backend-api/app/clash_profile/template_base.yaml` | 静态段：基础设置、sniffer、dns、tun。原样输出 |
 | `services/backend-api/app/clash_profile/template_rules.yaml` | 静态段：规则列表项（**不含 `rules:` 这个 key**，只有 `  - XXX` 行） |
 | `services/backend-api/app/clash_profile/render.py` | 纯函数，无 IO |
+| `services/backend-api/app/clash_profile/fetch.py` | 拉机场订阅、算指纹。stdlib only（backend-api 没有 requests/httpx/PyYAML） |
+| `services/backend-api/app/clash_profile/store.py` | 快照读写。两个调用方：HTTP 路由与 cli |
+| `services/backend-api/app/clash_profile/cli.py` | 给本机每日定时任务用，走 `docker exec`，绕开 SSO |
 | `services/backend-api/app/routers/clash_profile.py` | HTTP 层 |
 | `services/admin-ui/index.html` | 新增页签 |
 | `deploy/ecs/compose.prod.yml` | `backend-api.environment` 加 `CLASH_SELF_NODES_B64`（漏了变量进不了容器） |
@@ -226,22 +269,32 @@ render_profile(self_nodes: list[dict], providers: list[dict]) -> str
 | DELETE | `/v1/admin/clash-profile/providers/{id}` | 删除 |
 | GET | `/v1/admin/clash-profile/download` | 下载生成的配置，`Content-Disposition: attachment` |
 | GET | `/v1/admin/clash-profile/preview` | 返回配置文本，供页面上复制 |
+| GET | `/v1/admin/clash-profile/snapshots` | 各订阅源的拉取状态（节点数、指纹、上次成功、最后变化、错误）。**不含节点正文** |
+| POST | `/v1/admin/clash-profile/providers/{id}/fetch` | 立即拉取。失败返回 502（失败方是上游机场，不是本服务） |
+| GET | `/v1/admin/clash-profile/nodes/{id}` | 下载节点文件，落到客户端 `providers/airportN.yaml` |
+
+**没有免鉴权的下载端点，这是刻意的。** 一个公网可取的 token 订阅 URL 在形式上就是对外分发订阅服务；无人值守的每日同步任务改走 SSH + `docker exec` 调 `cli.py`，不扩大任何访问面。
 
 ### 页面
 
 admin-ui 新增页签，复用现有 `common/toast.js` 风格：
 
 - 机场列表：名称、URL（默认打码，点击展开）、启用开关、编辑、删除
+- 每行显示快照状态：节点数、指纹前 12 位、上次成功拉取时间、**节点最后一次变化时间**、失败原因
+- 每行两个新按钮：「立即拉取」「下载节点文件」
 - 新增机场表单
 - 「下载配置」按钮 + 「复制配置文本」按钮
-- 一段固定说明：换机场后需要在各客户端重新导入配置；机场自身节点增删由 mihomo 自动跟进，不需要重新导入
+- 一段固定说明：**只有节点指纹变化时才需要重新导入**；流量数字每天变动不算变更
+
+显示「最后一次变化」而不是「上次拉取」是有意的：后者每天都在动，没有信息量，用户看久了会忽略；前者才对应"需要动手"这个动作。
 
 ## 使用流程
 
 | 场景 | 操作 |
 |---|---|
-| 机场增删节点、节点改名 | 无需任何操作，mihomo 按 `interval: 86400` 自动同步 |
-| 更换机场 | admin-ui 改 URL → 下载配置 → 两台设备重新导入 |
+| 机场增删节点、节点改名 | 本阶段需人工：admin-ui 点「立即拉取」→「下载节点文件」→ 覆盖 `providers/airportN.yaml`。覆盖后 mihomo 约 2 秒自动重载，**不用重启内核、不用重新导入配置**（2026-08-15 实测，日志 `[Provider] xxx's content update`）。下一阶段由计划任务代劳 |
+| 机场换域名/换协议（节点指纹变化） | admin-ui 会显示「节点最后一次变化」时间 → 下载配置 + 节点文件 → 各客户端重新导入 |
+| 更换机场 | admin-ui 改 URL → 点「立即拉取」→ 下载配置 → 两台设备重新导入 |
 | 自建节点参数变更 | SOPS 改 `CLASH_SELF_NODES_B64` → 重建容器 → 下载配置 → 重新导入 |
 | 调整分流规则 | 改 `template_rules.yaml` → PR → 部署 → 下载配置 → 重新导入 |
 
@@ -261,6 +314,20 @@ admin-ui 新增页签，复用现有 `common/toast.js` 风格：
 | 节点名含中文与引号 | 输出可被 `json.loads` 解析回来，字段一致 |
 | AI 规则指向 | 输出中 openai 相关规则目标为 `AI服务` 而非 `节点选择` |
 | 自建节点为空 | 抛出明确异常，不产出配置 |
+| provider 形态 | 必须是 `type: file`，且产物里不得出现 `url` / `proxy` / 订阅 token |
+| Claude 三处齐全 | `anthropic.com` / `claude.ai` / `claudeusercontent.com` 同时出现在规则、`nameserver-policy`、`fallback-filter` |
+| AI 类 DNS 同组 | 这些域名的 DoH 后缀是 `#AI服务`，不是 `#节点选择` |
+| cloudflare 范围 | 只有 `challenges.cloudflare.com` 指向 `AI服务`，整个后缀不得指过去 |
+| AI服务 应急项 | `proxies[0]` 是自建节点，`use` 指向机场 provider，且**不含**「节点选择」组 |
+
+`tests/test_clash_profile_fetch.py` 另外覆盖拉取与指纹（不需要网络，`urlopen` 打桩）：
+
+| 用例 | 断言 |
+|---|---|
+| 伪节点名变动 | 指纹不变（否则后台天天误报节点已变更） |
+| 协议/域名/端口换代 | 指纹改变 |
+| `proxy-groups` 不计入 | 节点数只统计 `proxies` 段 |
+| 非 Clash 格式响应 | 明确抛错，不静默存成 0 节点 |
 
 按 AGENTS.md，运行 `python -m unittest discover -s tests`。
 
@@ -268,25 +335,34 @@ admin-ui 新增页签，复用现有 `common/toast.js` 风格：
 
 1. **配置语法校验**：用 Clash Verge 自带的 mihomo 核心跑 `clash-meta -t -d <目录> -f <生成的配置>`（目录里要放 `geosite.dat`/`geoip.dat`/`Country.mmdb`，否则只会因缺 geodata 报错）。能抓出拼接产生的缩进与结构错误。不进 CI（CI 环境没有 mihomo 二进制），作为部署前必做步骤。
 
-   ⚠️ **`-t` 不覆盖 provider 拉取**。它只做静态校验，`proxy-providers` 拉不拉得到、拉回来能不能解析，全都测不出来——首版就是这样漏掉 `proxy: DIRECT` 的：`-t` 报 `test is successful`，实跑 provider 节点数 0。要验拉取必须**真跑一次实例**再查 `GET /providers/proxies` 的节点数：
+   ⚠️ **`-t` 不覆盖节点是否真的加载**。它只做静态校验——首版就是这样漏掉 `proxy: DIRECT` 的：`-t` 报 `test is successful`，实跑 provider 节点数 0。必须**真跑一次实例**再查：
 
    ```bash
    # 换端口、关 tun、加 external-controller，避免干扰正在使用的 Clash Verge
    clash-meta -d <目录> -f <改造后的配置>
-   curl -s http://127.0.0.1:29090/providers/proxies | jq '.providers[] | select(.vehicleType=="HTTP") | {name, count:(.proxies|length)}'
+   curl -s http://127.0.0.1:29091/providers/proxies    # 节点数与 vehicleType
+   curl -s http://127.0.0.1:29091/proxies/AI服务       # now 与可选项，URL 里组名要 percent-encode
    ```
-2. **Windows Clash Verge 导入**：确认两类节点都出现在 `节点选择` 组；确认机场流量与到期信息正常显示。
-3. **机场节点连通性**：切到一个机场节点访问境外站点。重点验证 TUN 模式下机场节点不会因为缺少防回环规则而失败。
-4. **DNS 未回归**：切到机场节点后访问 YouTube 等依赖 `nameserver-policy` 的站点，确认境外 DNS 仍走代理查询。
-5. **AI 服务锁定**：确认 ChatGPT 走的是自建节点而非机场节点。
-6. **Android FlClash 导入**：确认同一份配置可用；确认 FlClash 自身的 TUN 开关与模板中 `tun.enable: true` 不冲突；首次导入可能需要先手选节点连上才能下载 geodata。
+
+   ⚠️ **每次都要从渲染函数重新生成配置，不要在上一轮的产物上打补丁**。改端口/关 tun 的脚本重复执行会叠加出重复 YAML key，mihomo 直接 `fatal: mapping key already defined`，看起来像"新配置有问题"，实际是测试脚本自己造成的——2026-08-15 踩过一次，差点把结论记错。
+
+   ⚠️ **节点文件缺失不会让内核起不来**（2026-08-15 实测）。mihomo 照常启动，该 provider 静默变成 0 节点，组里只剩自建节点。失败形态是"机场节点凭空消失"而非"启动失败"，排查时容易找错方向。
+
+2. **`file` provider 热重载**：覆盖 `providers/airportN.yaml` 后约 2 秒自动生效，内核不重启，日志出现 `[Provider] xxx's content update`。强制刷新的备用手段是 `PUT /providers/proxies/<name>`（返回 204）。这是每日同步任务成立的前提，改动 provider 形态后必须重测。
+3. **Windows Clash Verge 导入**：确认两类节点都出现在 `节点选择` 组；确认机场流量与到期信息正常显示。
+4. **机场节点连通性**：切到一个机场节点访问境外站点。重点验证 TUN 模式下机场节点不会因为缺少防回环规则而失败。
+5. **DNS 未回归**：切到机场节点后访问 YouTube 等依赖 `nameserver-policy` 的站点，确认境外 DNS 仍走代理查询。
+6. **AI 服务四端出口**：确认 ChatGPT 与 Claude 在**网页、桌面版、手机版、终端 CLI** 四处都走自建节点。终端那条最容易漏——Claude Code 不认系统代理，靠 `tun.enable: true` 接管，Windows 上需要 Clash Verge 开服务模式。验法是访问 `api.anthropic.com` 后在内核连接列表里看它落在哪个 chain 上，不要靠推理。
+7. **Android FlClash 导入**：确认同一份配置可用；确认 FlClash 自身的 TUN 开关与模板中 `tun.enable: true` 不冲突；首次导入可能需要先手选节点连上才能下载 geodata。手机端没有每日同步任务，节点文件要手动放或改用自包含产物。
 
 ## 已知风险
 
 | 风险 | 说明 |
 |---|---|
 | geodata 先有鸡先有蛋 | `GEOSITE,CN` 依赖 `geosite.dat`。手机首次导入时若尚无该文件且无法直连下载，需要先手动选节点连上 |
-| 机场按源 IP 拦截 | 2026-08-12 实测：同一条成都电信家宽在密集拉取（约 5 分钟内 7 次）后被静默丢包，**持续 30 分钟以上未恢复**，同刻 txecs 仍 200。traceroute 显示包正常出境（香港 PCCW 191ms）后才断，说明是目的端按源 IP 丢弃，不是 GFW 边界拦截。正常运行是一天一次，不会触发；**但排障时不要反复手动拉取**，会把自己的出口打进黑名单，连带影响现有 Clash Verge 订阅更新 |
+| 机场按源 IP 拦截 | 2026-08-12 实测：同一条成都电信家宽在密集拉取（约 5 分钟内 7 次）后被静默丢包，同刻 txecs 仍 200。traceroute 显示包正常出境（香港 PCCW 191ms）后才断，说明是目的端按源 IP 丢弃，不是 GFW 边界拦截。**⚠️ 原文写「持续 30 分钟以上未恢复」，该表述自 2026-08-15 起确认严重低估——实际到 08-15 仍未解封，已超过 72 小时；且机场另一个国内直连入口（IP + 高位端口形式，绕开域名）同样不通，ICMP 3/3 通而 TCP 全端口不通。当时按"临时限速"判断是错的，这是持久封禁。** 正是这条导致拉取整体上移到服务端 |
+| 拉取上移后仍受机场策略影响 | 服务端拉取一天一次，远低于触发阈值；但机场若改判定，txecs 出口同样可能进黑名单。届时没有第二条可行出口（aliecs 境外被拒、家宽已封），只能走机场后台申诉。**不要因为排障就在服务端反复手动点「立即拉取」** |
+| 客户端不再有兜底缓存 | `type: http` 时代 `path` 缓存能在拉取失败时兜底。现在客户端只有本地文件，文件本身就是"缓存"；同步任务失败时文件保持不动，行为等价。但**如果同步任务写了个坏文件**（例如半截内容），mihomo 会加载出错误的节点集。同步脚本必须先写临时文件再原子改名 |
 | 防回环规则覆盖不到机场节点 | 见上文，依赖 mihomo TUN 自身机制，列入验证清单 |
 | 规则调整需要走部署 | 相比现在直接编辑本地文件变慢。若后续觉得难受，再考虑把规则段做成 DB 可编辑，但那会牺牲可追溯性，本次不做 |
 | 配置文件含自建节点凭据 | 下载后的文件与现在 Clash Verge 里存的内容同等敏感，按同样方式保管。若经飞书投递，等于把 UUID 过一遍第三方服务器 |

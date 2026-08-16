@@ -3,8 +3,13 @@
 自建节点定义来自环境变量 CLASH_SELF_NODES_B64（由 SOPS 管理、部署时渲染），
 仓库里没有也不得有。机场订阅 URL 存库，不进仓库。
 
-本模块不访问机场——机场节点由客户端 mihomo 通过 proxy-providers 自行拉取，
-因此这里没有 HTTP 客户端、没有定时任务、没有快照表。
+⚠️ 2026-08-15 起本模块**会访问机场**。原先的注释是"不访问机场，机场节点由客户端
+mihomo 自行拉取，因此没有 HTTP 客户端、没有快照表"——该写法自 2026-08-15 起失效：
+机场按源 IP 封了家宽，客户端拉不到（详见 clash_profile/fetch.py 开头）。
+拉取实现在 `clash_profile/fetch.py`，落库在 `clash_profile/store.py`。
+
+仍然没有定时任务：调度放在消费端（本机每日计划任务经 SSH + docker exec 调
+`clash_profile/cli.py`），服务端不新增调度设施、不新增部署单元。
 """
 
 from __future__ import annotations
@@ -20,7 +25,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
-from app.clash_profile.render import render_profile
+from app.clash_profile import store
+from app.clash_profile.fetch import fetch_snapshot
+from app.clash_profile.render import provider_key, render_profile
 from app.core import _conn, require_admin
 
 
@@ -152,4 +159,62 @@ def download_profile(_: dict = Depends(require_admin)) -> PlainTextResponse:
         _profile_text(),
         media_type="text/yaml; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="clash-profile.yaml"'},
+    )
+
+
+@router.get("/snapshots")
+def list_snapshots(_: dict = Depends(require_admin)) -> dict[str, Any]:
+    """各订阅源的拉取状态。不含节点正文——状态接口不该把节点凭据带进响应。"""
+    status = store.read_status()
+    items = []
+    for provider in _rows():
+        snapshot = status.get(provider["id"], {})
+        items.append({
+            "provider_id": provider["id"],
+            "key": provider_key(provider["id"]),
+            "name": provider["name"],
+            "enabled": provider["enabled"],
+            "node_count": snapshot.get("node_count", 0),
+            "fingerprint": snapshot.get("fingerprint", ""),
+            "userinfo": snapshot.get("userinfo", ""),
+            "fetched_at": snapshot.get("fetched_at"),
+            "changed_at": snapshot.get("changed_at"),
+            "last_error": snapshot.get("last_error", ""),
+            "last_error_at": snapshot.get("last_error_at"),
+        })
+    return {"items": items}
+
+
+@router.post("/providers/{provider_id}/fetch")
+def fetch_provider_now(provider_id: int, _: dict = Depends(require_admin)) -> dict[str, Any]:
+    """后台「立即拉取」。改完订阅 URL 后不必等本机的下一轮定时同步。"""
+    provider = next((p for p in _rows() if p["id"] == provider_id), None)
+    if provider is None:
+        raise HTTPException(status_code=404, detail="订阅源不存在")
+    try:
+        snapshot = fetch_snapshot(provider["url"])
+    except RuntimeError as exc:
+        store.save_error(provider_id, str(exc))
+        # 502 而不是 500：失败方是上游机场，不是本服务。
+        raise HTTPException(status_code=502, detail=f"拉取失败：{exc}") from exc
+    changed = store.save_snapshot(provider_id, snapshot)
+    return {
+        "status": "ok",
+        "node_count": snapshot.node_count,
+        "fingerprint": snapshot.fingerprint,
+        "changed": changed,
+    }
+
+
+@router.get("/nodes/{provider_id}", response_class=PlainTextResponse)
+def download_nodes(provider_id: int, _: dict = Depends(require_admin)) -> PlainTextResponse:
+    """节点文件。产物里的 proxy-provider 是 type: file，客户端要把它放到 providers/ 下。"""
+    content = store.read_content(provider_id)
+    if not content:
+        raise HTTPException(status_code=404, detail="该订阅源还没有可用快照，请先拉取")
+    filename = f"{provider_key(provider_id)}.yaml"
+    return PlainTextResponse(
+        content,
+        media_type="text/yaml; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

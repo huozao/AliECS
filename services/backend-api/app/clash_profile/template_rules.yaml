@@ -15,10 +15,15 @@
   - DOMAIN-SUFFIX,alibabacloud.com,DIRECT
   - DOMAIN-SUFFIX,alicdn.com,DIRECT
 
-  # OpenAI / ChatGPT —— 走 AI服务 组，默认锁自建节点：
+  # AI 服务 —— 走 AI服务 组，默认锁自建节点：
   # 机场共享 IP 容易触发 ChatGPT / Claude 的登录与风控拦截。
+  #
+  # ⚠️ 覆盖面要连同 template_base.yaml 的 nameserver-policy 与 fallback-filter 一起改。
+  # 只加规则不加 DNS，域名会走国内 DoH 解析，拿到的 IP 与出口不匹配（2026-08-15 发现
+  # Claude 全套三处都漏了）。tests 里有断言保证三处同步。
   - DOMAIN,challenges.cloudflare.com,AI服务
-  - DOMAIN-SUFFIX,cloudflare.com,AI服务
+  # ⚠️ 2026-08-15：原先是 DOMAIN-SUFFIX,cloudflare.com —— 范围过大，会把 Cloudflare
+  # 全部服务都压进自建节点。验证码只需要 challenges 这一个子域，其余交回常规分流。
   - DOMAIN,api.openai.com,AI服务
   - DOMAIN,cdn.oaistatic.com,AI服务
   - DOMAIN-SUFFIX,openai.com,AI服务
@@ -26,6 +31,11 @@
   - DOMAIN-SUFFIX,oaistatic.com,AI服务
   - DOMAIN-SUFFIX,oaiusercontent.com,AI服务
   - DOMAIN-SUFFIX,auth.openai.com,AI服务
+  # Claude / Anthropic —— 覆盖网页版、桌面版、手机版和终端 CLI（api.anthropic.com）。
+  # 2026-08-15 补：此前一条都没有，四个端全部落到兜底 MATCH,节点选择 走机场共享 IP。
+  - DOMAIN-SUFFIX,anthropic.com,AI服务
+  - DOMAIN-SUFFIX,claude.ai,AI服务
+  - DOMAIN-SUFFIX,claudeusercontent.com,AI服务
 
   # GitHub
   - DOMAIN-SUFFIX,github.com,节点选择

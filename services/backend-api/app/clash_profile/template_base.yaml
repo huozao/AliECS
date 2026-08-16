@@ -78,25 +78,38 @@ dns:
     "+.withgoogle.com":
       - https://1.1.1.1/dns-query#节点选择
       - https://dns.google/dns-query#节点选择
+    # ⚠️ 以下 AI 类域名的 DNS 走 #AI服务，不是 #节点选择（2026-08-15 改）。
+    # 原因：规则把连接送去 AI服务（自建节点），DNS 却从机场出口查，两边出口不一致时
+    # GeoDNS 会返回与实际出口不匹配的边缘 IP。要让全链路同出口，DNS 必须同组。
     "+.openai.com":
-      - https://1.1.1.1/dns-query#节点选择
-      - https://dns.google/dns-query#节点选择
+      - https://1.1.1.1/dns-query#AI服务
+      - https://dns.google/dns-query#AI服务
     "+.chatgpt.com":
-      - https://1.1.1.1/dns-query#节点选择
-      - https://dns.google/dns-query#节点选择
+      - https://1.1.1.1/dns-query#AI服务
+      - https://dns.google/dns-query#AI服务
     "+.oaistatic.com":
-      - https://1.1.1.1/dns-query#节点选择
-      - https://dns.google/dns-query#节点选择
+      - https://1.1.1.1/dns-query#AI服务
+      - https://dns.google/dns-query#AI服务
     "+.oaiusercontent.com":
-      - https://1.1.1.1/dns-query#节点选择
-      - https://dns.google/dns-query#节点选择
+      - https://1.1.1.1/dns-query#AI服务
+      - https://dns.google/dns-query#AI服务
     "+.auth.openai.com":
-      - https://1.1.1.1/dns-query#节点选择
-      - https://dns.google/dns-query#节点选择
-    "+.cloudflare.com":
-      - https://1.1.1.1/dns-query#节点选择
-      - https://dns.google/dns-query#节点选择
+      - https://1.1.1.1/dns-query#AI服务
+      - https://dns.google/dns-query#AI服务
+    "+.anthropic.com":
+      - https://1.1.1.1/dns-query#AI服务
+      - https://dns.google/dns-query#AI服务
+    "+.claude.ai":
+      - https://1.1.1.1/dns-query#AI服务
+      - https://dns.google/dns-query#AI服务
+    "+.claudeusercontent.com":
+      - https://1.1.1.1/dns-query#AI服务
+      - https://dns.google/dns-query#AI服务
     "+.challenges.cloudflare.com":
+      - https://1.1.1.1/dns-query#AI服务
+      - https://dns.google/dns-query#AI服务
+    # cloudflare.com 整体不再压进 AI服务（规则侧同步收窄），DNS 走常规境外解析。
+    "+.cloudflare.com":
       - https://1.1.1.1/dns-query#节点选择
       - https://dns.google/dns-query#节点选择
     "+.github.com":
@@ -149,6 +162,9 @@ dns:
       - "+.oaistatic.com"
       - "+.oaiusercontent.com"
       - "+.auth.openai.com"
+      - "+.anthropic.com"
+      - "+.claude.ai"
+      - "+.claudeusercontent.com"
       - "+.cloudflare.com"
       - "+.challenges.cloudflare.com"
       - "+.github.com"
