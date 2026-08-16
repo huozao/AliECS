@@ -55,6 +55,10 @@ AliECS 是以 AI 客户端协作为主要开发方式的 Docker 化 Web/API 项�
 
 代码或配置验证通过后必须回查路径、符号、配置键、API、部署、回滚、备份和专项 runbook。PR 必须记录 `Nav-Impact: updated`，或同时记录 `Nav-Impact: none` 与 `Nav-Impact-Reason: <依据>`；最后从工作区顶层 `AGENTS.md` 重新进入并复验一条“功能 → 代码 → 验证命令 → 运行位置”链路。
 
+**⚠️ 这条记录必须写在 PR 正文里，写在 commit message 里不算。** `ci.yml` 的「PR 导航影响记录」步骤读的是 `github.event.pull_request.body`，本地 `check_nav_impact.py --range` 过了不代表 CI 会过（2026-08-16 PR#320 就是这样红的）。两处都写最稳。
+
+补救时注意：`ci.yml` 只在 `opened / synchronize / reopened / ready_for_review` 触发，**`edited` 不在列**，所以改完正文不会自动重跑；`gh run rerun` 也没用——它重放的是旧 event payload，读到的还是旧正文。要么再推一个 commit（`synchronize`），要么 `gh pr close && gh pr reopen`。
+
 ### 断言判据
 
 治理文档正文中以反引号点名的、指向本仓 Python 定义的、非下划线开头的标识符，必须有对应断言：
