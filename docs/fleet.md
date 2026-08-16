@@ -134,7 +134,7 @@ txecs 127.0.0.1:11800 failover-proxy
 | 设备 | 账户 | 用途 | 形态 |
 |---|---|---|---|
 | txecs | `ubuntu` | devbox 人工管理 + GitHub Actions 部署 | 唯一日常 shell 账户 |
-| txecs | `webdock-tunnel` | 生产隧道 11810/11811 + console 16101 | `Match User` 块，`PermitListen` 锁定这三个端口 |
+| txecs | `webdock-tunnel` | 生产隧道 11810/11811、console 16080/16081/16090/16091/16101、ERP 18200/18201 | `Match User` 块，`PermitListen` 锁定这九个端口 |
 | txecs | `artifact-drop` | artifact 投递 | SFTP chroot，拿不到 shell |
 | txecs | `restic-peer` | 跨机备份接收 | SFTP chroot，拿不到 shell |
 | aliecs | `root` | 人工/CI 管理、bridge/console/T+ 隧道、ProductCenter | 5733 次登录（2026-07-09~08-08 区间计数），历史取证时 `authorized_keys` 8 个 key |
@@ -219,11 +219,20 @@ GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会�
   **排障时看到客户端直连源站 IP 是正常的，不是配置泄漏**；nginx 日志里的
   `remote_addr` 现在就是真实客户端 IP（`cloudflare-realip.conf` 在灰云下不生效）。
   改回橙云的完整步骤与代价见 infra `docs/runbooks/site-entry.md`「代理模式」。
-  只有 `erp` 仍指 aliecs `47.77.176.62`（本来就是灰云）。
-- 远程控制台：公网 `/console/*` 的 Authelia forward-auth 在本机完成；除
-  `/console/devbox/desktop/` 外均反代回 AliECS 源站。devbox 那一路自 2026-08-03 起
-  在本机终止（`127.0.0.1:16101` ← devbox 反向隧道，sshd `PermitListen` 与
-  `webdock-tunnel` authorized_keys 均由 infra `roles/server/tencent` 管理）。
+  ⚠️「只有 `erp` 仍指 aliecs `47.77.176.62`」这句自 2026-08-16 起失效：aliecs 因当月
+  公网流量超支停机，`erp` 已改指 txecs `106.52.51.67`（`services.json` 的
+  `public_edge` 由 `aliecs-edge` 改成 `business`，DNS 由 opentofu 渲染）。
+  **现在没有任何生产域名指向 aliecs。**
+- 远程控制台：公网 `/console/*` 的 Authelia forward-auth 在本机完成。
+  ⚠️「除 `/console/devbox/desktop/` 外均反代回 AliECS 源站」这句自 2026-08-16 起失效：
+  同日 webdock1/webdock2 的 browser+desktop 四条路径也改成本机终止，通用
+  `location /console` 虽然仍写着回源 aliecs，但已经没有路径会落到它。
+  本机终止的五条及其 loopback 上游：`devbox/desktop`←16101（2026-08-03）、
+  `webdock1/browser`←16080、`webdock1/desktop`←16081、`webdock2/browser`←16090、
+  `webdock2/desktop`←16091（均 2026-08-16）。sshd `PermitListen` 与
+  `webdock-tunnel` authorized_keys 均由 infra `roles/server/tencent` 管理；
+  设备侧 unit 是 `console-txecs-tunnel.service`（旧的 `console-ecs-tunnel` 已 disable，
+  两者不能同时跑，上游端口号相同）。
 - 排障：
   `sudo systemctl status webdock-failover-proxy`、
   `curl -i http://127.0.0.1:11800/healthz`、
