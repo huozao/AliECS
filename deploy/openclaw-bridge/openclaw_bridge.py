@@ -581,7 +581,7 @@ def request_details(body: dict[str, Any]) -> dict[str, Any]:
             metadata["message_id"] = str(message_id)
     if metadata.get("channel") == "feishu":
         user_text = _strip_feishu_sender_prefix(user_text, get_last_user_metadata(messages))
-        user_text = strip_feishu_mention_helper_text(user_text)
+        user_text = strip_feishu_mention_helper_text(user_text, raw_metadata)
         enrich_feishu_metadata_with_session_route(metadata, raw_metadata, user_text)
         chat_mode = feishu_chat_mode({"metadata": metadata, "raw_metadata": raw_metadata})
         if chat_mode:
@@ -933,24 +933,100 @@ def _strip_feishu_sender_prefix(text: str, raw_metadata: dict[str, Any]) -> str:
     return text
 
 
-def strip_feishu_mention_helper_text(text: str) -> str:
-    """Remove OpenClaw's Feishu mention instructions and the bot's own leading
-    mention. The helper block is channel-injected text, not user content."""
+# The helper line names the bot's own id: [System: If user_id is "ou_x", that
+# mention refers to you.] — that id is what tells a self mention apart from a
+# mention of a colleague.
+_FEISHU_SELF_MENTION_ID_RE = re.compile(
+    r"If user_id is [\"']?([^\"'\s,]+)[\"']?,\s*that mention refers to you",
+    re.IGNORECASE,
+)
+
+
+def _feishu_self_mention_names(bot_id: str, raw_metadata: dict[str, Any] | None) -> list[str]:
+    """Display names the bot is mentioned by, read from the event's mention list.
+
+    Names come from the event, never from a constant, so renaming the bot in
+    Feishu ("hao的智能助手" -> "ChatGPT") needs no code change."""
+    mentions = (raw_metadata or {}).get("mentions")
+    if not isinstance(mentions, list) or not mentions:
+        return []
+    names: list[str] = []
+    for mention in mentions:
+        if not isinstance(mention, dict):
+            continue
+        identifier = mention.get("id")
+        ids = set()
+        if isinstance(identifier, dict):
+            ids.update(str(value) for value in identifier.values() if value)
+        elif identifier:
+            ids.add(str(identifier))
+        for key in ("open_id", "user_id", "union_id"):
+            value = mention.get(key)
+            if value:
+                ids.add(str(value))
+        name = str(mention.get("name") or "").strip()
+        if not name:
+            continue
+        if bot_id:
+            if bot_id in ids:
+                names.append(name)
+        elif len(mentions) == 1:
+            # Without the id we can only be sure when the message mentions exactly
+            # one entity and we already know the bot itself was mentioned.
+            names.append(name)
+    return names
+
+
+def _strip_feishu_self_mentions(text: str, bot_id: str, raw_metadata: dict[str, Any] | None) -> str:
+    """Drop the bot's own mention wherever it sits in the message.
+
+    2026-08-17: users put the mention at the END of the message and the old
+    leading-only strip passed it straight through to ChatGPT, which then treated
+    the trigger text as part of the task."""
+    cleaned = text
+    if bot_id:
+        cleaned = re.sub(
+            r"<at\s+[^>]*user_id=([\"'])" + re.escape(bot_id) + r"\1[^>]*>.*?</at>",
+            " ",
+            cleaned,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    names = _feishu_self_mention_names(bot_id, raw_metadata)
+    if names:
+        for name in names:
+            cleaned = cleaned.replace("@" + name, " ")
+    else:
+        # No name available: only strip a mention that stands alone on its own
+        # line, or sits at the very start/end — never one inside a sentence,
+        # which could be a mention of somebody else.
+        cleaned = re.sub(r"(?m)^[ \t]*@\S+[ \t]*$", "", cleaned)
+        cleaned = re.sub(r"^\s*@\S+(?:[ \t]+|(?=\r?$))", "", cleaned, count=1)
+        cleaned = re.sub(r"(?:(?<=\s)|^)@\S+\s*$", "", cleaned, count=1)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+def strip_feishu_mention_helper_text(text: str, raw_metadata: dict[str, Any] | None = None) -> str:
+    """Remove OpenClaw's Feishu mention instructions and the bot's own mention.
+    The helper block is channel-injected text, not user content."""
     if not text:
         return text
     kept: list[str] = []
     saw_self_mention_helper = False
+    bot_id = ""
     for line in text.splitlines():
         stripped = line.strip()
         if stripped.startswith(FEISHU_MENTION_HELPER_PREFIXES):
             if stripped.startswith("[System: If user_id is ") and stripped.endswith("that mention refers to you.]"):
                 saw_self_mention_helper = True
+                match = _FEISHU_SELF_MENTION_ID_RE.search(stripped)
+                if match:
+                    bot_id = match.group(1)
             continue
         kept.append(line)
     cleaned = "\n".join(kept).strip()
     if saw_self_mention_helper:
-        cleaned = re.sub(r"^\s*<at\s+user_id=([\"'])[^\"']+\1>.*?</at>\s*", "", cleaned, count=1)
-        cleaned = re.sub(r"^\s*@\S+(?:[ \t]+|(?=\r?$))", "", cleaned, count=1)
+        cleaned = _strip_feishu_self_mentions(cleaned, bot_id, raw_metadata)
     return cleaned.strip()
 
 
@@ -3833,6 +3909,34 @@ def _sync_webdock(outbound: dict[str, Any], request_id: str, started: float) -> 
     )
 
 
+# The ONLY job failure that is safe to re-send: UPLOAD_FAILED is raised before
+# the turn is sent to ChatGPT ("本次请求未发送"), so a retry cannot duplicate a
+# question. Everything else either already reached ChatGPT (a retry would ask
+# twice) or would fail identically on the other node — GENERATION_FAILED comes
+# from ChatGPT's own servers. The standby is a different Chrome with a different
+# conversation, so the retry starts a fresh thread there; acceptable because the
+# upload race that produces this error happens on `/新对话` anyway (2026-08-17).
+_RETRY_ON_STANDBY_ERROR_CODES = {"UPLOAD_FAILED"}
+# Don't start over on the standby without enough budget left to finish.
+_STANDBY_RETRY_MIN_REMAINING_SECONDS = 60.0
+
+
+def _job_error_code(state: dict[str, Any]) -> str:
+    detail = state.get("error") if isinstance(state.get("error"), dict) else {}
+    return str(detail.get("error_code") or "")
+
+
+def _can_retry_on_standby(state: dict[str, Any], route: str, remaining: float) -> bool:
+    if route != "primary" or remaining <= _STANDBY_RETRY_MIN_REMAINING_SECONDS:
+        return False
+    if _job_error_code(state) not in _RETRY_ON_STANDBY_ERROR_CODES:
+        return False
+    # Only meaningful when this bridge can actually address the standby; without
+    # the failover proxy in front, webdock_jobs_url ignores the route and the
+    # "retry" would land on the SAME node.
+    return webdock_jobs_url("standby") != webdock_jobs_url("primary")
+
+
 def _raise_job_error(url: str, state: dict[str, Any]) -> None:
     detail = state.get("error") if isinstance(state.get("error"), dict) else {}
     error_code = str(detail.get("error_code") or "UNKNOWN_ERROR")
@@ -3895,6 +3999,7 @@ def _submit_async_job(
     outbound: dict[str, Any],
     request_id: str,
     deadline: float,
+    force_route: str | None = None,
 ) -> tuple[dict[str, Any], str, str]:
     while True:
         remaining = deadline - time.monotonic()
@@ -3902,7 +4007,7 @@ def _submit_async_job(
             raise TimeoutError("WebDock async job submission exceeded its deadline")
         try:
             submitted, headers, _response_status = _webdock_request(
-                webdock_jobs_url(),
+                webdock_jobs_url(force_route),
                 request_id=request_id,
                 method="POST",
                 payload=outbound,
@@ -3925,7 +4030,11 @@ def _submit_async_job(
             if not job_id:
                 raise json.JSONDecodeError("WebDock job response omitted job_id", "", 0)
             route = str(headers.get("X-Webdock-Route") or "").strip()
-            if route not in {"primary", "standby"}:
+            if force_route:
+                # Aimed straight at one node, bypassing the failover proxy that
+                # would otherwise stamp the header.
+                route = force_route
+            elif route not in {"primary", "standby"}:
                 raise json.JSONDecodeError("WebDock job response omitted a valid route", "", 0)
             device = str(headers.get("X-Webdock-Device") or "").strip()
             return submitted, route, device
@@ -3946,6 +4055,7 @@ def _async_webdock(
     job_id = str(submitted.get("job_id") or "").strip()
     poll_url = webdock_jobs_url(route) + "/" + urllib.parse.quote(job_id, safe="")
     state = submitted
+    retried_on_standby = False
     while True:
         progress = state.get("progress")
         if progress_callback is not None and isinstance(progress, dict):
@@ -3983,6 +4093,21 @@ def _async_webdock(
                 footer,
             )
         if status in {"failed", "cancelled"}:
+            if not retried_on_standby and _can_retry_on_standby(
+                state, route, deadline - time.monotonic()
+            ):
+                retried_on_standby = True
+                log_line(
+                    f"webdock {_job_error_code(state)} on {route}; re-sending request "
+                    f"{request_id} to the standby (nothing was sent to ChatGPT)"
+                )
+                submitted, route, device = _submit_async_job(
+                    outbound, request_id, deadline, force_route="standby"
+                )
+                job_id = str(submitted.get("job_id") or "").strip()
+                poll_url = webdock_jobs_url(route) + "/" + urllib.parse.quote(job_id, safe="")
+                state = submitted
+                continue
             _raise_job_error(poll_url, state)
         remaining = deadline - time.monotonic()
         if remaining <= 0:

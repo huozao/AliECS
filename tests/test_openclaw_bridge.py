@@ -4672,3 +4672,175 @@ def test_config_announcement_stays_quiet_without_changes(monkeypatch):
     bridge.announce_feishu_config_changes([])
 
     assert sent == []
+
+
+def test_bridge_strips_self_mention_at_the_end_of_the_message():
+    """2026-08-17 生产：用户把 @ 放在正文末尾，旧的只剥开头的正则原样放行，
+    ChatGPT 把「@hao的智能助手」当成任务的一部分读了进去。"""
+    bridge = load_bridge()
+    helper = (
+        '[System: The content may include mention tags in the form '
+        '<at user_id="...">name</at>. Treat these as real mentions of Feishu entities (users or bots).]\n'
+        '[System: If user_id is "ou_bot", that mention refers to you.]'
+    )
+    text = f"处理成800x800的尺寸\n\n@hao的智能助手\n{helper}"
+    raw_metadata = {"mentions": [{"id": {"open_id": "ou_bot"}, "name": "hao的智能助手"}]}
+
+    assert bridge.strip_feishu_mention_helper_text(text, raw_metadata) == "处理成800x800的尺寸"
+
+
+def test_bridge_strips_a_renamed_bot_without_a_code_change():
+    """名字取自事件里的 mentions，不是常量——改名成 ChatGPT 后必须照样剥掉。"""
+    bridge = load_bridge()
+    helper = '[System: If user_id is "ou_bot", that mention refers to you.]'
+    text = f"把这张图放大@ChatGPT\n{helper}"
+    raw_metadata = {"mentions": [{"id": {"open_id": "ou_bot"}, "name": "ChatGPT"}]}
+
+    assert bridge.strip_feishu_mention_helper_text(text, raw_metadata) == "把这张图放大"
+
+
+def test_bridge_strips_self_mention_tag_anywhere_by_user_id():
+    bridge = load_bridge()
+    helper = '[System: If user_id is "ou_bot", that mention refers to you.]'
+    text = f'请看这张图 <at user_id="ou_bot">机器人</at> 谢谢\n{helper}'
+
+    assert bridge.strip_feishu_mention_helper_text(text, {}) == "请看这张图 谢谢"
+
+
+def test_bridge_keeps_a_mention_of_someone_else():
+    """只剥自己那一个：@同事 是用户正文的一部分，剥掉会改变语义。"""
+    bridge = load_bridge()
+    helper = '[System: If user_id is "ou_bot", that mention refers to you.]'
+    text = f'转告 <at user_id="ou_colleague">小王</at> 这件事 @hao的智能助手\n{helper}'
+    raw_metadata = {
+        "mentions": [
+            {"id": {"open_id": "ou_colleague"}, "name": "小王"},
+            {"id": {"open_id": "ou_bot"}, "name": "hao的智能助手"},
+        ]
+    }
+
+    cleaned = bridge.strip_feishu_mention_helper_text(text, raw_metadata)
+
+    assert "小王" in cleaned
+    assert "hao的智能助手" not in cleaned
+
+
+def test_bridge_falls_back_to_position_when_the_mention_list_is_missing():
+    """拿不到 mentions 时只剥首尾/独占一行的 @，不碰句子中间的。"""
+    bridge = load_bridge()
+    helper = '[System: If user_id is "ou_bot", that mention refers to you.]'
+
+    assert bridge.strip_feishu_mention_helper_text(f"改成800x800\n\n@某助手\n{helper}", None) == "改成800x800"
+    assert bridge.strip_feishu_mention_helper_text(f"发给 a@b.com 这个地址\n{helper}", None) == "发给 a@b.com 这个地址"
+
+
+def test_bridge_retries_upload_failed_on_the_standby(monkeypatch):
+    """UPLOAD_FAILED 是唯一保证「本次请求未发送」的失败，重投备机不会问两遍。
+    2026-08-17：webdock2 上传打空后直接报错，备机 webdock1 明明是健康的。"""
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "0")
+    monkeypatch.setattr(bridge.time, "sleep", lambda _seconds: None)
+    urls: list[str] = []
+
+    class FakeResponse:
+        headers = {"X-Webdock-Route": "primary", "X-Webdock-Device": "webdock2"}
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload, ensure_ascii=False).encode()
+
+    responses = iter(
+        [
+            FakeResponse({"job_id": "job-1", "status": "running"}),
+            FakeResponse(
+                {
+                    "job_id": "job-1",
+                    "status": "failed",
+                    "error": {
+                        "error_code": "UPLOAD_FAILED",
+                        "message": "图片未能附加到 ChatGPT 输入框，本次请求未发送。",
+                    },
+                }
+            ),
+            FakeResponse({"job_id": "job-2", "status": "running"}),
+            FakeResponse(
+                {
+                    "job_id": "job-2",
+                    "status": "succeeded",
+                    "result": {"choices": [{"message": {"content": "done on standby"}}]},
+                }
+            ),
+        ]
+    )
+
+    def fake_urlopen(request, *_args, **_kwargs):
+        urls.append(request.full_url if hasattr(request, "full_url") else str(request))
+        return next(responses)
+
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", fake_urlopen)
+
+    reply = bridge.build_reply({"messages": [{"role": "user", "content": "hello"}]})
+
+    assert "done on standby" in reply
+    # The retry is submitted straight to the standby node, not back through the proxy.
+    assert any(url.startswith("http://127.0.0.1:11811/") for url in urls), urls
+
+
+def test_bridge_does_not_retry_errors_that_already_reached_chatgpt(monkeypatch):
+    """GENERATION_FAILED 来自 ChatGPT 自己的服务端，换台机器同样失败；
+    而且那一轮已经发出去了，重投等于问两遍。"""
+    bridge = load_bridge()
+    monkeypatch.setenv("WEB_DOCK_BASE_URL", "http://127.0.0.1:11800/v1")
+    monkeypatch.setenv("WEB_DOCK_API_TOKEN", "token")
+    monkeypatch.setenv("OPENCLAW_BRIDGE_BATCH_SECONDS", "0")
+    monkeypatch.setattr(bridge.time, "sleep", lambda _seconds: None)
+    urls: list[str] = []
+
+    class FakeResponse:
+        headers = {"X-Webdock-Route": "primary", "X-Webdock-Device": "webdock2"}
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload, ensure_ascii=False).encode()
+
+    responses = iter(
+        [
+            FakeResponse({"job_id": "job-1", "status": "running"}),
+            FakeResponse(
+                {
+                    "job_id": "job-1",
+                    "status": "failed",
+                    "error": {"error_code": "GENERATION_FAILED", "message": "ChatGPT failed"},
+                }
+            ),
+        ]
+    )
+
+    def fake_urlopen(request, *_args, **_kwargs):
+        urls.append(request.full_url if hasattr(request, "full_url") else str(request))
+        return next(responses)
+
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", fake_urlopen)
+
+    reply = bridge.build_reply({"messages": [{"role": "user", "content": "hello"}]})
+
+    assert "GENERATION_FAILED" in reply
+    assert not any(url.startswith("http://127.0.0.1:11811/") for url in urls), urls

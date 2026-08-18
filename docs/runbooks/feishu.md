@@ -36,6 +36,7 @@
 | 回复只有半截/只有开场白 | 存档 `outbound.chars`；WebDock detector 完成判定 | ⛔ stop 按钮(`data-testid='stop-button'`)是完成判定权威信号，别改回以 streaming 为准 |
 | 回复图片变成链接 | bridge 环境变量 FEISHU_APP_ID/SECRET 是否在 | 缺凭据静默退 fallback；补后必须 force-recreate（restart 不重读 env_file） |
 | 图改图只回"Edit"/文件名 | imagegen_pending 窗口、预览层兜底、copy 按钮信号 | 07-18 已修（webdock 6550a70+c1bd76a+c9bf9a5）；08-14 因 08-12 的协议快通道绕过 scaffold 闸门而回归，已二修，详见 `webdock/docs/runbooks/browser.md`「图改图的完成判据只有一个能信」 |
+| 用户 @ 机器人的文本被一起发进了 ChatGPT | 存档 inbound 末尾是否残留 `@<机器人名>`；bridge 是否收到 `raw_metadata.mentions` | 旧实现只剥**开头**的 mention（`^\s*@\S+`），而用户习惯把 @ 放在正文末尾，08-17 实测原样穿透。已改为位置无关：helper 行里的 `If user_id is "ou_x"` 给出机器人自己的 id，`<at user_id=...>` 按 id 精确剥；明文 `@名字` 取自事件 `mentions` 的 name，**因此机器人改名（如改成 ChatGPT）不需要改代码**。拿不到 mentions 时只剥独占一行或首尾的 @，句中的 @同事 一律保留 |
 | 串频道/消息进错项目 | bridge channel 识别、`feishu_projects.json`、Sender 信封剥离 | 06-15 已修（PR#118/#119）；真实 metadata 是 `peer_id:"user:ou_…"` 无 channel 字段 |
 | 全链路每条都失败、bridge `chain_result` 全是 `http_500` 且十几秒就返回 | WebDock `api.log` 是否 `TargetClosedError`；容器内 Chrome 启动时间是否晚于 api 进程（`ps -eo pid,lstart,args`） | Chrome 被重启后 api 仍抓着死句柄，`started` 只判 `_page is not None` 导致永不重连；07-25 已修（webdock `29c163c`，`started` 加 `is_connected()` 校验）。应急：容器内 `POST /browser/detach` 再 `/browser/attach`，CDP 模式不会关 Chrome、不碰登录态 |
 | supervisord 报 `exited: chrome (exit status 0; expected)`，Chrome 无故重启 | 前一条请求是否卡满 310s 硬顶触发车道重建（`api.log` 找 `RESPONSE_TIMEOUT ... lane reset`） | 车道重建先关旧 tab 再开新 tab，关掉的是最后一个窗口 → Chrome 干净自退，随后 `new_page` 报 `Failed to open a new tab`；07-25 已修（webdock `08c4550` 改为先开新 tab） |
@@ -72,6 +73,11 @@ ssh webdock2 "wsl -d Ubuntu-24.04-WebDock -- docker ps"  # WebDock 容器状态
 - bridge 单测：`tests/test_openclaw_bridge.py`；mock 形状必须对齐真实 OpenClaw 输出（合成形状掩盖过串频道 bug）。
 - WebDock HTTP 429 会读取错误体：`LANE_BUSY` 的错误码和“已等待/未执行”文案会进入飞书诊断卡片；旧 `BUSY` 仍保留原 browser-lock 文案。
 - bridge 默认先提交 WebDock 异步 job，再以不超过 30s 的短 HTTP 查询状态；提交响应必须带合法的 `X-Webdock-Route`，后续固定轮询 `11810`（primary）或 `11811`（standby）。短暂超时/5xx 在总时限内重试；若提交响应丢失，bridge 用确定性 job id 到两节点找回已接单任务。只有 job 接口明确返回 404/405 才降级旧同步接口，避免重复执行。这项粘性不能去掉，否则 standby 接单后 primary 恢复会查到错误节点。
+- **UPLOAD_FAILED 是唯一会自动改投备机的失败**（2026-08-17）。WebDock 在附件确认没进输入框时报这个码，并保证「本次请求未发送」，所以重投不会让 ChatGPT 收到两遍同一个问题；bridge 直投 `11811`（standby）重跑一次，日志关键字 `re-sending request ... to the standby`。
+  - 其余错误码**一律不重投**：`GENERATION_FAILED` 来自 ChatGPT 自己的服务端（换台机器同样失败），`RESPONSE_TIMEOUT`/`REQUEST_CANCELLED` 那一轮已经发进 ChatGPT 了，重投等于问两遍。
+  - ⚠️ 代价是**备机是另一个 Chrome、另一条会话**，重投会在那边新开对话，上下文不延续。之所以可接受：产生这个错误的上传竞态几乎只发生在 `/新对话` 那一轮。
+  - 前提是 bridge 能定址备机（`webdock_jobs_url("standby") != webdock_jobs_url("primary")`，即前面挂着 failover-proxy）。不满足时不重投，避免"重试"其实落回同一台。
+  - ⚠️ 不要指望 failover-proxy 替你做这件事：它只在**连不上主机**或主机返回 **503 且含 `Chrome not running or CDP attach failed`** 时才切备机。业务失败（HTTP 500 + 结构化错误码）在它眼里是"主机好好的，只是这次没干成"，而且异步 job 模式下失败出现在轮询响应里，proxy 根本看不见。
 - job 运行期间飞书占位卡轮播不会停止：基础文案/提示文案继续轮换并附 `已等待 Ns`；只有终局答案或诊断卡 patch 时才停止。这样“页面仍在处理”和“结果已完成/失败”在用户侧可见。
 - **WebDock 生命周期阶段与轮播提示是同一张卡、同一个 patch 源**。阶段文案由 `set_placeholder_status` 写进轮播状态，顶替基础占位文案坐第一格，提示文案照常轮换：用户既看得到「ChatGPT 页面正在处理」，也看得到「/新对话」「勿重复提问」和等待秒数。⚠️ 阶段回调**不能**自己调 `feishu_patch_card`——非轮播 patch 会触发终局保护掐停轮播，而第一个 phase（`queued`）在提交那一刻就到，等于占位卡刚发出去提示就全灭（08-12 `#301` 引入，08-14 修）。只有这条消息没有轮播（轮播关闭或提示文案为空）时才退回自己 patch。
 
