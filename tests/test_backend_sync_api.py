@@ -305,6 +305,7 @@ class SyncApiTests(unittest.TestCase):
                 job_key="wecom.doc.17",
                 provider="wecom",
                 status="failed",
+                group="wecom_company_a",
                 limit=20,
                 offset=40,
                 _={},
@@ -316,6 +317,7 @@ class SyncApiTests(unittest.TestCase):
             job_key="wecom.doc.17",
             provider="wecom",
             status="failed",
+            group="wecom_company_a",
             limit=20,
             offset=40,
         )

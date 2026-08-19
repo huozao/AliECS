@@ -653,6 +653,45 @@ class PostgresDocSyncStore:
             for row in rows
         ]
 
+    def list_sheet_level_sources(self) -> list[dict[str, Any]]:
+        """表级同步来源 + 它绑定的作业键。
+
+        定位档案是**文档级**的（一份文档一行），而真正驱动同步的身份是表级四元组
+        (provider, env_profile, external_doc_id, external_sheet_id)——`sync_jobs` 靠
+        `source_id` 关联到这里。只备份文档级等于丢掉 sheet_id 和 source_id，
+        恢复时只能靠子表名去猜，子表一改名就错配。停用行同样要备份：停用不等于可以丢身份。
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT s.id, s.provider, s.env_profile, s.external_doc_id,
+                       s.external_sheet_id, s.document_name, s.sheet_name,
+                       s.source_type, s.status, s.last_sync_at,
+                       COALESCE(j.job_key, '')
+                FROM external_sources s
+                LEFT JOIN sync_jobs j ON j.source_id = s.id
+                WHERE s.external_sheet_id <> ''
+                ORDER BY s.id
+                """
+            )
+            rows = cur.fetchall()
+        return [
+            {
+                "id": int(row[0]),
+                "provider": str(row[1] or ""),
+                "env_profile": str(row[2] or ""),
+                "external_doc_id": str(row[3] or ""),
+                "external_sheet_id": str(row[4] or ""),
+                "document_name": str(row[5] or ""),
+                "sheet_name": str(row[6] or ""),
+                "source_type": str(row[7] or ""),
+                "status": str(row[8] or ""),
+                "last_sync_at": str(row[9]) if row[9] else "",
+                "job_key": str(row[10] or ""),
+            }
+            for row in rows
+        ]
+
     def get_document_locator_mirror_payload(
         self,
         locator_id: int,
@@ -667,7 +706,8 @@ class PostgresDocSyncStore:
                     l.source_kind, l.lifecycle_status, l.syncability_status,
                     l.capabilities, l.sheet_count, l.registered_at,
                     l.last_verified_at, l.last_sync_at, l.updated_at,
-                    l.last_error_summary,
+                    l.last_error_summary, l.last_error_code,
+                    l.external_source_id, l.locator_version,
                     e.event_type, e.trigger_source, e.changed_fields,
                     e.status_summary, e.created_at
                 FROM document_locator_registry l
@@ -703,13 +743,16 @@ class PostgresDocSyncStore:
                 "last_sync_at": str(row[16]) if row[16] else "",
                 "updated_at": str(row[17]) if row[17] else "",
                 "last_error_summary": str(row[18] or ""),
+                "last_error_code": str(row[19] or ""),
+                "external_source_id": int(row[20]) if row[20] else 0,
+                "locator_version": int(row[21] or 0),
             },
             "event": {
-                "event_type": str(row[19] or ""),
-                "trigger_source": str(row[20] or ""),
-                "changed_fields": list(row[21] or []),
-                "status_summary": dict(row[22] or {}),
-                "created_at": str(row[23]) if row[23] else "",
+                "event_type": str(row[22] or ""),
+                "trigger_source": str(row[23] or ""),
+                "changed_fields": list(row[24] or []),
+                "status_summary": dict(row[25] or {}),
+                "created_at": str(row[26]) if row[26] else "",
             },
         }
 

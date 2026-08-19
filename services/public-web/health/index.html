@@ -117,24 +117,18 @@
           <a class="btn primary" href="/health/versions/">查看版本明细</a>
         </div>
       </section>
+      <!-- 原来这里并排三张卡：「统一同步中心」「T+ 同步」「数据导出」。后两张分别指向
+           /sync/?group=tplus 和 /exports/，而 /exports/ 被 nginx 301 到 /sync/?view=assets——
+           三张卡落在同一个页面，只是带了不同参数。2026-08-19 收敛为一张；两条 301 保留，
+           老书签和外部链接照旧可用。「添加新微信」「Couple 入口」与同步无关，右上角 ⋯
+           菜单里本就有同名入口，这里的重复按钮一并去掉。 -->
       <section class="band">
-        <h2>同步与工具</h2>
+        <h2>同步</h2>
         <div class="linkgrid">
           <a class="card-link" href="/sync/">
-            <article class="card"><h3>统一同步中心</h3><p class="muted" style="margin:0">全部文档与 T+ 作业的运行和步骤。</p></article>
+            <h3>统一同步中心</h3>
+            <p class="muted" style="margin:0">企微、飞书与 T+ 的全部作业、运行、步骤，以及资产下载。</p>
           </a>
-          <a class="card-link" href="/sync/?group=tplus">
-            <h3>T+ 同步</h3>
-            <p class="muted" style="margin:0">在统一同步中心管理 T+ 调度、运行和变化明细。</p>
-          </a>
-          <a class="card-link" href="/exports/">
-            <h3>数据导出</h3>
-            <p class="muted" style="margin:0">按来源查找并下载数据文件。</p>
-          </a>
-        </div>
-        <div class="row" style="gap:10px;margin-top:12px">
-          <button id="addWechatPanelBtn" class="btn primary" type="button">添加新微信</button>
-          <a class="btn" href="/couple/" title="Couple">💗 Couple 入口</a>
         </div>
       </section>
     </div>
@@ -283,7 +277,7 @@
     loginBtn.onclick=ssoLogin;
     logoutBtn.onclick=()=>{clearAuthToken();applyGate(null);showSuccess('已退出登录。');};
     coupleEntryBtn.onclick=()=>location.assign('/couple/');
-    addWechatBtn.onclick=openWechatQr;addWechatPanelBtn.onclick=openWechatQr;closeWechatQrBtn.onclick=closeWechatQr;refreshWechatQrBtn.onclick=loadWechatLoginQr;wechatQrModal.onclick=(event)=>{if(event.target===wechatQrModal)closeWechatQr();};
+    addWechatBtn.onclick=openWechatQr;closeWechatQrBtn.onclick=closeWechatQr;refreshWechatQrBtn.onclick=loadWechatLoginQr;wechatQrModal.onclick=(event)=>{if(event.target===wechatQrModal)closeWechatQr();};
     menuToggle.onclick=(e)=>{e.stopPropagation();menuList.classList.toggle('hidden');};
     document.addEventListener('click',(e)=>{if(!e.target.closest('.menu'))menuList.classList.add('hidden');});
     (async()=>{applyGate(await fetchMe());})();

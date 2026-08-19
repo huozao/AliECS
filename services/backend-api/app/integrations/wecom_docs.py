@@ -98,12 +98,19 @@ class WeComDocClient:
             cursor = page.get("next")
         return records
 
-    def create_doc(self, doc_name: str, admin_users: list[str]) -> str:
+    def create_doc(self, doc_name: str, admin_users: list[str]) -> dict[str, str]:
+        """返回创建应答里的定位字段，而不只是 docid。
+
+        自建应用建出来的文档，丢了获取方式就等于失联，而创建应答是**唯一一次**
+        拿到权威链接的机会。此前只取 docid、URL 一律由客户端拼接，等于把这次机会丢了。
+        `admin_users` 为空时文档只剩 API 可达，调用方必须显式发现这件事。
+        """
         data = self.post("/wedoc/create_doc", {"doc_type": 10, "doc_name": doc_name, "admin_users": admin_users})
         docid = str(data.get("docid") or "")
         if not docid:
-            raise WeComDocError(f"create_doc 未返回 docid: {data}")
-        return docid
+            # 不回显应答体：失败应答同样可能带定位信息，不得进日志文本。
+            raise WeComDocError(f"create_doc 未返回 docid（errcode={data.get('errcode')}）")
+        return {"docid": docid, "url": str(data.get("url") or "")}
 
     def add_sheet(self, docid: str, title: str, index: int) -> None:
         self.post("/wedoc/smartsheet/add_sheet", {"docid": docid, "properties": {"title": title, "index": index}})
@@ -228,8 +235,11 @@ def copy_smartsheet_doc(
     if not source_sheets:
         raise WeComDocError("源文档没有可复制的工作表")
 
-    new_docid = client.create_doc(new_doc_name, admin_users)
-    new_url = f"https://doc.weixin.qq.com/smartsheet/{new_docid}"
+    created = client.create_doc(new_doc_name, admin_users)
+    new_docid = created["docid"]
+    api_url = str(created.get("url") or "")
+    fallback_url = f"https://doc.weixin.qq.com/smartsheet/{new_docid}"
+    new_url = api_url or fallback_url
     if on_created is not None:
         on_created(new_docid, new_url)
     default_sheet_ids = [str(s.get("sheet_id") or "") for s in client.get_sheets(new_docid) if s.get("sheet_id")]
@@ -238,6 +248,14 @@ def copy_smartsheet_doc(
     records_written = 0
     records_skipped = 0
     warnings: list[str] = []
+    if not admin_users:
+        warnings.append(
+            "创建时未指定文档管理员：该文档只能通过 API 访问，定位信息一旦丢失即无法人工找回"
+        )
+    if api_url and api_url != fallback_url:
+        warnings.append("创建应答返回的链接与拼接值不一致，已以应答值为准")
+    if not api_url:
+        warnings.append("创建应答未返回链接，当前链接由 docid 拼接得到，未经服务端确认")
 
     for index, sheet in enumerate(source_sheets, start=1):
         sheet_id = str(sheet.get("sheet_id") or "")

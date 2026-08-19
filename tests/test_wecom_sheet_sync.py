@@ -244,5 +244,24 @@ class WeComSheetSyncTests(WorkerImportTestCase):
             self.assertEqual(0, store.disable_calls)
 
 
+class AddSheetIndexTestCase(unittest.TestCase):
+    """`add_sheet` 的可选 index 契约。原属 test_wecom_structure_backup.py，
+    结构备份 2026-08-19 下线后迁来，测的是 provider 而非那条流水线。"""
+
+    def setUp(self) -> None:
+        _clear_app_modules()
+
+    def test_add_sheet_passes_optional_index(self) -> None:
+        from app.providers.wecom import WeComSmartsheetClient
+
+        client = WeComSmartsheetClient("corp", "secret")
+        calls = []
+        client._post = lambda path, payload: calls.append((path, payload)) or {}
+        client.add_sheet("DOC1", "表A")
+        client.add_sheet("DOC1", "表B", 2)
+        self.assertEqual({"docid": "DOC1", "properties": {"title": "表A"}}, calls[0][1])
+        self.assertEqual({"docid": "DOC1", "properties": {"title": "表B", "index": 2}}, calls[1][1])
+
+
 if __name__ == "__main__":
     unittest.main()
