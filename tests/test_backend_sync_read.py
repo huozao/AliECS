@@ -220,6 +220,7 @@ def run_row(
     finished_at: datetime | None = None,
     error_kind: str | None = "rate_limit",
     detail_json: dict[str, Any] | None = None,
+    env_profile: str = "COMPANY_A",
 ) -> tuple[Any, ...]:
     return (
         run_id,
@@ -237,6 +238,7 @@ def run_row(
         "sanitized failure" if error_kind else None,
         detail_json or {},
         {"table": "sync_runs", "id": 7},
+        env_profile,
     )
 
 
@@ -541,9 +543,11 @@ class RunTimelineReadTests(SyncReadTestCase):
                 "detail_json",
                 "legacy_ref",
                 "duration_seconds",
+                "source_group",
             },
             set(page["items"][0]),
         )
+        self.assertEqual("wecom_company_a", page["items"][0]["source_group"])
         self.assertEqual("请求限流", page["items"][0]["error_label"])
         self.assertEqual(300.0, page["items"][0]["duration_seconds"])
 

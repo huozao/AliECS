@@ -258,6 +258,7 @@ def sync_runs(
     job_key: str | None = None,
     provider: str | None = None,
     status: RunStatus | None = None,
+    group: str | None = None,
     limit: int = Query(20, ge=1, le=200),
     offset: int = Query(0, ge=0),
     _: dict[str, Any] = Depends(require_admin),
@@ -269,6 +270,7 @@ def sync_runs(
                 job_key=job_key,
                 provider=provider,
                 status=status,
+                group=group,
                 limit=limit,
                 offset=offset,
             )

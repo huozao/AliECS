@@ -293,8 +293,32 @@ _RUN_COLUMNS = """
     r.error_kind,
     r.error_message,
     r.detail_json,
-    r.legacy_ref
+    r.legacy_ref,
+    source.env_profile
 """
+
+
+# 作业总览的「分类」是 provider + env_profile 算出来的（sync_control.source_group），
+# 时间线要显示同一个分类就得跟着 join 出 env_profile，否则只能显示 provider，
+# 分不出企微 A 和企微 B 是两家公司。
+_RUN_JOINS = """
+FROM sync_job_runs r
+JOIN sync_jobs j ON j.id = r.job_id
+LEFT JOIN external_sources source ON source.id = j.source_id
+"""
+
+
+def _group_clause(group: str) -> tuple[str, list[Any]]:
+    if group == "tplus":
+        return "j.provider = %s", ["chanjet"]
+    if group == "feishu":
+        return "j.provider = %s", ["feishu"]
+    if group.startswith("wecom_"):
+        return (
+            "j.provider = %s AND lower(COALESCE(source.env_profile, '')) = %s",
+            ["wecom", group[len("wecom_") :]],
+        )
+    return "FALSE", []
 
 
 def _run_filters(
@@ -302,6 +326,7 @@ def _run_filters(
     job_key: str | None,
     provider: str | None,
     status: str | None,
+    group: str | None = None,
 ) -> tuple[str, list[Any]]:
     clauses: list[str] = []
     params: list[Any] = []
@@ -313,6 +338,10 @@ def _run_filters(
         if value:
             clauses.append(f"{column} = %s")
             params.append(value)
+    if group:
+        clause, group_params = _group_clause(group)
+        clauses.append(clause)
+        params.extend(group_params)
     return (" AND ".join(clauses) or "TRUE"), params
 
 
@@ -351,6 +380,7 @@ def _run_item(row: tuple[Any, ...], *, now=None) -> dict[str, Any]:
         "error_message": row[12],
         "detail_json": row[13] or {},
         "legacy_ref": row[14] or {},
+        "source_group": sync_control.source_group(str(row[3] or ""), str(row[15] or "")),
         "duration_seconds": _duration_seconds(
             row[7], row[8], row[6], now=now
         ),
@@ -374,19 +404,20 @@ def runs_page(
     status: str | None,
     limit: int,
     offset: int,
+    group: str | None = None,
     now=None,
 ) -> dict[str, Any]:
     predicate, filter_params = _run_filters(
         job_key=job_key,
         provider=provider,
         status=status,
+        group=group,
     )
     with conn.cursor() as cur:
         cur.execute(
             f"""
             SELECT COUNT(*)
-            FROM sync_job_runs r
-            JOIN sync_jobs j ON j.id = r.job_id
+            {_RUN_JOINS}
             WHERE {predicate}
             """,
             tuple(filter_params),
@@ -396,8 +427,7 @@ def runs_page(
         cur.execute(
             f"""
             SELECT {_RUN_COLUMNS}
-            FROM sync_job_runs r
-            JOIN sync_jobs j ON j.id = r.job_id
+            {_RUN_JOINS}
             WHERE {predicate}
             ORDER BY r.started_at DESC, r.id DESC
             LIMIT %s OFFSET %s

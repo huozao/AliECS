@@ -162,6 +162,9 @@ def mirror_payload() -> dict[str, Any]:
             "last_sync_at": "2026-08-14T00:00:00Z",
             "updated_at": "2026-08-14T00:00:00Z",
             "last_error_summary": "",
+            "last_error_code": "",
+            "external_source_id": 88,
+            "locator_version": 4,
         },
         "event": {
             "event_type": "sync-success",
@@ -273,10 +276,10 @@ class DocumentLocatorMirrorTests(unittest.TestCase):
         workbook = self.mirror.ensure_locator_workbook(client, docid="backup-doc")
 
         self.assertEqual(
-            {"文档定位档案", "定位档案变更历史"},
+            {"文档定位档案", "定位档案变更历史", "同步表格清单"},
             set(workbook["sheets"]),
         )
-        self.assertEqual({"文档定位档案", "定位档案变更历史"}, set(client.added_sheets))
+        self.assertEqual({"文档定位档案", "定位档案变更历史", "同步表格清单"}, set(client.added_sheets))
         self.assertNotIn("企微A-最新结构", client.added_sheets)
         current_id = workbook["sheets"]["文档定位档案"]
         history_id = workbook["sheets"]["定位档案变更历史"]
@@ -343,6 +346,259 @@ class DocumentLocatorMirrorTests(unittest.TestCase):
             self.assertEqual(1, self.mirror.run_pending_document_locator_mirror_jobs(limit=10, force=True))
         self.assertEqual(81, failing.retried[0][0])
         self.assertNotIn("topsecret", failing.retried[0][1])
+
+
+class MirrorFieldContractTests(unittest.TestCase):
+    """定位档案必须逐字段可核验：分列语义 + 写入后回读。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._old_path = list(sys.path)
+        cls._old_app = {name: module for name, module in sys.modules.items() if name == "app" or name.startswith("app.")}
+        for name in cls._old_app:
+            sys.modules.pop(name, None)
+        sys.path.insert(0, str(WORKER))
+        cls.mirror = importlib.import_module("app.pipelines.document_locator_mirror")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        for name in tuple(sys.modules):
+            if name == "app" or name.startswith("app."):
+                sys.modules.pop(name, None)
+        sys.modules.update(cls._old_app)
+        sys.path[:] = cls._old_path
+
+    def _written_row(self, client, sheet_id):
+        rows = client.records.get(sheet_id, [])
+        self.assertEqual(1, len(rows))
+        return rows[0]["values"]
+
+    def test_api_doc_id_and_share_ref_are_separate_columns(self) -> None:
+        """s3_ 分享标识不得伪装成可调 API 的 docid，两者必须分列。"""
+        client = FakeMirrorClient()
+        workbook = self.mirror.ensure_locator_workbook(client, docid="backup-doc")
+        payload = mirror_payload()
+        payload["locator"]["api_doc_id"] = ""
+        payload["locator"]["share_ref"] = "s3_only_share"
+
+        self.mirror.write_locator_mirror(
+            client,
+            backup_docid="backup-doc",
+            sheet_ids=workbook["sheets"],
+            payload=payload,
+        )
+
+        values = self._written_row(client, workbook["sheets"][self.mirror.CURRENT_SHEET])
+        self.assertEqual("", values["API文档ID"][0]["text"], "只有分享标识时 API 文档 ID 必须为空")
+        self.assertEqual("s3_only_share", values["分享标识"][0]["text"])
+        self.assertEqual("s3_only_share", values["文档定位ID"][0]["text"])
+
+    def test_control_fields_reach_the_mirror(self) -> None:
+        """恢复同步所需的控制字段必须逐个落到镜像里。"""
+        client = FakeMirrorClient()
+        workbook = self.mirror.ensure_locator_workbook(client, docid="backup-doc")
+
+        self.mirror.write_locator_mirror(
+            client,
+            backup_docid="backup-doc",
+            sheet_ids=workbook["sheets"],
+            payload=mirror_payload(),
+        )
+
+        values = self._written_row(client, workbook["sheets"][self.mirror.CURRENT_SHEET])
+        self.assertEqual(VALID_DOCID, values["API文档ID"][0]["text"])
+        self.assertEqual("COMPANY_A#1", values["凭据引用"][0]["text"])
+        self.assertEqual("admin-one", values["管理员"][0]["text"])
+        self.assertEqual("88", values["关联来源ID"][0]["text"])
+        self.assertEqual("4", values["档案版本"][0]["text"])
+
+    def test_silently_dropped_cells_fail_the_job_instead_of_succeeding(self) -> None:
+        """企微吞掉写入时返回 errcode=0；只有回读能发现，且必须判定为失败。
+
+        这是 2026-08-14 堆出 43 条空行、旧结构备份堆出 1177 条空行的成因：
+        写入侧一路成功，没有任何一层去回读确认。
+        """
+        client = FakeMirrorClient()
+        workbook = self.mirror.ensure_locator_workbook(client, docid="backup-doc")
+        current_id = workbook["sheets"][self.mirror.CURRENT_SHEET]
+
+        original_add = client.add_records
+
+        def swallow(docid, sheet_id, records):
+            """模拟企微：照常返回成功，但把单元格值丢掉。"""
+            if sheet_id == current_id:
+                stripped = [{"values": {}} for _ in records]
+                return original_add(docid, sheet_id, stripped)
+            return original_add(docid, sheet_id, records)
+
+        client.add_records = swallow
+
+        with self.assertRaises(self.mirror.DocumentLocatorMirrorError) as caught:
+            self.mirror.write_locator_mirror(
+                client,
+                backup_docid="backup-doc",
+                sheet_ids=workbook["sheets"],
+                payload=mirror_payload(),
+            )
+        self.assertIn("回读校验失败", str(caught.exception))
+
+    def test_verification_error_does_not_leak_locator_values(self) -> None:
+        """回读失败的报错只能带字段名，docid 与分享标识不得进日志文本。"""
+        client = FakeMirrorClient()
+        workbook = self.mirror.ensure_locator_workbook(client, docid="backup-doc")
+        current_id = workbook["sheets"][self.mirror.CURRENT_SHEET]
+        original_add = client.add_records
+
+        def drop_one(docid, sheet_id, records):
+            if sheet_id == current_id:
+                trimmed = [
+                    {"values": {k: v for k, v in record["values"].items() if k != "凭据引用"}}
+                    for record in records
+                ]
+                return original_add(docid, sheet_id, trimmed)
+            return original_add(docid, sheet_id, records)
+
+        client.add_records = drop_one
+
+        with self.assertRaises(self.mirror.DocumentLocatorMirrorError) as caught:
+            self.mirror.write_locator_mirror(
+                client,
+                backup_docid="backup-doc",
+                sheet_ids=workbook["sheets"],
+                payload=mirror_payload(),
+            )
+        message = str(caught.exception)
+        self.assertIn("凭据引用", message)
+        self.assertNotIn(VALID_DOCID, message)
+
+
+def sheet_source(**overrides: Any) -> dict[str, Any]:
+    base = {
+        "id": 19,
+        "provider": "wecom",
+        "env_profile": "COMPANY_A",
+        "external_doc_id": VALID_DOCID,
+        "external_sheet_id": "SHEET7",
+        "document_name": "待处理产品记录",
+        "sheet_name": "待处理-记录表",
+        "source_type": "smartsheet_sheet",
+        "status": "active",
+        "last_sync_at": "2026-08-19T00:00:00Z",
+        "job_key": "wecom.doc.19",
+    }
+    base.update(overrides)
+    return base
+
+
+class SheetInventoryMirrorTests(unittest.TestCase):
+    """表级同步身份必须完整进镜像：只备份文档级等于丢掉 sheet_id 与 source_id。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._old_path = list(sys.path)
+        cls._old_app = {name: module for name, module in sys.modules.items() if name == "app" or name.startswith("app.")}
+        for name in cls._old_app:
+            sys.modules.pop(name, None)
+        sys.path.insert(0, str(WORKER))
+        cls.mirror = importlib.import_module("app.pipelines.document_locator_mirror")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        for name in tuple(sys.modules):
+            if name == "app" or name.startswith("app."):
+                sys.modules.pop(name, None)
+        sys.modules.update(cls._old_app)
+        sys.path[:] = cls._old_path
+
+    def _rows(self, client, workbook):
+        return client.records.get(workbook["sheets"][self.mirror.INVENTORY_SHEET], [])
+
+    def test_sheet_identity_quadruple_reaches_the_mirror(self) -> None:
+        client = FakeMirrorClient()
+        workbook = self.mirror.ensure_locator_workbook(client, docid="backup-doc")
+
+        result = self.mirror.write_sheet_inventory(
+            client,
+            backup_docid="backup-doc",
+            sheet_ids=workbook["sheets"],
+            sources=[sheet_source()],
+        )
+
+        self.assertEqual({"added": 1, "updated": 0, "total": 1}, result)
+        values = self._rows(client, workbook)[0]["values"]
+        self.assertEqual(VALID_DOCID, values["API文档ID"][0]["text"])
+        self.assertEqual("SHEET7", values["子表ID"][0]["text"])
+        self.assertEqual("19", values["来源ID"][0]["text"])
+        self.assertEqual("wecom.doc.19", values["作业键"][0]["text"])
+        self.assertEqual("source:19", values["唯一键"][0]["text"])
+
+    def test_disabled_sources_are_backed_up_with_their_status(self) -> None:
+        """停用不等于可以丢身份：将来要恢复同样需要它。"""
+        client = FakeMirrorClient()
+        workbook = self.mirror.ensure_locator_workbook(client, docid="backup-doc")
+
+        self.mirror.write_sheet_inventory(
+            client,
+            backup_docid="backup-doc",
+            sheet_ids=workbook["sheets"],
+            sources=[sheet_source(id=20, status="disabled", job_key="")],
+        )
+
+        values = self._rows(client, workbook)[0]["values"]
+        self.assertEqual("disabled", values["状态"][0]["text"])
+        self.assertEqual("SHEET7", values["子表ID"][0]["text"])
+
+    def test_unchanged_rows_are_not_rewritten(self) -> None:
+        client = FakeMirrorClient()
+        workbook = self.mirror.ensure_locator_workbook(client, docid="backup-doc")
+        args = {"backup_docid": "backup-doc", "sheet_ids": workbook["sheets"], "sources": [sheet_source()]}
+
+        self.mirror.write_sheet_inventory(client, **args)
+        second = self.mirror.write_sheet_inventory(client, **args)
+
+        self.assertEqual({"added": 0, "updated": 0, "total": 1}, second)
+        self.assertEqual(1, len(self._rows(client, workbook)), "同一来源不应重复插行")
+
+    def test_changed_sheet_id_updates_in_place(self) -> None:
+        client = FakeMirrorClient()
+        workbook = self.mirror.ensure_locator_workbook(client, docid="backup-doc")
+        self.mirror.write_sheet_inventory(
+            client, backup_docid="backup-doc", sheet_ids=workbook["sheets"], sources=[sheet_source()]
+        )
+
+        result = self.mirror.write_sheet_inventory(
+            client,
+            backup_docid="backup-doc",
+            sheet_ids=workbook["sheets"],
+            sources=[sheet_source(external_sheet_id="SHEET9")],
+        )
+
+        self.assertEqual({"added": 0, "updated": 1, "total": 1}, result)
+        rows = self._rows(client, workbook)
+        self.assertEqual(1, len(rows))
+        self.assertEqual("SHEET9", rows[0]["values"]["子表ID"][0]["text"])
+
+    def test_silently_dropped_inventory_cells_fail_the_refresh(self) -> None:
+        client = FakeMirrorClient()
+        workbook = self.mirror.ensure_locator_workbook(client, docid="backup-doc")
+        inventory_id = workbook["sheets"][self.mirror.INVENTORY_SHEET]
+        original_add = client.add_records
+
+        def swallow(docid, sheet_id, records):
+            if sheet_id == inventory_id:
+                return original_add(docid, sheet_id, [{"values": {}} for _ in records])
+            return original_add(docid, sheet_id, records)
+
+        client.add_records = swallow
+
+        with self.assertRaises(self.mirror.DocumentLocatorMirrorError) as caught:
+            self.mirror.write_sheet_inventory(
+                client,
+                backup_docid="backup-doc",
+                sheet_ids=workbook["sheets"],
+                sources=[sheet_source()],
+            )
+        self.assertIn("回读校验失败", str(caught.exception))
 
 
 if __name__ == "__main__":

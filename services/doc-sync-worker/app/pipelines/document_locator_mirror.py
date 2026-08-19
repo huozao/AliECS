@@ -18,11 +18,19 @@ from app.storage.postgres import _redact_locator_error, open_store
 
 CURRENT_SHEET = "文档定位档案"
 EVENT_SHEET = "定位档案变更历史"
+# ⚠️「API文档ID」与「分享标识」必须分列。合成一列（原来的「文档定位ID」写的是
+# api_doc_id or share_ref）会让人从镜像恢复时分不清哪个能调企微 API、哪个只是
+# 人工定位用的 s3_ 分享标识——设计文档专门要求「s3_ 不能伪装成有效 docid」。
+#「文档定位ID」保留继续写，只作人类速览；权威值以拆出的两列为准。
+# 生产表里已存在的列不会被删（_ensure_fields 只补不删），故用新增而非改名，
+# 避免留下不再更新的陈旧列。
 CURRENT_FIELDS = (
     "平台",
     "企业配置",
     "文档名称",
     "文档定位ID",
+    "API文档ID",
+    "分享标识",
     "来源链接",
     "管理员",
     "凭据引用",
@@ -34,12 +42,32 @@ CURRENT_FIELDS = (
     "可写",
     "可创建副本",
     "工作表数量",
+    "关联来源ID",
+    "档案版本",
     "登记时间",
     "最后验证时间",
     "最后同步时间",
     "最后更新时间",
     "唯一键",
     "最近错误",
+    "错误代码",
+)
+# 定位档案是文档级的；真正驱动同步的身份是表级四元组，sheet_id 与 source_id 只在这张表里。
+# 没有它，光凭备份无法回答「哪个作业读哪个文档的哪张子表」。
+INVENTORY_SHEET = "同步表格清单"
+INVENTORY_FIELDS = (
+    "平台",
+    "企业配置",
+    "文档名称",
+    "子表名称",
+    "API文档ID",
+    "子表ID",
+    "来源ID",
+    "作业键",
+    "来源类型",
+    "状态",
+    "最后同步时间",
+    "唯一键",
 )
 EVENT_FIELDS = (
     "事件时间",
@@ -82,7 +110,7 @@ def ensure_locator_workbook(client: Any, *, docid: str) -> dict[str, Any]:
         if sheet_id and title
     }
     created_titles: set[str] = set()
-    for index, title in enumerate((CURRENT_SHEET, EVENT_SHEET), start=1):
+    for index, title in enumerate((CURRENT_SHEET, EVENT_SHEET, INVENTORY_SHEET), start=1):
         if title not in existing:
             client.add_sheet(docid, title, index)
             created_titles.add(title)
@@ -95,7 +123,17 @@ def ensure_locator_workbook(client: Any, *, docid: str) -> dict[str, Any]:
             raise DocumentLocatorMirrorError(f"定位镜像工作表创建后未找到：{title}")
     _ensure_fields(client, docid, existing[CURRENT_SHEET], CURRENT_FIELDS, created=CURRENT_SHEET in created_titles)
     _ensure_fields(client, docid, existing[EVENT_SHEET], EVENT_FIELDS, created=EVENT_SHEET in created_titles)
-    return {"docid": docid, "sheets": {CURRENT_SHEET: existing[CURRENT_SHEET], EVENT_SHEET: existing[EVENT_SHEET]}}
+    _ensure_fields(
+        client, docid, existing[INVENTORY_SHEET], INVENTORY_FIELDS, created=INVENTORY_SHEET in created_titles
+    )
+    return {
+        "docid": docid,
+        "sheets": {
+            CURRENT_SHEET: existing[CURRENT_SHEET],
+            EVENT_SHEET: existing[EVENT_SHEET],
+            INVENTORY_SHEET: existing[INVENTORY_SHEET],
+        },
+    }
 
 
 def _text(value: Any) -> str:
@@ -120,6 +158,8 @@ def _current_values(locator: dict[str, Any]) -> dict[str, str]:
         "企业配置": _text(locator.get("env_profile")),
         "文档名称": _text(locator.get("document_name")),
         "文档定位ID": api_doc_id or share_ref,
+        "API文档ID": api_doc_id,
+        "分享标识": share_ref,
         "来源链接": _text(locator.get("source_url")),
         "管理员": "; ".join(str(item) for item in locator.get("admin_userids") or []),
         "凭据引用": _text(locator.get("credential_ref")),
@@ -131,12 +171,15 @@ def _current_values(locator: dict[str, Any]) -> dict[str, str]:
         "可写": _capability(locator, "write"),
         "可创建副本": _capability(locator, "copy"),
         "工作表数量": _text(locator.get("sheet_count")),
+        "关联来源ID": _text(locator.get("external_source_id") or ""),
+        "档案版本": _text(locator.get("locator_version")),
         "登记时间": _text(locator.get("registered_at")),
         "最后验证时间": _text(locator.get("last_verified_at")),
         "最后同步时间": _text(locator.get("last_sync_at")),
         "最后更新时间": _text(locator.get("updated_at")),
         "唯一键": f"locator:{int(locator['id'])}",
         "最近错误": _text(locator.get("last_error_summary")),
+        "错误代码": _text(locator.get("last_error_code")),
     }
 
 
@@ -171,6 +214,45 @@ def _cells(values: dict[str, str]) -> dict[str, list[dict[str, str]]]:
     return {title: [{"type": "text", "text": str(text or "")}] for title, text in values.items()}
 
 
+def _verify_written(
+    client: Any,
+    *,
+    backup_docid: str,
+    sheet_id: str,
+    key_title: str,
+    expected: dict[str, str],
+) -> None:
+    """写完立即回读比对，不一致就抛错。
+
+    企微在收到裸字符串单元格时照样返回 errcode=0，值却不落库——写入侧的返回码、
+    重试次数全部无效，**唯一有效判据是回读单元格文本**（见 docs/constraints/doc-sync.md）。
+    此前该判据只落在测试的 fake 上，生产运行时没有，于是 2026-08-14 堆出 43 条空行、
+    旧结构备份堆出 1177 条空行且全程标记成功。
+
+    只比对期望非空的字段：空值写入后读回同样是空，无法与"没写进去"区分。
+    异常信息只带字段名，不带值——docid 和分享标识不得进日志文本。
+    """
+    unique_key = expected.get("唯一键", "")
+    row = _record_index(client, backup_docid, sheet_id, key_title).get(unique_key)
+    if not row:
+        raise DocumentLocatorMirrorError(f"回读校验失败：写入后按{key_title}读不到该行。")
+    actual = row.get("title_values") or {}
+    missing = [title for title, value in expected.items() if str(value or "") and not actual.get(title, "")]
+    if missing:
+        raise DocumentLocatorMirrorError(
+            f"回读校验失败：{len(missing)} 个字段未落库，首个为「{missing[0]}」。"
+        )
+    mismatched = [
+        title
+        for title, value in expected.items()
+        if str(value or "") and actual.get(title, "") != str(value)
+    ]
+    if mismatched:
+        raise DocumentLocatorMirrorError(
+            f"回读校验失败：{len(mismatched)} 个字段值与写入不一致，首个为「{mismatched[0]}」。"
+        )
+
+
 def write_locator_mirror(
     client: Any,
     *,
@@ -191,6 +273,13 @@ def write_locator_mirror(
         )
     else:
         client.add_records(backup_docid, current_sheet_id, [{"values": _cells(current_values)}])
+    _verify_written(
+        client,
+        backup_docid=backup_docid,
+        sheet_id=current_sheet_id,
+        key_title="唯一键",
+        expected=current_values,
+    )
 
     event_added = False
     event_values = _event_values(payload)
@@ -199,8 +288,111 @@ def write_locator_mirror(
         event_index = _record_index(client, backup_docid, event_sheet_id, "唯一键")
         if event_values["唯一键"] not in event_index:
             client.add_records(backup_docid, event_sheet_id, [{"values": _cells(event_values)}])
+            _verify_written(
+                client,
+                backup_docid=backup_docid,
+                sheet_id=event_sheet_id,
+                key_title="唯一键",
+                expected=event_values,
+            )
             event_added = True
     return {"current_written": True, "event_added": event_added}
+
+
+def _inventory_values(source: dict[str, Any]) -> dict[str, str]:
+    return {
+        "平台": "企微" if source.get("provider") == "wecom" else "飞书",
+        "企业配置": _text(source.get("env_profile")),
+        "文档名称": _text(source.get("document_name")),
+        "子表名称": _text(source.get("sheet_name")),
+        "API文档ID": _text(source.get("external_doc_id")),
+        "子表ID": _text(source.get("external_sheet_id")),
+        "来源ID": _text(source.get("id")),
+        "作业键": _text(source.get("job_key")),
+        "来源类型": _text(source.get("source_type")),
+        "状态": _text(source.get("status")),
+        "最后同步时间": _text(source.get("last_sync_at")),
+        "唯一键": f"source:{int(source['id'])}",
+    }
+
+
+def write_sheet_inventory(
+    client: Any,
+    *,
+    backup_docid: str,
+    sheet_ids: dict[str, str],
+    sources: list[dict[str, Any]],
+) -> dict[str, int]:
+    """把表级同步身份整表刷进镜像。
+
+    只写有变化的行：93 个来源每轮全量重写会白白打满写配额，也让变更历史失去意义。
+    写完统一回读一次全表校验——判据同 write_locator_mirror，errcode 不作数。
+    """
+    inventory_sheet_id = sheet_ids[INVENTORY_SHEET]
+    existing = _record_index(client, backup_docid, inventory_sheet_id, "唯一键")
+    added = 0
+    updated = 0
+    touched: list[dict[str, str]] = []
+    for source in sources:
+        values = _inventory_values(source)
+        current = existing.get(values["唯一键"])
+        if current is None:
+            client.add_records(backup_docid, inventory_sheet_id, [{"values": _cells(values)}])
+            added += 1
+            touched.append(values)
+            continue
+        stored = current.get("title_values") or {}
+        if all(stored.get(title, "") == value for title, value in values.items()):
+            continue
+        record_id = str(current.get("record_id") or current.get("id") or "")
+        if not record_id:
+            raise DocumentLocatorMirrorError("同步表格清单当前行缺少 record_id。")
+        client.update_records(
+            backup_docid, inventory_sheet_id, [{"record_id": record_id, "values": _cells(values)}]
+        )
+        updated += 1
+        touched.append(values)
+
+    if touched:
+        verified = _record_index(client, backup_docid, inventory_sheet_id, "唯一键")
+        for values in touched:
+            row = verified.get(values["唯一键"])
+            if not row:
+                raise DocumentLocatorMirrorError("回读校验失败：同步表格清单写入后读不到该行。")
+            stored = row.get("title_values") or {}
+            missing = [t for t, v in values.items() if str(v or "") and not stored.get(t, "")]
+            if missing:
+                raise DocumentLocatorMirrorError(
+                    f"回读校验失败：同步表格清单 {len(missing)} 个字段未落库，首个为「{missing[0]}」。"
+                )
+    return {"added": added, "updated": updated, "total": len(sources)}
+
+
+def run_sheet_inventory_mirror(*, force: bool = False) -> int:
+    """刷新表级同步身份镜像。失败不得影响同步本身，只报非零退出码。"""
+    if not force and not structure_backup_enabled():
+        return 0
+    store = open_store()
+    try:
+        sources = store.list_sheet_level_sources()
+        if not sources:
+            return 0
+        client, workbook = _workbook_client()
+        result = write_sheet_inventory(
+            client,
+            backup_docid=str(workbook["docid"]),
+            sheet_ids=dict(workbook["sheets"]),
+            sources=sources,
+        )
+        print(
+            f"[同步表格清单] 共 {result['total']} 条，新增 {result['added']}，更新 {result['updated']}。"
+        )
+        return 0
+    except Exception as exc:  # noqa: BLE001 - 镜像失败不阻断同步，下一轮全量重试。
+        print(f"[同步表格清单] 刷新失败：{_redact_locator_error(str(exc))}")
+        return 1
+    finally:
+        store.close()
 
 
 def _workbook_client() -> tuple[WeComSmartsheetClient, dict[str, Any]]:

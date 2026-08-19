@@ -79,6 +79,15 @@
       <section class="band" aria-labelledby="timelineTitle">
         <h2 id="timelineTitle">全局运行时间线</h2>
         <div class="row" style="margin-bottom:12px">
+          <label>分类
+            <select id="timelineGroupFilter" aria-label="按分类筛选">
+              <option value="">全部</option>
+              <option value="tplus">T+ ERP</option>
+              <option value="wecom_company_a">企微 A</option>
+              <option value="wecom_company_b">企微 B</option>
+              <option value="feishu">飞书</option>
+            </select>
+          </label>
           <label>提供方
             <select id="providerFilter" aria-label="按提供方筛选">
               <option value="">全部</option>
@@ -136,6 +145,8 @@
 
     const freshnessLabels={fresh:'新鲜',warning:'即将过期',stale:'已过期',never:'从未成功',unmonitored:'未监控'};
     const triggerLabels={manual:'手动',schedule:'定时',event:'订阅变更',scheduled:'定时',webhook:'订阅变更',unknown:'未知'};
+    const groupLabels={tplus:'T+ ERP',wecom_company_a:'企微 A',wecom_company_b:'企微 B',feishu:'飞书'};
+    const groupLabel=(value)=>groupLabels[value]||value||'-';
 
     function statusChip(value){return chip(esc(value||'unknown'));}
     function showError(message){AliECSToast.show(message,'error');}
@@ -175,7 +186,7 @@
         const last=item.last_run||{};
         const artifact=item.artifact?`${esc(item.artifact.name)} · ${esc(fmtTime(item.artifact.mtime))}`:'-';
         const error=last.error_message?`<div class="muted">${esc(last.error_label)}：${esc(last.error_message)}</div>`:'';
-        return `<tr><td><strong>${esc(item.display_name)}</strong><div class="muted">${esc(item.job_key)}</div></td><td>${esc(item.source_group||'-')}</td><td>${esc(item.provider)}</td><td>${item.enabled?'启用':'停用'}</td><td>${freshnessChip(item.freshness&&item.freshness.state)}</td><td>${last.status?statusChip(last.status):'<span class="muted">无记录</span>'}<div class="muted">${esc(fmtTime(last.started_at))}</div>${error}</td><td>${esc(scheduleLabel(item.schedule))}</td><td>${artifact}</td><td>${esc(item.open_alert_count||0)}</td><td><button class="btn" type="button" ${state.controlBusy||!item.enabled?'disabled':''} onclick="runVisibleJob(${index},this)">立即运行</button></td></tr>`;
+        return `<tr><td><strong>${esc(item.display_name)}</strong><div class="muted">${esc(item.job_key)}</div></td><td>${esc(groupLabel(item.source_group))}</td><td>${esc(item.provider)}</td><td>${item.enabled?'启用':'停用'}</td><td>${freshnessChip(item.freshness&&item.freshness.state)}</td><td>${last.status?statusChip(last.status):'<span class="muted">无记录</span>'}<div class="muted">${esc(fmtTime(last.started_at))}</div>${error}</td><td>${esc(scheduleLabel(item.schedule))}</td><td>${artifact}</td><td>${esc(item.open_alert_count||0)}</td><td><button class="btn" type="button" ${state.controlBusy||!item.enabled?'disabled':''} onclick="runVisibleJob(${index},this)">立即运行</button></td></tr>`;
       }).join('');
       $('jobList').innerHTML=`<table><thead><tr><th>作业</th><th>分类</th><th>提供方</th><th>开关</th><th>新鲜度</th><th>最近运行</th><th>调度</th><th>当前产出物</th><th>告警</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="10" class="muted">当前筛选无同步作业。</td></tr>'}</tbody></table>`;
 
@@ -226,9 +237,9 @@
         const detailButton=Number.isSafeInteger(runId)&&runId>0
           ?`<button class="btn" type="button" onclick="openRunDetail(${runId})">查看详情</button>`
           :'<span class="muted">-</span>';
-        return `<tr><td><strong>${esc(item.display_name)}</strong><div class="muted">${esc(item.job_key)}</div></td><td>${esc(item.provider)}</td><td>${esc(triggerLabels[item.trigger]||item.trigger||'-')}</td><td>${statusChip(item.status)}${error}</td><td>${esc(fmtTime(item.started_at))}</td><td>${esc(durationLabel(item.duration_seconds))}</td><td>${esc(item.row_count??'-')}</td><td>${esc(item.changed_count??'-')}</td><td>${detailButton}</td></tr>`;
+        return `<tr><td><strong>${esc(item.display_name)}</strong><div class="muted">${esc(item.job_key)}</div></td><td>${esc(groupLabel(item.source_group))}</td><td>${esc(item.provider)}</td><td>${esc(triggerLabels[item.trigger]||item.trigger||'-')}</td><td>${statusChip(item.status)}${error}</td><td>${esc(fmtTime(item.started_at))}</td><td>${esc(durationLabel(item.duration_seconds))}</td><td>${esc(item.row_count??'-')}</td><td>${esc(item.changed_count??'-')}</td><td>${detailButton}</td></tr>`;
       }).join('');
-      $('timelineList').innerHTML=`<table><thead><tr><th>作业</th><th>提供方</th><th>触发</th><th>状态</th><th>开始时间</th><th>耗时</th><th>行数</th><th>变更</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="9" class="muted">当前筛选无运行记录。</td></tr>'}</tbody></table>`;
+      $('timelineList').innerHTML=`<table><thead><tr><th>作业</th><th>分类</th><th>提供方</th><th>触发</th><th>状态</th><th>开始时间</th><th>耗时</th><th>行数</th><th>变更</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="10" class="muted">当前筛选无运行记录。</td></tr>'}</tbody></table>`;
       renderTimelinePager(state.offset,state.timelineLoading);
     }
     function renderTimelinePager(offset=state.offset,loading=state.timelineLoading){
@@ -388,6 +399,7 @@
     async function loadTimeline(requestOffset=state.offset,generation=currentLoad()){
       const requestId=++state.timelineRequestId;
       const params=new URLSearchParams({limit:String(state.limit),offset:String(requestOffset)});
+      if($('timelineGroupFilter').value)params.set('group',$('timelineGroupFilter').value);
       if($('providerFilter').value)params.set('provider',$('providerFilter').value);
       if($('statusFilter').value)params.set('status',$('statusFilter').value);
       if($('jobFilter').value)params.set('job_key',$('jobFilter').value);
@@ -466,6 +478,7 @@
     }
     function reloadTimelineFromStart(){loadTimeline(0).catch((error)=>AliECSToast.show(`时间线加载失败：${error.message}`,'error'));}
 
+    $('timelineGroupFilter').onchange=reloadTimelineFromStart;
     $('providerFilter').onchange=reloadTimelineFromStart;
     $('statusFilter').onchange=reloadTimelineFromStart;
     $('jobFilter').onchange=reloadTimelineFromStart;

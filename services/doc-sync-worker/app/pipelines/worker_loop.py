@@ -9,7 +9,10 @@ from typing import Any
 
 from app.pipelines.backfill_smartsheet_images import run_backfill_images
 from app.pipelines.document_locator import reconcile_document_locators
-from app.pipelines.document_locator_mirror import run_pending_document_locator_mirror_jobs
+from app.pipelines.document_locator_mirror import (
+    run_pending_document_locator_mirror_jobs,
+    run_sheet_inventory_mirror,
+)
 from app.pipelines.group_message_listener import resolve_groupbot_profile, run_group_listener
 from app.pipelines.rnd_record_writer import run_write_rnd_records
 from app.pipelines.sync_feishu_full import run_sync_feishu_full
@@ -197,6 +200,12 @@ def run_worker_loop(
             run_pending_document_locator_mirror_jobs(limit=1000)
         except Exception as exc:  # noqa: BLE001 - durable locator jobs retry independently.
             print(f"[文档同步循环] 文档定位档案镜像异常：{type(exc).__name__}")
+        # 放在定位档案之后：表级来源刚随全量同步增删完，此时刷出来的身份才是最新的。
+        # 新子表被发现不会产生文档级 locator 事件，所以这一步必须独立于 mirror job。
+        try:
+            run_sheet_inventory_mirror()
+        except Exception as exc:  # noqa: BLE001 - 清单镜像不得拖垮同步周期。
+            print(f"[文档同步循环] 同步表格清单镜像异常：{type(exc).__name__}")
         # 放在全量同步之后：核对要读刚同步下来的 T+ BOM 与表格最新内容。
         try:
             run_tplus_parent_match(trigger="schedule")

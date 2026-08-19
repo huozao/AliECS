@@ -295,7 +295,7 @@ class DocumentLocatorBackendTests(unittest.TestCase):
     def test_provider_reports_new_docid_immediately_after_create(self) -> None:
         client = mock.Mock()
         client.get_sheets.return_value = [{"sheet_id": "source-sheet"}]
-        client.create_doc.return_value = VALID_DOCID
+        client.create_doc.return_value = {"docid": VALID_DOCID, "url": ""}
         created = mock.Mock(side_effect=RuntimeError("stop after identity persistence"))
 
         with mock.patch.object(wecom_docs, "credentials_for_profile", return_value=("corp", "secret")), mock.patch.object(
@@ -307,6 +307,21 @@ class DocumentLocatorBackendTests(unittest.TestCase):
         created.assert_called_once_with(VALID_DOCID, f"https://doc.weixin.qq.com/smartsheet/{VALID_DOCID}")
         client.create_doc.assert_called_once_with("副本", ["admin"])
         client.get_sheets.assert_called_once_with(VALID_DOCID)
+
+    def test_create_response_url_wins_over_the_guessed_one(self) -> None:
+        """创建应答带链接时以应答为准；拼接值只是应答缺失时的兜底。"""
+        client = mock.Mock()
+        client.get_sheets.return_value = [{"sheet_id": "source-sheet"}]
+        client.create_doc.return_value = {"docid": VALID_DOCID, "url": "https://doc.weixin.qq.com/authoritative"}
+        created = mock.Mock(side_effect=RuntimeError("stop after identity persistence"))
+
+        with mock.patch.object(wecom_docs, "credentials_for_profile", return_value=("corp", "secret")), mock.patch.object(
+            wecom_docs, "doc_admin_users", return_value=["admin"]
+        ), mock.patch.object(wecom_docs, "WeComDocClient", return_value=client):
+            with self.assertRaisesRegex(RuntimeError, "identity persistence"):
+                wecom_docs.copy_smartsheet_doc("COMPANY_A", VALID_DOCID, "副本", on_created=created)
+
+        created.assert_called_once_with(VALID_DOCID, "https://doc.weixin.qq.com/authoritative")
 
     def test_copy_rejects_locator_without_verified_read_permission(self) -> None:
         lookup = QueueConnection([
