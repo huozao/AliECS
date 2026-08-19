@@ -449,8 +449,7 @@ def run_detail(conn, run_id: int, *, now=None) -> dict[str, Any] | None:
         cur.execute(
             f"""
             SELECT {_RUN_COLUMNS}
-            FROM sync_job_runs r
-            JOIN sync_jobs j ON j.id = r.job_id
+            {_RUN_JOINS}
             WHERE r.id = %s
             """,
             (run_id,),

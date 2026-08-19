@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -607,6 +608,28 @@ class RunDetailReadTests(SyncReadTestCase):
         super().setUp()
         if not hasattr(sync_read, "run_detail"):
             self.fail("sync_read.run_detail is not implemented")
+
+    def test_every_run_columns_query_joins_the_source_table(self):
+        """凡是 SELECT _RUN_COLUMNS 的地方都必须带 external_sources 的 join。
+
+        _RUN_COLUMNS 里有 source.env_profile（时间线的「分类」靠它），漏掉 join 的那条
+        查询会在真库上直接 UndefinedTable。假连接不执行 SQL，所以只能靠结构断言兜住——
+        2026-08-19 就是 run_detail 漏了 join，单元测试全绿、集成测试才炸。
+        """
+        self.assertIn("source.env_profile", sync_read._RUN_COLUMNS)
+        self.assertIn("LEFT JOIN external_sources source", sync_read._RUN_JOINS)
+        lines = Path(sync_read.__file__).read_text(encoding="utf-8").splitlines()
+        checked = 0
+        for index, line in enumerate(lines):
+            if "SELECT {_RUN_COLUMNS}" not in line:
+                continue
+            checked += 1
+            self.assertEqual(
+                "{_RUN_JOINS}",
+                lines[index + 1].strip(),
+                f"第 {index + 1} 行的查询用了 _RUN_COLUMNS 却自己写 FROM",
+            )
+        self.assertTrue(checked, "没找到任何 _RUN_COLUMNS 查询")
 
     def test_run_detail_orders_steps_labels_error_and_computes_durations(self):
         steps = [
