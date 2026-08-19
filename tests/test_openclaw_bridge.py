@@ -4844,3 +4844,33 @@ def test_bridge_does_not_retry_errors_that_already_reached_chatgpt(monkeypatch):
 
     assert "GENERATION_FAILED" in reply
     assert not any(url.startswith("http://127.0.0.1:11811/") for url in urls), urls
+
+
+def test_gated_reply_goes_out_as_openclaw_silent_token_not_empty_text():
+    """2026-08-18 群里的空白气泡：「仅@回复」把没有 @ 的消息挡在 ChatGPT 之前是对的，
+    但我们回了 content=""，OpenClaw 照样投递（dispatch complete … replies=1），群里就
+    多出一条空泡。OpenClaw 认的是它自己的静默令牌，回这个才真的不发。"""
+    bridge = load_bridge()
+    events: list[bytes] = []
+
+    def write(data: bytes) -> bool:
+        events.append(data)
+        return True
+
+    bridge.stream_sse(write, {"messages": []}, "m", reply_fn=lambda body: bridge.NO_REPLY, keepalive=5)
+
+    payloads, saw_done = _parse_sse(events)
+    assert saw_done
+    contents = [p["choices"][0]["delta"].get("content") for p in payloads]
+    assert bridge.OPENCLAW_SILENT_REPLY_TOKEN in [c for c in contents if c]
+    # 内部哨兵永远不上线
+    assert bridge.NO_REPLY not in [c for c in contents if c]
+    assert any(p["choices"][0]["finish_reason"] == "stop" for p in payloads)
+
+
+def test_silent_token_is_the_literal_openclaw_expects():
+    """OpenClaw dist/tokens-*.js: SILENT_REPLY_TOKEN = "NO_REPLY"，精确匹配才静默。
+    改这个常量等于让所有被门控的消息把令牌本身发进群。"""
+    bridge = load_bridge()
+    assert bridge.OPENCLAW_SILENT_REPLY_TOKEN == "NO_REPLY"
+    assert bridge.OPENCLAW_SILENT_REPLY_TOKEN != bridge.NO_REPLY

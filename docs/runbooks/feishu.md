@@ -37,6 +37,8 @@
 | 回复图片变成链接 | bridge 环境变量 FEISHU_APP_ID/SECRET 是否在 | 缺凭据静默退 fallback；补后必须 force-recreate（restart 不重读 env_file） |
 | 图改图只回"Edit"/文件名 | imagegen_pending 窗口、预览层兜底、copy 按钮信号 | 07-18 已修（webdock 6550a70+c1bd76a+c9bf9a5）；08-14 因 08-12 的协议快通道绕过 scaffold 闸门而回归，已二修，详见 `webdock/docs/runbooks/browser.md`「图改图的完成判据只有一个能信」 |
 | 用户 @ 机器人的文本被一起发进了 ChatGPT | 存档 inbound 末尾是否残留 `@<机器人名>`；bridge 是否收到 `raw_metadata.mentions` | 旧实现只剥**开头**的 mention（`^\s*@\S+`），而用户习惯把 @ 放在正文末尾，08-17 实测原样穿透。已改为位置无关：helper 行里的 `If user_id is "ou_x"` 给出机器人自己的 id，`<at user_id=...>` 按 id 精确剥；明文 `@名字` 取自事件 `mentions` 的 name，**因此机器人改名（如改成 ChatGPT）不需要改代码**。拿不到 mentions 时只剥独占一行或首尾的 @，句中的 @同事 一律保留 |
+| 群里冒出空白气泡（没人 @ 也冒） | bridge trace 该条是不是 `result:"empty"`、`reply_len:0`；OpenClaw 日志同刻是不是 `dispatch complete … replies=1` | 「仅@回复」把消息挡下是对的，错在**回了 content=""，OpenClaw 照样投递**（08-18 实测）。08-18 起改为回 OpenClaw 自己的静默令牌 `NO_REPLY`（`OPENCLAW_SILENT_REPLY_TOKEN`，群聊默认 `silentReply: allow` 才生效）。⚠️ 这个字面量必须和 OpenClaw 的 `SILENT_REPLY_TOKEN` 一字不差，写错就是把令牌本身发进群 |
+| 设了「仅@回复」，某条明明 @ 了却没反应 | 消息日志表该条的「是否 @ 机器人」「原始事件 JSON」有没有 `was_mentioned` | **手打或粘贴出来的「@某某」不是 @**（08-18 实测）：只有用 @ 选择器选出来的才带 mention 元数据（事件里有 `was_mentioned`，且 @ 文本会被剥掉）；明文 @ 在飞书眼里就是普通文字，判「未@机器人」是判对的，不是 bug |
 | 串频道/消息进错项目 | bridge channel 识别、`feishu_projects.json`、Sender 信封剥离 | 06-15 已修（PR#118/#119）；真实 metadata 是 `peer_id:"user:ou_…"` 无 channel 字段 |
 | 全链路每条都失败、bridge `chain_result` 全是 `http_500` 且十几秒就返回 | WebDock `api.log` 是否 `TargetClosedError`；容器内 Chrome 启动时间是否晚于 api 进程（`ps -eo pid,lstart,args`） | Chrome 被重启后 api 仍抓着死句柄，`started` 只判 `_page is not None` 导致永不重连；07-25 已修（webdock `29c163c`，`started` 加 `is_connected()` 校验）。应急：容器内 `POST /browser/detach` 再 `/browser/attach`，CDP 模式不会关 Chrome、不碰登录态 |
 | supervisord 报 `exited: chrome (exit status 0; expected)`，Chrome 无故重启 | 前一条请求是否卡满 310s 硬顶触发车道重建（`api.log` 找 `RESPONSE_TIMEOUT ... lane reset`） | 车道重建先关旧 tab 再开新 tab，关掉的是最后一个窗口 → Chrome 干净自退，随后 `new_page` 报 `Failed to open a new tab`；07-25 已修（webdock `08c4550` 改为先开新 tab） |
@@ -82,6 +84,7 @@ ssh webdock2 "wsl -d Ubuntu-24.04-WebDock -- docker ps"  # WebDock 容器状态
 - **WebDock 生命周期阶段与轮播提示是同一张卡、同一个 patch 源**。阶段文案由 `set_placeholder_status` 写进轮播状态，顶替基础占位文案坐第一格，提示文案照常轮换：用户既看得到「ChatGPT 页面正在处理」，也看得到「/新对话」「勿重复提问」和等待秒数。⚠️ 阶段回调**不能**自己调 `feishu_patch_card`——非轮播 patch 会触发终局保护掐停轮播，而第一个 phase（`queued`）在提交那一刻就到，等于占位卡刚发出去提示就全灭（08-12 `#301` 引入，08-14 修）。只有这条消息没有轮播（轮播关闭或提示文案为空）时才退回自己 patch。
 
 <!-- 本文点名的符号，改名时本文必须同批更新；校验器会拦 -->
+<!-- nav-check-python: deploy/openclaw-bridge/openclaw_bridge.py:OPENCLAW_SILENT_REPLY_TOKEN -->
 <!-- nav-check-python: deploy/openclaw-bridge/openclaw_bridge.py:FEISHU_BITABLE_LIST_CACHE_SECONDS -->
 <!-- nav-check-python: deploy/openclaw-bridge/openclaw_bridge.py:FEISHU_BITABLE_RECONCILE_AT -->
 <!-- nav-check-python: deploy/openclaw-bridge/openclaw_bridge.py:FEISHU_BITABLE_SNAPSHOT_REFRESH_SECONDS -->

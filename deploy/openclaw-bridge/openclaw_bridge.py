@@ -36,6 +36,15 @@ def log_line(message: str) -> None:
 
 FALLBACK_MESSAGE = os.getenv("WEB_DOCK_FALLBACK_MESSAGE", "ChatGPT 浏览器暂不可用，请稍后再试。")
 NO_REPLY = "__OPENCLAW_BRIDGE_NO_REPLY__"
+# What we must put on the wire when NO_REPLY reaches the HTTP layer. Returning an
+# empty assistant message does NOT keep OpenClaw quiet: 2026-08-18 a group message
+# from a non-mentioning member was gated here, we answered with content="", and
+# OpenClaw still delivered it (`dispatch complete … replies=1`) — the group saw a
+# blank bubble. OpenClaw's own silent-reply token is the literal string below
+# (`dist/tokens-*.js: SILENT_REPLY_TOKEN`); a reply equal to it is dropped instead
+# of delivered, and group chats default to `silentReply: allow`. Not to be confused
+# with NO_REPLY above, which is our internal sentinel and never goes on the wire.
+OPENCLAW_SILENT_REPLY_TOKEN = "NO_REPLY"
 OPENCLAW_METADATA_PREFIX_RE = re.compile(
     r"^(?:\[[^\]\n]*(?:UTC|GMT(?:[+-]\d{1,2}(?::\d{2})?)?)[^\]\n]*\]\s*)?"
     r"(?:Conversation info|Sender) \(untrusted metadata\):\s*",
@@ -4400,6 +4409,9 @@ def stream_sse(
 
     reply = result.get("reply")
     if reply == NO_REPLY:
+        # Emit the silent token rather than nothing: an empty stream still ends up
+        # delivered as a blank bubble (see OPENCLAW_SILENT_REPLY_TOKEN).
+        write(_stream_chunk(model, delta={"content": OPENCLAW_SILENT_REPLY_TOKEN}, finish_reason=None))
         write(_stream_chunk(model, delta={}, finish_reason="stop"))
         write(b"data: [DONE]\n\n")
         return
@@ -4527,7 +4539,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._stream_reply(body, model)
 
         reply = build_reply(body)
-        content = "" if reply == NO_REPLY else reply
+        content = OPENCLAW_SILENT_REPLY_TOKEN if reply == NO_REPLY else reply
         return self._json(
             200,
             {
