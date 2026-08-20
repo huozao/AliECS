@@ -227,9 +227,14 @@ class BackendExportsTests(unittest.TestCase):
                         {"read": "verified", "write": "unknown", "copy": "allowed"}, 3,
                         "2026-08-13", "2026-08-14", "2026-08-14", "2026-08-14", "wecom-timeout",
                     )]
+                if self.query_index == 2:
+                    return [(
+                        "2026-08-14", "生产表", "sync-success", "worker", ["last_sync_at"],
+                        {"syncability_status": "verified"}, 41,
+                    )]
                 return [(
-                    "2026-08-14", "生产表", "sync-success", "worker", ["last_sync_at"],
-                    {"syncability_status": "verified"}, 41,
+                    77, "wecom", "COMPANY_A", "dc-synthetic", "sheet-9", "生产表", "明细",
+                    "smartsheet_sheet", "disabled", "2026-08-14", "wecom.doc.77",
                 )]
 
         workbook = Workbook()
@@ -238,7 +243,7 @@ class BackendExportsTests(unittest.TestCase):
 
         self.main._append_locator_archive_worksheets(workbook, cursor)
 
-        self.assertEqual(["文档定位档案", "定位档案变更历史"], workbook.sheetnames)
+        self.assertEqual(["文档定位档案", "定位档案变更历史", "同步表格清单"], workbook.sheetnames)
         self.assertEqual(list(self.main._LOCATOR_CURRENT_FIELDS), [cell.value for cell in workbook["文档定位档案"][1]])
         self.assertEqual(list(self.main._LOCATOR_EVENT_FIELDS), [cell.value for cell in workbook["定位档案变更历史"][1]])
         self.assertEqual("dc-synthetic", workbook["文档定位档案"]["D2"].value)
@@ -247,6 +252,15 @@ class BackendExportsTests(unittest.TestCase):
         self.assertEqual("企微同步验证失败", workbook["文档定位档案"]["K2"].value)
         self.assertEqual("wecom-timeout", workbook["文档定位档案"]["U2"].value)
         self.assertEqual("locator:41", workbook["定位档案变更历史"]["G2"].value)
+        # 表级身份（子表ID / 来源ID / 作业键）只在这张表里；缺了它，备份回答不了
+        # 「哪个作业读哪个文档的哪张子表」。停用行同样要导出：停用不等于可以丢身份。
+        self.assertEqual(list(self.main._LOCATOR_INVENTORY_FIELDS), [cell.value for cell in workbook["同步表格清单"][1]])
+        inventory = [cell.value for cell in workbook["同步表格清单"][2]]
+        self.assertEqual(
+            ["企微", "COMPANY_A", "生产表", "明细", "dc-synthetic", "sheet-9", 77,
+             "wecom.doc.77", "smartsheet_sheet", "disabled", "2026-08-14", "source:77"],
+            inventory,
+        )
 
     def test_match_export_files_buckets_to_first_run_at_or_after_file_time(self):
         from app.routers.exports import _match_export_files_to_runs

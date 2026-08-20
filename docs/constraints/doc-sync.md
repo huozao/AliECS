@@ -89,6 +89,55 @@ docker compose -f local/docker-compose.local.yml config
 - **`add_fields` 是插在首列之后，不是追加到末尾**，所以 `_initialize_sheet_fields` 每批要
   `reversed`，**批与批之间也要 reversed**。字段数 ≤21 时只有一批、错位不显形，定位档案
   2026-08-19 加到 26 列才暴露。改字段契约时留意这个批次边界。
+## 结构备份文档的实际内容与下载口径（2026-08-20）
+
+`WECOM_STRUCTURE_BACKUP_DOCID` 指向的「企微智能表格结构备份」文档，现存子表**只有三张**，
+全部是定位档案镜像：`文档定位档案`、`定位档案变更历史`、`同步表格清单`。
+⚠️ 08-19 条目里提到的四张旧结构备份表（企微A/企微B/飞书-最新结构、结构变更历史）
+**已不在该文档中**；`external_sources` 里对应的 1642-1645 四行是陈旧残留，
+2026-08-20 已置 `disabled`。资产页「表数」曾因此显示 4，实际是 3。
+
+- **下载走 DB 实时生成，不读企微文档**（`exports.py` 的 `_append_locator_archive_worksheets`）。
+  所以"下载到的不是最新的"有两层原因要分开看：一是 registry 内容取决于上一轮全量
+  （每天一次，跳过 `modify_time` 未变的文档），二是导出端可能没跟上镜像端新增的表。
+- **镜像写几张表，导出就必须出几张表**。08-19 加了「同步表格清单」，导出端漏跟，
+  129 行表级身份从未进入下载文件，直到 08-20 才补齐。改 `INVENTORY_FIELDS` 或新增镜像表时，
+  `_LOCATOR_INVENTORY_FIELDS` 与那段 SQL 必须同步改——两边各写一套列，
+  从备份恢复时就不知道该信哪份。
+- 系统管理资产的「表数」在页面上显示为「—」：它的子表不由同步管道维护，
+  显示同步表数只会误导。
+
+## lifecycle_status 是派生值，"放弃一个失联文档"必须改来源（2026-08-20）
+
+`document_locator_registry.lifecycle_status` 不是可以直接写的字段，每轮 reconcile 都由
+`document_locator.py` 的 `locator_from_source()` 从 `external_sources` 重新算出来。
+直接 UPDATE registry 会被下一轮刷回去。
+
+判定顺序也踩过一次：原来写的是 `unresolved if not resolved else (active if active else disabled)`，
+即"未解析"优先。于是把失联来源置 `disabled` 也会被算回 `unresolved`，
+人工放弃动作永远落不了地，资产页也永远清不掉那一行。
+2026-08-20 起改为**停用优先**：`disabled if not active else (active if resolved else unresolved)`。
+
+放弃一个失联文档的正确动作：把 `external_sources` 对应行 `status` 置 `disabled`，
+等下一轮 reconcile 把 registry 刷成 `disabled`，`ASSET_SQL` 的
+`lifecycle_status IN ('active','unresolved')` 自然把它过滤掉。**档案行本身保留**——
+分享链接和历史还查得到，人工迁移内容时还用得上。
+
+## 同步资产 = 文档级视图（2026-08-20 合并作业总览）
+
+同步的真实粒度就是文档：`_sync_doc()` 先比 `modify_time`，没变整簿跳过，变了才遍历全部子表。
+所以页面按文档展示，原「作业总览」已并入「同步资产」。两条判据别再改回去：
+
+- **聚合键是 `doc_source_id`（后端 `_OVERVIEW_SQL` 新增列），不是文档名**。文档一改名，
+  按名字聚合就会错配到别的行。
+- **孤儿作业的判据是「没有任何资产认领它」，不是写死的 job_key 名单**。名单会随新增系统任务
+  悄悄失效，作业从所有分组里一起消失。没被认领的作业进「系统任务」分组。
+
+表级明细默认不展示，**只在该文档有 failed/partial 或未解决告警时自动展开**，且只列问题表。
+这一层不能省：`_sync_doc` 的 sheet 级容错让单表失败不拖垮同文档其余表，
+失败的表又因为整簿跳过而长期不重试——`产量统计 / 公开的生产记录表` 从 08-13 挂到 08-20，
+告警通知了 27 次，文档级视图里只是一个「告警 1」。
+
 ## 相关背景（运行现状）
 
 - 生产唯一实例运行在 txecs 的 `business-cn-doc-sync-worker-1`；aliecs 旧实例保持停止。

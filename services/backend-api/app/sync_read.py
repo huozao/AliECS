@@ -102,9 +102,22 @@ SELECT
     COALESCE(alerts.open_alert_count, 0),
     source.env_profile,
     source.document_name,
-    source.sheet_name
+    source.sheet_name,
+    doc.id
 FROM sync_jobs j
 LEFT JOIN external_sources source ON source.id = j.source_id
+-- 文档级聚合键：作业挂在表级来源上，资产视图按文档展示，两者靠文档级来源行对齐。
+-- 只取 id，docid 本身不出 SELECT。
+LEFT JOIN LATERAL (
+    SELECT d.id
+    FROM external_sources d
+    WHERE d.provider = source.provider
+      AND d.env_profile = source.env_profile
+      AND d.external_doc_id = source.external_doc_id
+      AND d.external_sheet_id = ''
+    ORDER BY d.id
+    LIMIT 1
+) doc ON TRUE
 LEFT JOIN LATERAL (
     SELECT id, trigger, status, started_at, finished_at, row_count, changed_count,
            error_kind, error_message, detail_json, legacy_ref
@@ -202,6 +215,7 @@ def overview(conn, *, now=None) -> dict[str, Any]:
                 "env_profile": row[23],
                 "document_name": row[24],
                 "sheet_name": row[25],
+                "doc_source_id": row[26],
                 "last_run": last_run,
                 "last_success_at": row[21],
                 "freshness": freshness,

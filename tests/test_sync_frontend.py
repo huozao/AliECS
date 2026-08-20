@@ -23,7 +23,7 @@ class SyncFrontendTests(unittest.TestCase):
     def test_has_summary_jobs_timeline_drawer_and_alert_layers(self) -> None:
         for dom_id in (
             "syncSummary",
-            "jobList",
+            "assetList",
             "timelineList",
             "timelinePager",
             "runDrawer",
@@ -83,9 +83,10 @@ class SyncFrontendTests(unittest.TestCase):
         self.assertIn(".get('group')", self.html)
 
     def test_jobs_and_assets_have_grouped_filters(self) -> None:
+        # 作业总览已并入同步资产：筛选器挂在资产上，不再有独立的作业筛选区。
         for dom_id in (
-            "jobGroupFilter", "jobProviderFilter", "jobStatusFilter", "jobFreshnessFilter",
-            "jobSearchFilter", "assetTabs", "assetList", "runAllBtn",
+            "assetStatusFilter", "assetFreshnessFilter", "assetSearchFilter",
+            "assetTabs", "assetList", "runAllBtn",
             "docConfigCard", "tplusConfigCard",
         ):
             self.assertIn(f'id="{dom_id}"', self.html)
@@ -186,6 +187,81 @@ class SyncFrontendTests(unittest.TestCase):
             )
         )
 
+    def test_jobs_roll_up_into_document_rows_by_doc_source_id(self) -> None:
+        """作业按文档级 source id 聚合，不按文档名——文档改名不能让作业错配到别的行。"""
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                vm.runInContext(`state.overview={summary:{},items:[
+                  {job_key:'wecom.doc.19',provider:'wecom',display_name:'A/表1',enabled:true,source_id:19,
+                   doc_source_id:5,source_group:'wecom_company_a',document_name:'改名前',sheet_name:'表1',
+                   last_run:{status:'success',started_at:'2026-08-19T08:00:00Z'},freshness:{state:'fresh'},open_alert_count:0},
+                  {job_key:'wecom.doc.20',provider:'wecom',display_name:'A/表2',enabled:true,source_id:20,
+                   doc_source_id:5,source_group:'wecom_company_a',document_name:'改名前',sheet_name:'表2',
+                   last_run:{status:'success',started_at:'2026-08-19T09:00:00Z'},freshness:{state:'stale'},open_alert_count:0}
+                ]};
+                state.assets=[{key:'wecom_company_a',title:'企微A',items:[{
+                  name:'改名后',source_id:5,sheets:2,jobs:2,updated_at:null,
+                  can_download:false,can_sync:true,can_copy:false,system_managed:false,reason:''
+                }]}];state.activeAssetGroup='wecom_company_a';renderAssets()`,context);
+                const rendered=elements.assetList.innerHTML;
+                if(!rendered.includes('改名后'))throw new Error('document row missing');
+                // 新鲜度取最差的一档，否则一张过期的表会被其余新鲜的表盖掉。
+                if(!rendered.includes('已过期'))throw new Error('worst freshness not rolled up');
+                // 全部成功时不展开表级明细。
+                if(rendered.includes('需要处理的表'))throw new Error('healthy document expanded sheet detail');
+                if(rendered.includes('wecom.doc.19'))throw new Error('healthy document leaked job rows');
+                """
+            )
+        )
+
+    def test_failed_sheet_auto_expands_under_its_document(self) -> None:
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                vm.runInContext(`state.overview={summary:{},items:[
+                  {job_key:'wecom.doc.1',provider:'wecom',display_name:'产量统计/正常表',enabled:true,source_id:1,
+                   doc_source_id:10,source_group:'wecom_company_a',document_name:'产量统计',sheet_name:'正常表',
+                   last_run:{status:'success',started_at:'2026-08-19T08:00:00Z'},freshness:{state:'fresh'},open_alert_count:0},
+                  {job_key:'wecom.doc.2',provider:'wecom',display_name:'产量统计/公开的生产记录表',enabled:true,source_id:2,
+                   doc_source_id:10,source_group:'wecom_company_a',document_name:'产量统计',sheet_name:'公开的生产记录表',
+                   last_run:{status:'partial',started_at:'2026-08-13T16:01:04Z',error_label:'未知错误',error_message:'sync failure'},
+                   freshness:{state:'stale'},open_alert_count:1}
+                ]};
+                state.assets=[{key:'wecom_company_a',title:'企微A',items:[{
+                  name:'产量统计',source_id:10,sheets:2,jobs:2,updated_at:null,
+                  can_download:false,can_sync:true,can_copy:false,system_managed:false,reason:''
+                }]}];state.activeAssetGroup='wecom_company_a';renderAssets()`,context);
+                const rendered=elements.assetList.innerHTML;
+                if(!rendered.includes('需要处理的表'))throw new Error('problem sheets not expanded');
+                if(!rendered.includes('公开的生产记录表'))throw new Error('failing sheet name missing');
+                if(!rendered.includes('sync failure'))throw new Error('failure reason missing');
+                // 只列出问题表，正常表不跟着展开。
+                if(rendered.includes('正常表'))throw new Error('healthy sheet listed in problem detail');
+                if(!rendered.includes('重试这张表'))throw new Error('sheet-level retry action missing');
+                // 文档级状态取最坏的一档。
+                if(!rendered.includes('partial'))throw new Error('document status not degraded by failing sheet');
+                """
+            )
+        )
+
+    def test_jobs_without_document_land_in_system_group(self) -> None:
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                vm.runInContext(`state.overview={summary:{},items:[
+                  {job_key:'wecom.locator_mirror',provider:'wecom',display_name:'定位档案镜像',enabled:true,
+                   source_id:null,doc_source_id:null,source_group:'wecom_',document_name:null,sheet_name:null,
+                   last_run:null,freshness:{state:'unmonitored'},open_alert_count:0}
+                ]};
+                state.assets=[{key:'wecom_company_a',title:'企微A',items:[]}];
+                state.activeAssetGroup='system';renderAssets()`,context);
+                if(!elements.assetTabs.innerHTML.includes('系统任务'))throw new Error('system group tab missing');
+                if(!elements.assetList.innerHTML.includes('定位档案镜像'))throw new Error('orphan job dropped from every group');
+                """
+            )
+        )
+
     def test_system_asset_renders_download_without_sync_or_copy(self) -> None:
         self._run_timeline_probe(
             textwrap.dedent(
@@ -203,7 +279,7 @@ class SyncFrontendTests(unittest.TestCase):
         )
 
     def test_dynamic_job_keys_never_enter_inline_handlers(self) -> None:
-        self.assertIn("function runVisibleJob(", self.html)
+        self.assertIn("function runProblemJob(", self.html)
         self.assertIn("function runVisibleAsset(", self.html)
         self.assertNotIn("onclick=\"runJob('${esc(item.job_key)}'", self.html)
 
@@ -233,8 +309,8 @@ class SyncFrontendTests(unittest.TestCase):
                   toggle(name){classes.has(name)?classes.delete(name):classes.add(name);},
                   contains(name){return classes.has(name);}},onclick:null,onchange:null});
             }
-            const ids=['providerFilter','statusFilter','jobFilter','jobGroupFilter','jobProviderFilter','jobStatusFilter','jobFreshnessFilter','jobSearchFilter','timelinePrevBtn','timelineNextBtn',
-              'timelinePageInfo','timelineList','syncSummary','jobList','alertList','refreshBtn','loginBtn','logoutBtn',
+            const ids=['providerFilter','statusFilter','jobFilter','assetStatusFilter','assetFreshnessFilter','assetSearchFilter','timelinePrevBtn','timelineNextBtn',
+              'timelinePageInfo','timelineList','syncSummary','alertList','refreshBtn','loginBtn','logoutBtn',
               'runDrawer','runDrawerCloseBtn','runDetailBody','assetTabs','assetList','runAllBtn','docConfigEnabled','docConfigHours','docConfigAnchor','docConfigPaused','docConfigSaveBtn','docConfigStatus','tplusConfigEnabled','tplusConfigHours','tplusConfigAnchor','tplusConfigSaveBtn','tplusConfigStatus'];
             ids.forEach(element);
             const pending=[];
@@ -398,7 +474,7 @@ class SyncFrontendTests(unittest.TestCase):
                   await Promise.all([overview,alerts,timeline,detailRequest]);
                   const snapshot=vm.runInContext('({overview:state.overview,alerts:state.alerts,runs:state.runs,total:state.total,loading:state.timelineLoading,openRunId})',context);
                   if(snapshot.overview!==null||snapshot.alerts.length||snapshot.runs.length||snapshot.total!==0||snapshot.loading||snapshot.openRunId!==null)throw new Error(`logout retained admin state: ${JSON.stringify(snapshot)}`);
-                  for(const id of ['syncSummary','jobList','alertList','timelineList','runDetailBody']){
+                  for(const id of ['syncSummary','assetList','alertList','timelineList','runDetailBody']){
                     if(elements[id].innerHTML)throw new Error(`logout retained ${id} DOM`);
                   }
                   if(elements.runDrawer.classList.contains('show')||timers.size)throw new Error('logout retained detail UI/poll');

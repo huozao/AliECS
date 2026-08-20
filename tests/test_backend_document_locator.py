@@ -71,6 +71,36 @@ class ConnectionQueue:
 
 
 class DocumentLocatorBackendTests(unittest.TestCase):
+    def test_system_asset_download_does_not_depend_on_pull_freshness(self) -> None:
+        """系统管理资产的下载内容全部由 DB 生成，不调企微 API，可读性判定不能挂在 pull 同步时间上。
+
+        2026-08-20 实测的回归：把该文档下早已不存在的陈旧子表置 disabled 后，
+        MAX(last_sync_at) 归零 → syncability 从 verified 掉到 unverified → readable=False
+        → 下载按钮消失，而 reason 还写着「仅提供下载」，能力与说明自相矛盾。
+        这个文档根本不走 pull（它的内容由 mirror 写入），拿 pull 的新鲜度判它能不能下载，
+        判的从来就不是同一件事。
+        """
+        conn = QueueConnection([[
+            ("wecom", "COMPANY_A", VALID_DOCID, "structure_backup_doc", "企微智能表格结构备份", "",
+             12, 0, 0, None, "unverified", {"read": "unverified", "copy": "unavailable"}, "active"),
+        ]])
+
+        items = document_locator.asset_catalog(conn, tplus_items=[])["groups"][1]["items"]
+
+        self.assertTrue(items[0]["system_managed"])
+        self.assertTrue(items[0]["can_download"])
+        self.assertFalse(items[0]["can_sync"] or items[0]["can_copy"])
+
+    def test_ordinary_asset_still_needs_readable_sheets_to_download(self) -> None:
+        conn = QueueConnection([[
+            ("wecom", "COMPANY_A", VALID_DOCID, "smartsheet_doc", "普通表", "",
+             13, 0, 0, None, "unverified", {"read": "unverified", "copy": "allowed"}, "active"),
+        ]])
+
+        items = document_locator.asset_catalog(conn, tplus_items=[])["groups"][1]["items"]
+
+        self.assertFalse(items[0]["can_download"])
+
     def test_catalog_is_canonical_includes_system_and_unresolved_without_external_ids(self) -> None:
         conn = QueueConnection([[
             ("wecom", "COMPANY_A", VALID_DOCID, "smartsheet_doc", "生产表", "生产表", 11, 2, 2, None, "verified", {"read": "verified", "copy": "allowed"}, "active"),
