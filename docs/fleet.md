@@ -222,7 +222,13 @@ GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会�
   ⚠️「只有 `erp` 仍指 aliecs `47.77.176.62`」这句自 2026-08-16 起失效：aliecs 因当月
   公网流量超支停机，`erp` 已改指 txecs `106.52.51.67`（`services.json` 的
   `public_edge` 由 `aliecs-edge` 改成 `business`，DNS 由 opentofu 渲染）。
-  **现在没有任何生产域名指向 aliecs。**
+  ⚠️「**现在没有任何生产域名指向 aliecs**」这句自 2026-08-20 起确认会误导：它只盘点了
+  business 业务域名，漏掉了 `immich`/`adventure`/`adventure-media`/`files` 四条——这四条
+  当时仍解析到 `47.77.176.62`，`services.json` 里标着 `status: suspended`（所以 opentofu
+  的 `active_records` 根本不管它们，Cloudflare 上是手工遗留记录），实际却一直在对外服务，
+  aliecs 停机后全部 502。四条已于 2026-08-20 迁到 txecs，新情况见本文件 txecs 段
+  「webdock1 服务入口」与 infra `roles/webdock/extras/README.md`。
+  **教训：`suspended` 只说明 tofu 不管它，不说明它没在跑。**
 - 远程控制台：公网 `/console/*` 的 Authelia forward-auth 在本机完成。
   ⚠️「除 `/console/devbox/desktop/` 外均反代回 AliECS 源站」这句自 2026-08-16 起失效：
   同日 webdock1/webdock2 的 browser+desktop 四条路径也改成本机终止，通用
@@ -233,6 +239,15 @@ GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会�
   `webdock-tunnel` authorized_keys 均由 infra `roles/server/tencent` 管理；
   设备侧 unit 是 `console-txecs-tunnel.service`（旧的 `console-ecs-tunnel` 已 disable，
   两者不能同时跑，上游端口号相同）。
+- **webdock1 服务入口（2026-08-20 从 aliecs 迁入）**：`immich.hydwang.xyz`←12283、
+  `adventure.hydwang.xyz`←18015、`adventure-media.hydwang.xyz`←18016、
+  `files.hydwang.xyz`←15342（Gokapi）。四个 loopback 上游都由 webdock1 的反向隧道维持，
+  隧道断则 502；nginx 是 `conf.d/7{0,1,2}-*.conf`，证书 DNS-01 单独签、与主站分开。
+  设备侧 unit：`webdock-immich-tunnel` / `adventurelog-tunnel` / `gokapi-ecs-tunnel`，
+  各用独立 key（见 infra `roles/webdock/extras/README.md`）。
+  ⚠️ 端口双层限制：key 的 `permitlisten=` 和 `Match User webdock-tunnel` 的
+  `PermitListen` 都要放行，只改一层报 `remote port forwarding failed`。
+  ⚠️ `adventure-media` 的根路径不应答（backend 固有行为），探活用 `/api/`，别据此判故障。
 - 排障：
   `sudo systemctl status webdock-failover-proxy`、
   `curl -i http://127.0.0.1:11800/healthz`、
