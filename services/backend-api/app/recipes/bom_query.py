@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import threading
@@ -15,6 +16,8 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+
+logger = logging.getLogger(__name__)
 
 SHEET_MATERIAL = "物料清单"
 SHEET_COMPONENT = "子件明细"
@@ -107,10 +110,17 @@ CUSTOM_COLUMNS_ORDER = [
 ]
 
 SKIP_CHILD_CODES = {"30008", "30004", "90011", "30009", "90024", "03000012", "3000011", "0300001"}
-# 包装类子件按单位兜底排除：新增包装袋编码不在 SKIP_CHILD_CODES 时（如 HYD-0601 的新包装袋），
-# 凡单位为"条"/"个"的子件一律不参与比例分母。
-SKIP_RATIO_UNITS = {"条", "个"}
+# ⚠️ 旧写法 `SKIP_RATIO_UNITS = {"条", "个"}`（黑名单枚举非质量单位）自 2026-08-20 起确认会静默失效：
+# 单位「份」的色粉包不在名单里，被错误算进某本成品 BOM 的比例分母（101.5，应为 100.5），
+# 8 个 kg 子件的比例全被压低约 1%，页面不报任何异常。这是同一个坑第二次（第一次是 HYD-0601 新包装袋）。
+# 新判据见下方 MASS_UNITS 白名单：只有可换算成质量的单位进分母，新出现的包装类单位自动排除。
 GRAM_UNITS = {"克", "g", "G", "gram", "grams"}
+KG_UNITS = {"kg", "KG", "Kg", "kG", "千克", "公斤"}
+# 「吨」故意不进白名单：_cost_quantity() 只有克→千克的换算因子，放进来会算错一个数量级；
+# 排除并告警比算错安全。真出现「吨」时由 _warn_unknown_units 的日志提醒人来加换算。
+MASS_UNITS = GRAM_UNITS | KG_UNITS
+# 已知的非质量单位，仅用于告警去噪，不参与判定。
+KNOWN_NON_MASS_UNITS = {"条", "个", "份"}
 TEXT_COLUMNS = {
     "版本号",
     "版本号_子件",
@@ -284,14 +294,37 @@ def merge_frames(df_component: pd.DataFrame, df_material: pd.DataFrame) -> pd.Da
     return merged
 
 
+def _warn_unknown_units(unit: pd.Series) -> None:
+    """遇到既不是质量单位、也不在已知非质量单位里的写法就叫一声。
+
+    这是白名单方案唯一的兜底：T+ 若改用未覆盖的质量写法（如「KGS」），比例会静默塌成空，
+    只有这条日志能在有人发现之前先叫出来。
+    """
+    quiet = MASS_UNITS | KNOWN_NON_MASS_UNITS | {"", "nan", "None"}
+    unknown = sorted({value for value in unit.dropna().unique() if value not in quiet})
+    if unknown:
+        logger.warning("BOM 出现未识别的计量单位（不参与比例分母，如属质量单位请补进 MASS_UNITS）：%s", unknown)
+
+
 def compute_ratio_series(df: pd.DataFrame) -> pd.Series:
     qty = pd.to_numeric(df.get("需用数量"), errors="coerce")
-    unit = df.get("计量单位_子件").astype(str).str.strip() if "计量单位_子件" in df.columns else ""
+    # 缺列时给空字符串 Series 而不是裸 str：裸 str 没有 .isin，下一行会直接 AttributeError
+    # （2026-08-20 前就存在的隐性崩溃，缺「计量单位_子件」列的 BOM 会整批查询失败）。
+    unit = df.get("计量单位_子件").astype(str).str.strip() if "计量单位_子件" in df.columns else pd.Series("", index=df.index, dtype="object")
     qty_kg = qty.where(~unit.isin(GRAM_UNITS), qty / 1000)
-    child = df.get("子件编码").astype(str).str.strip() if "子件编码" in df.columns else ""
+    child = df.get("子件编码").astype(str).str.strip() if "子件编码" in df.columns else pd.Series("", index=df.index, dtype="object")
     mask = qty_kg.notna() & (~child.isin(SKIP_CHILD_CODES))
+    # 判据反转（黑名单→白名单）会把降级方向一并翻转：旧写法下「缺单位列」＝不排除任何行，
+    # 新写法下同一个位置若不加这层 if 就变成排除所有行、整批配方比例全空。缺列必须保持不过滤。
     if "计量单位_子件" in df.columns:
-        mask &= ~unit.isin(SKIP_RATIO_UNITS)
+        _warn_unknown_units(unit)
+        mass = unit.isin(MASS_UNITS)
+        if mass.any():
+            mask &= mass
+        else:
+            # 整列没有一个质量单位＝单位列大概率解析异常；此时按单位过滤会让全部比例变空，
+            # 降级为不按单位过滤（与反转前行为一致），并留下 ERROR 便于定位。
+            logger.error("BOM 计量单位列没有任何质量单位，已跳过按单位过滤：%s", sorted(set(unit.dropna().unique()))[:20])
     group_key = (
         df.get("版本号_子件").astype(str).str.strip().fillna("")
         .str.cat(df.get("父件编码").astype(str).str.strip().fillna(""), sep="||")
@@ -489,7 +522,8 @@ def _normalized_float_mapping(values: dict[str, float] | None) -> dict[str, floa
 
 
 def _ratio_excluded(child_code: str, unit: str) -> bool:
-    return child_code in SKIP_CHILD_CODES or unit in SKIP_RATIO_UNITS
+    # 与 compute_ratio_series 同一套判据：只有质量单位进分母（模拟比例的分母也走这里）。
+    return child_code in SKIP_CHILD_CODES or unit not in MASS_UNITS
 
 
 def calculate_recipe_costs(

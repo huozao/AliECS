@@ -208,6 +208,110 @@ class RecipeQueryTests(unittest.TestCase):
         self.assertAlmostEqual(0.8, float(detail.loc["C100", "比例"]))
         self.assertAlmostEqual(0.2, float(detail.loc["C200", "比例"]))
 
+    def test_ratio_excludes_fen_unit_color_powder_pack(self) -> None:
+        # 复刻生产上那本含色粉包的 BOM 的形状（编码/物料名用占位，本仓 PUBLIC 不落配方数据）：
+        # 色粉包单位「份」不在旧黑名单里，被错误算进分母（101.5，应为 100.5）。
+        from app.recipes.bom_query import query_recipe_workbook
+
+        source = self.tmp_path / "bom_fen_unit.xlsx"
+        wb = Workbook()
+        material = wb.active
+        material.title = "物料清单"
+        material.append(["父件编码", "父件名称", "规格型号", "版本号", "计量单位", "生产数量", "默认BOM", "停用"])
+        material.append(["FEN-DEMO", "含色粉包成品", "X", "V1", "kg", 100, 1, 0])
+        component = wb.create_sheet("子件明细")
+        component.append(["版本号", "父件编码", "子件编码", "子件名称", "规格型号", "计量单位", "需用数量"])
+        component.append(["V1", "FEN-DEMO", "MAT-A", "主料A", "A", "kg", 60])
+        component.append(["V1", "FEN-DEMO", "MAT-B", "填料B", "B", "kg", 30])
+        component.append(["V1", "FEN-DEMO", "MAT-C", "助剂C", "C", "kg", 10.5])
+        component.append(["V1", "FEN-DEMO", "PACK-FEN", "色粉包", "D", "份", 1])
+        component.append(["V1", "FEN-DEMO", "PACK-BAG", "包装袋", "E", "条", 4])
+        wb.save(source)
+
+        result = query_recipe_workbook(source, query_text="FEN-DEMO", default_bom="1")
+
+        detail = result.detail.set_index("子件编码")
+        self.assertTrue(pd.isna(detail.loc["PACK-FEN", "比例"]))
+        self.assertTrue(pd.isna(detail.loc["PACK-BAG", "比例"]))
+        # 分母 = 60 + 30 + 10.5 = 100.5（不含色粉包的 1 份）
+        self.assertAlmostEqual(60 / 100.5, float(detail.loc["MAT-A", "比例"]), places=9)
+        self.assertAlmostEqual(30 / 100.5, float(detail.loc["MAT-B", "比例"]), places=9)
+        self.assertAlmostEqual(1.0, float(detail.loc[["MAT-A", "MAT-B", "MAT-C"], "比例"].sum()), places=9)
+        # 反证锚点：旧黑名单判据（{"条","个"}）会把色粉包算进分母得到 101.5；本行确保新测试真挡得住该 bug。
+        self.assertNotAlmostEqual(60 / 101.5, float(detail.loc["MAT-A", "比例"]), places=6)
+
+    def test_ratio_denominator_accepts_mass_unit_variants_only(self) -> None:
+        # 白名单判据：质量单位的各种写法都进分母，其余（含「吨」——没有换算因子）一律排除。
+        from app.recipes.bom_query import query_recipe_workbook
+
+        source = self.tmp_path / "bom_unit_variants.xlsx"
+        wb = Workbook()
+        material = wb.active
+        material.title = "物料清单"
+        material.append(["父件编码", "父件名称", "规格型号", "版本号", "计量单位", "生产数量", "默认BOM", "停用"])
+        material.append(["UNITMIX", "单位变体", "X", "V1", "kg", 10, 1, 0])
+        component = wb.create_sheet("子件明细")
+        component.append(["版本号", "父件编码", "子件编码", "子件名称", "规格型号", "计量单位", "需用数量"])
+        for code, unit, qty in [
+            ("M_KG", "kg", 1), ("M_KGUP", "KG", 1), ("M_QIANKE", "千克", 1),
+            ("M_GONGJIN", "公斤", 1), ("M_KE", "克", 1000), ("M_G", "g", 1000),
+            ("X_DUN", "吨", 1), ("X_BAO", "包", 1), ("X_ZHI", "只", 1), ("X_PCS", "PCS", 1),
+        ]:
+            component.append(["V1", "UNITMIX", code, code, "S", unit, qty])
+        wb.save(source)
+
+        result = query_recipe_workbook(source, query_text="UNITMIX", default_bom="1")
+
+        detail = result.detail.set_index("子件编码")
+        for code in ["M_KG", "M_KGUP", "M_QIANKE", "M_GONGJIN", "M_KE", "M_G"]:
+            self.assertAlmostEqual(1 / 6, float(detail.loc[code, "比例"]), places=9, msg=code)
+        for code in ["X_DUN", "X_BAO", "X_ZHI", "X_PCS"]:
+            self.assertTrue(pd.isna(detail.loc[code, "比例"]), msg=code)
+
+    def test_ratio_skips_unit_filter_when_unit_column_missing(self) -> None:
+        # 判据反转会翻转降级方向：缺「计量单位_子件」列时必须不按单位过滤，否则整批比例会变空。
+        from app.recipes.bom_query import query_recipe_workbook
+
+        source = self.tmp_path / "bom_no_unit_column.xlsx"
+        wb = Workbook()
+        material = wb.active
+        material.title = "物料清单"
+        material.append(["父件编码", "父件名称", "规格型号", "版本号", "生产数量", "默认BOM", "停用"])
+        material.append(["NOUNIT", "无单位列", "X", "V1", 10, 1, 0])
+        component = wb.create_sheet("子件明细")
+        component.append(["版本号", "父件编码", "子件编码", "子件名称", "规格型号", "需用数量"])
+        component.append(["V1", "NOUNIT", "A1", "料A", "S", 30])
+        component.append(["V1", "NOUNIT", "A2", "料B", "S", 70])
+        wb.save(source)
+
+        result = query_recipe_workbook(source, query_text="NOUNIT", default_bom="1")
+
+        detail = result.detail.set_index("子件编码")
+        self.assertAlmostEqual(0.3, float(detail.loc["A1", "比例"]), places=9)
+        self.assertAlmostEqual(0.7, float(detail.loc["A2", "比例"]), places=9)
+
+    def test_ratio_degrades_when_no_mass_unit_present_at_all(self) -> None:
+        # 兜底：整列没有一个质量单位＝单位列大概率解析异常，此时按单位过滤会让全部比例变空，降级为不过滤。
+        from app.recipes.bom_query import query_recipe_workbook
+
+        source = self.tmp_path / "bom_all_non_mass.xlsx"
+        wb = Workbook()
+        material = wb.active
+        material.title = "物料清单"
+        material.append(["父件编码", "父件名称", "规格型号", "版本号", "计量单位", "生产数量", "默认BOM", "停用"])
+        material.append(["ALLBAD", "单位异常", "X", "V1", "kg", 10, 1, 0])
+        component = wb.create_sheet("子件明细")
+        component.append(["版本号", "父件编码", "子件编码", "子件名称", "规格型号", "计量单位", "需用数量"])
+        component.append(["V1", "ALLBAD", "B1", "料A", "S", "KGS", 30])
+        component.append(["V1", "ALLBAD", "B2", "料B", "S", "KGS", 70])
+        wb.save(source)
+
+        result = query_recipe_workbook(source, query_text="ALLBAD", default_bom="1")
+
+        detail = result.detail.set_index("子件编码")
+        self.assertAlmostEqual(0.3, float(detail.loc["B1", "比例"]), places=9)
+        self.assertAlmostEqual(0.7, float(detail.loc["B2", "比例"]), places=9)
+
     def test_simulated_quantities_recompute_ratio_without_packaging_units(self) -> None:
         from app.recipes.bom_query import calculate_recipe_costs, query_recipe_workbook
 
