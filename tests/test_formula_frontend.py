@@ -6,6 +6,7 @@ from pathlib import Path
 
 FORMULA_PAGE = Path(__file__).resolve().parents[1] / "services" / "public-web" / "formula" / "index.html"
 COMPARE_CORE = Path(__file__).resolve().parents[1] / "services" / "public-web" / "formula" / "compare-core.js"
+COST_CORE = Path(__file__).resolve().parents[1] / "services" / "public-web" / "formula" / "cost-core.js"
 
 
 class FormulaFrontendTests(unittest.TestCase):
@@ -13,6 +14,8 @@ class FormulaFrontendTests(unittest.TestCase):
         self.html = FORMULA_PAGE.read_text(encoding="utf-8")
         # PR#185 把对比核心逻辑抽到 compare-core.js（页面薄壳化）；涉及算法的断言查两个文件的合集。
         self.core = COMPARE_CORE.read_text(encoding="utf-8")
+        # PR#(本次) 把成本核算的纯计算抽到 cost-core.js（利润口径、对比矩阵、本地重算）。
+        self.core_cost = COST_CORE.read_text(encoding="utf-8")
         self.bundle = self.html + self.core
 
     def test_cost_panel_matches_reset_and_grouped_table_contract(self) -> None:
@@ -30,8 +33,8 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertIn('colspan="8">原配方</th>', self.html)
         self.assertIn("line.spec?escapeHtml(line.spec):'—'", self.html)
         self.assertIn('sum-basic" colspan="4">汇总</td>', self.html)
-        self.assertIn(".cost-table tbody td{text-align:center", self.html)
-        self.assertIn(".cost-table td.text-left{text-align:left", self.html)
+        self.assertIn(":is(.cost-table,.cost-matrix-table) tbody td{text-align:center", self.html)
+        self.assertIn(":is(.cost-table,.cost-matrix-table) td.text-left{text-align:left", self.html)
 
     def test_cost_reset_button_has_visible_button_border(self) -> None:
         self.assertIn("border:1px solid #dacdbd", self.html)
@@ -46,26 +49,26 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertNotIn(".src-line", self.html)
         # 模拟分价 carries the "按当下价" subtitle with a small dot, per the mockup
         self.assertIn('模拟分价<span class="subtle-source">按当下价<span class="source-dot"></span></span>', self.html)
-        self.assertIn(".cost-table .subtle-source{display:block", self.html)
-        self.assertIn(".cost-table .source-dot{display:inline-block", self.html)
+        self.assertIn(":is(.cost-table,.cost-matrix-table) .subtle-source{display:block", self.html)
+        self.assertIn(":is(.cost-table,.cost-matrix-table) .source-dot{display:inline-block", self.html)
 
     def test_cost_spec_column_narrow_with_ellipsis_and_hover_title(self) -> None:
         self.assertIn(".cost-table col.spec{width:96px}", self.html)
-        self.assertIn(".cost-table td.spec-cell>span{display:block;max-width:90px;overflow:hidden;text-overflow:ellipsis", self.html)
+        self.assertIn(":is(.cost-table,.cost-matrix-table) td.spec-cell>span{display:block;max-width:90px;overflow:hidden;text-overflow:ellipsis", self.html)
         self.assertIn('<td class="text-left spec-cell${line.spec?\'\':\' muted\'}" title="${escapeHtml(line.spec||\'\')}"><span>', self.html)
 
     def test_cost_table_restyle_module_borders_and_colored_results(self) -> None:
         # group/sub module-end colored separators
-        self.assertIn(".cost-table .formula-end{border-right:2px solid", self.html)
-        self.assertIn(".cost-table .price-end{border-right:2px solid", self.html)
-        self.assertIn(".cost-table .cost-end{border-right:2px solid", self.html)
+        self.assertIn(":is(.cost-table,.cost-matrix-table) .formula-end{border-right:2px solid", self.html)
+        self.assertIn(":is(.cost-table,.cost-matrix-table) .price-end{border-right:2px solid", self.html)
+        self.assertIn(":is(.cost-table,.cost-matrix-table) .cost-end{border-right:2px solid", self.html)
         # colored price/cost result text (mockup palette) + zero muting + footer sums
-        self.assertIn(".cost-table td.sys-price,.cost-table td.sys-cost{color:#a76700}", self.html)
-        self.assertIn(".cost-table td.cur-cost{color:#e63716", self.html)
-        self.assertIn(".cost-table td.sim-cost{color:#4b45bf", self.html)
-        self.assertIn(".cost-table td.zero{color:#8b94a3}", self.html)
+        self.assertIn(":is(.cost-table,.cost-matrix-table) td.sys-price,:is(.cost-table,.cost-matrix-table) td.sys-cost{color:#a76700}", self.html)
+        self.assertIn(":is(.cost-table,.cost-matrix-table) td.cur-cost{color:#e63716", self.html)
+        self.assertIn(":is(.cost-table,.cost-matrix-table) td.sim-cost{color:#4b45bf", self.html)
+        self.assertIn(":is(.cost-table,.cost-matrix-table) td.zero{color:#8b94a3}", self.html)
         self.assertIn('<tfoot id="costFoot"></tfoot>', self.html)
-        self.assertIn(".cost-table .sum-cost{background:", self.html)
+        self.assertIn(":is(.cost-table,.cost-matrix-table) .sum-cost{background:", self.html)
 
     def test_cost_export_uses_server_filename(self) -> None:
         self.assertIn("downloadNameFromDisposition", self.html)
@@ -275,6 +278,92 @@ class FormulaFrontendTests(unittest.TestCase):
         self.assertIn("function downloadRawResult()", self.html)
         self.assertIn("/v1/recipes/download/${state.fileId}", self.html)
         self.assertIn("配方比例对比表_${filenamePart(queryInput.value.trim())}.xlsx", self.html)
+
+    def test_cost_totals_renamed_and_carry_simulated_sales_and_profit(self) -> None:
+        self.assertIn(">系统销售价格<", self.html)
+        self.assertIn(">当前成本合价<", self.html)
+        self.assertIn(">其他综合成本<", self.html)
+        self.assertIn(">预估利润（毛利率）<", self.html)
+        # 旧标签不能残留，否则同一个数字会有两种叫法
+        self.assertNotIn(">销售价格<", self.html)
+        self.assertNotIn(">当前合价<", self.html)
+        self.assertIn('data-metric="simSales"', self.html)
+        self.assertIn('data-metric="otherCost"', self.html)
+
+    def test_simulated_sales_and_other_cost_persist_with_timestamps(self) -> None:
+        # 与「当下价格」同一套记忆语义：值 + 时间戳两个 key，粒度分别是父件编码 / 父件编码::版本
+        self.assertIn("const SIM_SALES_KEY='formula_sim_sales_prices'", self.html)
+        self.assertIn("const SIM_SALES_TIME_KEY='formula_sim_sales_price_times'", self.html)
+        self.assertIn("const OTHER_COST_KEY='formula_other_costs'", self.html)
+        self.assertIn("const OTHER_COST_TIME_KEY='formula_other_cost_times'", self.html)
+        self.assertIn("state.simSalesPrices[code]=value;state.simSalesTimes[code]=Date.now();", self.html)
+        self.assertIn("state.otherCosts[key]=value;state.otherCostTimes[key]=Date.now();", self.html)
+
+    def test_profit_uses_cost_core_and_shows_both_calibers_in_tooltip(self) -> None:
+        self.assertIn('<script src="cost-core.js"></script>', self.html)
+        self.assertIn("CostCore.profitMetrics(", self.html)
+        self.assertIn("CostCore.profitTooltipText(", self.html)
+        self.assertIn("毛利率 = ${head} ÷", self.core_cost)
+        self.assertIn("加成率 = ${head} ÷", self.core_cost)
+        # 可换行的 tooltip 变体：单行 nowrap 的 .price-cell 装不下算式
+        self.assertIn("white-space:pre-line", self.html)
+        self.assertIn(".calc-tip[data-tooltip]:hover::after", self.html)
+
+    def test_cost_compare_mode_is_frontend_only_and_group_toggleable(self) -> None:
+        self.assertIn('data-cost-mode="single"', self.html)
+        self.assertIn('data-cost-mode="compare"', self.html)
+        for group in ["recipeGroup", "systemGroup", "currentGroup", "simGroup"]:
+            self.assertIn(f'data-cost-view="{group}"', self.html)
+        self.assertIn("const COST_VIEW_KEY='formula_cost_view_options'", self.html)
+        self.assertIn("CostCore.buildCostMatrix(", self.html)
+        # 对比模式不额外请求后端：/v1/recipes/cost 一次就返回了全部 recipes
+        self.assertEqual(1, self.html.count("await api('/v1/recipes/cost'"))
+
+    def test_compare_mode_keeps_price_editable_but_simulated_quantity_readonly(self) -> None:
+        # 模拟数量按子件编码全局存，各版本原数量不同，多列并排会自相矛盾，故对比模式只读
+        matrix = self.html[self.html.index("function renderCostMatrix("):self.html.index("function selectVersion(")]
+        self.assertIn('class="price-input"', matrix)
+        self.assertNotIn("sim-qty-input", matrix)
+        self.assertIn("模拟数量」同样是全局值", self.html)
+
+    def test_cost_view_keeps_at_least_one_element_group(self) -> None:
+        self.assertIn("COST_GROUP_KEYS.some((item)=>state.costView[item])", self.html)
+        self.assertIn("至少要保留一组对比要素。", self.html)
+
+    def test_cost_matrix_shares_single_view_visual_rules(self) -> None:
+        # 矩阵表复用单本那份 CSS 定义，不复制一套——两处样式各写一份迟早会漂
+        self.assertIn(":is(.cost-table,.cost-matrix-table) td.cur-cost", self.html)
+        self.assertIn(":is(.cost-table,.cost-matrix-table) td.ratio-cell::after", self.html)
+        self.assertIn(":is(.cost-table,.cost-matrix-table) th,:is(.cost-table,.cost-matrix-table) td{border-right", self.html)
+        matrix = self.html[self.html.index("function renderCostMatrix("):self.html.index("function selectVersion(")]
+        for cls in ["sys-price", "sys-cost", "cur-cost", "sim-cost", "sim-ratio", "ratio-cell", "qty", "sum-formula", "sum-cost"]:
+            self.assertIn(cls, matrix, msg=cls)
+        # 配方之间的分隔要比组内分隔重，否则「组末」和「本末」看起来一样
+        self.assertIn(".cost-matrix-table .recipe-end{border-right:3px", self.html)
+        self.assertIn("recipe-end", matrix)
+        # 比例条按每本配方自己的最大比例缩放
+        self.assertIn("const scales=recipes.map(", matrix)
+
+    def test_compare_sort_control_sits_after_filters_and_covers_four_keys(self) -> None:
+        self.assertLess(self.html.index('data-filter="same"'), self.html.index('id="compareSortDrop"'))
+        for key in ["default", "code", "name", "ratio", "family"]:
+            self.assertIn(f'data-sort-key="{key}"', self.html)
+        self.assertIn('data-sort-dir="asc"', self.html)
+        self.assertIn('data-sort-dir="desc"', self.html)
+        self.assertIn("const SORT_KEY='formula_compare_sort'", self.html)
+
+    def test_compare_table_and_excel_share_one_sort(self) -> None:
+        # 改这条之前：页面按 buildCompareMatrix 的编码序、Excel 按状态分组，同一份数据两种行序
+        self.assertIn("CompareCore.sortCompareRows(", self.html)
+        self.assertIn("sortKey:state.sort.sortKey,sortDir:state.sort.sortDir", self.html)
+        self.assertIn("sortCompareRows(", self.core)
+        self.assertIn("sortKey: args.sortKey, sortDir: args.sortDir", self.core)
+        self.assertNotIn("(orderOf(a.st) - orderOf(b.st)) || a.itemCode.localeCompare", self.core)
+
+    def test_ratio_sort_pins_zero_ratio_rows_last(self) -> None:
+        # 不计比例的行 ratio 是 0 不是 NaN；只判 isFinite 会让它们在倒序时翻到最前
+        self.assertIn("Math.abs(value) >= 0.000005", self.core)
+        self.assertIn("const valued = rows.filter(hasRatio);", self.core)
 
 
 if __name__ == "__main__":
