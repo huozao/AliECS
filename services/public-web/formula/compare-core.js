@@ -191,6 +191,50 @@
   }
   const VIEW_DEFAULTS = { spec: true, qty: true, pct: true, arrow: true, delta: true, newTag: true, bar: true };
 
+  // 子件行排序。页面表格和导出 Excel 都走这一个函数——两边各排一次迟早会漂
+  // （改这条之前：页面按 buildCompareMatrix 的编码序，Excel 按状态分组，同一份数据两种行序）。
+  const SORT_KEYS = { default: '默认（状态分组）', code: '子件编码', name: '子件名称', ratio: '比例（目标配方）', family: '物料族' };
+  const SORT_DEFAULT = { sortKey: 'default', sortDir: 'asc' };
+  // 目标配方里的比例；该行在目标里没有就回落到基准，都没有则 NaN（排到最后）。
+  function targetRatioGetter(sel) {
+    const targets = targetVersions(sel), base = baseVersion(sel);
+    return function (row) {
+      for (let i = 0; i < targets.length; i += 1) {
+        const cell = row.cells[targets[i].key];
+        if (cell) return cell.ratio;
+      }
+      const baseCell = base ? row.cells[base.key] : null;
+      return baseCell ? baseCell.ratio : NaN;
+    };
+  }
+  function sortCompareRows(rows, args) {
+    const options = args || {};
+    const key = options.sortKey || 'default';
+    const desc = options.sortDir === 'desc';
+    const ratioOf = options.ratioOf || function () { return NaN; };
+    const byCode = (a, b) => String(a.itemCode).localeCompare(String(b.itemCode), 'zh-CN');
+    const byText = (field) => (a, b) => String(a[field] || '').localeCompare(String(b[field] || ''), 'zh-CN') || byCode(a, b);
+    const orderOf = (st) => (st in EXPORT_ST_ORDER ? EXPORT_ST_ORDER[st] : 9);
+    if (key === 'ratio') {
+      // 无比例的行（包装袋、色粉包这类不计比例的）恒定压在最后，正倒序都不把它们翻上来。
+      // 判据必须与 ratioD 显示 DASH 的阈值一致：detailToCompareRow 走 numberFromCell，
+      // 空比例出来是 0 而不是 NaN，只判 isFinite 会把它们当成「占比 0」排进队列，倒序时翻到最前。
+      const hasRatio = (row) => { const value = Number(ratioOf(row)); return Number.isFinite(value) && Math.abs(value) >= 0.000005; };
+      const valued = rows.filter(hasRatio);
+      const blank = rows.filter((row) => !hasRatio(row)).sort(byCode);
+      valued.sort((a, b) => (Number(ratioOf(b)) - Number(ratioOf(a))) || byCode(a, b));
+      if (desc) valued.reverse();
+      return valued.concat(blank);
+    }
+    let cmp;
+    if (key === 'code') cmp = byCode;
+    else if (key === 'name') cmp = byText('itemName');
+    else if (key === 'family') cmp = byText('family');
+    else cmp = (a, b) => (orderOf(a.st) - orderOf(b.st)) || byCode(a, b);
+    const sorted = [...rows].sort(cmp);
+    return desc ? sorted.reverse() : sorted;
+  }
+
   function applyQuickSelect(sel, quickMode) {
     const all = sel.versions.map((version) => version.key);
     if (quickMode === 'all') sel.selectedKeys = new Set(all);
@@ -211,11 +255,11 @@
     if (!selected.length) return null;
     const base = baseVersion(sel), targets = targetVersions(sel);
     if (!base || !targets.length) return null;
-    const orderOf = (st) => (st in EXPORT_ST_ORDER ? EXPORT_ST_ORDER[st] : 9);
     const rowsAll = buildCompareMatrix(queryRows, sel);
-    const rows = rowsAll.map((row) => Object.assign({}, row, { st: rowStatus(row, rowsAll, sel) }))
-      .filter((row) => passCompareFilter(row.st, activeFilter))
-      .sort((a, b) => (orderOf(a.st) - orderOf(b.st)) || a.itemCode.localeCompare(b.itemCode, 'zh-CN'));
+    const rows = sortCompareRows(
+      rowsAll.map((row) => Object.assign({}, row, { st: rowStatus(row, rowsAll, sel) })).filter((row) => passCompareFilter(row.st, activeFilter)),
+      { sortKey: args.sortKey, sortDir: args.sortDir, ratioOf: targetRatioGetter(sel) },
+    );
     return {
       query,
       filter_label: FILTER_LABELS[activeFilter] || activeFilter,
@@ -251,6 +295,7 @@
     buildVersions, selectedVersions, baseVersion, normalizeTargets, targetVersions, isTargetVersion, targetLabel, versionMaxRatio,
     itemFamily, buildCompareMatrix, categoryHasReplacement, rowStatusForTarget, rowStatus,
     statusText, statusClass, EXPORT_ST_ORDER, FILTER_LABELS, passCompareFilter, VIEW_DEFAULTS,
+    SORT_KEYS, SORT_DEFAULT, sortCompareRows, targetRatioGetter,
     applyQuickSelect, buildComparePayload,
   };
 }));

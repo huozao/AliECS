@@ -20,16 +20,25 @@
     .table-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px;background:#fff}.data-table{width:100%;border-collapse:collapse;font-size:13px;min-width:1240px}.data-table th,.data-table td{border-bottom:1px solid var(--line);padding:9px 10px;text-align:left;vertical-align:middle}.data-table th{background:#f2eadc;position:sticky;top:0}
     .compare-panel{border:1px solid var(--line);background:rgba(255,253,249,.84);border-radius:16px;padding:14px;margin-top:14px}.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px}.section-title{font-size:18px;font-weight:850}.hint{color:var(--muted);font-size:13px;font-weight:500}.version-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.version-card{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:12px 13px 0;overflow:hidden;display:flex;flex-direction:column}.version-card.selected{border-color:#7aa46d;box-shadow:0 0 0 2px rgba(80,137,65,.08)}.version-card.base{border-color:#8a6a3b;box-shadow:0 0 0 2px rgba(138,106,59,.14)}.version-card.disabled-by-user{opacity:.55}.v-head{display:flex;align-items:flex-start;gap:10px;margin-bottom:10px}.v-title{min-width:0;flex:1}.v-name{font-weight:900;font-size:16px;line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.v-code{margin-top:5px;font-weight:700;font-size:13px;color:#5a5246;display:flex;align-items:center;gap:8px;flex-wrap:wrap}.v-version{margin-top:3px;color:#6f675b;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tag{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:999px;font-size:12px;font-weight:800;border:1px solid transparent}.tag.default{color:#a16207;background:#fff6d6;border-color:#ead38a}.tag.target{color:#2f7d3d;background:#eff9ee;border-color:#b7dcb3}.tag.rule{color:#68523a;background:#f4eadb;border-color:#e4d1b9}.v-meta{display:grid;grid-template-columns:70px 1fr;gap:7px 10px;padding:8px 0 10px;border-top:1px solid rgba(234,223,206,.62)}.m-key{color:var(--muted)}.m-val{text-align:right;font-weight:650;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:#858585}.status-dot.on{background:#2f7d3d}.set-row{display:flex;margin:auto -13px 0;border-top:1px solid var(--line)}.base-set{flex:1;min-width:0;height:40px;background:#fffaf3;display:flex;align-items:center;justify-content:center;padding:0 8px;gap:6px;color:#46392a;font-weight:700;font-size:13px;white-space:nowrap;cursor:pointer}.base-set.active{background:#f6f0e6;color:#63451f}.target-set{border-left:1px dashed var(--line)}.target-set.active{background:#eef7ee;color:#2f5d2f}
     .compare-toolbar{display:grid;grid-template-columns:auto auto auto auto 1fr;gap:10px;align-items:center;margin:14px 0 12px}.export-btn{height:36px;padding:0 14px;border:1px solid #cdbba6;border-radius:10px;background:#fffaf3;color:#5a452d;font-weight:800}.export-btn:hover{background:#fff4e5}
-    .dropdown{position:relative;display:inline-block}.drop-btn::after{content:" ▾";font-size:11px}.drop-menu{position:absolute;top:100%;left:0;padding-top:6px;display:none;z-index:40;min-width:216px}.dropdown:hover .drop-menu,.dropdown.open .drop-menu{display:block}.drop-inner{background:#fff;border:1px solid var(--line-strong);border-radius:12px;box-shadow:0 12px 26px rgba(69,56,38,.16);padding:6px}.drop-menu button{display:block;width:100%;text-align:left;background:none;border:0;border-radius:8px;padding:9px 12px;font-weight:650;color:#4a4137;font-size:13px}.drop-menu button:hover{background:#f6efe3}.drop-menu button:disabled{opacity:.45;cursor:not-allowed;background:none}.drop-menu label.view-item{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;font-size:13px;font-weight:650;color:#4a4137;cursor:pointer}.drop-menu label.view-item:hover{background:#f6efe3}.pills{display:flex;gap:8px;flex-wrap:wrap}.pill{height:34px;padding:0 15px;border-radius:999px;border:1px solid var(--line-strong);background:var(--panel);color:#4a4137;font-weight:750}.pill.active{background:#7a5a35;color:#fff;border-color:#7a5a35}.legend{display:flex;gap:12px;flex-wrap:wrap;padding:10px 12px;border:1px dashed #dbcab5;background:#fffaf2;border-radius:12px;color:#675b4e;font-size:12px;margin-bottom:12px}.legend b{color:#342c24}.legend span{display:flex;align-items:center;gap:5px}.mini-box{width:26px;height:3px;border-radius:999px;background:rgba(126,89,45,.45);display:inline-block}.mini-box.low{width:10px;background:rgba(126,89,45,.24)}
+    .dropdown{position:relative;display:inline-block}.drop-btn::after{content:" ▾";font-size:11px}.drop-menu{position:absolute;top:100%;left:0;padding-top:6px;display:none;z-index:40;min-width:216px}.dropdown:hover .drop-menu,.dropdown.open .drop-menu{display:block}.drop-inner{background:#fff;border:1px solid var(--line-strong);border-radius:12px;box-shadow:0 12px 26px rgba(69,56,38,.16);padding:6px}.drop-menu button{display:block;width:100%;text-align:left;background:none;border:0;border-radius:8px;padding:9px 12px;font-weight:650;color:#4a4137;font-size:13px}.drop-menu button:hover{background:#f6efe3}.drop-menu button:disabled{opacity:.45;cursor:not-allowed;background:none}.drop-menu button.on{background:#f0e6d5;color:#5d4a2f}.drop-menu button.on::after{content:" ✓";font-weight:800}.drop-sep{height:1px;background:var(--line);margin:5px 8px}.sort-label{margin-left:5px;font-weight:650;color:#7a6a56}.drop-menu label.view-item{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;font-size:13px;font-weight:650;color:#4a4137;cursor:pointer}.drop-menu label.view-item:hover{background:#f6efe3}.pills{display:flex;gap:8px;flex-wrap:wrap}.pill{height:34px;padding:0 15px;border-radius:999px;border:1px solid var(--line-strong);background:var(--panel);color:#4a4137;font-weight:750}.pill.active{background:#7a5a35;color:#fff;border-color:#7a5a35}.legend{display:flex;gap:12px;flex-wrap:wrap;padding:10px 12px;border:1px dashed #dbcab5;background:#fffaf2;border-radius:12px;color:#675b4e;font-size:12px;margin-bottom:12px}.legend b{color:#342c24}.legend span{display:flex;align-items:center;gap:5px}.mini-box{width:26px;height:3px;border-radius:999px;background:rgba(126,89,45,.45);display:inline-block}.mini-box.low{width:10px;background:rgba(126,89,45,.24)}
     .summary-grid{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));gap:12px;margin-bottom:12px}.stat{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:11px 14px;display:flex;align-items:center;gap:12px;min-height:64px}.icon{width:34px;height:34px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:17px}.icon.green{background:#eef8ef;color:var(--good)}.icon.orange{background:#fff3e6;color:var(--orange)}.icon.blue{background:#eef5fc;color:var(--blue)}.icon.purple{background:#f5efff;color:var(--purple)}.icon.gray{background:#f5f0e8;color:#7d6340}.s-label{font-size:13px;color:var(--muted);font-weight:650}.s-value{font-size:22px;font-weight:900;line-height:1;margin-top:4px}
     .compare-layout{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:14px;align-items:start}.compare-table-wrap{border:1px solid var(--line);border-radius:15px;overflow:auto;background:var(--panel);box-shadow:0 3px 16px rgba(45,30,12,.04);max-height:988px}.compare-table{width:100%;min-width:1120px;border-collapse:separate;border-spacing:0;font-size:13px}.compare-table th{position:sticky;top:0;z-index:3;background:#fbf5ea;border-bottom:1px solid var(--line);color:#2d2924;height:58px;font-weight:900;text-align:center;padding:8px 10px}.compare-table th,.compare-table td{border-right:1px solid var(--line);border-bottom:1px solid #f0e6d7}.compare-table th:last-child,.compare-table td:last-child{border-right:0}.compare-table tbody td{height:62px;padding:7px 10px;vertical-align:middle;background:#fffdf9;text-align:center}.compare-table tbody tr:hover td{background:#fffaf2}.col-status{width:78px}.col-code{width:1%;white-space:nowrap;font-variant-numeric:tabular-nums}.col-name{width:1%;white-space:nowrap;text-align:left!important}.col-spec{width:1%;white-space:nowrap;text-align:left!important}.col-unit{width:1%;white-space:nowrap}.version-col{width:155px;text-align:center}.vh-tags{display:flex;flex-wrap:wrap;justify-content:center;gap:4px;margin-bottom:5px}.vh-tag{display:inline-flex;align-items:center;height:16px;padding:0 6px;border-radius:999px;font-size:10px;font-weight:700;line-height:1;border:1px solid transparent}.vh-tag.bom{color:#9a7b2a;background:#fbf3df;border-color:#ecdcb4}.vh-tag.off{color:#9a6a62;background:#f6ebe9;border-color:#e6cfc9}.vh-tag.base{color:#7a634a;background:#f3ece1;border-color:#e1d3bf}.vh-tag.target{color:#4a7a54;background:#eef6ee;border-color:#cfe3cf}.cell-value{position:relative;text-align:center}.ratio-line{display:flex;align-items:center;justify-content:center;gap:6px;line-height:1.05}.ratio-main{font-size:15px;font-weight:900}.qty-line{margin-top:3px;color:#6d645a;font-size:12px}.flag{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;font-size:13px;font-weight:900}.flag.up{color:#c55537}.flag.down{color:#2e7d58}.flag.neutral{color:#89827a}.flag.new{font-size:11px;color:#6f54a7;background:#f0e8fb;padding:0 5px;border-radius:999px;min-width:auto}.flag.base{font-size:11px;color:#6b4a1e;background:#f7ead6;padding:0 5px;border-radius:999px;min-width:auto}.delta{margin-left:2px;font-size:11px;font-weight:800}.empty{color:#9a9287;font-weight:800;font-size:18px}.barLine{position:absolute;left:0;right:0;bottom:0;height:4px;margin:0;background:rgba(0,0,0,.05);border-radius:0;overflow:hidden}.barLine i{display:block;height:100%;border-radius:0;background:linear-gradient(90deg,rgba(126,89,45,.28),rgba(126,89,45,.58))}
     .status-badge{display:inline-flex;align-items:center;justify-content:center;height:24px;min-width:48px;padding:0 9px;border-radius:999px;font-size:12px;font-weight:850;border:1px solid transparent}.st-change{color:#c2681a;background:#fff4e7;border-color:#ffd9ad}.st-replace{color:#2f75b5;background:#edf6ff;border-color:#bedaf5}.st-add{color:#7a55aa;background:#f5efff;border-color:#d8c7f2}.st-del{color:#a94535;background:#fff0ec;border-color:#f5c0b5}.st-same{color:#6b675f;background:#f4f2ef;border-color:#ded9d1}.st-history{color:#7b6852;background:#f6efe6;border-color:#e6d7c5}.codeWarn{color:#a83d2f!important;background:#fff1eb!important;font-weight:950}.warn-dot{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;margin-left:4px;border-radius:50%;background:#d94a31;color:white;font-size:11px;font-weight:950;vertical-align:1px}.parent-warn{display:inline-flex;align-items:center;gap:5px;color:#a83d2f;background:#fff1eb;border:1px solid #f3b6a8;border-radius:8px;padding:2px 6px}
     .side-panel{background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:16px;box-shadow:0 3px 16px rgba(45,30,12,.04);min-height:390px}.side-title{font-size:18px;font-weight:900;margin-bottom:14px}.side-sub{color:var(--muted);font-size:12px;margin-top:-7px;margin-bottom:14px;line-height:1.5}.insight{display:grid;grid-template-columns:28px 1fr;gap:10px;margin:13px 0 18px;align-items:flex-start}.insight-num{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;font-size:13px;background:#c87528}.insight-num.blue{background:#3c7dbb}.insight-num.purple{background:#7b5caf}.insight-text{line-height:1.6;font-size:14px;color:#332e29}.composition{margin-top:16px;border:1px solid var(--line);background:#fffaf3;border-radius:13px;padding:12px}.composition h3{margin:0 0 10px;font-size:15px}.comp-target-title{margin:10px 0 6px;color:#5e5143;font-size:12px;font-weight:900}.comp-target-title:first-child{margin-top:0}.comp-row{display:grid;grid-template-columns:76px 1fr 54px;gap:8px;align-items:center;margin:8px 0;font-size:12px;color:#5d5145}.comp-bar{height:8px;background:rgba(0,0,0,.055);border-radius:999px;overflow:hidden}.comp-bar i{display:block;height:100%;background:rgba(126,89,45,.48);border-radius:999px}.comp-val{text-align:right;font-weight:800}.raw-toggle{margin-top:16px;background:var(--panel);border:1px solid var(--line);border-radius:15px;overflow:hidden}.raw-toggle summary{cursor:pointer;padding:14px 16px;font-weight:850;color:#453a2d;background:#fffaf3}.raw-table{max-height:300px;overflow:auto;border-top:1px solid var(--line)}.raw-table table{min-width:1200px;font-size:12px}.raw-table thead th{height:34px}.raw-table tbody td{height:32px;padding:5px 8px;text-align:center}
     .version-tabs{display:flex;gap:10px;flex-wrap:wrap;margin:2px 0 16px}.version-tabs button{border:1px solid var(--line);background:#fff;height:40px;padding:0 18px}.version-tabs button.active{background:linear-gradient(180deg,#826641,var(--primary-dark));color:#fff;border-color:transparent;box-shadow:0 8px 18px rgba(95,73,44,.2)}
-    .total-row{display:grid;grid-template-columns:1.3fr repeat(3,1fr);gap:14px;margin:12px 0 18px}.metric{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px 18px;min-height:82px}.metric span{font-size:13px;font-weight:750}.metric strong{display:block;font-size:23px;margin-top:5px;line-height:1.15}
+    .version-tabs.multi button::before{content:"☐ ";font-weight:800}.version-tabs.multi button.active::before{content:"☑ "}
+    .cost-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0 2px}.cost-hint{color:#7d7367;font-size:12px}
+    .cost-summary-table{width:max-content;min-width:auto;max-width:100%}.cost-summary-table th:first-child,.cost-summary-table td:first-child{width:1%;white-space:nowrap;padding-right:26px}.cost-summary-table thead th:not(:first-child),.cost-summary-table tbody td:not(:first-child){min-width:186px}.cost-summary-table th,.cost-summary-table td{white-space:nowrap;text-align:right;font-variant-numeric:tabular-nums}.cost-summary-table th:first-child,.cost-summary-table td:first-child{text-align:left;position:sticky;left:0;background:#fbf5ea;z-index:2;font-weight:800}.cost-summary-table tbody td:first-child{background:#fdf9f2}.cost-summary-table td.best{background:#eef7f0;color:#1f7a4d;font-weight:800}.cost-summary-table td.worst{background:#fdf0ee;color:#c0392b;font-weight:800}.cost-summary-table input.cell-input{width:110px;height:32px;padding:0 8px;text-align:right;border-radius:8px;font:inherit;color:#e63716;border:1px solid #ffc39d;background:#fff8f2;outline:none}.cost-summary-table input.cell-input:focus{border-color:#e68a54;background:#fff;box-shadow:0 0 0 3px rgba(200,74,27,.10)}
+    .cost-matrix-table{min-width:auto}.cost-matrix-table thead tr.group th{font-size:17px}.cost-matrix-table thead tr.columns th{top:58px}.cost-matrix-table td.fix-col.center,.cost-matrix-table th.fix-col.center{text-align:center}.cost-matrix-table .recipe-end{border-right:3px solid #c4b5a1}.cost-matrix-table .fix-col{position:sticky;z-index:2;text-align:left;background:#fff}.cost-matrix-table thead .fix-col{background:#f2eadc;z-index:5}.cost-matrix-table tfoot .fix-col{background:linear-gradient(180deg,#fbfcfb,#f4faf7)}.cost-matrix-table tbody tr:hover td.fix-col{background:#fbf8f2}.cost-matrix-table .rc-end{border-right:2px solid #d7cec0}.cost-matrix-table td.excluded-tag{color:#9a9287;font-size:12px;font-weight:500}.cost-matrix-table thead tr.group th.recipe-head{font-size:17px}
+    .total-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(186px,1fr));gap:14px;margin:12px 0 18px}.metric{position:relative;background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px 18px;min-height:82px}.metric span{font-size:13px;font-weight:750}.metric strong{display:block;font-size:23px;margin-top:5px;line-height:1.15}
+    .metric-input{display:block;width:100%;height:38px;margin-top:5px;padding:0 10px;text-align:right;border-radius:9px;outline:none;font:inherit;font-size:20px;font-weight:800;color:#e63716;border:1px solid #ffc39d;background:#fff8f2}.metric-input:focus{box-shadow:0 0 0 4px rgba(200,74,27,.10);border-color:#e68a54;background:#fff}
+    .metric.profit strong{font-size:19px}.metric.profit .profit-item{display:block;line-height:1.5}.metric.profit .profit-sep{display:none}.profit-num{font-weight:900}.profit-num.neg{color:#c0392b}.profit-num.pos{color:#1f7a4d}.profit-sep{color:#a2968a;margin:0 7px;font-weight:600}.profit-tag{color:#8b8177;font-weight:700;font-size:13px;margin-right:3px}
+    .calc-tip{cursor:help;border-bottom:1px dashed #b9ab9b}
+    .calc-tip[data-tooltip]:hover::after,.calc-tip[data-tooltip]:focus-within::after{content:attr(data-tooltip);position:absolute;z-index:30;left:14px;top:calc(100% - 6px);background:rgba(34,31,28,.97);color:#fff;border-radius:10px;padding:10px 13px;font-size:12px;font-weight:600;line-height:1.75;white-space:pre-line;text-align:left;width:max-content;max-width:min(440px,78vw);box-shadow:0 10px 22px rgba(0,0,0,.26)}
+    .metric:nth-last-child(-n+2) .calc-tip[data-tooltip]:hover::after,.metric:nth-last-child(-n+2) .calc-tip[data-tooltip]:focus-within::after{left:auto;right:14px}
     .cost-table{width:100%;min-width:1480px;border-collapse:separate;border-spacing:0;font-variant-numeric:tabular-nums;font-size:16px;color:#142033;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC",Arial,sans-serif}.cost-table col.code{width:128px}.cost-table col.name{width:220px}.cost-table col.spec{width:96px}.cost-table col.unit{width:70px}.cost-table col.num{width:108px}.cost-table col.rate{width:108px}.cost-table col.price{width:120px}.cost-table col.result{width:128px}.cost-table col.action{width:92px}
-    .cost-table th,.cost-table td{border-right:1px solid #eee7dd;border-bottom:1px solid #eee7dd;padding:0 14px;height:58px;vertical-align:middle;white-space:nowrap}.cost-table th:last-child,.cost-table td:last-child{border-right:0}.cost-table thead th{position:sticky;text-align:center;font-weight:800;border-bottom-color:#e6ded2}.cost-table thead tr.group th{top:0;height:58px;font-size:21px;letter-spacing:.3px;border-bottom:1px solid #d9cfc2}.cost-table thead tr.columns th{top:58px;height:60px;font-size:17px}.cost-table tbody td{text-align:center;height:58px;background:#fff}.cost-table tbody tr:hover td{background:#fbf8f2}.cost-table td.text-left{text-align:left}.cost-table td.code{text-align:left;color:#111827}.cost-table td.num{text-align:right}.cost-table td.muted{color:#8b94a3}.cost-table td.spec-cell>span{display:block;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cost-table tbody td.price-td{overflow:visible}
-    .g-recipe{background:linear-gradient(180deg,rgba(230,248,241,.95),rgba(248,252,250,.95))!important;color:#00674e}.g-system{background:linear-gradient(180deg,rgba(255,245,226,.95),rgba(255,251,244,.95))!important;color:#a36300}.g-current{background:linear-gradient(180deg,rgba(255,235,224,.95),rgba(255,247,243,.95))!important;color:#d83b12}.g-sim{background:linear-gradient(180deg,rgba(241,238,255,.95),rgba(249,248,255,.95))!important;color:#4030a8}.g-action{background:linear-gradient(180deg,#fafafa,#ffffff)!important;color:#374151}.cost-table .basic-end{border-right:2px solid #d7cec0}.cost-table .formula-end{border-right:2px solid #d7cec0}.cost-table .sim-end{border-right:2px solid #d7cec0}.cost-table .price-end{border-right:2px solid #d7cec0}.cost-table .cost-end{border-right:2px solid #d7cec0}.cost-table td.qty{font-weight:600}.cost-table td.sys-price,.cost-table td.sys-cost{color:#a76700}.cost-table td.cur-cost{color:#e63716;font-weight:800}.cost-table td.sim-cost{color:#4b45bf;font-weight:800}.cost-table td.sim-ratio{color:#4b45bf;font-weight:700}.cost-table td.zero{color:#8b94a3}.cost-table td.ratio-cell{position:relative}.cost-table td.ratio-cell .ratio-value{position:relative;z-index:2}.cost-table td.ratio-cell::after{content:"";position:absolute;left:0;bottom:-1px;width:var(--bar,0%);height:2px;background:rgba(166,137,98,.38);border-radius:0 1px 1px 0;pointer-events:none}.cost-table td.ratio-cell.sim-ratio::after{background:rgba(116,99,194,.34)}.cost-table tfoot td.ratio-cell::after{display:none}.cost-table .subtle-source{display:block;margin-top:3px;color:#7d8291;font-size:13px;font-weight:500}.cost-table .source-dot{display:inline-block;width:5px;height:5px;margin-left:4px;border-radius:50%;background:#f0a275;vertical-align:2px}.cost-table tfoot td{height:58px;font-weight:800;border-top:1px solid #ccbfae;border-bottom:0;text-align:center}.cost-table .sum-basic{color:#00674e;background:linear-gradient(180deg,#f4fbf6,#edf8f1)}.cost-table .sum-formula{color:#33402f;background:linear-gradient(180deg,#fbfcfb,#f4faf7)}.cost-table .sum-sim{color:#4b45bf;background:linear-gradient(180deg,#fbf9ff,#f1eeff)}.cost-table .sum-price{color:#8b94a3;background:linear-gradient(180deg,#fff8f1,#fff0e4)}.cost-table .sum-cost{background:linear-gradient(180deg,#fbfcfb,#f4faf7)}.cost-table .sum-op{background:#fff;color:#6b7280}
+    :is(.cost-table,.cost-matrix-table) th,:is(.cost-table,.cost-matrix-table) td{border-right:1px solid #eee7dd;border-bottom:1px solid #eee7dd;padding:0 14px;height:58px;vertical-align:middle;white-space:nowrap}:is(.cost-table,.cost-matrix-table) th:last-child,:is(.cost-table,.cost-matrix-table) td:last-child{border-right:0}:is(.cost-table,.cost-matrix-table) thead th{position:sticky;text-align:center;font-weight:800;border-bottom-color:#e6ded2}:is(.cost-table,.cost-matrix-table) thead tr.group th{top:0;height:58px;font-size:21px;letter-spacing:.3px;border-bottom:1px solid #d9cfc2}:is(.cost-table,.cost-matrix-table) thead tr.columns th{top:58px;height:60px;font-size:17px}:is(.cost-table,.cost-matrix-table) tbody td{text-align:center;height:58px;background:#fff}:is(.cost-table,.cost-matrix-table) tbody tr:hover td{background:#fbf8f2}:is(.cost-table,.cost-matrix-table) td.text-left{text-align:left}:is(.cost-table,.cost-matrix-table) td.code{text-align:left;color:#111827}:is(.cost-table,.cost-matrix-table) td.num{text-align:right}:is(.cost-table,.cost-matrix-table) td.muted{color:#8b94a3}:is(.cost-table,.cost-matrix-table) td.spec-cell>span{display:block;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}:is(.cost-table,.cost-matrix-table) tbody td.price-td{overflow:visible}
+    .g-recipe{background:linear-gradient(180deg,rgba(230,248,241,.95),rgba(248,252,250,.95))!important;color:#00674e}.g-system{background:linear-gradient(180deg,rgba(255,245,226,.95),rgba(255,251,244,.95))!important;color:#a36300}.g-current{background:linear-gradient(180deg,rgba(255,235,224,.95),rgba(255,247,243,.95))!important;color:#d83b12}.g-sim{background:linear-gradient(180deg,rgba(241,238,255,.95),rgba(249,248,255,.95))!important;color:#4030a8}.g-action{background:linear-gradient(180deg,#fafafa,#ffffff)!important;color:#374151}:is(.cost-table,.cost-matrix-table) .basic-end{border-right:2px solid #d7cec0}:is(.cost-table,.cost-matrix-table) .formula-end{border-right:2px solid #d7cec0}:is(.cost-table,.cost-matrix-table) .sim-end{border-right:2px solid #d7cec0}:is(.cost-table,.cost-matrix-table) .price-end{border-right:2px solid #d7cec0}:is(.cost-table,.cost-matrix-table) .cost-end{border-right:2px solid #d7cec0}:is(.cost-table,.cost-matrix-table) td.qty{font-weight:600}:is(.cost-table,.cost-matrix-table) td.sys-price,:is(.cost-table,.cost-matrix-table) td.sys-cost{color:#a76700}:is(.cost-table,.cost-matrix-table) td.cur-cost{color:#e63716;font-weight:800}:is(.cost-table,.cost-matrix-table) td.sim-cost{color:#4b45bf;font-weight:800}:is(.cost-table,.cost-matrix-table) td.sim-ratio{color:#4b45bf;font-weight:700}:is(.cost-table,.cost-matrix-table) td.zero{color:#8b94a3}:is(.cost-table,.cost-matrix-table) td.ratio-cell{position:relative}:is(.cost-table,.cost-matrix-table) td.ratio-cell .ratio-value{position:relative;z-index:2}:is(.cost-table,.cost-matrix-table) td.ratio-cell::after{content:"";position:absolute;left:0;bottom:-1px;width:var(--bar,0%);height:2px;background:rgba(166,137,98,.38);border-radius:0 1px 1px 0;pointer-events:none}:is(.cost-table,.cost-matrix-table) td.ratio-cell.sim-ratio::after{background:rgba(116,99,194,.34)}:is(.cost-table,.cost-matrix-table) tfoot td.ratio-cell::after{display:none}:is(.cost-table,.cost-matrix-table) .subtle-source{display:block;margin-top:3px;color:#7d8291;font-size:13px;font-weight:500}:is(.cost-table,.cost-matrix-table) .source-dot{display:inline-block;width:5px;height:5px;margin-left:4px;border-radius:50%;background:#f0a275;vertical-align:2px}:is(.cost-table,.cost-matrix-table) tfoot td{height:58px;font-weight:800;border-top:1px solid #ccbfae;border-bottom:0;text-align:center}:is(.cost-table,.cost-matrix-table) .sum-basic{color:#00674e;background:linear-gradient(180deg,#f4fbf6,#edf8f1)}:is(.cost-table,.cost-matrix-table) .sum-formula{color:#33402f;background:linear-gradient(180deg,#fbfcfb,#f4faf7)}:is(.cost-table,.cost-matrix-table) .sum-sim{color:#4b45bf;background:linear-gradient(180deg,#fbf9ff,#f1eeff)}:is(.cost-table,.cost-matrix-table) .sum-price{color:#8b94a3;background:linear-gradient(180deg,#fff8f1,#fff0e4)}:is(.cost-table,.cost-matrix-table) .sum-cost{background:linear-gradient(180deg,#fbfcfb,#f4faf7)}:is(.cost-table,.cost-matrix-table) .sum-op{background:#fff;color:#6b7280}
     .cost-status{margin-left:8px;font-size:13px;font-weight:700;color:#3f7a4c;opacity:0;transition:opacity .2s ease}.cost-status.show{opacity:1}
     @keyframes fmspin{to{transform:rotate(360deg)}}.fmspin{display:inline-block;width:12px;height:12px;border:2px solid #cbd5e1;border-top-color:#2563eb;border-radius:50%;animation:fmspin .8s linear infinite;vertical-align:-2px;margin-right:6px}.cost-loading{color:#6b7280;font-weight:600;margin-left:4px}
     .num{text-align:right}.center{text-align:center}.price-input,.sim-qty-input{width:76px;max-width:76px;height:34px;padding:0 10px;text-align:right;border-radius:9px;outline:none;font:inherit;background:#fff}.sim-qty-input{color:#4b45bf;border:1px solid #d4ccff;background:#fbfaff}.price-input{color:#e63716;border:1px solid #ffc39d;background:#fff8f2}.sim-qty-input:focus{box-shadow:0 0 0 4px rgba(91,74,201,.10);border-color:#8f82ff;background:#fff}.price-input:focus{box-shadow:0 0 0 4px rgba(200,74,27,.10);border-color:#e68a54;background:#fff}.price-cell{position:relative;display:inline-flex;align-items:center;justify-content:center}.price-cell[data-tooltip]:hover::after,.price-cell[data-tooltip]:focus-within::after{content:attr(data-tooltip);position:absolute;z-index:20;left:50%;top:calc(100% + 8px);transform:translateX(-50%);background:rgba(34,31,28,.96);color:#fff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:650;white-space:nowrap;box-shadow:0 8px 16px rgba(0,0,0,.22)}.price-cell[data-tooltip]:hover::before,.price-cell[data-tooltip]:focus-within::before{content:"";position:absolute;z-index:21;left:50%;top:calc(100% + 2px);transform:translateX(-50%);border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:6px solid rgba(34,31,28,.96)}.reset-link{height:34px;padding:0 14px;border:1px solid #dacdbd;background:#fffdf8;color:#66584a;font-weight:700;border-radius:9px;cursor:pointer}.reset-link:hover{background:#f8f3eb}
@@ -118,6 +127,19 @@
             <button class="pill" data-filter="change" type="button">仅比例变化</button>
             <button class="pill" data-filter="same" type="button">仅一致</button>
           </div>
+          <div class="dropdown" id="compareSortDrop">
+            <button class="btn subtle drop-btn" type="button">排序<span id="compareSortLabel" class="sort-label"></span></button>
+            <div class="drop-menu"><div class="drop-inner" id="compareSortOptions">
+              <button type="button" data-sort-key="default">默认（状态分组）</button>
+              <button type="button" data-sort-key="code">子件编码</button>
+              <button type="button" data-sort-key="name">子件名称</button>
+              <button type="button" data-sort-key="ratio">比例（目标配方）</button>
+              <button type="button" data-sort-key="family">物料族</button>
+              <div class="drop-sep"></div>
+              <button type="button" data-sort-dir="asc">顺序 ↑</button>
+              <button type="button" data-sort-dir="desc">倒序 ↓</button>
+            </div></div>
+          </div>
         </div>
         <div class="legend">
           <span><b>主数字：</b>数量（单位见「单位」列）。</span>
@@ -158,14 +180,38 @@
       <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
         <h2>成本核算 <span id="costStatus" class="cost-status" aria-live="polite"></span></h2>
         <div class="actions">
+          <div id="costModePills" class="pills">
+            <button class="pill active" data-cost-mode="single" type="button">单本</button>
+            <button class="pill" data-cost-mode="compare" type="button">多选对比</button>
+          </div>
+          <div class="dropdown hidden" id="costViewDrop">
+            <button class="btn subtle drop-btn" type="button">对比要素</button>
+            <div class="drop-menu"><div class="drop-inner" id="costViewOptions">
+              <label class="view-item"><input type="checkbox" data-cost-view="recipeGroup"/>原配方：数量 + 比例</label>
+              <label class="view-item"><input type="checkbox" data-cost-view="systemGroup"/>系统：系统单价 + 系统分价</label>
+              <label class="view-item"><input type="checkbox" data-cost-view="currentGroup" checked/>当下：当下价格 + 当下分价</label>
+              <label class="view-item"><input type="checkbox" data-cost-view="simGroup"/>模拟：模拟数量 + 比例 + 分价</label>
+              <label class="view-item"><input type="checkbox" data-cost-view="spec" checked/>显示规格列</label>
+            </div></div>
+          </div>
           <button id="exportCostBtn" class="btn primary" type="button">导出核算Excel</button>
           <button id="resetAllSimBtn" class="btn subtle" type="button">重置模拟数量</button>
           <button id="resetAllPricesBtn" class="btn subtle" type="button">重置当下价格</button>
         </div>
       </div>
+      <div id="costCompareToolbar" class="cost-toolbar hidden">
+        <button class="btn subtle" data-cost-quick="all" type="button">全选</button>
+        <button class="btn subtle" data-cost-quick="none" type="button">全不选</button>
+        <button class="btn subtle" data-cost-quick="enabled" type="button">仅未停用</button>
+        <span class="cost-hint">「当下价格」按子件编码全局共享，改一次所有配方同步；「模拟数量」同样是全局值，各版本原数量不同，故此处只读——要改请切回「单本」。</span>
+      </div>
       <div id="versionTabs" class="version-tabs"></div>
       <div id="costTotals" class="total-row"></div>
-      <div class="table-wrap">
+      <div id="costCompareWrap" class="hidden">
+        <div class="table-wrap" style="margin-bottom:16px"><table id="costSummaryTable" class="data-table cost-summary-table"></table></div>
+        <div class="table-wrap"><table id="costMatrixTable" class="data-table cost-matrix-table"></table></div>
+      </div>
+      <div id="costSingleWrap" class="table-wrap">
         <table class="data-table cost-table">
           <colgroup>
             <col class="code"><col class="name"><col class="spec"><col class="unit">
@@ -205,6 +251,7 @@
     </section>
   </div>
   <script src="compare-core.js"></script>
+  <script src="cost-core.js"></script>
   <script src="/common/toast.js"></script>
   <script>
     const API_BASE=location.port==='8080'?'http://localhost:8000':'/api';
@@ -212,19 +259,37 @@
     const PRICE_KEY='formula_manual_prices';
     const PRICE_TIME_KEY='formula_manual_price_times';
     const SIM_QTY_KEY='formula_simulated_quantities';
+    // 模拟销售价格按「父件编码」记（售价按成品定，与 BOM 版本无关）；
+    // 其他综合成本按「父件编码::版本」记（换包装/换色粉包会随版本变，多选对比时每列要能独立填）。
+    const SIM_SALES_KEY='formula_sim_sales_prices';
+    const SIM_SALES_TIME_KEY='formula_sim_sales_price_times';
+    const OTHER_COST_KEY='formula_other_costs';
+    const OTHER_COST_TIME_KEY='formula_other_cost_times';
     const VIEW_KEY='formula_display_options';
+    const COST_VIEW_KEY='formula_cost_view_options';
+    const COST_MODE_KEY='formula_cost_mode';
+    const SORT_KEY='formula_compare_sort';
     const MAX_VISIBLE_COMPARE_ROWS=15;
     const VIEW_DEFAULTS=CompareCore.VIEW_DEFAULTS;
-    const state={token:'',fileId:'',cost:null,selectedKey:'',manualPrices:{},priceTimes:{},simulatedQuantities:{},focusCode:'',focusSimCode:'',queryRows:[],versions:[],selectedKeys:new Set(),baseKey:'',targetKeys:new Set(),activeFilter:'all',view:{...VIEW_DEFAULTS},majority:{parentCode:'',itemLen:0,itemPrefix:''}};
+    const COST_VIEW_DEFAULTS={recipeGroup:false,systemGroup:false,currentGroup:true,simGroup:false,spec:true};
+    const COST_GROUP_KEYS=['recipeGroup','systemGroup','currentGroup','simGroup'];
+    const state={token:'',fileId:'',cost:null,selectedKey:'',manualPrices:{},priceTimes:{},simulatedQuantities:{},simSalesPrices:{},simSalesTimes:{},otherCosts:{},otherCostTimes:{},focusCode:'',focusSimCode:'',focusMetric:'',queryRows:[],versions:[],selectedKeys:new Set(),baseKey:'',targetKeys:new Set(),activeFilter:'all',view:{...VIEW_DEFAULTS},sort:{...CompareCore.SORT_DEFAULT},costMode:'single',costSelectedKeys:new Set(),costView:{...COST_VIEW_DEFAULTS},majority:{parentCode:'',itemLen:0,itemPrefix:''}};
     const loadViewOptions=()=>{try{const saved=JSON.parse(localStorage.getItem(VIEW_KEY)||'{}');if('arrow' in saved&&!('delta' in saved))saved.delta=saved.arrow;return{...VIEW_DEFAULTS,...saved}}catch{return {...VIEW_DEFAULTS}}};
     const saveViewOptions=()=>localStorage.setItem(VIEW_KEY,JSON.stringify(state.view));
+    const loadCostViewOptions=()=>{try{return{...COST_VIEW_DEFAULTS,...JSON.parse(localStorage.getItem(COST_VIEW_KEY)||'{}')}}catch{return {...COST_VIEW_DEFAULTS}}};
+    const saveCostViewOptions=()=>localStorage.setItem(COST_VIEW_KEY,JSON.stringify(state.costView));
+    const loadSortOptions=()=>{try{return{...CompareCore.SORT_DEFAULT,...JSON.parse(localStorage.getItem(SORT_KEY)||'{}')}}catch{return {...CompareCore.SORT_DEFAULT}}};
+    const saveSortOptions=()=>localStorage.setItem(SORT_KEY,JSON.stringify(state.sort));
     const getAuthToken=()=>AUTH_KEYS.map((key)=>localStorage.getItem(key)||'').find(Boolean)||'';
     const clearAuthToken=()=>AUTH_KEYS.forEach((key)=>localStorage.removeItem(key));
     const loadManualPrices=()=>{try{return JSON.parse(localStorage.getItem(PRICE_KEY)||'{}')}catch{return {}}};
     const loadPriceTimes=()=>{try{return JSON.parse(localStorage.getItem(PRICE_TIME_KEY)||'{}')}catch{return {}}};
     const loadSimulatedQuantities=()=>{try{return JSON.parse(localStorage.getItem(SIM_QTY_KEY)||'{}')}catch{return {}}};
+    const loadJsonMap=(key)=>{try{return JSON.parse(localStorage.getItem(key)||'{}')}catch{return {}}};
     const saveManualPrices=()=>{localStorage.setItem(PRICE_KEY,JSON.stringify(state.manualPrices));localStorage.setItem(PRICE_TIME_KEY,JSON.stringify(state.priceTimes));};
     const saveSimulatedQuantities=()=>localStorage.setItem(SIM_QTY_KEY,JSON.stringify(state.simulatedQuantities));
+    const saveSimSalesPrices=()=>{localStorage.setItem(SIM_SALES_KEY,JSON.stringify(state.simSalesPrices));localStorage.setItem(SIM_SALES_TIME_KEY,JSON.stringify(state.simSalesTimes));};
+    const saveOtherCosts=()=>{localStorage.setItem(OTHER_COST_KEY,JSON.stringify(state.otherCosts));localStorage.setItem(OTHER_COST_TIME_KEY,JSON.stringify(state.otherCostTimes));};
     const fmtPriceTime=(ts)=>{if(!ts)return'';const d=new Date(ts);const p=(n)=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;};
     const syncAuth=()=>{state.token=getAuthToken();loginBtn.classList.toggle('hidden',Boolean(state.token));logoutBtn.classList.toggle('hidden',!state.token);};
     function showError(message){AliECSToast.show(message,'error')}
@@ -394,6 +459,13 @@
         ${state.view.bar?`<div class="barLine" title="本条长度 = 该物料比例 / 当前版本最大物料比例"><i style="width:${Math.round(pct*100)}%"></i></div>`:''}
       </td>`;
     }
+    // 排序下拉的勾选态 + 按钮上的当前排序摘要（关着下拉也能看出现在按什么排）。
+    function syncSortUi(){
+      compareSortOptions.querySelectorAll('[data-sort-key]').forEach((btn)=>btn.classList.toggle('on',btn.dataset.sortKey===state.sort.sortKey));
+      compareSortOptions.querySelectorAll('[data-sort-dir]').forEach((btn)=>btn.classList.toggle('on',btn.dataset.sortDir===state.sort.sortDir));
+      const name=CompareCore.SORT_KEYS[state.sort.sortKey]||state.sort.sortKey;
+      compareSortLabel.textContent=`：${name} ${state.sort.sortDir==='desc'?'↓':'↑'}`;
+    }
     function renderCompareTable(){
       const selected=selectedVersions();
       if(!selected.length){
@@ -401,7 +473,9 @@
         return;
       }
       const allRows=buildCompareMatrix();
-      const rows=allRows.map((row)=>({...row,st:rowStatus(row,allRows)})).filter((row)=>passCompareFilter(row.st));
+      const rows=CompareCore.sortCompareRows(
+        allRows.map((row)=>({...row,st:rowStatus(row,allRows)})).filter((row)=>passCompareFilter(row.st)),
+        {sortKey:state.sort.sortKey,sortDir:state.sort.sortDir,ratioOf:CompareCore.targetRatioGetter(sel())});
       compareTable.innerHTML=`<thead><tr>
         <th class="col-code">子件编码</th>
         <th class="col-name">子件名称</th>
@@ -553,34 +627,39 @@
       const recipe=selectedRecipe();
       return ((recipe&&recipe.lines)||[]).find((line)=>line.child_code===code)||null;
     }
-    // 当下价格 / 模拟数量 编辑后在浏览器本地重算（与后端 calculate_recipe_costs 公式一致），避免每次都请求后端重新解析 Excel。
+    // 本地重算已移到 cost-core.js（纯计算、可 node 直测）；这里只负责把当前 state 传进去。
     function recomputeRecipeCosts(recipe){
-      const lines=(recipe&&recipe.lines)||[];
-      let denom=0;
-      lines.forEach((line)=>{
-        const manual=state.manualPrices[line.child_code];
-        line.current_price=(manual==null||manual==='')?Number(line.system_price||0):Number(manual);
-        line.manual_price_applied=!(manual==null||manual==='');
-        const sim=state.simulatedQuantities[line.child_code];
-        line.simulated_quantity=(sim==null||sim==='')?Number(line.quantity||0):Number(sim);
-        if(!line.excluded)denom+=Number(line.cost_unit_factor||1)*Number(line.simulated_quantity||0);
-      });
-      let systemTotal=0,currentTotal=0,simulatedTotal=0;
-      lines.forEach((line)=>{
-        line.current_amount=Number(line.ratio||0)*Number(line.current_price||0);
-        const simCostQty=Number(line.cost_unit_factor||1)*Number(line.simulated_quantity||0);
-        line.simulated_ratio=(line.excluded||denom<=0)?0:simCostQty/denom;
-        line.simulated_amount=line.simulated_ratio*Number(line.current_price||0);
-        systemTotal+=Number(line.system_amount||0);
-        currentTotal+=Number(line.current_amount||0);
-        simulatedTotal+=Number(line.simulated_amount||0);
-      });
-      recipe.system_total=systemTotal;
-      recipe.current_total=currentTotal;
-      recipe.simulated_total=simulatedTotal;
+      return CostCore.recomputeRecipeCosts(recipe,state.manualPrices,state.simulatedQuantities);
     }
     function recomputeAllCosts(){
       ((state.cost&&state.cost.recipes)||[]).forEach(recomputeRecipeCosts);
+    }
+    // 模拟销售价格按父件编码取；没手填过就回落到系统销售价格（可能为 null＝该成品无销售记录）。
+    function simSalesPriceFor(recipe){
+      if(!recipe)return null;
+      const manual=state.simSalesPrices[recipe.parent_code];
+      if(manual!=null&&manual!=='')return Number(manual);
+      return (recipe.sales_price!=null&&recipe.sales_price!=='')?Number(recipe.sales_price):null;
+    }
+    const otherCostFor=(recipe)=>recipe?Number(state.otherCosts[recipe.key]||0):0;
+    function profitTipFor(recipe){
+      return CostCore.profitTooltipText({
+        salesPrice:simSalesPriceFor(recipe),
+        currentCost:recipe?recipe.current_total:null,
+        simulatedCost:recipe?recipe.simulated_total:null,
+        otherCost:otherCostFor(recipe),
+      });
+    }
+    // 「当前 19.5% · 模拟 21.2%」；毛利率为主口径，加成率在 tooltip 里。
+    function profitPairHtml(recipe){
+      const sales=simSalesPriceFor(recipe),other=otherCostFor(recipe);
+      const cell=(label,cost)=>{
+        const value=CostCore.profitMetrics({salesPrice:sales,cost,otherCost:other}).margin;
+        const text=CostCore.pct(value);
+        const tone=(value==null||!Number.isFinite(value))?'':(value<0?' neg':' pos');
+        return `<span class="profit-item"><span class="profit-tag">${label}</span><span class="profit-num${tone}">${text}</span></span>`;
+      };
+      return `${cell('当前',recipe?recipe.current_total:null)}<span class="profit-sep">·</span>${cell('模拟',recipe?recipe.simulated_total:null)}`;
     }
     let costStatusTimer=null;
     function flashCostStatus(text){
@@ -590,16 +669,35 @@
       if(costStatusTimer)clearTimeout(costStatusTimer);
       costStatusTimer=setTimeout(()=>el.classList.remove('show'),1200);
     }
+    const costLabel=(recipe)=>`${recipe.parent_name||recipe.parent_code} · ${recipe.version||'-'}${recipe.disabled&&recipe.disabled!=='0'?' · 停用':''}`;
     function renderCost(){
       const recipes=(state.cost&&state.cost.recipes)||[];
       costPanel.classList.toggle('hidden',!recipes.length);
       if(!recipes.length)return;
-      versionTabs.innerHTML=recipes.map((recipe)=>`<button type="button" class="${recipe.key===state.selectedKey?'active':''}" onclick="selectVersion('${recipe.key}')">${recipe.parent_name||recipe.parent_code} · ${recipe.version||'-'}${recipe.disabled&&recipe.disabled!=='0'?' · 停用':''}</button>`).join('');
+      const compare=state.costMode==='compare';
+      // 选中集跟着查询走（不持久化）；进对比模式时默认全选，省掉一次手点。
+      state.costSelectedKeys=new Set([...state.costSelectedKeys].filter((key)=>recipes.some((item)=>item.key===key)));
+      if(compare&&!state.costSelectedKeys.size)state.costSelectedKeys=new Set(recipes.map((item)=>item.key));
+      costModePills.querySelectorAll('.pill').forEach((pill)=>pill.classList.toggle('active',pill.dataset.costMode===state.costMode));
+      costViewDrop.classList.toggle('hidden',!compare);
+      costCompareToolbar.classList.toggle('hidden',!compare);
+      costCompareWrap.classList.toggle('hidden',!compare);
+      costSingleWrap.classList.toggle('hidden',compare);
+      costTotals.classList.toggle('hidden',compare);
+      resetAllSimBtn.classList.toggle('hidden',compare);
+      versionTabs.classList.toggle('multi',compare);
+      versionTabs.innerHTML=recipes.map((recipe)=>{
+        const active=compare?state.costSelectedKeys.has(recipe.key):recipe.key===state.selectedKey;
+        const handler=compare?`toggleCostVersion('${recipe.key}')`:`selectVersion('${recipe.key}')`;
+        return `<button type="button" class="${active?'active':''}" onclick="${handler}">${escapeHtml(costLabel(recipe))}</button>`;
+      }).join('');
+      if(compare){renderCostCompare();return;}
+      renderCostSingle();
+    }
+    function renderCostSingle(){
       const recipe=selectedRecipe();
       if(!recipe)return;
-      const salesLabel=recipe.sales_price_date?`销售价格（更新：${escapeHtml(String(recipe.sales_price_date))}）`:'销售价格';
-      const salesValue=(recipe.sales_price!=null&&recipe.sales_price!=='')?money(recipe.sales_price):'—';
-      costTotals.innerHTML=`<div class="metric"><span class="muted">${salesLabel}</span><strong>${salesValue}</strong></div><div class="metric"><span class="muted">当前合价</span><strong>${money(recipe.current_total)}</strong></div><div class="metric"><span class="muted">模拟合价</span><strong>${money(recipe.simulated_total)}</strong></div><div class="metric"><span class="muted">系统合价</span><strong>${money(recipe.system_total)}</strong></div>`;
+      renderCostTotals(recipe);
       const costLines=recipe.lines||[];
       const costSum=(key)=>costLines.reduce((acc,line)=>acc+Number(line[key]||0),0);
       const zc=(value)=>Math.abs(Number(value||0))<0.0005?' zero':'';
@@ -627,6 +725,218 @@
       });
       if(state.focusCode){const el=costBody.querySelector(`.price-input[data-code="${state.focusCode}"]`);state.focusCode='';if(el)el.focus();}
       if(state.focusSimCode){const el=costBody.querySelector(`.sim-qty-input[data-code="${state.focusSimCode}"]`);state.focusSimCode='';if(el)el.focus();}
+    }
+    function renderCostTotals(recipe){
+      const sysSalesTip=recipe.sales_price_date?` data-tooltip="录入日期：${escapeHtml(String(recipe.sales_price_date))}"`:'';
+      const sysSalesValue=(recipe.sales_price!=null&&recipe.sales_price!=='')?money(recipe.sales_price):DASH;
+      const simSales=simSalesPriceFor(recipe);
+      const simSalesTime=state.simSalesTimes[recipe.parent_code];
+      const simSalesTip=(recipe.parent_code in state.simSalesPrices)&&simSalesTime?` data-tooltip="更新时间：${fmtPriceTime(simSalesTime)}"`:'';
+      const otherTime=state.otherCostTimes[recipe.key];
+      const otherTip=(recipe.key in state.otherCosts)&&otherTime?` data-tooltip="更新时间：${fmtPriceTime(otherTime)}"`:'';
+      costTotals.innerHTML=[
+        `<div class="metric"><span class="muted${sysSalesTip?' calc-tip':''}"${sysSalesTip}>系统销售价格</span><strong>${sysSalesValue}</strong></div>`,
+        `<div class="metric"><span class="muted${simSalesTip?' calc-tip':''}"${simSalesTip}>模拟销售价格</span><input class="metric-input" data-metric="simSales" value="${simSales==null?'':inputValue(simSales)}" inputmode="decimal" placeholder="无销售价记录"/></div>`,
+        `<div class="metric"><span class="muted">系统合价</span><strong>${money(recipe.system_total)}</strong></div>`,
+        `<div class="metric"><span class="muted">模拟合价</span><strong>${money(recipe.simulated_total)}</strong></div>`,
+        `<div class="metric"><span class="muted">当前成本合价</span><strong>${money(recipe.current_total)}</strong></div>`,
+        `<div class="metric"><span class="muted${otherTip?' calc-tip':''}"${otherTip}>其他综合成本</span><input class="metric-input" data-metric="otherCost" value="${inputValue(otherCostFor(recipe))}" inputmode="decimal"/></div>`,
+        `<div class="metric profit"><span class="muted calc-tip" data-tooltip="${escapeHtml(profitTipFor(recipe))}">预估利润（毛利率）</span><strong>${profitPairHtml(recipe)}</strong></div>`,
+      ].join('');
+      costTotals.querySelectorAll('.metric-input').forEach((input)=>{
+        input.addEventListener('change',onMetricChange);
+        input.addEventListener('focus',()=>setTimeout(()=>input.select(),0));
+        input.addEventListener('keydown',(event)=>{if(event.key==='Enter'){event.preventDefault();input.blur();}});
+      });
+      if(state.focusMetric){
+        const el=costTotals.querySelector(`.metric-input[data-metric="${state.focusMetric}"]`);
+        state.focusMetric='';
+        if(el)el.focus();
+      }
+    }
+    // 模拟销售价格：清空＝回到系统销售价格；等于系统值时也删掉覆盖（与「当下价格」同一套记忆语义）。
+    function updateSimSalesPrice(recipe,value){
+      const code=recipe.parent_code;
+      const system=(recipe.sales_price!=null&&recipe.sales_price!=='')?Number(recipe.sales_price):null;
+      if(value==null||(system!=null&&Number(value)===system)){
+        delete state.simSalesPrices[code];delete state.simSalesTimes[code];
+      }else{
+        state.simSalesPrices[code]=value;state.simSalesTimes[code]=Date.now();
+      }
+      saveSimSalesPrices();
+    }
+    // 其他综合成本没有系统值，默认 0；填 0 就当没填过，删掉记忆。
+    function updateOtherCost(recipe,value){
+      const key=recipe.key;
+      if(!value){delete state.otherCosts[key];delete state.otherCostTimes[key];}
+      else{state.otherCosts[key]=value;state.otherCostTimes[key]=Date.now();}
+      saveOtherCosts();
+    }
+    function applyMetricEdit(recipe,metric,raw){
+      if(!recipe)return false;
+      const text=String(raw==null?'':raw).trim();
+      if(metric==='simSales'&&text===''){updateSimSalesPrice(recipe,null);return true;}
+      const value=Number(text);
+      if(!Number.isFinite(value)||value<0){
+        showError(metric==='simSales'?'模拟销售价格必须是非负数字。':'其他综合成本必须是非负数字。');
+        return false;
+      }
+      if(metric==='simSales')updateSimSalesPrice(recipe,value);else updateOtherCost(recipe,value);
+      return true;
+    }
+    function onMetricChange(event){
+      const metric=event.target.dataset.metric;
+      const ok=applyMetricEdit(selectedRecipe(),metric,event.target.value);
+      state.focusMetric=ok?'':metric;
+      renderCost();
+      if(ok)flashCostStatus('已更新 ✓');
+    }
+    function setCostMode(mode){
+      state.costMode=mode==='compare'?'compare':'single';
+      localStorage.setItem(COST_MODE_KEY,state.costMode);
+      renderCost();
+    }
+    function toggleCostVersion(key){
+      if(state.costSelectedKeys.has(key))state.costSelectedKeys.delete(key);else state.costSelectedKeys.add(key);
+      renderCost();
+    }
+    function costQuickSelect(mode){
+      const recipes=(state.cost&&state.cost.recipes)||[];
+      if(mode==='all')state.costSelectedKeys=new Set(recipes.map((item)=>item.key));
+      else if(mode==='none')state.costSelectedKeys=new Set();
+      else if(mode==='enabled')state.costSelectedKeys=new Set(recipes.filter((item)=>!item.disabled||item.disabled==='0').map((item)=>item.key));
+      renderCost();
+    }
+    const selectedCostRecipes=()=>((state.cost&&state.cost.recipes)||[]).filter((item)=>state.costSelectedKeys.has(item.key));
+    function renderCostCompare(){
+      costViewOptions.querySelectorAll('input[data-cost-view]').forEach((input)=>{input.checked=Boolean(state.costView[input.dataset.costView]);});
+      const recipes=selectedCostRecipes();
+      if(!recipes.length){
+        costSummaryTable.innerHTML='<tbody><tr><td style="padding:18px;color:#8b8177">请至少勾选一本配方。</td></tr></tbody>';
+        costMatrixTable.innerHTML='';
+        return;
+      }
+      renderCostSummary(recipes);
+      renderCostMatrix(recipes);
+    }
+    function renderCostSummary(recipes){
+      const head=`<thead><tr><th>指标</th>${recipes.map((recipe)=>`<th>${escapeHtml(costLabel(recipe))}</th>`).join('')}</tr></thead>`;
+      const markedRow=(label,values,lowerIsBetter,render)=>{
+        const mark=CostCore.bestWorstIndexes(values,lowerIsBetter);
+        const cells=values.map((value,index)=>`<td class="${index===mark.best?'best':index===mark.worst?'worst':''}">${render(value,recipes[index])}</td>`).join('');
+        return `<tr><td>${label}</td>${cells}</tr>`;
+      };
+      const plainRow=(label,render)=>`<tr><td>${label}</td>${recipes.map((recipe)=>`<td>${render(recipe)}</td>`).join('')}</tr>`;
+      const profits=recipes.map((recipe)=>CostCore.profitMetrics({salesPrice:simSalesPriceFor(recipe),cost:recipe.current_total,otherCost:otherCostFor(recipe)}).margin);
+      const profitMark=CostCore.bestWorstIndexes(profits,false);
+      const profitCells=recipes.map((recipe,index)=>`<td class="${index===profitMark.best?'best':index===profitMark.worst?'worst':''}" title="${escapeHtml(profitTipFor(recipe))}">${profitPairHtml(recipe)}</td>`).join('');
+      costSummaryTable.innerHTML=head+'<tbody>'+[
+        markedRow('系统合价',recipes.map((recipe)=>recipe.system_total),true,(value)=>moneyD(value)),
+        markedRow('当前成本合价',recipes.map((recipe)=>recipe.current_total),true,(value)=>moneyD(value)),
+        markedRow('模拟合价',recipes.map((recipe)=>recipe.simulated_total),true,(value)=>moneyD(value)),
+        plainRow('系统销售价格',(recipe)=>(recipe.sales_price!=null&&recipe.sales_price!=='')?money(recipe.sales_price):DASH),
+        plainRow('模拟销售价格',(recipe)=>{const value=simSalesPriceFor(recipe);return `<input class="cell-input" data-metric="simSales" data-key="${escapeHtml(recipe.key)}" value="${value==null?'':inputValue(value)}" inputmode="decimal" placeholder="无记录"/>`;}),
+        plainRow('其他综合成本',(recipe)=>`<input class="cell-input" data-metric="otherCost" data-key="${escapeHtml(recipe.key)}" value="${inputValue(otherCostFor(recipe))}" inputmode="decimal"/>`),
+        `<tr><td>预估利润（毛利率）</td>${profitCells}</tr>`,
+      ].join('')+'</tbody>';
+      costSummaryTable.querySelectorAll('.cell-input').forEach((input)=>{
+        input.addEventListener('change',onSummaryCellChange);
+        input.addEventListener('focus',()=>setTimeout(()=>input.select(),0));
+        input.addEventListener('keydown',(event)=>{if(event.key==='Enter'){event.preventDefault();input.blur();}});
+      });
+      if(state.focusMetric){
+        const el=costSummaryTable.querySelector(`.cell-input[data-metric="${state.focusMetric.split('|')[0]}"][data-key="${state.focusMetric.split('|')[1]||''}"]`);
+        state.focusMetric='';
+        if(el)el.focus();
+      }
+    }
+    function onSummaryCellChange(event){
+      const input=event.target;
+      const recipe=((state.cost&&state.cost.recipes)||[]).find((item)=>item.key===input.dataset.key);
+      const metric=input.dataset.metric;
+      const ok=applyMetricEdit(recipe,metric,input.value);
+      state.focusMetric=ok?'':`${metric}|${input.dataset.key}`;
+      renderCost();
+      if(ok)flashCostStatus('已更新 ✓');
+    }
+    // 对比矩阵：行 = 所选配方的子件并集，列 = 配方 × 勾选的要素列组。
+    // 「当下价格」和「模拟数量」都是按子件编码全局存的，所以它们不进每本配方的列组：
+    // 当下价格放在左侧固定区只出现一次（可编辑），模拟数量在模拟组里只读。
+    function costMatrixGroups(){
+      const view=state.costView;
+      const groups=[];
+      if(view.recipeGroup)groups.push({key:'recipeGroup',cls:'g-recipe',label:'原配方',cols:['数量','比例']});
+      if(view.systemGroup)groups.push({key:'systemGroup',cls:'g-system',label:'系统',cols:['系统单价','系统分价']});
+      if(view.currentGroup)groups.push({key:'currentGroup',cls:'g-current',label:'当下',cols:['当下分价']});
+      if(view.simGroup)groups.push({key:'simGroup',cls:'g-sim',label:'模拟',cols:['模拟数量','模拟比例','模拟分价']});
+      return groups;
+    }
+    function renderCostMatrix(recipes){
+      const view=state.costView;
+      const groups=costMatrixGroups();
+      const perRecipe=groups.reduce((acc,group)=>acc+group.cols.length,0);
+      const fixed=[{label:'子件编码',w:132,cls:'code'},{label:'子件名称',w:210,cls:'text-left'}];
+      if(view.spec)fixed.push({label:'规格型号',w:130,cls:'text-left'});
+      fixed.push({label:'单位',w:70,cls:'center'});
+      if(view.currentGroup)fixed.push({label:'当下价格',w:124,cls:'center price-td'});
+      let offset=0;
+      fixed.forEach((col)=>{col.left=offset;offset+=col.w;});
+      const lastFixed=fixed.length-1;
+      const fixedTh=fixed.map((col,index)=>`<th class="fix-col center${index===lastFixed?' recipe-end':''}" rowspan="2" style="left:${col.left}px;min-width:${col.w}px;width:${col.w}px">${col.label}</th>`).join('');
+      const groupTh=recipes.map((recipe)=>`<th class="recipe-end" colspan="${perRecipe}">${escapeHtml(costLabel(recipe))}</th>`).join('');
+      const colTh=recipes.map(()=>groups.map((group,gi)=>group.cols.map((name,index)=>{
+        const last=index===group.cols.length-1;
+        const endCls=last?(gi===groups.length-1?' recipe-end':' rc-end'):'';
+        return `<th class="${group.cls}${endCls}">${name}</th>`;
+      }).join('')).join('')).join('');
+      const rows=CostCore.buildCostMatrix(recipes,state.costSelectedKeys);
+      const zc=(value)=>Math.abs(Number(value||0))<0.0005?' zero':'';
+      // 比例条按「每本配方自己的最大比例」缩放：跨配方共用一个 max 会让占比小的那本整列看不见。
+      const maxOf=(recipe,key)=>Math.max(0,...(recipe.lines||[]).map((line)=>Number(line[key]||0)));
+      const scales=recipes.map((recipe)=>({ratio:maxOf(recipe,'ratio'),sim:maxOf(recipe,'simulated_ratio')}));
+      const cellsFor=(line,group,gi,ri)=>{
+        const last=gi===groups.length-1;
+        const endCls=last?' recipe-end':' rc-end';
+        if(!line)return group.cols.map((name,index)=>`<td class="muted${index===group.cols.length-1?endCls:''}">—</td>`).join('');
+        const rd=ratioD(line.ratio),srd=ratioD(line.simulated_ratio);
+        if(group.key==='recipeGroup')return `<td class="num qty${qtyD(line.quantity)===DASH?' muted':''}">${qtyD(line.quantity)}</td><td class="num ratio-cell${rd===DASH?' muted':''}${endCls}" style="--bar:${barPct(line.ratio,scales[ri].ratio)}%"><span class="ratio-value">${rd}</span></td>`;
+        if(group.key==='systemGroup')return `<td class="num sys-price${zc(line.system_price)}">${moneyD(line.system_price)}</td><td class="num sys-cost${zc(line.system_amount)}${endCls}">${moneyD(line.system_amount)}</td>`;
+        if(group.key==='currentGroup')return `<td class="num cur-cost${zc(line.current_amount)}${endCls}">${moneyD(line.current_amount)}</td>`;
+        return `<td class="num qty${qtyD(line.simulated_quantity)===DASH?' muted':''}">${qtyD(line.simulated_quantity)}</td><td class="num ratio-cell ${srd===DASH?'muted':'sim-ratio'}" style="--bar:${barPct(line.simulated_ratio,scales[ri].sim)}%"><span class="ratio-value">${srd}</span></td><td class="num sim-cost${zc(line.simulated_amount)}${endCls}">${moneyD(line.simulated_amount)}</td>`;
+      };
+      const body=rows.map((row)=>{
+        const anyLine=recipes.map((recipe)=>row.cells[recipe.key]).find(Boolean)||{};
+        const values=[
+          `${escapeHtml(row.child_code)}`,
+          `${escapeHtml(row.child_name||'')}${row.excluded?'<span class="excluded-tag"> · 不计比例</span>':''}`,
+        ];
+        if(view.spec)values.push(row.spec?escapeHtml(row.spec):'—');
+        values.push(escapeHtml(row.unit||''));
+        if(view.currentGroup)values.push(`<input class="price-input" data-code="${escapeHtml(row.child_code)}" value="${inputValue(anyLine.current_price||0)}" inputmode="decimal"/>`);
+        const fixedTd=values.map((html,index)=>`<td class="fix-col ${fixed[index].cls}${index===lastFixed?' recipe-end':''}" style="left:${fixed[index].left}px">${html}</td>`).join('');
+        const perRecipeTd=recipes.map((recipe,ri)=>groups.map((group,gi)=>cellsFor(row.cells[recipe.key],group,gi,ri)).join('')).join('');
+        return `<tr>${fixedTd}${perRecipeTd}</tr>`;
+      }).join('');
+      const sum=(recipe,key)=>((recipe.lines||[]).reduce((acc,line)=>acc+Number(line[key]||0),0));
+      const footFor=(recipe,group,gi)=>{
+        const endCls=gi===groups.length-1?' recipe-end':' rc-end';
+        if(group.key==='recipeGroup')return `<td class="num sum-formula qty">${qtyD(sum(recipe,'quantity'))}</td><td class="num sum-formula${endCls}">${ratioD(sum(recipe,'ratio'))}</td>`;
+        if(group.key==='systemGroup')return `<td class="num sum-price">—</td><td class="num sum-cost sys-cost${zc(recipe.system_total)}${endCls}">${moneyD(recipe.system_total)}</td>`;
+        if(group.key==='currentGroup')return `<td class="num sum-cost cur-cost${zc(recipe.current_total)}${endCls}">${moneyD(recipe.current_total)}</td>`;
+        return `<td class="num sum-sim">${qtyD(sum(recipe,'simulated_quantity'))}</td><td class="num sum-sim">${ratioD(sum(recipe,'simulated_ratio'))}</td><td class="num sum-cost sim-cost${zc(recipe.simulated_total)}${endCls}">${moneyD(recipe.simulated_total)}</td>`;
+      };
+      const foot=`<tfoot><tr><td class="fix-col sum-basic recipe-end" colspan="${fixed.length}" style="left:0">合计</td>${recipes.map((recipe)=>groups.map((group,gi)=>footFor(recipe,group,gi)).join('')).join('')}</tr></tfoot>`;
+      costMatrixTable.innerHTML=`<thead><tr class="group">${fixedTh}${groupTh}</tr><tr class="columns">${colTh}</tr></thead><tbody>${body}</tbody>${foot}`;
+      costMatrixTable.querySelectorAll('.price-input').forEach((input)=>{
+        input.addEventListener('change',onPriceChange);
+        input.addEventListener('focus',()=>setTimeout(()=>input.select(),0));
+        input.addEventListener('keydown',onPriceKeydown);
+      });
+      if(state.focusCode){
+        const el=costMatrixTable.querySelector(`.price-input[data-code="${state.focusCode}"]`);
+        state.focusCode='';
+        if(el)el.focus();
+      }
     }
     function selectVersion(key){state.selectedKey=key;renderCost();}
     function updateManualPrice(code,value){
@@ -661,7 +971,7 @@
       if(event.key!=='Enter')return;
       event.preventDefault();
       const input=event.target;
-      const inputs=[...costBody.querySelectorAll('.price-input')];
+      const inputs=[...document.querySelectorAll('#costSingleWrap .price-input, #costMatrixTable .price-input')];
       const next=inputs[inputs.indexOf(input)+1]||null;
       const code=input.dataset.code;
       const value=Number(input.value);
@@ -680,12 +990,15 @@
       recomputeAllCosts();renderCost();
       showSuccess('该行模拟数量和当下价格已重置。');
     }
+    // 重置范围跟着当前视图走：单本＝当前配方，对比＝所有勾选的配方。
+    const costRecipesInScope=()=>state.costMode==='compare'?selectedCostRecipes():[selectedRecipe()].filter(Boolean);
     async function resetAllPrices(){
-      const recipe=selectedRecipe();
-      for(const line of (recipe&&recipe.lines)||[]){delete state.manualPrices[line.child_code];delete state.priceTimes[line.child_code];}
+      for(const recipe of costRecipesInScope()){
+        for(const line of recipe.lines||[]){delete state.manualPrices[line.child_code];delete state.priceTimes[line.child_code];}
+      }
       saveManualPrices();
       recomputeAllCosts();renderCost();
-      showSuccess('当前配方当下价格已重置为系统价格。');
+      showSuccess(state.costMode==='compare'?'所选配方的当下价格已重置为系统价格。':'当前配方当下价格已重置为系统价格。');
     }
     async function onSimQuantityChange(event){
       const input=event.target;
@@ -757,7 +1070,7 @@
       return String(value||'配方').replace(/[\\/:*?"<>|\r\n\t]+/g,'-').replace(/\s+/g,'').slice(0,36)||'配方';
     }
     function buildComparePayload(){
-      return CompareCore.buildComparePayload({query:queryInput.value.trim(),activeFilter:state.activeFilter,view:state.view,queryRows:state.queryRows,sel:sel(),majority:state.majority});
+      return CompareCore.buildComparePayload({query:queryInput.value.trim(),activeFilter:state.activeFilter,view:state.view,queryRows:state.queryRows,sel:sel(),majority:state.majority,sortKey:state.sort.sortKey,sortDir:state.sort.sortDir});
     }
     async function downloadCompareResult(){
       const payload=buildComparePayload();
@@ -779,7 +1092,9 @@
     }
     const ssoLogin=()=>{location.href=`${API_BASE}/v1/auth/oidc/login?rd=${encodeURIComponent(location.pathname+location.search)}`;};
     document.addEventListener('DOMContentLoaded',()=>{
-      state.manualPrices=loadManualPrices();state.priceTimes=loadPriceTimes();state.simulatedQuantities=loadSimulatedQuantities();state.view=loadViewOptions();syncAuth();
+      state.manualPrices=loadManualPrices();state.priceTimes=loadPriceTimes();state.simulatedQuantities=loadSimulatedQuantities();state.view=loadViewOptions();
+      state.simSalesPrices=loadJsonMap(SIM_SALES_KEY);state.simSalesTimes=loadJsonMap(SIM_SALES_TIME_KEY);state.otherCosts=loadJsonMap(OTHER_COST_KEY);state.otherCostTimes=loadJsonMap(OTHER_COST_TIME_KEY);state.costView=loadCostViewOptions();state.sort=loadSortOptions();state.costMode=localStorage.getItem(COST_MODE_KEY)==='compare'?'compare':'single';
+      syncAuth();
       const linkParams=new URLSearchParams(location.search),linkedQuery=linkParams.get('q');
       if(linkedQuery)queryInput.value=linkedQuery;
       queryForm.onsubmit=(event)=>queryFormula(event).catch((error)=>showError(error.message));
@@ -806,9 +1121,31 @@
         });
       });
       compareFilters.querySelectorAll('.pill').forEach((pill)=>pill.onclick=()=>{compareFilters.querySelectorAll('.pill').forEach((item)=>item.classList.remove('active'));pill.classList.add('active');state.activeFilter=pill.dataset.filter;renderCompareTable();});
+      compareSortOptions.querySelectorAll('[data-sort-key],[data-sort-dir]').forEach((btn)=>btn.onclick=()=>{
+        if(btn.dataset.sortKey)state.sort.sortKey=btn.dataset.sortKey;else state.sort.sortDir=btn.dataset.sortDir;
+        saveSortOptions();syncSortUi();renderCompareTable();
+      });
+      syncSortUi();
       downloadRawBtn.onclick=()=>downloadRawResult().catch((error)=>showError(error.message));
       downloadHumanBtn.onclick=()=>downloadHumanResult().catch((error)=>showError(error.message));
       downloadCompareBtn.onclick=()=>downloadCompareResult().catch((error)=>showError(error.message));
+      costModePills.querySelectorAll('.pill').forEach((pill)=>pill.onclick=()=>setCostMode(pill.dataset.costMode));
+      costCompareToolbar.querySelectorAll('[data-cost-quick]').forEach((btn)=>btn.onclick=()=>costQuickSelect(btn.dataset.costQuick));
+      const costViewInputs=[...costViewOptions.querySelectorAll('input[data-cost-view]')];
+      costViewInputs.forEach((input)=>{
+        input.checked=Boolean(state.costView[input.dataset.costView]);
+        input.addEventListener('change',()=>{
+          const key=input.dataset.costView;
+          state.costView[key]=input.checked;
+          // 四个要素组至少留一组，否则对比表只剩左侧固定列，什么也比不出来。
+          if(COST_GROUP_KEYS.indexOf(key)>=0&&!COST_GROUP_KEYS.some((item)=>state.costView[item])){
+            state.costView[key]=true;input.checked=true;
+            showSuccess('至少要保留一组对比要素。');
+          }
+          saveCostViewOptions();
+          renderCost();
+        });
+      });
       exportCostBtn.onclick=()=>downloadCostResult().catch((error)=>showError(error.message));
       resetAllPricesBtn.onclick=()=>resetAllPrices().catch((error)=>showError(error.message));
       resetAllSimBtn.onclick=()=>resetAllSimulatedQuantities().catch((error)=>showError(error.message));
