@@ -58,7 +58,10 @@ def locator_from_source(source: dict[str, Any]) -> dict[str, Any]:
         "document_name": str(source.get("document_name") or ""),
         "source_url": str(source.get("source_url") or ""),
         "source_kind": source_type or "discovered",
-        "lifecycle_status": "unresolved" if not resolved else ("active" if active else "disabled"),
+        # 停用优先于未解析：lifecycle_status 每轮由 external_sources 派生，若 not resolved
+        # 先判，人工把失联来源置 disabled 也会被下一轮 reconcile 刷回 unresolved，
+        # 放弃动作永远落不了地（2026-08-20 放弃「产品名称命名」「市场需求」时踩到）。
+        "lifecycle_status": "disabled" if not active else ("active" if resolved else "unresolved"),
         "syncability_status": syncability,
         "capabilities": {
             "read": read_capability,

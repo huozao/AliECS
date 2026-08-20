@@ -99,7 +99,10 @@ def _doc_capabilities(
         reason = "文档尚未通过读取验证"
     return {
         "can_sync": syncable,
-        "can_download": resolved and readable and (system_managed or sheet_count > 0),
+        # 系统管理资产的下载文件全部由 DB 生成（定位档案 / 变更历史 / 同步表格清单），
+        # 不调企微 API，也不走 pull —— 拿 pull 的可读性判它能不能下载判的不是同一件事。
+        # 2026-08-20 停用该文档下早已不存在的陈旧子表后，MAX(last_sync_at) 归零就把下载按钮判没了。
+        "can_download": resolved and (system_managed or (readable and sheet_count > 0)),
         "can_copy": (
             provider == "wecom" and resolved and active and readable and not system_managed
             and locator_capabilities.get("copy") in {"allowed", "verified"}

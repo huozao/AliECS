@@ -243,6 +243,39 @@ class DocumentLocatorMirrorTests(unittest.TestCase):
         self.assertEqual("permission-denied", preserved["syncability_status"])
         self.assertEqual("auth", preserved["last_error_code"])
 
+    def test_disabled_source_retires_locator_even_without_valid_docid(self) -> None:
+        """停用优先于未解析：失联文档（只有 s3_ 分享标识）被人工放弃后必须能停下来。
+
+        lifecycle_status 不是独立字段，而是每轮由 external_sources 派生。若 `not resolved`
+        优先判定为 unresolved，把来源置 disabled 也会被下一轮 reconcile 刷回 unresolved，
+        放弃动作永远落不了地，资产页也永远清不掉这一行。
+        """
+        abandoned = source()
+        abandoned.update({
+            "external_doc_id": "s3_AHAAXxTrAKECNUdzDUxzETZ0E06P0_a",
+            "source_type": "smartsheet_link",
+            "status": "disabled",
+            "last_sync_at": None,
+        })
+
+        retired = self.locator.locator_from_source(abandoned)
+
+        self.assertEqual("disabled", retired["lifecycle_status"])
+        # 放弃不等于伪造身份：docid 依旧无效，分享标识与失败原因原样留在档案里。
+        self.assertIsNone(retired["api_doc_id"])
+        self.assertEqual("invalid-id", retired["syncability_status"])
+
+    def test_active_source_without_valid_docid_stays_unresolved(self) -> None:
+        unresolved = source()
+        unresolved.update({
+            "external_doc_id": "s3_ACcA4BQeAKQCNA97BZSY6TRmCWiKi_a",
+            "source_type": "smartsheet_link",
+            "status": "active",
+            "last_sync_at": None,
+        })
+
+        self.assertEqual("unresolved", self.locator.locator_from_source(unresolved)["lifecycle_status"])
+
     def test_live_read_success_clears_stale_permission_failure(self) -> None:
         store = FakeLocatorStore()
         failed_source = source()

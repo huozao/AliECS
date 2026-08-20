@@ -257,6 +257,7 @@ def overview_row(
     env_profile: str | None = "COMPANY_A",
     document_name: str | None = "生产表",
     sheet_name: str | None = "明细",
+    doc_source_id: int | None = 5,
 ) -> tuple[Any, ...]:
     has_run = status is not None
     return (
@@ -286,6 +287,7 @@ def overview_row(
         env_profile,
         document_name,
         sheet_name,
+        doc_source_id,
     )
 
 
@@ -381,6 +383,9 @@ class OverviewReadTests(SyncReadTestCase):
         self.assertEqual("COMPANY_A", result["items"][0]["env_profile"])
         self.assertEqual("生产表", result["items"][0]["document_name"])
         self.assertEqual("明细", result["items"][0]["sheet_name"])
+        # 资产视图按文档聚合作业，聚合键必须是文档级 source id。用文档名当键，
+        # 文档一改名就错配到别的行。
+        self.assertEqual(5, result["items"][0]["doc_source_id"])
         self.assertEqual("feishu", result["items"][1]["source_group"])
         self.assertEqual("tplus", result["items"][2]["source_group"])
         self.assertEqual({}, result["items"][0]["schedule"])
@@ -406,7 +411,11 @@ class OverviewReadTests(SyncReadTestCase):
         self.assertIn("source.env_profile", sql)
         self.assertIn("source.document_name", sql)
         self.assertIn("source.sheet_name", sql)
-        self.assertNotIn("external_doc_id", sql)
+        # 约束是「docid 不出现在响应里」，不是「docid 不出现在 SQL 文本里」。
+        # 文档级聚合键必须靠 (provider, env_profile, external_doc_id) 自连接才拿得到，
+        # 所以 JOIN 条件用得上这一列，SELECT 出去则不行——按前者断言。
+        select_clause = sql.split("FROM sync_jobs")[0]
+        self.assertNotIn("external_doc_id", select_clause)
         self.assertNotIn("alert_chat_id", sql)
 
     def test_overview_preserves_null_source_pointer_without_exposing_document_id(self):
@@ -420,6 +429,7 @@ class OverviewReadTests(SyncReadTestCase):
                     last_success_at=None,
                     sla_seconds=None,
                     source_id=None,
+                    doc_source_id=None,
                 )
             ]
         )
@@ -428,6 +438,7 @@ class OverviewReadTests(SyncReadTestCase):
 
         self.assertIsNone(result["items"][0]["source_id"])
         self.assertNotIn("external_doc_id", result["items"][0])
+        self.assertIsNone(result["items"][0]["doc_source_id"])
 
 
 class AlertReadTests(SyncReadTestCase):

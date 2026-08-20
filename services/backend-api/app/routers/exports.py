@@ -28,6 +28,13 @@ _LOCATOR_CURRENT_FIELDS = (
 _LOCATOR_EVENT_FIELDS = (
     "事件时间", "文档名称", "事件类型", "触发来源", "变化字段", "状态摘要", "唯一键",
 )
+# 定位档案是文档级的，真正驱动同步的身份是表级四元组，sheet_id 与 source_id 只在这张表里。
+# 字段与 doc-sync-worker 的 INVENTORY_FIELDS 逐列对齐：镜像和下载必须是同一份东西，
+# 两边各写一套列，从备份恢复时就不知道该信哪份。
+_LOCATOR_INVENTORY_FIELDS = (
+    "平台", "企业配置", "文档名称", "子表名称", "API文档ID", "子表ID", "来源ID",
+    "作业键", "来源类型", "状态", "最后同步时间", "唯一键",
+)
 
 
 _TPLUS_EXPORT_DESCRIPTIONS = {
@@ -554,6 +561,28 @@ def _append_locator_archive_worksheets(workbook: Any, cur: Any) -> None:
     for row in cur.fetchall():
         history.append(
             [_archive_cell(row[0]), row[1], row[2], row[3], _archive_cell(row[4]), _archive_cell(row[5]), f"locator:{int(row[6])}"]
+        )
+
+    inventory = workbook.create_sheet(title="同步表格清单")
+    inventory.append(list(_LOCATOR_INVENTORY_FIELDS))
+    # 停用行同样导出：停用不等于可以丢身份，恢复时要认得出哪张子表曾经归哪个作业。
+    cur.execute(
+        """
+        SELECT s.id, s.provider, s.env_profile, s.external_doc_id, s.external_sheet_id,
+               s.document_name, s.sheet_name, s.source_type, s.status, s.last_sync_at,
+               COALESCE(j.job_key, '')
+        FROM external_sources s
+        LEFT JOIN sync_jobs j ON j.source_id = s.id
+        WHERE s.external_sheet_id <> ''
+        ORDER BY s.id
+        """
+    )
+    for row in cur.fetchall():
+        inventory.append(
+            [
+                "企微" if row[1] == "wecom" else "飞书", row[2], row[5], row[6], row[3], row[4],
+                int(row[0]), row[10], row[7], row[8], _archive_cell(row[9]), f"source:{int(row[0])}",
+            ]
         )
 
 
