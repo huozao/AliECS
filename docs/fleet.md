@@ -40,6 +40,20 @@ bridge/openclaw 容器
       └─ 备 127.0.0.1:11811 ← webdock1 反向隧道
 ```
 
+txecs 上另有三条同形的容器侧通路。四条规则都只允许
+`business-cn` 容器子网访问 Docker 网关，不开放到公网：
+
+| 容器访问 | 宿主机转发目标 | 用途 |
+|---|---|---|
+| `host.docker.internal:11800` | `127.0.0.1:11800` | WebDock 照片存储 |
+| `host.docker.internal:18080` | `127.0.0.1:18080` | 企微客服处理器 |
+| `host.docker.internal:18200` | `127.0.0.1:18200` | ERPNext 资料任务归档 |
+| `host.docker.internal:18201` | `127.0.0.1:18201` | Paperless 资料任务归档 |
+
+2026-08-21 实测迁移后四条都曾出现“宿主机回环可达、容器超时”；根因是回环服务没有
+对应的 Docker 网关 proxy/UFW 放行。验活必须从 `business-cn-backend-api-1` 容器内发起，
+只在宿主机 `curl 127.0.0.1:<port>` 不能证明业务通路恢复。
+
 - **主备关系的唯一权威来源是当前 business-cn 主机（现为 txecs）上的 `/etc/default/webdock-failover-proxy` 与 `127.0.0.1:11800/healthz` 响应头**。当前 primary=webdock2、standby=webdock1。⚠️ 端口只是实现细节：当前 primary 端口为 11810、standby 端口为 11811；切换服务器或主备时不得只凭端口号判断。
 - 主上游失败自动切备（标记 60s），并给回复加"已自动切换备用服务器"前缀。
 - 代理在响应头标注实际来源：`X-Webdock-Device`（设备名，来自环境文件 `WEBDOCK_FAILOVER_PRIMARY_NAME`/`STANDBY_NAME`）和 `X-Webdock-Route`（primary/standby）；bridge 用它渲染飞书卡片灰色脚注（例如 `设备: webdock2(主) | 项目: xx | 耗时: Ns`，以实际响应头为准）。

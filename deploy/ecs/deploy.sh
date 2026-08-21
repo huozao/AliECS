@@ -306,6 +306,7 @@ WEBDOCK_TUNNEL_PROXY_BIND_PORT="${WEBDOCK_TUNNEL_PROXY_BIND_PORT:-11800}"
 WEBDOCK_TUNNEL_PROXY_TARGET_HOST="${WEBDOCK_TUNNEL_PROXY_TARGET_HOST:-127.0.0.1}"
 WEBDOCK_TUNNEL_PROXY_TARGET_PORT="${WEBDOCK_TUNNEL_PROXY_TARGET_PORT:-11800}"
 WEBDOCK_TUNNEL_PROXY_BACKLOG="${WEBDOCK_TUNNEL_PROXY_BACKLOG:-64}"
+HOST_GATEWAY_PROXIES_ENABLED="${HOST_GATEWAY_PROXIES_ENABLED:-true}"
 
 LOG_DIR="${DEPLOY_LOG_DIR:-$ROOT_DIR/logs}"
 mkdir -p "$LOG_DIR"
@@ -486,7 +487,14 @@ ENV
 cp "$CURRENT_ENV" "$RUNTIME_ENV_FILE"
 
 if [[ "${DEPLOY_PREPARE_ONLY:-false}" != "true" \
-    && "$WEBDOCK_TUNNEL_PROXY_ENABLED" == "true" ]]; then
+    && "$HOST_GATEWAY_PROXIES_ENABLED" == "true" ]]; then
+  echo "[部署] 配置容器到宿主机业务代理"
+  bash "$ROOT_DIR/install-host-gateway-proxies.sh"
+fi
+
+if [[ "${DEPLOY_PREPARE_ONLY:-false}" != "true" \
+    && ( "$WEBDOCK_TUNNEL_PROXY_ENABLED" == "true" \
+      || "$STORAGE_DRIVER" == "webdock" ) ]]; then
   echo "[部署] 配置 WebDock SSH 隧道容器代理"
   "$ROOT_DIR/install-webdock-tunnel-proxy.sh"
 fi

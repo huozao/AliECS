@@ -1,0 +1,19 @@
+[Unit]
+Description=Host-gateway proxy for %i (containers -> loopback service)
+After=network-online.target docker.service
+Wants=network-online.target
+ConditionPathExists=/opt/aliecs/webdock-tunnel-proxy.py
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/host-gateway-proxy-%i
+ExecStart=/usr/bin/python3 /opt/aliecs/webdock-tunnel-proxy.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
