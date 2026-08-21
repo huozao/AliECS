@@ -182,11 +182,14 @@ aliecs 与 txecs。两个脚本对缺 `deployment_id` 的旧 request 会回落�
 | backend unhealthy | healthcheck `start_period: 300s` 内属正常；healthz 对可选探测必须容错（惰性目录事故 PR#106） | 等 start_period；真不健康看 `docker logs` |
 | 部署后页面没变 | 内容寻址：内容没变的服务标签不变、容器不重建 | 确认改动落在对应构建上下文目录内 |
 | txecs 的三个 worker 同时 Exited(137)，随后部署仍不启动 | `sudo grep -E '^(P0_MODE|TPLUS_BOM_WRITE_ENABLED)=' /srv/business-cn/config/runtime.env` | 正式 `business-cn` workflow 必须用 infra 的 production profile：`P0_MODE=false`、`TPLUS_BOM_WRITE_ENABLED=true`。P0 profile 会主动停 worker，只用于隔离阶段 |
+| 宿主机 `127.0.0.1` 上游正常，但 backend 容器访问 `host.docker.internal` 超时 | 从 `business-cn-backend-api-1` 内分别探 11800/18080/18200/18201，再查 `172.17.0.1` listener 与 UFW 的 `172.18.0.0/16` 来源限制 | `install-host-gateway-proxies.sh` 管 18080/18200/18201，旧的 `webdock-tunnel-proxy.service` 管 11800；两边都必须同时具备 proxy listener 和窄 UFW 规则。不要把端口直接发布到公网 |
 | workflow 显示 success，但生产没变（容器还是旧的 Up N days） | 先看**是不是 push 触发的**（push 不部署，见上方「触发语义」）；再看 `stage-business-cn-peer` 的结论 | 两种成因：①（2026-08-10）push/合并根本不触发部署，需手工 dispatch；②（2026-08-04）`gh run rerun --failed` **只重跑 failed 的 job，skipped 的不会被拉起**，build 失败 → deploy 被 skip → 重跑后 build 转绿、conclusion=success、部署却没执行。两者处置相同：`gh workflow run release-deploy.yml --ref main -f deploy_target=business-cn` 跑完整一轮。⚠️ 判据是 `stage-business-cn-peer`，**不是 `deploy-business-cn`**（后者是 TCR fallback，主路径下恒为 skipped） |
 | `mirror-built-to-tcr` 失败或超时 | `stage-business-cn-peer` 和 txecs ACK 是否成功 | peer 成功则生产发布已完成，TCR 仅备用镜像缺一版；网络恢复后重跑 `mirror-only`。只有显式 `business-cn-tcr-fallback` 才被它阻塞 |
 | `stage-business-cn-peer` 等不到 ACK | aliecs `peer-syncthing`、txecs tunnel/syncthing/consume timer；两侧 `release.json` 与 ACK | 不手工跳过哈希门。先修同步；需止损时显式选择 `business-cn-tcr-fallback` |
 | `stage-openclaw-bridge-peer` 等不到 ACK | 先按上一行查同一物理通道，再看 bridge release 的 ACK、`txecs-openclaw-bridge.service` 和 `/v1/models` | 修复后手工选择 `bridge-peer` 重发；紧急回退才使用 `bridge-cutover.yml` 的 TCR 路径。不要改成业务 release，也不要重启 business-cn |
 | 手工 TCR `bridge-cutover` 失败，日志是 `ssh: handshake failed: EOF` | 本机 `ssh txecs` 同时也会间歇 `Connection closed`。查 `sudo journalctl -u ssh` 是否出现 `beginning MaxStartups throttling` / `drop connection`，再查 `sudo fail2ban-client status sshd` | txecs 公网 22 持续遭遇机会型自动扫描；来源 IP 多登记在腾讯云网段，但不能据此断言主机归属或是否已被入侵。2026-07-28 曾触发 `MaxStartups 10:30:100` 并丢弃合法连接；同日已启用 fail2ban sshd aggressive jail（5 次/10 分钟、封 24 小时），未放宽 `MaxStartups`。确认扫描源已被封且本机 SSH 稳定后，再重跑 fallback。密码和 root 登录均关闭；成功登录还必须按用户、来源 IP、密钥指纹核对，不能只看 IP |
+
+<!-- nav-check: deploy/ecs/install-host-gateway-proxies.sh -->
 
 ## 验证命令
 
