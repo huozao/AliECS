@@ -99,7 +99,7 @@
   const pct = (value) => (value == null || !Number.isFinite(value)) ? DASH : `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)}%`;
   const fixed3 = (value) => (Number.isFinite(Number(value)) ? Number(value).toFixed(3) : DASH);
 
-  // 悬浮提示：代入实际数字的四条算式 + 成本口径说明，让用户知道数字是怎么来的。
+  // 悬浮提示：三个成本口径各代入实际数字的两条算式 + 成本口径说明，让用户知道数字是怎么来的。
   function profitTooltipText(args) {
     const input = args || {};
     const salesPrice = numOrNaN(input.salesPrice);
@@ -108,7 +108,7 @@
       return '该成品没有销售价记录，也未手填「模拟销售价格」，无法估算利润。\n在上方「模拟销售价格」里填一个价格即可看到毛利率。';
     }
     const lines = [];
-    [['当前', input.currentCost], ['模拟', input.simulatedCost]].forEach((pair) => {
+    [['系统', input.systemCost], ['当前', input.currentCost], ['模拟', input.simulatedCost]].forEach((pair) => {
       const label = pair[0], cost = numOrNaN(pair[1]);
       if (!Number.isFinite(cost)) return;
       const metrics = profitMetrics({ salesPrice, cost, otherCost });

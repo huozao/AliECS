@@ -466,22 +466,131 @@ def build_group_summary(detail: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def query_recipe_workbook(
-    input_path: Path,
-    query_text: str,
-    default_bom: str | None = "all",
-    include_disabled: bool = True,
-) -> RecipeQueryResult:
-    detail = load_detail_from_workbook(input_path)
+# 按子件反查时候选列表的上限：关键字太泛（比如「粉」）会命中上千个子件，
+# 一次全塞给前端既卡页面也没法选，超出就截断并让前端提示细化关键字。
+CHILD_SEARCH_LIMIT = 200
+
+# 拼接版本键用的分隔符：取不可能出现在编码/版本号里的控制字符，避免 "A"+"1" 与 "A1"+"" 撞键。
+_VERSION_KEY_SEP = chr(31)
+
+
+def _apply_scope_filter(detail: pd.DataFrame, default_bom: str | None, include_disabled: bool) -> pd.DataFrame:
+    """默认BOM / 停用两个范围过滤。按子件反查和按父件查询共用，避免两条入口的范围口径漂移。"""
     if not _is_all_filter(default_bom):
         wanted = normalize_cell(default_bom)
         detail = detail[detail["默认BOM"].map(normalize_cell) == wanted]
     if not include_disabled and "停用" in detail.columns:
         detail = detail[detail["停用"].map(normalize_cell).isin({"", "0", "否", "False", "false"})]
+    return detail
 
-    codes = parse_codes_text(query_text)
-    keywords = codes or [query_text]
-    detail = detail[_query_match_mask(detail, keywords)].copy()
+
+def _version_keys(detail: pd.DataFrame) -> pd.Series:
+    """配方版本的唯一键＝父件编码 + 版本号；同一父件的不同版本必须分开算。"""
+    return detail["父件编码"].map(normalize_cell) + _VERSION_KEY_SEP + detail["版本号_子件"].map(normalize_cell)
+
+
+def search_child_items(
+    input_path: Path,
+    keyword: str,
+    default_bom: str | None = "all",
+    include_disabled: bool = True,
+    limit: int = CHILD_SEARCH_LIMIT,
+) -> tuple[list[dict[str, object]], bool]:
+    """按关键字在子件编码/名称里找候选子件，返回 (候选列表, 是否被截断)。
+
+    只做候选罗列，不做反查——反查是用户勾选确认之后由 query_recipe_workbook 走 child_codes 完成的。
+    """
+    detail = _apply_scope_filter(load_detail_from_workbook(input_path), default_bom, include_disabled)
+    terms = [normalize_cell(term).lower() for term in parse_codes_text(keyword)]
+    terms = [term for term in terms if term]
+    if detail.empty or not terms:
+        return [], False
+
+    code = detail["子件编码"].map(normalize_cell)
+    name = detail["子件名称"].map(normalize_cell)
+    lower_code, lower_name = code.str.lower(), name.str.lower()
+    mask = pd.Series(False, index=detail.index)
+    for term in terms:
+        mask = mask | lower_code.str.contains(term, regex=False, na=False) | lower_name.str.contains(term, regex=False, na=False)
+
+    hit = detail[mask]
+    if hit.empty:
+        return [], False
+    keys = _version_keys(hit)
+    grouped: dict[str, dict[str, object]] = {}
+    for child_code, child_name, spec, unit, version_key in zip(
+        code[mask], name[mask],
+        hit["规格型号_子件"].map(normalize_cell), hit["计量单位_子件"].map(normalize_cell),
+        keys,
+    ):
+        item = grouped.get(child_code)
+        if item is None:
+            item = {"child_code": child_code, "child_name": child_name, "spec": spec, "unit": unit, "_keys": set()}
+            grouped[child_code] = item
+        if not item["child_name"]:
+            item["child_name"] = child_name
+        if not item["spec"]:
+            item["spec"] = spec
+        if not item["unit"]:
+            item["unit"] = unit
+        item["_keys"].add(version_key)
+
+    items = [
+        {"child_code": item["child_code"], "child_name": item["child_name"], "spec": item["spec"],
+         "unit": item["unit"], "recipe_count": len(item["_keys"])}
+        for item in grouped.values()
+    ]
+    items.sort(key=lambda item: (-int(item["recipe_count"]), str(item["child_code"])))
+    truncated = len(items) > limit
+    return items[:limit], truncated
+
+
+def _filter_by_child_codes(detail: pd.DataFrame, child_codes: list[str], child_match: str) -> pd.DataFrame:
+    """按子件反查：先定位含这些子件的配方版本，再把明细收敛到这些版本（整本配方都要，不只命中行）。
+
+    子件编码走精确匹配，不能复用 _query_match_mask 的子串匹配——
+    子串会让 `HYD-419` 连带命中 `HYD-4197`，反查结果就多出用户没选的配方。
+    """
+    wanted = {normalize_cell(code) for code in child_codes}
+    wanted.discard("")
+    if not wanted:
+        return detail.iloc[0:0]
+    child = detail["子件编码"].map(normalize_cell)
+    keys = _version_keys(detail)
+    hit = child.isin(wanted)
+    if not hit.any():
+        return detail.iloc[0:0]
+    if normalize_cell(child_match).lower() == "all":
+        covered = (
+            pd.DataFrame({"key": keys[hit], "child": child[hit]})
+            .groupby("key")["child"].nunique()
+        )
+        matched_keys = set(covered[covered >= len(wanted)].index)
+    else:
+        matched_keys = set(keys[hit])
+    return detail[keys.isin(matched_keys)]
+
+
+def query_recipe_workbook(
+    input_path: Path,
+    query_text: str,
+    default_bom: str | None = "all",
+    include_disabled: bool = True,
+    child_codes: list[str] | None = None,
+    child_match: str = "any",
+) -> RecipeQueryResult:
+    detail = _apply_scope_filter(load_detail_from_workbook(input_path), default_bom, include_disabled)
+
+    selected_children = [normalize_cell(code) for code in (child_codes or [])]
+    selected_children = [code for code in selected_children if code]
+    if selected_children:
+        # 反查模式：query_text 只是候选关键字，用于审计和文件名，不参与匹配。
+        codes = selected_children
+        detail = _filter_by_child_codes(detail, selected_children, child_match).copy()
+    else:
+        codes = parse_codes_text(query_text)
+        keywords = codes or [query_text]
+        detail = detail[_query_match_mask(detail, keywords)].copy()
     summary = build_group_summary(detail)
     return RecipeQueryResult(
         source_path=input_path,

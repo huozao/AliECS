@@ -189,7 +189,7 @@
   function passCompareFilter(status, activeFilter) {
     return activeFilter === 'all' || (activeFilter === 'diff' && status !== 'same') || (activeFilter === 'replace' && status === 'replace') || (activeFilter === 'adddel' && (status === 'add' || status === 'del')) || (activeFilter === 'change' && status === 'change') || (activeFilter === 'same' && status === 'same');
   }
-  const VIEW_DEFAULTS = { spec: true, qty: true, pct: true, arrow: true, delta: true, newTag: true, bar: true };
+  const VIEW_DEFAULTS = { code: true, spec: true, qty: true, pct: true, arrow: true, delta: true, newTag: true, bar: true, insight: true };
 
   // 子件行排序。页面表格和导出 Excel 都走这一个函数——两边各排一次迟早会漂
   // （改这条之前：页面按 buildCompareMatrix 的编码序，Excel 按状态分组，同一份数据两种行序）。
@@ -235,6 +235,30 @@
     return desc ? sorted.reverse() : sorted;
   }
 
+  // 配方列（BOM 列）排序：以某一个子件行为基准，按该行的比例或数量给列排序。
+  // 与 sortCompareRows 对称，同样只此一处——页面表格和导出 Excel 的列序必须同源。
+  const COL_SORT_DEFAULT = { itemCode: '', dir: 'desc', metric: 'ratio' };
+  function sortCompareColumns(versions, args) {
+    const options = args || {};
+    const itemCode = options.itemCode || '';
+    if (!itemCode) return versions;
+    const row = (options.rows || []).find((item) => String(item.itemCode) === String(itemCode));
+    if (!row) return versions;
+    const metric = options.metric === 'qty' ? 'qty' : 'ratio';
+    const valueOf = (version) => {
+      const cell = row.cells[version.key];
+      return cell ? Number(cell[metric]) : NaN;
+    };
+    // 该配方不含此子件（cell 缺失），或含但该口径为 0（包装袋这类不计比例的），
+    // 都恒定压在最后：正倒序都不该把「没有这个料」的配方翻到最前面。
+    const has = (version) => { const value = valueOf(version); return Number.isFinite(value) && Math.abs(value) >= 0.000005; };
+    const valued = versions.filter(has);
+    const blank = versions.filter((version) => !has(version));
+    valued.sort((a, b) => (valueOf(b) - valueOf(a)) || String(a.parentCode).localeCompare(String(b.parentCode), 'zh-CN'));
+    if (options.dir === 'asc') valued.reverse();
+    return valued.concat(blank);
+  }
+
   function applyQuickSelect(sel, quickMode) {
     const all = sel.versions.map((version) => version.key);
     if (quickMode === 'all') sel.selectedKeys = new Set(all);
@@ -256,6 +280,7 @@
     const base = baseVersion(sel), targets = targetVersions(sel);
     if (!base || !targets.length) return null;
     const rowsAll = buildCompareMatrix(queryRows, sel);
+    const ordered = sortCompareColumns(selected, Object.assign({ rows: rowsAll }, args.colSort || {}));
     const rows = sortCompareRows(
       rowsAll.map((row) => Object.assign({}, row, { st: rowStatus(row, rowsAll, sel) })).filter((row) => passCompareFilter(row.st, activeFilter)),
       { sortKey: args.sortKey, sortDir: args.sortDir, ratioOf: targetRatioGetter(sel) },
@@ -264,7 +289,7 @@
       query,
       filter_label: FILTER_LABELS[activeFilter] || activeFilter,
       view,
-      versions: selected.map((version) => ({ label: targetLabel(version), code: version.parentCode, version: version.version || '', is_base: version.key === base.key, is_target: targets.some((target) => target.key === version.key) })),
+      versions: ordered.map((version) => ({ label: targetLabel(version), code: version.parentCode, version: version.version || '', is_base: version.key === base.key, is_target: targets.some((target) => target.key === version.key) })),
       rows: rows.map((row) => ({
         status: row.st,
         item_code: row.itemCode,
@@ -272,7 +297,7 @@
         spec: row.spec || '',
         unit: row.unit || '',
         code_warn: isSpecialItemCode(row.itemCode, majority),
-        cells: selected.map((version) => {
+        cells: ordered.map((version) => {
           const cell = row.cells[version.key];
           if (!cell) return null;
           const baseCell = row.cells[base.key];
@@ -296,6 +321,7 @@
     itemFamily, buildCompareMatrix, categoryHasReplacement, rowStatusForTarget, rowStatus,
     statusText, statusClass, EXPORT_ST_ORDER, FILTER_LABELS, passCompareFilter, VIEW_DEFAULTS,
     SORT_KEYS, SORT_DEFAULT, sortCompareRows, targetRatioGetter,
+    COL_SORT_DEFAULT, sortCompareColumns,
     applyQuickSelect, buildComparePayload,
   };
 }));

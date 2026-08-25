@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from app.core import _conn, require_login, require_permission
 from app.business_audit import sha256_file, write_business_audit
-from app.recipes.bom_query import calculate_recipe_costs, export_path_for_id, load_detail_from_workbook, locate_recipe_source, new_export_path, query_recipe_workbook, recipe_cost_export_filename, recipe_raw_export_filename, save_recipe_cost_workbook, save_recipe_human_workbook, save_recipe_workbook
+from app.recipes.bom_query import CHILD_SEARCH_LIMIT, calculate_recipe_costs, export_path_for_id, load_detail_from_workbook, locate_recipe_source, new_export_path, query_recipe_workbook, recipe_cost_export_filename, recipe_raw_export_filename, save_recipe_cost_workbook, save_recipe_human_workbook, save_recipe_workbook, search_child_items
 from app.recipes.compare_export import compare_export_filename, save_compare_workbook
 from app.recipes.price_lookup import latest_purchase_prices, latest_sales_prices
 
@@ -28,6 +28,16 @@ router = APIRouter()
 
 class RecipeQueryRequest(BaseModel):
     query: str = Field(min_length=1, max_length=100)
+    default_bom: str = "all"
+    include_disabled: bool = True
+    # 按子件反查：非空时 query 只作展示/文件名，匹配改成「先按子件编码精确定位配方版本，再取整本配方」。
+    # 不复用 query 文本传父件编码：query 是子串匹配（HYD-419 会带出 HYD-4197）且只有 100 字符。
+    child_codes: list[str] = Field(default_factory=list, max_length=500)
+    child_match: str = Field(default="any", pattern="^(any|all)$")
+
+
+class ChildSearchRequest(BaseModel):
+    keyword: str = Field(min_length=1, max_length=100)
     default_bom: str = "all"
     include_disabled: bool = True
 
@@ -99,11 +109,13 @@ _RECIPE_QUERY_CONTEXT: dict[str, dict[str, object]] = {}
 _RECIPE_QUERY_CONTEXT_MAX = 256
 
 
-def _remember_recipe_query(file_id: str, query: str, default_bom: str | None, include_disabled: bool) -> None:
+def _remember_recipe_query(file_id: str, body: RecipeQueryRequest) -> None:
     _RECIPE_QUERY_CONTEXT[file_id] = {
-        "query": query,
-        "default_bom": default_bom,
-        "include_disabled": include_disabled,
+        "query": body.query,
+        "default_bom": body.default_bom,
+        "include_disabled": body.include_disabled,
+        "child_codes": list(body.child_codes),
+        "child_match": body.child_match,
     }
     while len(_RECIPE_QUERY_CONTEXT) > _RECIPE_QUERY_CONTEXT_MAX:
         _RECIPE_QUERY_CONTEXT.pop(next(iter(_RECIPE_QUERY_CONTEXT)))
@@ -175,14 +187,9 @@ def recipe_query(request: Request, body: RecipeQueryRequest, user: dict[str, Any
     require_permission("formula.read", user)
     try:
         source_path = locate_recipe_source()
-        result = query_recipe_workbook(
-            source_path,
-            query_text=body.query,
-            default_bom=body.default_bom,
-            include_disabled=body.include_disabled,
-        )
+        result = _query_for(body, source_path)
         file_id, _output_path = new_export_path()
-        _remember_recipe_query(file_id, body.query, body.default_bom, body.include_disabled)
+        _remember_recipe_query(file_id, body)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="BOM 输入文件未找到") from exc
     except ValueError as exc:
@@ -204,10 +211,55 @@ def recipe_query(request: Request, body: RecipeQueryRequest, user: dict[str, Any
     }
     write_business_audit(
         user=user, request=request, action="formula.query", resource_type="formula",
-        query={"query": body.query, "default_bom": body.default_bom, "include_disabled": body.include_disabled},
+        query={"query": body.query, "default_bom": body.default_bom, "include_disabled": body.include_disabled,
+               "child_codes": list(body.child_codes), "child_match": body.child_match},
         result_count=result.recipe_count,
     )
     return response
+
+
+@router.post("/v1/recipes/children/search")
+def recipe_children_search(request: Request, body: ChildSearchRequest, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
+    """按关键字罗列候选子件，供用户勾选后反查配方。只出候选，不出配方——反查在 /v1/recipes/query 用 child_codes 完成。"""
+    require_permission("formula.read", user)
+    try:
+        source_path = locate_recipe_source()
+        items, truncated = search_child_items(
+            source_path,
+            keyword=body.keyword,
+            default_bom=body.default_bom,
+            include_disabled=body.include_disabled,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="BOM 输入文件未找到") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"子件查询失败：{type(exc).__name__}") from exc
+
+    write_business_audit(
+        user=user, request=request, action="formula.children.search", resource_type="formula",
+        query={"keyword": body.keyword, "default_bom": body.default_bom, "include_disabled": body.include_disabled},
+        result_count=len(items),
+    )
+    return {
+        "keyword": body.keyword,
+        "source_file": source_path.name,
+        "item_count": len(items),
+        "truncated": truncated,
+        "limit": CHILD_SEARCH_LIMIT,
+        "items": items,
+    }
+
+
+def _query_for(body: RecipeQueryRequest, source_path: Path):
+    """三个入口（查询/成本/成本导出）共用的一次查询，参数各写一份必然漏传 child_codes。"""
+    return query_recipe_workbook(
+        source_path,
+        query_text=body.query,
+        default_bom=body.default_bom,
+        include_disabled=body.include_disabled,
+        child_codes=body.child_codes,
+        child_match=body.child_match,
+    )
 
 
 def _recipe_price_maps() -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]]]:
@@ -223,12 +275,7 @@ def recipe_cost(request: Request, body: RecipeCostRequest, user: dict[str, Any] 
     require_permission("formula.cost.calculate", user)
     try:
         source_path = locate_recipe_source()
-        result = query_recipe_workbook(
-            source_path,
-            query_text=body.query,
-            default_bom=body.default_bom,
-            include_disabled=body.include_disabled,
-        )
+        result = _query_for(body, source_path)
         purchase_prices, sales_prices = _recipe_price_maps()
         recipes = calculate_recipe_costs(
             result,
@@ -267,12 +314,7 @@ def recipe_cost_export(request: Request, body: RecipeCostRequest, user: dict[str
     require_permission("formula.cost.calculate", user)
     try:
         source_path = locate_recipe_source()
-        result = query_recipe_workbook(
-            source_path,
-            query_text=body.query,
-            default_bom=body.default_bom,
-            include_disabled=body.include_disabled,
-        )
+        result = _query_for(body, source_path)
         purchase_prices, sales_prices = _recipe_price_maps()
         recipes = calculate_recipe_costs(
             result,
@@ -364,6 +406,8 @@ def recipe_download(request: Request, file_id: str, sheet: str | None = None, us
                 query_text=str(context["query"]),
                 default_bom=context["default_bom"],
                 include_disabled=bool(context["include_disabled"]),
+                child_codes=list(context.get("child_codes") or []),
+                child_match=str(context.get("child_match") or "any"),
             )
             if human_only:
                 save_recipe_human_workbook(path, result)
