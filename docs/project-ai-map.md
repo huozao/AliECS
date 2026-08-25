@@ -8,7 +8,7 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 
 | router | 功能 |
 |---|---|
-| `recipes.py` | formula 配方查询、成本核算 |
+| `recipes.py` | formula 配方查询、按子件反查、成本核算（坑见 `docs/runbooks/formula.md`） |
 | `formula_colors.py` | 标准型号色彩空间只读数据（企微「标准型号0117」+ T+ 当前有效 BOM 父件名称） |
 | `exports.py` | 对比表导出（真 xlsx，`compare_export.py`） |
 | `tplus_bom.py` | BOM builder（写回 T+ 经独立 write-worker） |
@@ -49,6 +49,10 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 
 公网首页（纯 nginx 静态）：功能卡片、登录、formula 入口、工具分区（灰分计算器）。
 `services/public-web/sync/index.html` 对应 `/sync/` 管理员统一同步中心，按 T+ ERP、企微 A、企微 B、飞书与「系统任务」分类展示资产，统一提供下载、复制、docid 修复、调度、立即运行、时间线、步骤详情与告警。2026-08-20 起**按文档展示**（同步粒度本就是整簿），原「作业总览」区块已并入「同步资产」：表级作业按 `doc_source_id` 聚合到文档行，表级明细只在该文档有 failed/partial 或未解决告警时自动展开；不挂任何文档的作业进「系统任务」。判据见 `docs/constraints/doc-sync.md`。`/exports/` 相对 301 到 `/sync/?view=assets`，`/tplus-sync/` 相对 301 到 `/sync/?group=tplus`。
+`formula/index.html` 是系统配方页（查询 → 版本对比 → 成本核算），纯前端渲染 + `compare-core.js`（对比矩阵/行序/列序/视图开关）
++ `cost-core.js`（利润口径）。「查询方式」可切**按配方**或**按子件反查**（两段式：候选罗列 → 勾选确认 → 反查）。
+坑与判据全在 `docs/runbooks/formula.md`，改这三个文件之前先读；接口契约见 `docs/recipe-query.md`。
+⚠️ `compare-core.js` 是微信小程序共享模块的权威源，改完要在 weapp 仓跑 `sync-shared.mjs`。
 `formula/colors/` 是标准型号色彩空间（three.js + camera-controls，数据走 `/v1/formula/colors`，
 需登录且有 `formula.read`）；`mock-data.js` 是默认隐藏的参考示例，惰性加载。视图设置已从画布浮层移到顶部 `#settingsPanel`；色点标签由 `rebuildLabels()` / `syncLabels()` 的 DOM 层渲染，偏好存 `localStorage['aliecs_formula_colors_view_prefs']`。
 「刷新数据」按钮走 `POST /v1/formula/colors/refresh` 入队 `sync_requests` 后轮询 `meta.last_sync_at`（死线 180s）——

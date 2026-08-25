@@ -2,6 +2,8 @@
 
 The recipe query feature lets an authenticated user enter a formula code, parent item code, or parent name and generate a downloadable T+ BOM review workbook.
 
+Troubleshooting, business-semantic pitfalls, and hot-patch steps live in `docs/runbooks/formula.md` (Chinese). This file documents the contract; that one documents the traps.
+
 ## Data Source
 
 `backend-api` first reads the latest confirmed workbook from `RECIPE_ACTIVE_BOM_DIR`, default `/app/recipe-active-bom`. If no confirmed file exists, it falls back to the latest workbook from `RECIPE_BOM_INPUT_DIR`, default `/app/tplus-output/excel`. In local and production compose the fallback path is backed by the `tplus-sync-worker` output mounted read-only.
@@ -20,6 +22,16 @@ No real source workbook belongs in Git.
 - `default_bom=1` filters to default BOM rows.
 - `include_disabled=false` excludes rows whose `停用` value indicates disabled.
 - Query output includes match count, recipe count, source workbook name, preview rows, a generated `file_id`, and a download URL.
+
+## Reverse Lookup by Child Item
+
+Added 2026-08-24. Finding "which formulas use this raw material" is a two-step flow, not a single query.
+
+- `POST /v1/recipes/children/search` takes `{keyword, default_bom, include_disabled}` and lists candidate child items: `child_code`, `child_name`, `spec`, `unit`, `recipe_count` (distinct parent-code + version pairs using it). Sorted by `recipe_count` descending, capped at `CHILD_SEARCH_LIMIT` (200) with a `truncated` flag. Requires `formula.read`.
+- `POST /v1/recipes/query` accepts optional `child_codes: list[str]` and `child_match: "any" | "all"`. When `child_codes` is non-empty the `query` field is display-only (audit trail and export filename) and does not participate in matching.
+- Child codes are matched **exactly**, never as substrings, and the result contains **whole formulas** — every line of every matching version, not only the matching lines.
+- `child_match="all"` requires a single formula version to contain every selected child. Interchangeable materials never co-occur, so `all` returns nothing for same-family selections; see the runbook.
+- `RecipeCostRequest` extends `RecipeQueryRequest`, so `/v1/recipes/cost` and `/v1/recipes/cost/export` follow the same reverse-lookup scope automatically. The download context stores `child_codes` and `child_match` too, so deferred workbook generation stays consistent.
 
 ## Manual BOM Sync
 
@@ -60,3 +72,5 @@ Generated files are temporary runtime outputs under `RECIPE_EXPORT_DIR`.
 python -m unittest AliECS.tests.test_recipe_query AliECS.tests.test_backend_recipes
 docker compose -f AliECS\local\docker-compose.local.yml config
 ```
+
+Frontend contracts are asserted as string checks in `tests/test_formula_frontend.py`; pure functions in `compare-core.js` / `cost-core.js` run under node via `tests/test_formula_core_js.py`.

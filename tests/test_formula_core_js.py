@@ -60,15 +60,43 @@ check('profit_metrics_negative_is_kept', () => {
   assert.ok(m.profit < 0 && m.margin < 0);
 });
 
-check('tooltip_contains_four_formulas', () => {
-  const text = CostCore.profitTooltipText({ salesPrice: 17, currentCost: 12.88, simulatedCost: 12.6, otherCost: 0.8 });
-  ['当前毛利率', '当前加成率', '模拟毛利率', '模拟加成率'].forEach((label) => assert.ok(text.includes(label), label));
+check('tooltip_contains_formulas_for_all_three_calibers', () => {
+  const text = CostCore.profitTooltipText({ salesPrice: 17, systemCost: 13.2, currentCost: 12.88, simulatedCost: 12.6, otherCost: 0.8 });
+  ['系统毛利率', '系统加成率', '当前毛利率', '当前加成率', '模拟毛利率', '模拟加成率'].forEach((label) => assert.ok(text.includes(label), label));
   assert.ok(text.includes('其他综合成本'));
 });
 
 check('tooltip_explains_missing_sales_price', () => {
   const text = CostCore.profitTooltipText({ salesPrice: null, currentCost: 12.88, otherCost: 0 });
   assert.ok(text.includes('没有销售价记录'));
+});
+
+check('sort_compare_columns_orders_by_one_row_and_parks_missing_last', () => {
+  const versions = [{ key: 'A', parentCode: 'PA' }, { key: 'B', parentCode: 'PB' }, { key: 'C', parentCode: 'PC' }];
+  const rows = [{ itemCode: 'C001', itemName: '树脂', cells: { A: { ratio: 0.10, qty: 5 }, B: { ratio: 0.30, qty: 1 } } }];
+  const desc = CompareCore.sortCompareColumns(versions, { rows, itemCode: 'C001', dir: 'desc', metric: 'ratio' });
+  assert.deepStrictEqual(desc.map((v) => v.key), ['B', 'A', 'C']);
+  const asc = CompareCore.sortCompareColumns(versions, { rows, itemCode: 'C001', dir: 'asc', metric: 'ratio' });
+  // C 不含该子件，升序也不该翻到最前
+  assert.deepStrictEqual(asc.map((v) => v.key), ['A', 'B', 'C']);
+  // 按数量是另一套序：A 的数量更大
+  const byQty = CompareCore.sortCompareColumns(versions, { rows, itemCode: 'C001', dir: 'desc', metric: 'qty' });
+  assert.deepStrictEqual(byQty.map((v) => v.key), ['A', 'B', 'C']);
+});
+
+check('sort_compare_columns_is_identity_without_a_basis_row', () => {
+  const versions = [{ key: 'A', parentCode: 'PA' }, { key: 'B', parentCode: 'PB' }];
+  assert.deepStrictEqual(CompareCore.sortCompareColumns(versions, { rows: [], itemCode: '' }), versions);
+  // 基准子件在当前表里找不到时保持原序，而不是把列清空
+  assert.deepStrictEqual(CompareCore.sortCompareColumns(versions, { rows: [], itemCode: 'GONE' }), versions);
+});
+
+check('sort_compare_columns_parks_zero_ratio_rows_last', () => {
+  const versions = [{ key: 'A', parentCode: 'PA' }, { key: 'B', parentCode: 'PB' }];
+  // 包装袋这类不计比例的子件：cell 在但 ratio=0，正倒序都不该被翻上来
+  const rows = [{ itemCode: 'BAG', itemName: '包装袋', cells: { A: { ratio: 0, qty: 1 }, B: { ratio: 0.2, qty: 1 } } }];
+  const asc = CompareCore.sortCompareColumns(versions, { rows, itemCode: 'BAG', dir: 'asc', metric: 'ratio' });
+  assert.deepStrictEqual(asc.map((v) => v.key), ['B', 'A']);
 });
 
 check('build_cost_matrix_unions_and_sorts', () => {
@@ -161,7 +189,7 @@ class FormulaCoreJsTests(unittest.TestCase):
         )
         self.assertEqual(0, result.returncode, msg=result.stderr[-2000:])
         passed = json.loads(result.stdout.strip().splitlines()[-1])
-        self.assertEqual(14, len(passed), msg=f"实际通过：{passed}")
+        self.assertEqual(17, len(passed), msg=f"实际通过：{passed}")
 
 
 if __name__ == "__main__":

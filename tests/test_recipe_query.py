@@ -453,5 +453,127 @@ class RecipeQueryTests(unittest.TestCase):
         self.assertEqual("物料清单配方表", wb["配方表_人眼版"]["A1"].value)
 
 
+class ChildReverseLookupTests(unittest.TestCase):
+    """按子件反查配方：候选罗列 + 勾选后取整本配方。"""
+
+    def setUp(self) -> None:
+        self._old_sys_path = list(sys.path)
+        for name in list(sys.modules):
+            if name == "app" or name.startswith("app."):
+                del sys.modules[name]
+        backend_root = str(BACKEND_ROOT)
+        sys.path[:] = [item for item in sys.path if item != backend_root]
+        sys.path.insert(0, str(BACKEND_ROOT))
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self._tmp.name)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+        for name in list(sys.modules):
+            if name == "app" or name.startswith("app."):
+                del sys.modules[name]
+        sys.path[:] = self._old_sys_path
+
+    def _write_source_workbook(self) -> Path:
+        source = self.tmp_path / "bom_20260824.xlsx"
+        # HYD-419 与 HYD-4197 互为前缀；C001 与 C0011 同理。两组都是用来钉死「精确匹配」的。
+        material_rows = [
+            {"父件编码": code, "父件名称": name, "规格型号": "PP", "版本号": version,
+             "计量单位": "kg", "生产数量": 100, "默认BOM": default_bom, "停用": disabled}
+            for code, name, version, default_bom, disabled in [
+                ("HYD-419", "甲料", "V1", 1, 0),
+                ("HYD-4197", "乙料", "V1", 1, 0),
+                ("HYD-4200", "丙料", "V1", 1, 0),
+                ("HYD-4300", "丁料", "V1", 1, 1),
+            ]
+        ]
+        child_rows = [
+            {"版本号": version, "父件编码": parent, "子件编码": code, "子件名称": name,
+             "规格型号": "S", "计量单位": "kg", "需用数量": qty}
+            for parent, version, code, name, qty in [
+                ("HYD-419", "V1", "C001", "硬脂酸", 2),
+                ("HYD-419", "V1", "C002", "树脂", 8),
+                ("HYD-4197", "V1", "C001", "硬脂酸", 1),
+                ("HYD-4197", "V1", "C003", "硬脂酸锌", 3),
+                ("HYD-4200", "V1", "C0011", "硬脂酸钙", 5),
+                ("HYD-4300", "V1", "C001", "硬脂酸", 4),
+            ]
+        ]
+        with pd.ExcelWriter(source, engine="openpyxl") as writer:
+            pd.DataFrame(material_rows).to_excel(writer, sheet_name="物料清单", index=False)
+            pd.DataFrame(child_rows).to_excel(writer, sheet_name="子件明细", index=False)
+        return source
+
+    def test_search_lists_candidates_with_recipe_counts_sorted_by_usage(self) -> None:
+        from app.recipes.bom_query import search_child_items
+
+        items, truncated = search_child_items(self._write_source_workbook(), keyword="硬脂酸")
+
+        self.assertFalse(truncated)
+        by_code = {item["child_code"]: item for item in items}
+        self.assertEqual({"C001", "C003", "C0011"}, set(by_code))
+        # C001 被 HYD-419 / HYD-4197 / HYD-4300 三本用到
+        self.assertEqual(3, by_code["C001"]["recipe_count"])
+        self.assertEqual(1, by_code["C003"]["recipe_count"])
+        self.assertEqual("硬脂酸钙", by_code["C0011"]["child_name"])
+        # 用量最多的排最前，方便用户先看主料
+        self.assertEqual("C001", items[0]["child_code"])
+
+    def test_search_matches_child_code_and_respects_scope_filters(self) -> None:
+        from app.recipes.bom_query import search_child_items
+
+        source = self._write_source_workbook()
+        by_code, _ = search_child_items(source, keyword="C003")
+        self.assertEqual(["C003"], [item["child_code"] for item in by_code])
+
+        # 停用的 HYD-4300 排除后，C001 只剩两本配方
+        items, _ = search_child_items(source, keyword="硬脂酸", include_disabled=False)
+        counts = {item["child_code"]: item["recipe_count"] for item in items}
+        self.assertEqual(2, counts["C001"])
+
+    def test_reverse_lookup_returns_whole_recipes_not_only_matched_lines(self) -> None:
+        from app.recipes.bom_query import query_recipe_workbook
+
+        result = query_recipe_workbook(
+            self._write_source_workbook(), query_text="硬脂酸", child_codes=["C001"],
+        )
+
+        self.assertEqual({"HYD-419", "HYD-4197", "HYD-4300"}, set(result.detail["父件编码"]))
+        # 命中的是配方，不是行：同一本配方里没命中的子件也要在结果里，否则对比和成本核算都是残的
+        self.assertIn("C002", set(result.detail["子件编码"]))
+        self.assertEqual(["C001"], result.codes)
+
+    def test_reverse_lookup_matches_child_code_exactly_not_as_prefix(self) -> None:
+        from app.recipes.bom_query import query_recipe_workbook
+
+        result = query_recipe_workbook(
+            self._write_source_workbook(), query_text="硬脂酸", child_codes=["C001"],
+        )
+
+        # C0011 只在 HYD-4200 里；子串匹配会把它一起捞进来，精确匹配不会
+        self.assertNotIn("HYD-4200", set(result.detail["父件编码"]))
+
+    def test_reverse_lookup_all_requires_every_selected_child(self) -> None:
+        from app.recipes.bom_query import query_recipe_workbook
+
+        source = self._write_source_workbook()
+        any_result = query_recipe_workbook(source, query_text="x", child_codes=["C001", "C003"], child_match="any")
+        all_result = query_recipe_workbook(source, query_text="x", child_codes=["C001", "C003"], child_match="all")
+
+        self.assertEqual({"HYD-419", "HYD-4197", "HYD-4300"}, set(any_result.detail["父件编码"]))
+        # 同时含 C001 和 C003 的只有 HYD-4197
+        self.assertEqual({"HYD-4197"}, set(all_result.detail["父件编码"]))
+
+    def test_reverse_lookup_ignores_query_text_and_returns_empty_for_unknown_child(self) -> None:
+        from app.recipes.bom_query import query_recipe_workbook
+
+        source = self._write_source_workbook()
+        # query_text 在反查模式下只作展示：即使它能匹配到父件，也不该混进结果
+        result = query_recipe_workbook(source, query_text="HYD-419", child_codes=["C999"])
+
+        self.assertTrue(result.detail.empty)
+        self.assertEqual(0, result.recipe_count)
+
+
 if __name__ == "__main__":
     unittest.main()

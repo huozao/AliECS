@@ -199,11 +199,83 @@ class FormulaFrontendTests(unittest.TestCase):
 
     def test_view_options_persist_with_qty_pct_guard(self) -> None:
         self.assertIn("const VIEW_KEY='formula_display_options';", self.html)
-        self.assertIn("VIEW_DEFAULTS = { spec: true, qty: true, pct: true, arrow: true, delta: true, newTag: true, bar: true }", self.core)
+        self.assertIn("VIEW_DEFAULTS = { code: true, spec: true, qty: true, pct: true, arrow: true, delta: true, newTag: true, bar: true, insight: true }", self.core)
         self.assertIn("if(!state.view.qty&&!state.view.pct){", self.html)
         self.assertIn("至少保留一项", self.html)
-        for key in ("spec", "qty", "pct", "arrow", "delta", "newTag", "bar"):
+        for key in ("code", "spec", "qty", "pct", "arrow", "delta", "newTag", "bar", "insight"):
             self.assertIn(f'data-view="{key}"', self.html)
+
+    def test_item_code_column_is_toggleable_and_keeps_the_code_warning(self) -> None:
+        # 编码列可隐藏；隐藏后编码异常的红「!」挪到子件名称列，告警不随列一起消失
+        self.assertIn("显示子件编码", self.html)
+        self.assertIn("""${state.view.code?'<th class="col-code">子件编码</th>':''}""", self.html)
+        self.assertIn("""!state.view.code&&isSpecialItemCode(row.itemCode)?' codeWarn':''""", self.html)
+
+    def test_child_reverse_lookup_confirms_candidates_before_querying(self) -> None:
+        # 按子件查不是直接出配方：先罗列候选子件，用户勾选确认后才反查
+        self.assertIn('id="queryMode"', self.html)
+        self.assertIn('value="child"', self.html)
+        self.assertIn('id="childPanel"', self.html)
+        self.assertIn("'/v1/recipes/children/search'", self.html)
+        self.assertIn('data-child-match="any"', self.html)
+        self.assertIn('data-child-match="all"', self.html)
+        self.assertIn("async function searchChildren(keyword)", self.html)
+        self.assertIn("childLookupBtn.onclick=()=>runQuery({query:queryInput.value.trim(),child_codes:[...state.childSelected],child_match:state.childMatch})", self.html)
+        # 候选过多要说清是被截断了，不能让用户以为就这么些
+        self.assertIn("state.childTruncated", self.html)
+
+    def test_query_scope_is_single_source_for_query_cost_and_exports(self) -> None:
+        # 反查模式下输入框里是候选关键字而不是配方编码；三个入口各读一次输入框，child_codes 必漏
+        self.assertIn("queryScope:{query:'',child_codes:[],child_match:'any'}", self.html)
+        self.assertIn("return{query:scope.query,child_codes:scope.child_codes,child_match:scope.child_match,", self.html)
+        self.assertIn("query:state.queryScope.query,activeFilter:state.activeFilter", self.html)
+        self.assertIn("filenamePart(state.queryScope.query)", self.html)
+        # 只剩表单提交、反查按钮两处直接读输入框（链接回填是赋值）
+        self.assertEqual(2, self.html.count("queryInput.value.trim()"))
+
+    def test_query_form_grid_has_a_column_for_every_field(self) -> None:
+        # 加了「查询方式」后 grid 仍是 3 列 → 第 4 个元素被挤到第二行，查询按钮换行
+        self.assertIn("grid-template-columns:200px minmax(200px,1fr) 150px auto", self.html)
+        self.assertEqual(3, self.html.count("<label", self.html.index('id="queryForm"'), self.html.index("</form>")))
+
+    def test_insight_sidebar_is_toggleable_from_view_menu(self) -> None:
+        self.assertIn('data-view="insight"', self.html)
+        self.assertIn("显示变化重点", self.html)
+        self.assertIn(".compare-layout.no-side{grid-template-columns:minmax(0,1fr)}", self.html)
+        self.assertIn("function syncInsightVisibility()", self.html)
+
+    def test_compare_filter_is_a_dropdown_on_the_toolbar_row(self) -> None:
+        # 一排 pills 换成下拉，和视图/排序同一行；工具栏改 flex 换行
+        self.assertIn('id="compareFilterDrop"', self.html)
+        self.assertIn('id="compareFilterLabel"', self.html)
+        self.assertIn("function syncFilterUi()", self.html)
+        self.assertIn(".compare-toolbar{display:flex;flex-wrap:wrap", self.html)
+        self.assertNotIn('<div id="compareFilters" class="pills">', self.html)
+
+    def test_column_sort_is_driven_from_a_row_and_shared_with_export(self) -> None:
+        # 点某一子件行 → 按该行给配方列排序；列序只有 selectedVersions() 一个来源
+        self.assertIn("function cycleColSort(itemCode)", self.html)
+        self.assertIn("CompareCore.sortCompareColumns(selected,{rows:buildCompareMatrix(),...state.colSort})", self.html)
+        self.assertIn("CompareCore.buildComparePayload({colSort:state.colSort,", self.html)
+        self.assertIn('data-col-metric="ratio"', self.html)
+        self.assertIn('data-col-metric="qty"', self.html)
+        self.assertIn("data-col-clear", self.html)
+        # 换查询后基准子件要清掉，否则新配方里找不到它，看起来像排序坏了
+        self.assertIn("state.colSort={...state.colSort,itemCode:'',dir:'desc'};", self.html)
+
+    def test_compare_mode_default_select_all_runs_once_not_every_render(self) -> None:
+        # 放在每次 renderCost 里会把用户点的「全不选」当场填回去
+        self.assertIn("if(compare&&!state.costSelectionReady){", self.html)
+        self.assertNotIn("if(compare&&!state.costSelectedKeys.size)state.costSelectedKeys=new Set(", self.html)
+        self.assertIn("costSelectionReady:false", self.html)
+        # 点了按钮但集合没变化时，计数让「没反应」和「没变化」能区分开
+        self.assertIn('id="costSelectedNote"', self.html)
+        self.assertIn("已选 ${state.costSelectedKeys.size} / ${recipes.length} 本", self.html)
+
+    def test_empty_reverse_lookup_explains_why_instead_of_a_blank_panel(self) -> None:
+        self.assertIn("if(!data.recipe_count&&state.queryScope.child_codes.length){", self.html)
+        self.assertIn("互为替代品", self.html)
+        self.assertIn("切到「任一命中」试试", self.html)
 
     def test_arrow_and_delta_are_independent_toggles(self) -> None:
         # 箭头(↑↓)与±基准数值拆成两个开关；旧 localStorage 的 arrow 值迁移到 delta
@@ -277,18 +349,32 @@ class FormulaFrontendTests(unittest.TestCase):
     def test_raw_and_compare_downloads_both_use_server_workbooks(self) -> None:
         self.assertIn("function downloadRawResult()", self.html)
         self.assertIn("/v1/recipes/download/${state.fileId}", self.html)
-        self.assertIn("配方比例对比表_${filenamePart(queryInput.value.trim())}.xlsx", self.html)
+        self.assertIn("配方比例对比表_${filenamePart(state.queryScope.query)}.xlsx", self.html)
 
     def test_cost_totals_renamed_and_carry_simulated_sales_and_profit(self) -> None:
         self.assertIn(">系统销售价格<", self.html)
-        self.assertIn(">当前成本合价<", self.html)
+        self.assertIn("label:'当前成本合价'", self.html)
         self.assertIn(">其他综合成本<", self.html)
-        self.assertIn(">预估利润（毛利率）<", self.html)
         # 旧标签不能残留，否则同一个数字会有两种叫法
-        self.assertNotIn(">销售价格<", self.html)
         self.assertNotIn(">当前合价<", self.html)
         self.assertIn('data-metric="simSales"', self.html)
         self.assertIn('data-metric="otherCost"', self.html)
+
+    def test_three_cost_calibers_share_one_definition_and_carry_three_profit_metrics(self) -> None:
+        # 单本卡片与多选对比汇总表共用 COST_CALIBERS；两处各写一份必然漂
+        self.assertIn("const COST_CALIBERS=[", self.html)
+        for label in ("系统合价", "当前成本合价", "模拟合价"):
+            self.assertIn(f"label:'{label}'", self.html)
+        for row in ("合价", "利润额", "毛利率", "成本加成率"):
+            self.assertIn(f"'{row}'", self.html)
+        # 售价统一取模拟销售价格（未手填回落系统销售价格），三个口径只换成本
+        self.assertIn("const profitFor=(recipe,cost)=>CostCore.profitMetrics({salesPrice:simSalesPriceFor(recipe),cost,otherCost:otherCostFor(recipe)});", self.html)
+        # 对比汇总表按口径分组，不再只出一行毛利率
+        self.assertIn("const caliberRows=COST_CALIBERS.flatMap(", self.html)
+        self.assertNotIn(">预估利润（毛利率）<", self.html)
+        self.assertNotIn("预估利润（毛利率）</td>", self.html)
+        # 窄屏下利润表自己横向滚动，页面 body 不横滚
+        self.assertIn(".profit-scroll{overflow-x:auto", self.html)
 
     def test_simulated_sales_and_other_cost_persist_with_timestamps(self) -> None:
         # 与「当下价格」同一套记忆语义：值 + 时间戳两个 key，粒度分别是父件编码 / 父件编码::版本

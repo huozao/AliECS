@@ -164,6 +164,52 @@ class BackendRecipeRouteTests(unittest.TestCase):
         )
         self.assertGreater(len(download.content), 0)
 
+    def test_children_search_lists_candidates_for_reverse_lookup(self) -> None:
+        token = self._token(permissions=["formula.read"])
+
+        response = self.client.post(
+            "/v1/recipes/children/search",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"keyword": "树脂"},
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()
+        self.assertFalse(data["truncated"])
+        codes = {item["child_code"]: item for item in data["items"]}
+        self.assertEqual({"C001", "C003"}, set(codes))
+        self.assertEqual(1, codes["C001"]["recipe_count"])
+
+    def test_children_search_requires_formula_read_permission(self) -> None:
+        response = self.client.post(
+            "/v1/recipes/children/search",
+            headers={"Authorization": f"Bearer {self._token()}"},
+            json={"keyword": "树脂"},
+        )
+
+        self.assertEqual(403, response.status_code)
+
+    def test_query_with_child_codes_returns_whole_recipes_and_survives_download(self) -> None:
+        token = self._token(permissions=["formula.read"])
+
+        response = self.client.post(
+            "/v1/recipes/query",
+            headers={"Authorization": f"Bearer {token}"},
+            # query 在反查模式下只作展示：这里故意填一个匹配不到任何父件的关键字
+            json={"query": "树脂", "child_codes": ["C001"], "child_match": "any"},
+        )
+
+        self.assertEqual(200, response.status_code)
+        data = response.json()
+        self.assertEqual(1, data["recipe_count"])
+        # 整本配方都要在结果里，不能只剩命中行
+        self.assertEqual({"C001", "C002"}, {row["子件编码"] for row in data["preview"]})
+
+        # 延迟生成的导出文件必须沿用同一套反查参数，否则下载下来是空表
+        download = self.client.get(data["download_url"], headers={"Authorization": f"Bearer {token}"})
+        self.assertEqual(200, download.status_code)
+        self.assertGreater(len(download.content), 0)
+
     def test_download_with_sheet_human_returns_single_human_sheet(self) -> None:
         token = self._token(permissions=["formula.read"])
         data = self.client.post(

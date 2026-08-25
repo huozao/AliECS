@@ -77,6 +77,7 @@ def save_compare_workbook(output_path: Path, payload: dict) -> None:
     versions = payload["versions"]
     rows = payload["rows"]
     view = payload.get("view", {})
+    show_code = bool(view.get("code", True))
     show_spec = bool(view.get("spec", True))
     show_qty = bool(view.get("qty", True))
     show_pct = bool(view.get("pct", True))
@@ -84,8 +85,14 @@ def save_compare_workbook(output_path: Path, payload: dict) -> None:
     show_delta = bool(view.get("delta", True))
     show_new = bool(view.get("newTag", True))
 
-    info_heads = [("状态", 8), ("子件编码", 13), ("子件名称", 26)] + ([("规格型号", 14)] if show_spec else []) + [("单位", 7)]
+    info_heads = [("状态", 8)] + ([("子件编码", 13)] if show_code else []) + [("子件名称", 26)] + ([("规格型号", 14)] if show_spec else []) + [("单位", 7)]
     n_info = len(info_heads)
+    # 信息列的列号由开关算出，不能写死：少一列会让后面所有列号（含左对齐判据）整体错位。
+    col_code = 2 if show_code else 0
+    col_name = 3 if show_code else 2
+    col_spec = col_name + 1 if show_spec else 0
+    col_unit = col_name + (1 if show_spec else 0) + 1
+    left_cols = {col_name} | ({col_spec} if show_spec else set())
     n_cols = n_info + len(versions)
 
     # 每版本列内部最大占比 → 热力分母
@@ -150,16 +157,19 @@ def save_compare_workbook(output_path: Path, payload: dict) -> None:
         cell.fill = PatternFill("solid", fgColor=st_fill)
         cell.font = Font(bold=True, color=st_font, size=10)
 
-        code_cell = ws.cell(row=r_idx, column=2, value=row["item_code"])
-        code_cell.font = Font(name="Consolas", size=10, color="FFA83D2F" if row.get("code_warn") else "FF1F2328", bold=bool(row.get("code_warn")))
-        name_cell = ws.cell(row=r_idx, column=3, value=row["item_name"])
-        col = 4
+        warn = bool(row.get("code_warn"))
+        if show_code:
+            code_cell = ws.cell(row=r_idx, column=col_code, value=row["item_code"])
+            code_cell.font = Font(name="Consolas", size=10, color="FFA83D2F" if warn else "FF1F2328", bold=warn)
+        name_cell = ws.cell(row=r_idx, column=col_name, value=row["item_name"])
+        # 编码列隐藏时，编码异常的红色标记挪到名称列，告警不随列一起消失（与页面一致）。
+        if warn and not show_code:
+            name_cell.font = Font(size=11, color="FFA83D2F", bold=True)
         if show_spec:
-            spec_cell = ws.cell(row=r_idx, column=col, value=row.get("spec", ""))
+            spec_cell = ws.cell(row=r_idx, column=col_spec, value=row.get("spec", ""))
             spec_cell.font = Font(size=10, color="FF777777")
             spec_cell.alignment = LEFT_WRAP
-            col += 1
-        ws.cell(row=r_idx, column=col, value=row.get("unit", ""))
+        ws.cell(row=r_idx, column=col_unit, value=row.get("unit", ""))
 
         lines_max = 1
         for idx, version in enumerate(versions):
@@ -196,14 +206,15 @@ def save_compare_workbook(output_path: Path, payload: dict) -> None:
             target = ws.cell(row=r_idx, column=c)
             target.border = THIN_BORDER
             if target.alignment is None or not target.alignment.wrap_text:
-                target.alignment = LEFT_WRAP if c == 3 or (show_spec and c == 4) else CENTER_WRAP
+                target.alignment = LEFT_WRAP if c in left_cols else CENTER_WRAP
         ws.row_dimensions[r_idx].height = 14 * max(2, lines_max) + 6
 
     legend_row = header_row + len(rows) + 1
     merged_row(
         legend_row,
         "说明：每格=比例/数量/相对基准变化（数量单位见「单位」列）；红↑=比基准高、绿↓=低；「—」=该配方不含此物料；"
-        "底色深浅=该配方内占比高低；★基准列米色底；红色编码=格式与多数物料不一致。",
+        "底色深浅=该配方内占比高低；★基准列米色底；"
+        + ("红色编码=格式与多数物料不一致。" if show_code else "红色名称=该物料编码格式与多数物料不一致。"),
         font=Font(size=8, color="FF8A8172"),
         height=24,
     )
