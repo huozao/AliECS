@@ -642,3 +642,138 @@ def test_unknown_kind_still_rejected(monkeypatch) -> None:
         json=body,
     )
     assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# 收盘复盘告警的可见性（2026-08-17 审计）
+#
+# 背景：复盘计划任务从 07-29 起 22 次运行 17 次失败，告警**每次都发出去了**，
+# 就是没人看见。两个原因都在呈现/投递这一层：
+#   1. 无论 severity 一律渲染成中性的「🧾 收盘复盘」；
+#   2. 全部投进价差通知群，混在行情流水里。
+# ---------------------------------------------------------------------------
+
+
+def test_failed_replay_summary_header_follows_severity(monkeypatch) -> None:
+    """critical 的复盘日结不得再顶着中性的「🧾 收盘复盘」标题。"""
+    captured: dict[str, object] = {}
+    client = _client(monkeypatch)
+    monkeypatch.setattr(
+        alerts,
+        "send_feishu_text",
+        lambda receive_id, text, **kwargs: captured.update(text=text) or True,
+    )
+    body = {
+        "event_id": "replay:20260816T024201",
+        "kind": "replay_summary",
+        "occurred_at": "2026-08-16T02:42:01+08:00",
+        "source": "replay",
+        "severity": "critical",
+        "summary": "🔴 收盘复盘未完成：失败 3 日、挂起 3 日。",
+    }
+    response = client.post(
+        "/v1/internal/gold-spread/alerts",
+        headers={"X-Gold-Spread-Token": "test-token"},
+        json=body,
+    )
+    assert response.status_code == 200
+    text = str(captured["text"])
+    assert text.startswith("🔴 收盘复盘未完成｜当日错单结论不成立")
+    assert "🧾" not in text
+
+
+def test_healthy_replay_summary_keeps_neutral_header(monkeypatch) -> None:
+    """正常完成时仍用中性标题，别把每天的例行日结都渲染成红色。"""
+    captured: dict[str, object] = {}
+    client = _client(monkeypatch)
+    monkeypatch.setattr(
+        alerts,
+        "send_feishu_text",
+        lambda receive_id, text, **kwargs: captured.update(text=text) or True,
+    )
+    body = {
+        "event_id": "replay:20260817T030000",
+        "kind": "replay_summary",
+        "occurred_at": "2026-08-17T03:00:00+08:00",
+        "source": "replay",
+        "severity": "warning",
+        "summary": "✅ 收盘复盘完成：3 日可信、1 日无数据。",
+    }
+    response = client.post(
+        "/v1/internal/gold-spread/alerts",
+        headers={"X-Gold-Spread-Token": "test-token"},
+        json=body,
+    )
+    assert response.status_code == 200
+    assert str(captured["text"]).startswith("🧾 收盘复盘")
+
+
+def test_replay_summary_goes_to_ops_chat_when_configured(monkeypatch) -> None:
+    """复盘日结投运维群：它是链路健康，不是行情信息。"""
+    captured: dict[str, object] = {}
+    client = _client(monkeypatch)
+    monkeypatch.setenv("GOLD_SPREAD_OPS_FEISHU_RECEIVE_ID", "oc_ops")
+    monkeypatch.setattr(
+        alerts,
+        "send_feishu_text",
+        lambda receive_id, text, **kwargs: captured.update(receive_id=receive_id) or True,
+    )
+    response = client.post(
+        "/v1/internal/gold-spread/alerts",
+        headers={"X-Gold-Spread-Token": "test-token"},
+        json={
+            "event_id": "replay:20260817T030001",
+            "kind": "replay_summary",
+            "occurred_at": "2026-08-17T03:00:01+08:00",
+            "source": "replay",
+            "severity": "critical",
+            "summary": "🔴 收盘复盘未完成：失败 2 日、挂起 2 日。",
+        },
+    )
+    assert response.status_code == 200
+    assert captured["receive_id"] == "oc_ops"
+
+
+def test_replay_summary_falls_back_to_price_chat_when_ops_unset(monkeypatch) -> None:
+    """运维群没配就回落到价差群——宁可发错群，不可不发。"""
+    captured: dict[str, object] = {}
+    client = _client(monkeypatch)
+    monkeypatch.delenv("GOLD_SPREAD_OPS_FEISHU_RECEIVE_ID", raising=False)
+    monkeypatch.setattr(
+        alerts,
+        "send_feishu_text",
+        lambda receive_id, text, **kwargs: captured.update(receive_id=receive_id) or True,
+    )
+    response = client.post(
+        "/v1/internal/gold-spread/alerts",
+        headers={"X-Gold-Spread-Token": "test-token"},
+        json={
+            "event_id": "replay:20260817T030002",
+            "kind": "replay_summary",
+            "occurred_at": "2026-08-17T03:00:02+08:00",
+            "source": "replay",
+            "severity": "critical",
+            "summary": "🔴 收盘复盘未完成：失败 1 日、挂起 1 日。",
+        },
+    )
+    assert response.status_code == 200
+    assert captured["receive_id"] == "oc_target"
+
+
+def test_price_alerts_still_go_to_price_chat(monkeypatch) -> None:
+    """只搬 replay_summary。价差告警必须仍然进价差群，别顺手把行情流水也搬走。"""
+    captured: dict[str, object] = {}
+    client = _client(monkeypatch)
+    monkeypatch.setenv("GOLD_SPREAD_OPS_FEISHU_RECEIVE_ID", "oc_ops")
+    monkeypatch.setattr(
+        alerts,
+        "send_feishu_text",
+        lambda receive_id, text, **kwargs: captured.update(receive_id=receive_id) or True,
+    )
+    response = client.post(
+        "/v1/internal/gold-spread/alerts",
+        headers={"X-Gold-Spread-Token": "test-token"},
+        json=_payload(),
+    )
+    assert response.status_code == 200
+    assert captured["receive_id"] == "oc_target"

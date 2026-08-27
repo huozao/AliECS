@@ -228,7 +228,14 @@ def render_gold_spread_alert(alert: GoldSpreadAlert) -> str:
             "data_silence_recovered": "🟢 行情已恢复",
             "replay_summary": "🧾 收盘复盘",
         }
-        return f"{headers[alert.kind]}\n时间：{_human_time(alert.occurred_at)}\n{alert.summary}".rstrip()
+        header = headers[alert.kind]
+        if alert.kind == "replay_summary" and alert.severity == "critical":
+            # ⚠️ 原来无论 severity 一律渲染成中性的「🧾 收盘复盘」。2026-08-17 审计：
+            # 复盘连续三个交易日 429 全灭时，卡片标题仍是这个 🧾，正文第一句还写着
+            # 「收盘复盘完成。」——severity 明明是 critical，呈现层却把它抹平了，
+            # 于是「准点跑、准点失败、没人知道」。标题必须跟着 severity 走。
+            header = "🔴 收盘复盘未完成｜当日错单结论不成立"
+        return f"{header}\n时间：{_human_time(alert.occurred_at)}\n{alert.summary}".rstrip()
 
     titles = {
         "anomaly_started": "价差异常已确认",
@@ -803,12 +810,29 @@ def _mark_alert(event_id: str, status: str, error_text: str = "") -> None:
         conn.commit()
 
 
+# 投到运维群而不是价差通知群的 kind。价差群是给「看行情」的人的，收盘复盘的
+# 成败是**链路健康**，混在价差流水里没人会注意——2026-08-17 审计的直接教训：
+# 复盘从 07-29 起 22 次运行 17 次失败，告警每次都发出去了，就是没人看见。
+# 目前只收敛 replay_summary 一类；data_silence 仍留在价差群，那是行情侧信息，
+# 要不要一起搬另议。
+_OPS_CHANNEL_KINDS = frozenset({"replay_summary"})
+
+
+def _resolve_chat_id(kind: str) -> str:
+    """挑投递目标群。运维群没配就回落到价差群——宁可发错群，不可不发。"""
+    if kind in _OPS_CHANNEL_KINDS:
+        ops = os.getenv("GOLD_SPREAD_OPS_FEISHU_RECEIVE_ID", "").strip()
+        if ops:
+            return ops
+    return os.getenv("GOLD_SPREAD_FEISHU_RECEIVE_ID", "").strip()
+
+
 @router.post("/v1/internal/gold-spread/alerts")
 def send_gold_spread_alert(
     body: GoldSpreadAlert,
     _: None = Depends(_require_alert_token),
 ) -> dict[str, Any]:
-    chat_id = os.getenv("GOLD_SPREAD_FEISHU_RECEIVE_ID", "").strip()
+    chat_id = _resolve_chat_id(body.kind)
     if not chat_id:
         raise HTTPException(status_code=503, detail="gold spread Feishu chat is not configured")
     text = render_gold_spread_alert(body)
