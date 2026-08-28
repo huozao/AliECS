@@ -221,9 +221,11 @@ class SyncFrontendTests(unittest.TestCase):
                 r"""
                 vm.runInContext(`state.overview={summary:{},items:[
                   {job_key:'wecom.doc.1',provider:'wecom',display_name:'产量统计/正常表',enabled:true,source_id:1,
+                   manual_triggerable:true,
                    doc_source_id:10,source_group:'wecom_company_a',document_name:'产量统计',sheet_name:'正常表',
                    last_run:{status:'success',started_at:'2026-08-19T08:00:00Z'},freshness:{state:'fresh'},open_alert_count:0},
                   {job_key:'wecom.doc.2',provider:'wecom',display_name:'产量统计/公开的生产记录表',enabled:true,source_id:2,
+                   manual_triggerable:true,
                    doc_source_id:10,source_group:'wecom_company_a',document_name:'产量统计',sheet_name:'公开的生产记录表',
                    last_run:{status:'partial',started_at:'2026-08-13T16:01:04Z',error_label:'未知错误',error_message:'sync failure'},
                    freshness:{state:'stale'},open_alert_count:1}
@@ -240,7 +242,100 @@ class SyncFrontendTests(unittest.TestCase):
                 if(rendered.includes('正常表'))throw new Error('healthy sheet listed in problem detail');
                 if(!rendered.includes('重试这张表'))throw new Error('sheet-level retry action missing');
                 // 文档级状态取最坏的一档。
-                if(!rendered.includes('partial'))throw new Error('document status not degraded by failing sheet');
+                if(!rendered.includes('部分成功'))throw new Error('document status not degraded by failing sheet');
+                """
+            )
+        )
+
+    def test_overview_collapses_zero_metrics_into_one_status_line(self) -> None:
+        """概况只讲三件事：多少作业、有没有异常、新鲜度这列能不能信。
+
+        旧版把 10 个计数平铺成等大卡片，生产上 8 个恒为 0，占了约 600px 却没有信息。
+        """
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                vm.runInContext(`state.overview={summary:{jobs:92,fresh:1,warning:0,stale:0,never:0,
+                  unmonitored:91,failed:1,partial:0,running:0,skipped:60,open_alerts:1},items:[
+                  {job_key:'wecom.doc.2',display_name:'A/表',source_group:'wecom_company_a',last_run:{status:'failed'}},
+                  {job_key:'feishu.doc.1',display_name:'F/表',source_group:'feishu',last_run:{status:'success'}}
+                ]};renderOverview()`,context);
+                const summaryHtml=elements.syncSummary.innerHTML;
+                if(!summaryHtml.includes('92'))throw new Error('job total missing');
+                if(!summaryHtml.includes('失败 1'))throw new Error('failure chip missing');
+                if(!summaryHtml.includes('未解决告警 1'))throw new Error('open alert chip missing');
+                // 恒为 0 的档不占版面。
+                if(summaryHtml.includes('部分成功'))throw new Error('zero-valued status rendered');
+                if(summaryHtml.includes('运行中'))throw new Error('zero-valued status rendered');
+                if(summaryHtml.includes('已过期')||summaryHtml.includes('从未成功'))throw new Error('zero-valued freshness rendered');
+                // 91/92 没配 SLA 时必须写清楚，否则「新鲜 1」会被读成健康度。
+                if(!summaryHtml.includes('未监控 91/92'))throw new Error('sla coverage not stated');
+                if(!summaryHtml.includes('企微 A 1'))throw new Error('group composition missing');
+                """
+            )
+        )
+
+    def test_overview_says_no_anomaly_instead_of_rendering_zeros(self) -> None:
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                vm.runInContext(`state.overview={summary:{jobs:3,fresh:3,warning:0,stale:0,never:0,
+                  unmonitored:0,failed:0,partial:0,running:0,skipped:0,open_alerts:0},items:[
+                  {job_key:'feishu.doc.1',display_name:'F/表',source_group:'feishu',last_run:{status:'success'}}
+                ]};renderOverview()`,context);
+                const summaryHtml=elements.syncSummary.innerHTML;
+                if(!summaryHtml.includes('无异常'))throw new Error('healthy state not summarised');
+                if(!summaryHtml.includes('3 个作业全部已配 SLA'))throw new Error('full sla coverage not stated');
+                """
+            )
+        )
+
+    def test_skipped_run_is_labelled_and_filterable(self) -> None:
+        """整簿跳过必须能和「没跑」分开——这正是用户把企微 A/B 读成「都没同步」的原因。"""
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                vm.runInContext(`state.overview={summary:{},items:[
+                  {job_key:'wecom.doc.7',provider:'wecom',display_name:'点餐表/表1',enabled:true,source_id:7,
+                   manual_triggerable:true,doc_source_id:9,source_group:'wecom_company_a',
+                   document_name:'点餐表',sheet_name:'表1',
+                   last_run:{status:'skipped',started_at:'2026-08-28T00:30:00Z'},
+                   freshness:{state:'unmonitored'},open_alert_count:0}
+                ]};
+                state.assets=[{key:'wecom_company_a',title:'企微A',items:[{
+                  name:'点餐表',source_id:9,sheets:1,jobs:1,updated_at:'2026-08-14T00:00:00Z',
+                  can_download:false,can_sync:true,can_copy:false,system_managed:false,reason:''
+                }]}];state.activeAssetGroup='wecom_company_a';renderAssets()`,context);
+                if(!elements.assetList.innerHTML.includes('已跳过·内容未变'))
+                  throw new Error('skipped run not labelled');
+                vm.runInContext("assetStatusFilter.value='skipped';renderAssets()",context);
+                if(!elements.assetList.innerHTML.includes('点餐表'))throw new Error('skipped filter dropped the row');
+                vm.runInContext("assetStatusFilter.value='failed';renderAssets()",context);
+                if(elements.assetList.innerHTML.includes('点餐表'))throw new Error('skipped row leaked into failed filter');
+                """
+            )
+        )
+
+    def test_unreadable_records_are_flagged_without_failing_the_row(self) -> None:
+        """企微对个别记录恒返回 60111，是数据源的稳定缺陷，常驻标注、不算同步失败。"""
+        self._run_timeline_probe(
+            textwrap.dedent(
+                r"""
+                vm.runInContext(`state.overview={summary:{},items:[
+                  {job_key:'wecom.doc.2',provider:'wecom',display_name:'产量统计/公开的生产记录表',enabled:true,
+                   source_id:2,manual_triggerable:true,doc_source_id:10,source_group:'wecom_company_a',
+                   document_name:'产量统计',sheet_name:'公开的生产记录表',
+                   last_run:{status:'success',started_at:'2026-08-28T00:30:00Z',unreadable_record_count:3},
+                   freshness:{state:'unmonitored'},open_alert_count:0}
+                ]};
+                state.assets=[{key:'wecom_company_a',title:'企微A',items:[{
+                  name:'产量统计',source_id:10,sheets:2,jobs:1,updated_at:'2026-08-28T00:30:00Z',
+                  can_download:false,can_sync:true,can_copy:false,system_managed:false,reason:''
+                }]}];state.activeAssetGroup='wecom_company_a';renderAssets()`,context);
+                const rendered=elements.assetList.innerHTML;
+                if(!rendered.includes('3 条不可读'))throw new Error('unreadable record count not surfaced');
+                if(!rendered.includes('成功'))throw new Error('row should stay successful');
+                if(rendered.includes('需要处理的表'))throw new Error('unreadable records must not open the problem panel');
                 """
             )
         )
@@ -251,13 +346,18 @@ class SyncFrontendTests(unittest.TestCase):
                 r"""
                 vm.runInContext(`state.overview={summary:{},items:[
                   {job_key:'wecom.locator_mirror',provider:'wecom',display_name:'定位档案镜像',enabled:true,
-                   source_id:null,doc_source_id:null,source_group:'wecom_',document_name:null,sheet_name:null,
+                   source_id:null,manual_triggerable:false,
+                   doc_source_id:null,source_group:'wecom_',document_name:null,sheet_name:null,
                    last_run:null,freshness:{state:'unmonitored'},open_alert_count:0}
                 ]};
                 state.assets=[{key:'wecom_company_a',title:'企微A',items:[]}];
                 state.activeAssetGroup='system';renderAssets()`,context);
                 if(!elements.assetTabs.innerHTML.includes('系统任务'))throw new Error('system group tab missing');
                 if(!elements.assetList.innerHTML.includes('定位档案镜像'))throw new Error('orphan job dropped from every group');
+                // enabled=true 但 kind=mirror：后端 enqueue_doc_job 收不了它，按钮就不能出现，
+                // 否则点下去必报「同步作业不存在或不可手动触发」。
+                if(elements.assetList.innerHTML.includes('立即同步'))throw new Error('non-triggerable job rendered a sync button');
+                if(!elements.assetList.innerHTML.includes('系统调度，不支持手动触发'))throw new Error('non-triggerable reason missing');
                 """
             )
         )

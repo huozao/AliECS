@@ -34,7 +34,7 @@
             <button id="runAllBtn" class="btn primary" type="button">全部立即同步</button>
           </div>
         </div>
-        <div id="syncSummary" class="grid" aria-live="polite"><div class="panel muted">加载中…</div></div>
+        <div id="syncSummary" aria-live="polite"><div class="muted">加载中…</div></div>
       </section>
 
       <section class="band" aria-labelledby="configTitle">
@@ -57,7 +57,7 @@
         <div class="row" style="justify-content:space-between"><div><h2 id="assetsTitle" style="margin:0">同步资产</h2><p class="muted">一行一个文档——同步本来就是整簿进行的；不可自动同步的分享链接会明确标注。表级明细只在该文档有失败或未解决告警时自动展开。</p></div></div>
         <div id="assetTabs" class="row" style="margin:10px 0"></div>
         <div class="row" style="margin-bottom:12px">
-          <label>状态 <select id="assetStatusFilter"><option value="">全部</option><option value="running">运行中</option><option value="success">成功</option><option value="partial">部分成功</option><option value="failed">失败</option><option value="never">无记录</option></select></label>
+          <label>状态 <select id="assetStatusFilter"><option value="">全部</option><option value="running">运行中</option><option value="success">成功</option><option value="partial">部分成功</option><option value="failed">失败</option><option value="skipped">已跳过</option><option value="never">无记录</option></select></label>
           <label>新鲜度 <select id="assetFreshnessFilter"><option value="">全部</option><option value="fresh">新鲜</option><option value="warning">即将过期</option><option value="stale">已过期</option><option value="never">从未成功</option><option value="unmonitored">未监控</option></select></label>
           <label>搜索 <input id="assetSearchFilter" type="search" placeholder="文档名或作业键"/></label>
         </div>
@@ -137,10 +137,24 @@
 
     const freshnessLabels={fresh:'新鲜',warning:'即将过期',stale:'已过期',never:'从未成功',unmonitored:'未监控'};
     const triggerLabels={manual:'手动',schedule:'定时',event:'订阅变更',scheduled:'定时',webhook:'订阅变更',unknown:'未知'};
-    const groupLabels={tplus:'T+ ERP',wecom_company_a:'企微 A',wecom_company_b:'企微 B',feishu:'飞书'};
+    const groupLabels={tplus:'T+ ERP',wecom_company_a:'企微 A',wecom_company_b:'企微 B',feishu:'飞书',system:'系统任务'};
     const groupLabel=(value)=>groupLabels[value]||value||'-';
 
-    function statusChip(value){return chip(esc(value||'unknown'));}
+    // skipped｜内容未变整簿跳过：企微 modify_time 没动时不重拉。它和「没跑」是两件事，
+    // 标签必须自带解释，否则用户看到「已跳过」还是会以为同步没工作。
+    const runStatusMeta={
+      success:{css:'ok',label:'成功'},
+      failed:{css:'failed',label:'失败'},
+      partial:{css:'warning',label:'部分成功'},
+      running:{css:'degraded',label:'运行中'},
+      skipped:{css:'',label:'已跳过·内容未变'},
+      never:{css:'',label:'无记录'},
+    };
+    function statusChip(value){
+      const meta=runStatusMeta[String(value||'')];
+      if(!meta)return chip(esc(value||'unknown'));
+      return `<span class="chip ${esc(meta.css)}">${esc(meta.label)}</span>`;
+    }
     function showError(message){AliECSToast.show(message,'error');}
     function freshnessChip(value){
       const key=String(value||'unmonitored');
@@ -154,17 +168,61 @@
       const seconds=Math.max(0,Number(value)||0);
       return seconds>=60?`${Math.floor(seconds/60)} 分 ${Math.round(seconds%60)} 秒`:`${Math.round(seconds)} 秒`;
     }
-    function metric(label,value){return `<article class="panel"><div class="muted">${esc(label)}</div><div class="metric">${esc(value)}</div></article>`;}
+    // 概况区只回答三个问题：一共多少作业、有没有出问题、新鲜度这列能不能信。
+    // 旧版把 10 个计数平铺成等大卡片，生产上其中 8 个恒为 0，占了约 600px 却没有信息。
+    const problemStatuses=[['failed','失败','failed'],['partial','部分成功','warning'],['running','运行中','degraded']];
+    function overviewProblemChips(summary){
+      const chips=problemStatuses
+        .filter(([key])=>Number(summary[key]||0)>0)
+        .map(([key,label,css])=>`<button class="chip ${esc(css)} clickable" type="button" onclick="focusAssetStatus('${key}')">${esc(label)} ${esc(summary[key])}</button>`);
+      if(Number(summary.open_alerts||0)>0)
+        chips.push(`<button class="chip failed clickable" type="button" onclick="focusAlerts()">未解决告警 ${esc(summary.open_alerts)}</button>`);
+      return chips.length?chips.join(''):'<span class="chip ok">无异常</span>';
+    }
+    function overviewFreshnessLine(summary){
+      const jobs=Number(summary.jobs||0),unmonitored=Number(summary.unmonitored||0),monitored=jobs-unmonitored;
+      const chips=['stale','warning','fresh','never']
+        .filter((key)=>Number(summary[key]||0)>0)
+        .map((key)=>`<span class="chip ${esc(key==='fresh'?'ok':key==='stale'||key==='never'?'failed':'warning')}">${esc(freshnessLabels[key])} ${esc(summary[key])}</span>`)
+        .join('');
+      // 没配 SLA 的作业算不出新鲜度。生产上 91/92 都没配，不写清楚这一行会被当成健康度读。
+      const coverage=!unmonitored
+        ? `${jobs} 个作业全部已配 SLA`
+        : `未监控 ${unmonitored}/${jobs}${monitored?`，仅 ${monitored} 个作业配了 SLA`:'，没有任何作业配 SLA，本行不代表健康度'}`;
+      return `<span class="muted">${esc(coverage)}</span>${chips}`;
+    }
+    function overviewComposition(items){
+      const counts=new Map();
+      for(const item of items){
+        const key=groupLabels[item.source_group]?item.source_group:'system';
+        counts.set(key,(counts.get(key)||0)+1);
+      }
+      return [...counts.entries()].sort((a,b)=>b[1]-a[1]).map(([key,count])=>`${groupLabel(key)} ${count}`).join(' · ');
+    }
+    function focusAssetStatus(status){
+      const target=((state.overview&&state.overview.items)||[]).find((item)=>(item.last_run||{}).status===status);
+      if(target&&groupLabels[target.source_group])state.activeAssetGroup=target.source_group;
+      $('assetStatusFilter').value=status;
+      $('assetFreshnessFilter').value='';
+      $('assetSearchFilter').value='';
+      renderAssets();
+      scrollToSection('assetsTitle');
+    }
+    function focusAlerts(){scrollToSection('alertsTitle');}
+    function scrollToSection(id){
+      const node=$(id);
+      if(node&&typeof node.scrollIntoView==='function')node.scrollIntoView({behavior:'smooth',block:'start'});
+    }
 
     function renderOverview(){
       const data=state.overview||{},summary=data.summary||{},items=data.items||[];
-      $('syncSummary').innerHTML=[
-        metric('作业',summary.jobs||0),metric('新鲜',summary.fresh||0),
-        metric('即将过期',summary.warning||0),metric('已过期',summary.stale||0),
-        metric('从未成功',summary.never||0),metric('未监控',summary.unmonitored||0),
-        metric('失败',summary.failed||0),metric('部分成功',summary.partial||0),
-        metric('运行中',summary.running||0),metric('未解决告警',summary.open_alerts||0),
-      ].join('');
+      $('syncSummary').innerHTML=`
+        <div class="row" style="gap:16px;align-items:baseline">
+          <div><span style="font-size:26px;font-weight:800">${esc(summary.jobs||0)}</span> <span class="muted">个作业</span></div>
+          <span class="muted">${esc(overviewComposition(items))}</span>
+        </div>
+        <div class="row" style="margin-top:10px"><span class="muted" style="min-width:56px">异常</span>${overviewProblemChips(summary)}</div>
+        <div class="row" style="margin-top:8px"><span class="muted" style="min-width:56px">新鲜度</span>${overviewFreshnessLine(summary)}</div>`;
 
       const selected=initialJob||$('jobFilter').value;
       $('jobFilter').innerHTML=`<option value="">全部</option>${items.map((item)=>`<option value="${esc(item.job_key)}">${esc(item.display_name)}（${esc(item.job_key)}）</option>`).join('')}`;
@@ -196,14 +254,16 @@
       return {byAsset,system};
     }
     function rollupJobs(jobs){
-      const roll={jobs,count:jobs.length,freshness:'',status:'',lastStartedAt:null,alerts:0,problems:[]};
+      const roll={jobs,count:jobs.length,freshness:'',status:'',lastStartedAt:null,alerts:0,unreadable:0,problems:[]};
       for(const job of jobs){
         const last=job.last_run||{},fresh=(job.freshness&&job.freshness.state)||'unmonitored';
         roll.alerts+=Number(job.open_alert_count||0);
+        roll.unreadable+=Number(last.unreadable_record_count||0);
         if(!roll.freshness||freshnessRank[fresh]>freshnessRank[roll.freshness])roll.freshness=fresh;
         if(last.started_at&&(!roll.lastStartedAt||String(last.started_at)>String(roll.lastStartedAt)))roll.lastStartedAt=last.started_at;
         // 状态取最坏的一档：一张表失败就是这个文档有问题，别被其余成功的表盖过去。
-        const rank={failed:4,partial:3,running:2,success:1,never:0};
+        // skipped 排在 success 之下、never 之上：跳过比没记录有信息，但比真拉过一轮弱。
+        const rank={failed:5,partial:4,running:3,success:2,skipped:1,never:0};
         const current=last.status||'never';
         if(!roll.status||rank[current]>rank[roll.status])roll.status=current;
         if(current==='failed'||current==='partial'||Number(job.open_alert_count||0)>0)roll.problems.push(job);
@@ -218,7 +278,10 @@
         const error=last.error_message?`<div class="muted">${esc(last.error_label)}：${esc(last.error_message)}</div>`:'';
         const alerts=Number(job.open_alert_count||0)?`<span class="chip failed">未解决告警 ${esc(job.open_alert_count)}</span>`:'';
         const index=state.problemJobs.push(job)-1;
-        return `<tr><td><strong>${esc(label)}</strong><div class="muted">${esc(job.job_key)}</div></td><td>${last.status?statusChip(last.status):'<span class="muted">无记录</span>'} ${alerts}<div class="muted">${esc(fmtTime(last.started_at))}</div>${error}</td><td><button class="btn" type="button" ${state.controlBusy||!job.enabled?'disabled':''} onclick="runProblemJob(${index},this)">重试这张表</button></td></tr>`;
+        const retry=job.manual_triggerable
+          ?`<button class="btn" type="button" ${state.controlBusy||!job.enabled?'disabled':''} onclick="runProblemJob(${index},this)">重试这张表</button>`
+          :'<span class="muted">系统调度，不支持手动触发</span>';
+        return `<tr><td><strong>${esc(label)}</strong><div class="muted">${esc(job.job_key)}</div></td><td>${last.status?statusChip(last.status):'<span class="muted">无记录</span>'} ${alerts}<div class="muted">${esc(fmtTime(last.started_at))}</div>${error}</td><td>${retry}</td></tr>`;
       }).join('');
       return `<tr><td colspan="${colspan}"><div class="attention critical" style="margin:0"><strong>需要处理的表（${roll.problems.length}）</strong></div><table style="margin-top:8px"><thead><tr><th>子表</th><th>最近运行</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></td></tr>`;
     }
@@ -235,9 +298,14 @@
       if(system.length)groups.push({
         key:'system',
         title:'系统任务',
+        // can_sync 判据必须来自后端的 manual_triggerable，不能拿 enabled 自己推：
+        // enabled 只说作业开着，说明不了它能不能手动排队。kind='mirror' 的
+        // wecom.locator_mirror 和 kind='reconcile' 的 tplus.parent_match 都是 enabled=true，
+        // 旧写法照样给它们渲染「立即同步」，点下去必然报「同步作业不存在或不可手动触发」。
         items:system.map((job)=>({name:job.display_name,job_key:job.job_key,sheets:null,jobs:1,
-          updated_at:(job.last_run||{}).started_at||null,can_sync:!!job.enabled,can_download:false,
-          can_copy:false,system_managed:true,reason:'系统任务，不对应企微/飞书文档',source_id:null})),
+          updated_at:(job.last_run||{}).started_at||null,can_sync:!!job.manual_triggerable,can_download:false,
+          can_copy:false,system_managed:true,source_id:null,
+          reason:job.manual_triggerable?'系统任务，不对应企微/飞书文档':'系统调度，不支持手动触发'})),
       });
       $('assetTabs').innerHTML=groups.map((group)=>`<button class="btn ${group.key===state.activeAssetGroup?'primary':''}" type="button" onclick="selectAssetGroup('${esc(group.key)}')">${esc(group.title)}（${(group.items||[]).length}）</button>`).join('');
       const group=groups.find((item)=>item.key===state.activeAssetGroup)||groups[0];
@@ -269,12 +337,17 @@
         if(!item.can_sync&&item.source_id!=null&&!item.system_managed&&String(item.reason||'').includes('docid'))actions.push(`<button class="btn" type="button" ${state.controlBusy?'disabled':''} onclick="repairVisibleAsset(${index},this)">补录 docid</button>`);
         if(!actions.length)actions.push('<span class="chip failed">暂无可用操作</span>');
         const alerts=roll.alerts?`<span class="chip failed">${esc(roll.alerts)}</span>`:'<span class="muted">0</span>';
+        // 企微对个别记录返回 60111/-1 时那几条永远读不出来（成员字段指向解析不到的 userid）。
+        // 这是数据源的稳定缺陷、不是同步失败，所以常驻标注，不走告警。
+        const unreadable=roll.unreadable
+          ?`<span class="chip warning" title="企微对这些记录返回 60111，成员字段指向解析不到的 userid">${esc(roll.unreadable)} 条不可读</span>`
+          :'';
         const statusCell=roll.jobs.length
-          ?`${roll.status&&roll.status!=='never'?statusChip(roll.status):'<span class="muted">无记录</span>'}<div class="muted">${esc(fmtTime(roll.lastStartedAt))}</div>`
+          ?`${roll.status&&roll.status!=='never'?statusChip(roll.status):'<span class="muted">无记录</span>'} ${unreadable}<div class="muted">${esc(fmtTime(roll.lastStartedAt))}</div>`
           :'<span class="muted">-</span>';
         return `<tr><td><strong>${esc(item.name)}</strong> ${systemChip}${reason}</td><td>${item.system_managed?'<span class="muted">—</span>':esc(item.sheets??'-')}</td><td>${esc(roll.count||item.jobs||0)}</td><td>${roll.jobs.length?freshnessChip(roll.freshness):'<span class="muted">-</span>'}</td><td>${statusCell}</td><td>${esc(fmtTime(item.updated_at))}</td><td>${alerts}</td><td><div class="row">${actions.join('')}</div></td></tr>${problemRows(roll,8)}`;
       }).join('');
-      $('assetList').innerHTML=`<table><thead><tr><th>资产</th><th>表数</th><th>作业数</th><th>新鲜度</th><th>最近运行</th><th>最近同步</th><th>告警</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="8" class="muted">当前筛选无同步资产。</td></tr>'}</tbody></table>`;
+      $('assetList').innerHTML=`<table><thead><tr><th>资产</th><th>表数</th><th>作业数</th><th>新鲜度</th><th>最近运行</th><th>最近取数</th><th>告警</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="8" class="muted">当前筛选无同步资产。</td></tr>'}</tbody></table>`;
     }
     function selectAssetGroup(key){state.activeAssetGroup=key;renderAssets();}
 

@@ -294,6 +294,24 @@ def enqueue_doc_asset(conn: Any, source_id: int, requested_by: str) -> dict[str,
         raise
 
 
+# 路由 POST /v1/sync/jobs/{job_key}/run 对这个 key 单独分派到 enqueue_tplus_full，
+# 它没有表级 source_id，走不通 enqueue_doc_job 的约束。
+SPECIAL_MANUAL_JOB_KEYS = {"chanjet.full"}
+
+
+def manual_triggerable(job_key: str, kind: str, source_id: Any) -> bool:
+    """「立即同步」按钮能不能点，与 sync_job_run 的实际分派共用同一份判据。
+
+    前端此前用 job.enabled 自己推导，于是 kind='mirror' 的
+    `wecom.locator_mirror｜企微文档定位档案镜像` 和 kind='reconcile' 的
+    `tplus.parent_match｜T+ 父件核对` 也长出了按钮，点下去必然撞
+    enqueue_doc_job 的 kind='pull' + 有效来源约束，报「同步作业不存在或不可手动触发」。
+    """
+    if str(job_key or "") in SPECIAL_MANUAL_JOB_KEYS:
+        return True
+    return str(kind or "") == "pull" and source_id is not None
+
+
 def enqueue_doc_job(conn: Any, job_key: str, requested_by: str) -> dict[str, Any]:
     try:
         with conn.cursor() as cur:

@@ -99,6 +99,7 @@ SELECT
     latest.detail_json,
     latest.legacy_ref,
     succeeded.finished_at,
+    verified.finished_at,
     COALESCE(alerts.open_alert_count, 0),
     source.env_profile,
     source.document_name,
@@ -133,6 +134,16 @@ LEFT JOIN LATERAL (
     ORDER BY finished_at DESC NULLS LAST, id DESC
     LIMIT 1
 ) succeeded ON TRUE
+-- 新鲜度看的是「最近一次确认数据是新的」，不是「最近一次真的拉了数据」。
+-- 企微 modify_time 未变会整簿跳过，跳过同样确认了内容没变；只认 success 的话，
+-- 配上 SLA 之后那几十张长期无改动的表会集体变成「已过期」，全是假告警。
+LEFT JOIN LATERAL (
+    SELECT finished_at
+    FROM sync_job_runs
+    WHERE job_id = j.id AND status IN ('success', 'skipped')
+    ORDER BY finished_at DESC NULLS LAST, id DESC
+    LIMIT 1
+) verified ON TRUE
 LEFT JOIN (
     SELECT job_id, COUNT(*) AS open_alert_count
     FROM sync_job_alerts
@@ -159,6 +170,7 @@ def _last_run(row: tuple[Any, ...]) -> dict[str, Any] | None:
         "error_message": row[18],
         "detail_json": row[19] or {},
         "legacy_ref": row[20] or {},
+        "unreadable_record_count": int((row[19] or {}).get("unreadable_record_count") or 0),
     }
 
 
@@ -177,6 +189,7 @@ def overview(conn, *, now=None) -> dict[str, Any]:
         "failed": 0,
         "partial": 0,
         "running": 0,
+        "skipped": 0,
         "open_alerts": 0,
     }
     items: list[dict[str, Any]] = []
@@ -184,12 +197,12 @@ def overview(conn, *, now=None) -> dict[str, Any]:
     formula_artifact_loaded = False
 
     for row in rows:
-        freshness = classify_freshness(row[21], row[6], now=now)
+        freshness = classify_freshness(row[22], row[6], now=now)
         summary[freshness["state"]] += 1
         last_run = _last_run(row)
-        if last_run and last_run["status"] in ("failed", "partial", "running"):
+        if last_run and last_run["status"] in ("failed", "partial", "running", "skipped"):
             summary[last_run["status"]] += 1
-        open_alert_count = int(row[22] or 0)
+        open_alert_count = int(row[23] or 0)
         summary["open_alerts"] += open_alert_count
 
         artifact = None
@@ -211,13 +224,16 @@ def overview(conn, *, now=None) -> dict[str, Any]:
                 "artifact_glob": row[7],
                 "alert_enabled": row[8],
                 "source_id": row[9],
-                "source_group": sync_control.source_group(str(row[2] or ""), str(row[23] or "")),
-                "env_profile": row[23],
-                "document_name": row[24],
-                "sheet_name": row[25],
-                "doc_source_id": row[26],
+                "manual_triggerable": sync_control.manual_triggerable(row[0], row[1], row[9]),
+                "source_group": sync_control.source_group(str(row[2] or ""), str(row[24] or "")),
+                "env_profile": row[24],
+                "document_name": row[25],
+                "sheet_name": row[26],
+                "doc_source_id": row[27],
                 "last_run": last_run,
                 "last_success_at": row[21],
+                # 新鲜度用的是它，不是 last_success_at：整簿跳过同样确认了内容没变。
+                "last_verified_at": row[22],
                 "freshness": freshness,
                 "next_expected_at": None,
                 "open_alert_count": open_alert_count,

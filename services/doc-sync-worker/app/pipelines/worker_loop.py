@@ -33,6 +33,22 @@ from app.storage.job_catalog import reconcile_document_jobs_fail_open
 
 CONFIG_PULL_MIN_SECONDS = 120
 DISABLED_RECHECK_MAX_SECONDS = 600
+# 运行记录保留期。每作业保底条数不能省：整簿跳过留痕后写入量涨到约 90 行/天，
+# 纯按时间删会把低频作业删成「无记录」——正是页面上最容易被误读成"这作业坏了"的状态。
+RUN_RETENTION_DAYS = 90
+RUN_RETENTION_MIN_PER_JOB = 5
+
+
+def prune_sync_job_runs(
+    retain_days: int = RUN_RETENTION_DAYS, min_runs_per_job: int = RUN_RETENTION_MIN_PER_JOB
+) -> int:
+    store = open_store()
+    try:
+        if not hasattr(store, "prune_sync_job_runs"):
+            return 0
+        return int(store.prune_sync_job_runs(retain_days, min_runs_per_job) or 0)
+    finally:
+        store.close()
 
 
 def _read_positive_int(name: str, default: int) -> int:
@@ -211,6 +227,15 @@ def run_worker_loop(
             run_tplus_parent_match(trigger="schedule")
         except Exception as exc:  # noqa: BLE001 - 核对失败不拖垮源同步周期
             print(f"[文档同步循环] T+ 父件核对异常：{exc}")
+        # 挂在每日全量之后：这是循环里唯一天然的「一天一次」入口，不必再引入 pg_cron。
+        try:
+            deleted = prune_sync_job_runs()
+            print(
+                f"[文档同步循环] 运行记录清理：删除 {deleted} 条"
+                f"（保留 {RUN_RETENTION_DAYS} 天，每作业保底 {RUN_RETENTION_MIN_PER_JOB} 条）。"
+            )
+        except Exception as exc:  # noqa: BLE001 - 清理失败不拖垮同步周期
+            print(f"[文档同步循环] 运行记录清理异常：{type(exc).__name__}")
         return code
 
     def _default_consume_requests() -> int:

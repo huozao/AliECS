@@ -17,6 +17,13 @@ ENV_LIST_SEPARATORS = (";", ",", "\n")
 MAX_NUMBERED_ENV_ITEMS = 20
 NETWORK_RETRIES = 3
 RETRY_SLEEP_SECONDS = 1.5
+RECORD_PAGE_SIZE = 50
+MAX_RECORD_PAGES = 2000
+# 某条记录的成员字段引用了本企业解析不到的 userid 时，包含它的那次 get_records 整体失败：
+# 多条请求回 60111、单条请求回 -1。2026-08-28 在 COMPANY_A「公开的生产记录表」实测，
+# 146 条里第 85/86/97 条稳定不可读；用 field_ids 裁掉成员字段也绕不开——
+# 企微在返回前先解析 userid，字段过滤发生在解析之后。
+UNREADABLE_RECORD_ERRCODES = {-1, 60111}
 SENSITIVE_URL_PARAMS = {
     "access_token",
     "authcode",
@@ -321,24 +328,77 @@ class WeComSmartsheetClient:
             sheets = sheets.get("sheets") or sheets.get("sheet_list") or []
         return sheets if isinstance(sheets, list) else []
 
+    def _record_page(self, docid: str, sheet_id: str, offset: int, limit: int) -> dict[str, Any]:
+        payload: dict[str, Any] = {"docid": docid, "sheet_id": sheet_id, "limit": limit}
+        if offset:
+            payload["offset"] = offset
+        return self._post("/wedoc/smartsheet/get_records", payload)
+
+    def _scan_record_page(
+        self, docid: str, sheet_id: str, offset: int, limit: int
+    ) -> tuple[list[Any], list[int], bool]:
+        """整页读不出时逐条重试，返回（可读记录, 不可读记录的 1-based 序号, 是否已到表尾）。"""
+        records: list[Any] = []
+        unreadable: list[int] = []
+        for index in range(offset, offset + limit):
+            try:
+                page = self._record_page(docid, sheet_id, index, 1)
+            except WeComApiError as exc:
+                if exc.errcode not in UNREADABLE_RECORD_ERRCODES:
+                    raise
+                unreadable.append(index + 1)
+                continue
+            got = list(page.get("records") or [])
+            if not got:
+                return records, unreadable, True
+            records.extend(got)
+        return records, unreadable, False
+
     def get_records(self, docid: str, sheet_id: str) -> dict[str, Any]:
-        base_payload: dict[str, Any] = {"docid": docid, "sheet_id": sheet_id}
-        current_page = self._post("/wedoc/smartsheet/get_records", base_payload)
-        records = list(current_page.get("records") or [])
-        page_count = 1
-        next_cursor = current_page.get("next")
+        """按 offset 分页拉全量记录。
 
-        while current_page.get("has_more") and next_cursor not in (None, ""):
-            page_payload = {**base_payload, "next": next_cursor}
-            current_page = self._post("/wedoc/smartsheet/get_records", page_payload)
-            records.extend(current_page.get("records") or [])
+        企微 get_records 只认请求里的 offset；**响应里的 next 回传给服务端会被忽略**，
+        带 next 翻页会反复拿回同一页且 has_more 恒为 true（2026-08-28 实测，连发 8 次全同），
+        旧写法因此是个死循环——只是不传 limit 时服务端一次返回整表、翻页分支从未走到才没爆。
+        单条记录不可读时整页失败，此时把该页降级成逐条拉取，跳过读不出的那几条，
+        并把它们的序号回传给调用方计数。
+        """
+        records: list[Any] = []
+        unreadable: list[int] = []
+        last_page: dict[str, Any] = {}
+        offset = 0
+        page_count = 0
+
+        while page_count < MAX_RECORD_PAGES:
+            try:
+                page = self._record_page(docid, sheet_id, offset, RECORD_PAGE_SIZE)
+            except WeComApiError as exc:
+                if exc.errcode not in UNREADABLE_RECORD_ERRCODES:
+                    raise
+                got, skipped, exhausted = self._scan_record_page(docid, sheet_id, offset, RECORD_PAGE_SIZE)
+                records.extend(got)
+                unreadable.extend(skipped)
+                page_count += 1
+                if exhausted:
+                    break
+                offset += RECORD_PAGE_SIZE
+                continue
             page_count += 1
-            next_cursor = current_page.get("next")
+            last_page = page
+            got = list(page.get("records") or [])
+            records.extend(got)
+            if not page.get("has_more") or not got:
+                break
+            offset += len(got)
+        else:
+            raise RuntimeError(f"企业微信 get_records 翻页超过 {MAX_RECORD_PAGES} 页，疑似未收敛。")
 
-        merged = dict(current_page)
+        merged = dict(last_page)
         merged["records"] = records
         merged["fetched_count"] = len(records)
         merged["page_count"] = page_count
+        merged["unreadable_offsets"] = unreadable
+        merged["unreadable_count"] = len(unreadable)
         return merged
 
     def update_records(self, docid: str, sheet_id: str, records: list[dict[str, Any]]) -> dict[str, Any]:

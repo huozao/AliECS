@@ -196,5 +196,27 @@ class SyncControlTests(unittest.TestCase):
         self.assertEqual(1, conn.rollbacks)
 
 
+class ManualTriggerableTests(unittest.TestCase):
+    """「立即同步」按钮的判据必须和 sync_job_run 的实际分派对齐。
+
+    前端此前用 job.enabled 自己推导，于是 kind='mirror' 的 wecom.locator_mirror
+    也长出了按钮，点下去必然报「同步作业不存在或不可手动触发」。
+    """
+
+    def test_document_pull_job_with_source_is_triggerable(self) -> None:
+        self.assertTrue(sync_control.manual_triggerable("wecom.doc.7", "pull", 7))
+
+    def test_tplus_full_is_triggerable_even_without_source(self) -> None:
+        # 路由对它单独分派到 enqueue_tplus_full，不走 enqueue_doc_job。
+        self.assertTrue(sync_control.manual_triggerable("chanjet.full", "pull", None))
+
+    def test_mirror_and_reconcile_jobs_are_not_triggerable(self) -> None:
+        self.assertFalse(sync_control.manual_triggerable("wecom.locator_mirror", "mirror", None))
+        self.assertFalse(sync_control.manual_triggerable("tplus.parent_match", "reconcile", None))
+
+    def test_pull_job_without_source_is_not_triggerable(self) -> None:
+        self.assertFalse(sync_control.manual_triggerable("wecom.doc.7", "pull", None))
+
+
 if __name__ == "__main__":
     unittest.main()

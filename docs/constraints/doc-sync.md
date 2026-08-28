@@ -190,8 +190,99 @@ docker compose -f local/docker-compose.local.yml config
   会把本批未出现的记录标 `missing_since`，触发核对时把大量行误标「编码失联」发大告警。
   **改那边任一写入点的 provider/module/status 语义就要同步改这里**，否则事件触发会静默失效。
 
+## 企微 get_records 只认 offset，回传 next 会被忽略（2026-08-28）
+
+`WeComSmartsheetClient.get_records` 曾拿响应里的 `next` 当游标翻页。**企微忽略请求里的
+`next`**：连发 8 次带 `next=50` 的请求，每次都返回同一批前 50 条、`has_more` 恒为 `true`、
+`next` 恒为 `50`——旧写法是个死循环。
+
+它一直没爆，只是因为**不传 `limit` 时企微一次性把整表返回**（生产「生产色粉明细」524 条 /
+分页 1 页），`has_more` 永远是 false，翻页分支从来没被走到。
+
+现行写法：显式 `limit=RECORD_PAGE_SIZE`（50），用 `offset` 翻页。判据锁在
+`tests/test_doc_sync_worker.py` 的 `_offset_only_client`——那个假客户端**只认 offset、
+忽略 next**，就是为了让旧写法在测试里必然失败。
+
+## 个别记录企微拒绝返回：60111，裁字段绕不开（2026-08-28 定案）
+
+`wecom.doc.2｜产量统计 / 公开的生产记录表` 自 2026-08-13 起 `failed`，告警推了 58 次。
+**不是 docid 失联**：同一 docid 下的「选单录单」读得通，每晚 `get_doc_base` 也正常。
+
+实测证据（COMPANY_A，只读探针）：
+
+| 请求 | 结果 |
+|---|---|
+| `offset=0 limit=84` | OK，84 条 |
+| `offset=0 limit=85` | ERR 60111 |
+| `offset=50 limit=50`（第 51–100 条） | ERR 60111 |
+| `offset=84 limit=1`（第 85 条） | ERR -1，连测 3 次全错 |
+| `field_ids` 排除「创建人」(`FIELD_TYPE_USER`) | ERR 60111 |
+| `field_ids` 只要「创建人」 | ERR 60111 |
+
+`total=146`，读不出的是**第 85 / 86 / 97 条**，其余 143 条正常。这三条的「创建人」指向本企业
+解析不到的 userid（离职或外部提交人）。**裁掉成员字段绕不开**——企微在返回前先解析 userid，
+`field_ids` 过滤发生在解析之后。
+
+处理口径（2026-08-28 用户拍板「甲」）：
+
+- 整页失败时降级成逐条拉取，跳过读不出的记录，序号回传为 `unreadable_offsets`。
+- 运行状态仍是 `success`：这是**数据源的稳定缺陷，不是同步失败**，每天推一次告警没有信息量。
+  条数写进 `sync_job_runs.detail_json.unreadable_record_count`，页面上常驻一个「N 条不可读」chip。
+- 🔴 **有不可读记录时整轮放弃 `delete_missing_records`**。「本轮没见到」不能推断成「上游已删」，
+  照删会把仍然存在、只是这次拉不回来的记录从库里抹掉。
+
+## 整簿跳过必须留痕；半途失败不得登记 modify_time（2026-08-28）
+
+企微 `modify_time` 未变时整簿跳过，旧实现在跳过分支直接 `return`：既不写 `sync_job_runs`
+也不动 `last_sync_at`。后果是同步中心页面上「最近运行」停在最后一次**内容有变化**的日子——
+2026-08-28 用户据此报「企微 A 和企微 B 都没同步」，实际每晚都在跑。飞书没有跳过机制
+（每轮全拉 13 张表），所以飞书天天有记录，对比之下更像企微坏了。
+
+现行口径：
+
+- 跳过时为该文档下每个 active 表级作业写一条 `status='skipped'` 的运行记录
+  （`_record_skipped_runs`，来源列表走 `list_active_sheet_sources`）。
+- 新鲜度看 **`verified`＝最近一次 `success` 或 `skipped`**，不是 `last_success_at`。
+  只认 success 的话，配上 SLA 之后那几十张长期无改动的表会集体变成「已过期」，全是假告警。
+- 页面列名「最近同步」改为**「最近取数」**：它读的是 `MAX(external_sources.last_sync_at)`，
+  跳过时不更新，本来就只在真拉了数据时才动。
+- ⚠️ `sync_wecom_full.py` 里「全簿处理完才登记 modify_time，半途失败下轮不会被跳过」这句注释
+  **在 2026-08-28 之前只是注释**：`upsert_doc_source(external_modified_at=...)` 是无条件执行的。
+  `wecom.doc.2` 因此从失败那天起被每晚跳过、定时任务从未重试过。现已改为失败时传空串，
+  下一轮 `last_seen` 为空就不会命中跳过分支。
+
+## 「立即同步」的判据只有一个（2026-08-28）
+
+前端曾用 `job.enabled` 自己推导按钮是否渲染，于是 `kind='mirror'` 的
+`wecom.locator_mirror｜企微文档定位档案镜像` 和 `kind='reconcile'` 的
+`tplus.parent_match｜T+ 父件核对` 也长出了「立即同步」，点下去必然报
+**「同步作业不存在或不可手动触发」**——`enqueue_doc_job` 要求 `kind='pull'` 且有有效表级来源。
+
+判据现在只有一份：`sync_control.manual_triggerable(job_key, kind, source_id)`，
+由 `/v1/sync/overview` 的 items 带给前端。`chanjet.full` 例外放行，因为路由对它单独分派到
+`enqueue_tplus_full`。**前端不得再自己推导这件事。**
+
+`wecom.locator_mirror` 另有一处：它走 `document_locator_mirror_jobs` 独立队列，此前从不写
+`sync_job_runs`，登记进 `sync_jobs` 只是为了让告警器认它——所以页面上永远显示「无记录」。
+现已在 `run_pending_document_locator_mirror_jobs` 每一轮起止各写一条运行记录。
+
+## 运行记录保留策略（2026-08-28）
+
+整簿跳过留痕后 `sync_job_runs` 写入量从约 33 行/天涨到约 90 行/天。清理挂在每日全量之后
+（`worker_loop._default_full_sync`，循环里唯一天然的「一天一次」入口，不引入 pg_cron）：
+
+- 删 `started_at < now() - 90 天`（`RUN_RETENTION_DAYS`）
+- 🔴 **但每个作业保底留最近 5 条**（`RUN_RETENTION_MIN_PER_JOB`）。纯按时间删会把低频作业
+  删成「无记录」——那正是本次在修的、最容易被误读成「这个作业坏了」的状态。
+- `sync_job_steps` 走 `ON DELETE CASCADE` 一起清；`sync_job_alerts.run_id` 是
+  `ON DELETE SET NULL`，告警本身不受影响。
+
 <!-- 本文点名的符号，改名时本文必须同批更新；校验器会拦 -->
 <!-- nav-check-python: services/doc-sync-worker/app/pipelines/rnd_record_writer.py:build_node_row_values -->
 <!-- nav-check-python: services/doc-sync-worker/app/pipelines/document_locator_mirror.py:write_locator_mirror -->
+<!-- nav-check-python: services/doc-sync-worker/app/providers/wecom.py:get_records -->
+<!-- nav-check-python: services/doc-sync-worker/app/pipelines/sync_wecom_full.py:_record_skipped_runs -->
+<!-- nav-check-python: services/doc-sync-worker/app/storage/postgres.py:prune_sync_job_runs -->
+<!-- nav-check-python: services/backend-api/app/sync_control.py:manual_triggerable -->
 <!-- nav-check-python: services/tplus-sync-worker/src/tplus_datahub/jobs/db_sync_requests.py:finish_bom_request -->
 <!-- nav-check-python: services/tplus-sync-worker/src/tplus_datahub/jobs/sync_state.py:record_tplus_sync_run_if_configured -->

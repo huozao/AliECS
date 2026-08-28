@@ -14,8 +14,11 @@ from app.pipelines.wecom_structure_backup import (
 )
 from app.providers.wecom import WeComSmartsheetClient, credentials_for_profile, normalize_env_profile
 from app.storage.postgres import _redact_locator_error, open_store
+from app.storage.sync_job_platform import platform_writer_for
 
 
+MIRROR_JOB_KEY = "wecom.locator_mirror"
+MIRROR_JOB_DISPLAY_NAME = "企微文档定位档案镜像"
 CURRENT_SHEET = "文档定位档案"
 EVENT_SHEET = "定位档案变更历史"
 # ⚠️「API文档ID」与「分享标识」必须分列。合成一列（原来的「文档定位ID」写的是
@@ -411,6 +414,59 @@ def _workbook_client() -> tuple[WeComSmartsheetClient, dict[str, Any]]:
     raise DocumentLocatorMirrorError("所有结构备份凭据均无法访问定位档案文档：" + " | ".join(errors))
 
 
+class _MirrorPlatformRun:
+    """把镜像流水线的每一轮写进 sync_job_runs。
+
+    这条流水线走的是 document_locator_mirror_jobs 独立队列，此前从不写平台运行表，
+    于是它在同步中心页面上永远显示「无记录」——登记在 sync_jobs 里只是为了让告警器
+    认它。全部写入 best-effort，观测失败不得改变镜像本身的结果。
+    """
+
+    def __init__(self, writer: Any = None, run_id: int | None = None) -> None:
+        self.writer = writer
+        self.run_id = run_id
+
+    @classmethod
+    def start(cls, store: Any) -> "_MirrorPlatformRun":
+        try:
+            writer = platform_writer_for(store)
+            run_id = writer.start_run(
+                job_key=MIRROR_JOB_KEY,
+                kind="mirror",
+                provider="wecom",
+                display_name=MIRROR_JOB_DISPLAY_NAME,
+                source_id=None,
+                trigger="event",
+                legacy_ref={},
+            )
+        except Exception:  # noqa: BLE001 - observability must not block the mirror.
+            return cls()
+        return cls(writer, run_id)
+
+    def step(self, seq: int, name: str, status: str, *, items: int = 0, message: str = "") -> None:
+        if self.writer is None or self.run_id is None:
+            return
+        try:
+            self.writer.upsert_step(self.run_id, seq, name, status, items=items, message=message)
+        except Exception:  # noqa: BLE001
+            return
+
+    def finish(self, *, status: str, claimed: int, written: int, error: Exception | str | None = None) -> None:
+        if self.writer is None or self.run_id is None:
+            return
+        try:
+            self.writer.finish_run(
+                self.run_id,
+                status=status,
+                row_count=claimed,
+                changed_count=written,
+                error=error,
+                detail_json={"claimed_job_count": claimed, "written_job_count": written},
+            )
+        except Exception:  # noqa: BLE001
+            return
+
+
 def run_pending_document_locator_mirror_jobs(*, limit: int = 10, force: bool = False) -> int:
     if not force and not structure_backup_enabled():
         return 0
@@ -421,6 +477,9 @@ def run_pending_document_locator_mirror_jobs(*, limit: int = 10, force: bool = F
         jobs = store.claim_document_locator_mirror_jobs(limit=limit)
         if not jobs:
             return 0
+        run = _MirrorPlatformRun.start(store)
+        run.step(1, "claim", "success", items=len(jobs))
+        written = 0
         try:
             client, workbook = _workbook_client()
         except Exception as exc:  # noqa: BLE001 - durable jobs retain the work for retry.
@@ -428,7 +487,11 @@ def run_pending_document_locator_mirror_jobs(*, limit: int = 10, force: bool = F
             for job in jobs:
                 delay = min(3600, 60 * (2 ** int(job.get("attempt_count") or 0)))
                 store.retry_document_locator_mirror_job(int(job["id"]), safe_error, delay)
+            run.step(2, "workbook", "failed", message=safe_error)
+            run.finish(status="failed", claimed=len(jobs), written=0, error=safe_error)
             return 1
+        run.step(2, "workbook", "success", items=1)
+        run.step(3, "write_mirror", "running", items=0)
         for job in jobs:
             job_id = int(job["id"])
             try:
@@ -445,10 +508,18 @@ def run_pending_document_locator_mirror_jobs(*, limit: int = 10, force: bool = F
                     payload=payload,
                 )
                 store.finish_document_locator_mirror_job(job_id)
+                written += 1
             except Exception as exc:  # noqa: BLE001 - one document must not block other mirror jobs.
                 delay = min(3600, 60 * (2 ** int(job.get("attempt_count") or 0)))
                 store.retry_document_locator_mirror_job(job_id, _redact_locator_error(str(exc)), delay)
                 exit_code = 1
+        run.step(3, "write_mirror", "success" if exit_code == 0 else "failed", items=written)
+        run.finish(
+            status="success" if exit_code == 0 else ("partial" if written else "failed"),
+            claimed=len(jobs),
+            written=written,
+            error=None if exit_code == 0 else "mirror job failed",
+        )
     finally:
         store.close()
     return exit_code
