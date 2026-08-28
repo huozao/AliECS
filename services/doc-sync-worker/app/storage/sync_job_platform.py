@@ -11,12 +11,17 @@ except ModuleNotFoundError:  # pragma: no cover - pure unit tests do not require
             self.value = value
 
 
-_RUN_STATUSES = {"running", "success", "partial", "failed"}
+# skipped｜内容未变整簿跳过：企微 modify_time 没动时不重拉，但必须留痕——
+# 否则页面上「最近运行」停在最后一次内容变化的日子，看起来像同步坏了。
+_RUN_STATUSES = {"running", "success", "partial", "failed", "skipped"}
 _STEP_STATUSES = {"running", "success", "failed"}
 _LEGACY_TABLES = {"sync_runs", "integration_sync_runs"}
-_TPLUS_JOB_METADATA = {
+# 不挂 source_id 的作业：T+ 两个 + 企微定位档案镜像。它们没有表级来源，
+# job_key 是写死的，因此元数据也在这里钉死，避免调用方随便传。
+_SOURCELESS_JOB_METADATA = {
     "chanjet.full": ("pull", "chanjet"),
     "tplus.parent_match": ("reconcile", "chanjet"),
+    "wecom.locator_mirror": ("mirror", "wecom"),
 }
 _DOCUMENT_JOB_KEY = re.compile(r"^(wecom|feishu)\.doc\.(\d+)$")
 _SECRET_PATTERN = re.compile(
@@ -102,12 +107,12 @@ class SyncJobPlatformWriter:
             if type(source_id) is not int or source_id <= 0 or int(document_job.group(2)) != source_id:
                 raise ValueError("invalid document source")
             return
-        expected_metadata = _TPLUS_JOB_METADATA.get(job_key)
+        expected_metadata = _SOURCELESS_JOB_METADATA.get(job_key)
         if expected_metadata is not None:
             if source_id is not None:
-                raise ValueError("invalid tplus source")
+                raise ValueError("invalid sourceless job source")
             if (kind, provider) != expected_metadata:
-                raise ValueError("invalid tplus metadata")
+                raise ValueError("invalid sourceless job metadata")
             return
         raise ValueError("unknown job key")
 

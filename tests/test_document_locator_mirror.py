@@ -88,8 +88,28 @@ class FakeMirrorClient:
         return {}
 
 
+class FakeJobPlatform:
+    """SyncJobPlatformWriter 的最小替身，只记录调用。"""
+
+    def __init__(self) -> None:
+        self.started: list[dict[str, Any]] = []
+        self.steps: list[tuple[Any, ...]] = []
+        self.finished: list[dict[str, Any]] = []
+
+    def start_run(self, **kwargs: Any) -> int:
+        self.started.append(kwargs)
+        return 900 + len(self.started)
+
+    def upsert_step(self, run_id: int, seq: int, name: str, status: str, **kwargs: Any) -> None:
+        self.steps.append((run_id, seq, name, status))
+
+    def finish_run(self, run_id: int, **kwargs: Any) -> None:
+        self.finished.append({"run_id": run_id, **kwargs})
+
+
 class FakeLocatorStore:
     def __init__(self) -> None:
+        self.sync_jobs = FakeJobPlatform()
         self.sources: list[dict[str, Any]] = []
         self.upserts: list[tuple[dict[str, Any], str]] = []
         self.jobs: list[dict[str, Any]] = []
@@ -379,6 +399,53 @@ class DocumentLocatorMirrorTests(unittest.TestCase):
             self.assertEqual(1, self.mirror.run_pending_document_locator_mirror_jobs(limit=10, force=True))
         self.assertEqual(81, failing.retried[0][0])
         self.assertNotIn("topsecret", failing.retried[0][1])
+
+    def test_successful_batch_records_one_platform_run(self) -> None:
+        """镜像走独立队列，此前从不写 sync_job_runs——页面上因此永远显示「无记录」。"""
+        store = FakeLocatorStore()
+        store.jobs = [
+            {"id": 81, "locator_id": 41, "locator_version": 1, "trigger": "sync-success", "attempt_count": 0}
+        ]
+        store.payloads[41] = mirror_payload()
+        client = FakeMirrorClient()
+        workbook = self.mirror.ensure_locator_workbook(client, docid="backup-doc")
+
+        with mock.patch.object(self.mirror, "open_store", return_value=store), \
+                mock.patch.object(self.mirror, "_workbook_client", return_value=(client, workbook)):
+            self.assertEqual(0, self.mirror.run_pending_document_locator_mirror_jobs(limit=10, force=True))
+
+        self.assertEqual(1, len(store.sync_jobs.started))
+        started = store.sync_jobs.started[0]
+        self.assertEqual("wecom.locator_mirror", started["job_key"])
+        self.assertEqual("mirror", started["kind"])
+        self.assertEqual("wecom", started["provider"])
+        self.assertIsNone(started["source_id"])
+        self.assertEqual({}, started["legacy_ref"])
+        self.assertEqual(["success"], [item["status"] for item in store.sync_jobs.finished])
+        self.assertEqual(1, store.sync_jobs.finished[0]["changed_count"])
+
+    def test_workbook_failure_is_recorded_as_a_failed_run(self) -> None:
+        store = FakeLocatorStore()
+        store.jobs = [
+            {"id": 81, "locator_id": 41, "locator_version": 1, "trigger": "sync-success", "attempt_count": 0}
+        ]
+        store.payloads[41] = mirror_payload()
+
+        with mock.patch.object(self.mirror, "open_store", return_value=store), \
+                mock.patch.object(self.mirror, "_workbook_client", side_effect=RuntimeError("token=topsecret")):
+            self.assertEqual(1, self.mirror.run_pending_document_locator_mirror_jobs(limit=10, force=True))
+
+        self.assertEqual(["failed"], [item["status"] for item in store.sync_jobs.finished])
+        # 凭据不得随错误串进运行记录。
+        self.assertNotIn("topsecret", str(store.sync_jobs.finished[0]))
+
+    def test_empty_queue_records_nothing(self) -> None:
+        store = FakeLocatorStore()
+
+        with mock.patch.object(self.mirror, "open_store", return_value=store):
+            self.assertEqual(0, self.mirror.run_pending_document_locator_mirror_jobs(limit=10, force=True))
+
+        self.assertEqual([], store.sync_jobs.started)
 
 
 class MirrorFieldContractTests(unittest.TestCase):

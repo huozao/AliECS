@@ -59,14 +59,16 @@ class WeComSmartsheetPaginationTests(WorkerImportTestCase):
         self.assertEqual(1, len(client.calls))
         self.assertNotIn("next", client.calls[0]["payload"])
 
-    def test_get_records_follows_next_until_has_more_false(self) -> None:
-        from app.providers.wecom import WeComSmartsheetClient
+    @staticmethod
+    def _offset_only_client(total: int, unreadable_positions: frozenset[int] = frozenset()):
+        """模拟企微真实行为：只认请求里的 offset，回传的 next 一律忽略。
 
-        pages = [
-            {"errcode": 0, "has_more": True, "next": "cursor-1", "records": [{"record_id": "r1"}]},
-            {"errcode": 0, "has_more": True, "next": "cursor-2", "records": [{"record_id": "r2"}]},
-            {"errcode": 0, "has_more": False, "next": "", "records": [{"record_id": "r3"}]},
-        ]
+        2026-08-28 实测：连发 8 次带 next 的请求全部拿回同一页、has_more 恒为 true。
+        旧实现拿 next 当游标翻页，遇到多页就是死循环——这个假客户端专门锁住这条契约。
+        unreadable_positions 里的 1-based 序号模拟成员字段指向失效 userid 的记录：
+        请求窗口一旦覆盖到它就整体报 60111。
+        """
+        from app.providers.wecom import WeComApiError, WeComSmartsheetClient
 
         class FakeClient(WeComSmartsheetClient):
             def __init__(self) -> None:
@@ -75,17 +77,126 @@ class WeComSmartsheetPaginationTests(WorkerImportTestCase):
 
             def _post(self, path: str, payload: dict) -> dict:
                 self.calls.append({"path": path, "payload": dict(payload)})
-                return pages.pop(0)
+                offset = int(payload.get("offset") or 0)
+                limit = int(payload.get("limit") or total)
+                window = range(offset + 1, min(offset + limit, total) + 1)
+                if unreadable_positions & set(window):
+                    raise WeComApiError(path, {"errcode": 60111, "errmsg": "userid not found"})
+                records = [{"record_id": f"r{index}"} for index in window]
+                return {
+                    "errcode": 0,
+                    "total": total,
+                    "has_more": offset + len(records) < total,
+                    "next": offset + len(records),
+                    "records": records,
+                }
 
-        client = FakeClient()
+        return FakeClient()
+
+    def test_get_records_pages_by_offset_and_never_sends_next(self) -> None:
+        client = self._offset_only_client(total=120)
 
         result = client.get_records("doc1", "sheet1")
 
-        self.assertEqual(3, result["fetched_count"])
+        self.assertEqual(120, result["fetched_count"])
         self.assertEqual(3, result["page_count"])
-        self.assertEqual(["r1", "r2", "r3"], [item["record_id"] for item in result["records"]])
-        self.assertEqual("cursor-1", client.calls[1]["payload"]["next"])
-        self.assertEqual("cursor-2", client.calls[2]["payload"]["next"])
+        self.assertEqual(0, result["unreadable_count"])
+        self.assertEqual(
+            [f"r{index}" for index in range(1, 121)],
+            [item["record_id"] for item in result["records"]],
+        )
+        self.assertEqual([0, 50, 100], [int(call["payload"].get("offset") or 0) for call in client.calls])
+        for call in client.calls:
+            self.assertNotIn("next", call["payload"])
+
+    def test_get_records_skips_records_wecom_refuses_to_return(self) -> None:
+        client = self._offset_only_client(total=146, unreadable_positions=frozenset({85, 86, 97}))
+
+        result = client.get_records("doc1", "sheet1")
+
+        self.assertEqual([85, 86, 97], result["unreadable_offsets"])
+        self.assertEqual(3, result["unreadable_count"])
+        self.assertEqual(143, result["fetched_count"])
+        self.assertNotIn("r85", [item["record_id"] for item in result["records"]])
+        self.assertIn("r84", [item["record_id"] for item in result["records"]])
+        self.assertIn("r146", [item["record_id"] for item in result["records"]])
+
+    def test_get_records_propagates_errors_that_are_not_unreadable_records(self) -> None:
+        from app.providers.wecom import WeComApiError, WeComSmartsheetClient
+
+        class FakeClient(WeComSmartsheetClient):
+            def __init__(self) -> None:
+                super().__init__("corp", "secret")
+
+            def _post(self, path: str, payload: dict) -> dict:
+                raise WeComApiError(path, {"errcode": 42001, "errmsg": "access_token expired"})
+
+        with self.assertRaises(WeComApiError):
+            FakeClient().get_records("doc1", "sheet1")
+
+
+class SyncJobRunRetentionTests(WorkerImportTestCase):
+    """运行记录清理：跳过留痕之后写入量约 90 行/天，必须有保留期。"""
+
+    def test_prune_passes_retention_window_and_per_job_floor(self) -> None:
+        from app.pipelines import worker_loop
+
+        class FakeStore:
+            def __init__(self) -> None:
+                self.calls: list[tuple[int, int]] = []
+                self.closed = 0
+
+            def prune_sync_job_runs(self, retain_days: int, min_runs_per_job: int) -> int:
+                self.calls.append((retain_days, min_runs_per_job))
+                return 12
+
+            def close(self) -> None:
+                self.closed += 1
+
+        store = FakeStore()
+        with patch.object(worker_loop, "open_store", return_value=store):
+            deleted = worker_loop.prune_sync_job_runs()
+
+        self.assertEqual(12, deleted)
+        self.assertEqual([(worker_loop.RUN_RETENTION_DAYS, worker_loop.RUN_RETENTION_MIN_PER_JOB)], store.calls)
+        self.assertEqual(1, store.closed)
+        # 保底条数不能省：纯按时间删会把低频作业删成「无记录」。
+        self.assertGreaterEqual(worker_loop.RUN_RETENTION_MIN_PER_JOB, 1)
+
+    def test_prune_is_a_noop_on_stores_without_the_method(self) -> None:
+        from app.pipelines import worker_loop
+
+        class OldStore:
+            def __init__(self) -> None:
+                self.closed = 0
+
+            def close(self) -> None:
+                self.closed += 1
+
+        store = OldStore()
+        with patch.object(worker_loop, "open_store", return_value=store):
+            self.assertEqual(0, worker_loop.prune_sync_job_runs())
+        self.assertEqual(1, store.closed)
+
+
+class SourcelessJobMetadataTests(WorkerImportTestCase):
+    def test_locator_mirror_is_accepted_as_a_sourceless_job(self) -> None:
+        from app.storage.sync_job_platform import SyncJobPlatformWriter
+
+        SyncJobPlatformWriter._validate_start("wecom.locator_mirror", "mirror", "wecom", None, {})
+
+    def test_locator_mirror_rejects_a_source_id_or_wrong_kind(self) -> None:
+        from app.storage.sync_job_platform import SyncJobPlatformWriter
+
+        with self.assertRaises(ValueError):
+            SyncJobPlatformWriter._validate_start("wecom.locator_mirror", "mirror", "wecom", 7, {})
+        with self.assertRaises(ValueError):
+            SyncJobPlatformWriter._validate_start("wecom.locator_mirror", "pull", "wecom", None, {})
+
+    def test_skipped_is_a_valid_run_status(self) -> None:
+        from app.storage.sync_job_platform import _RUN_STATUSES
+
+        self.assertIn("skipped", _RUN_STATUSES)
 
 
 class ExternalRecordHashTests(WorkerImportTestCase):

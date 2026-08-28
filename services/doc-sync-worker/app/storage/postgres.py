@@ -1543,6 +1543,61 @@ class PostgresDocSyncStore:
         self.conn.commit()
         return disabled_count
 
+    def list_active_sheet_sources(
+        self, provider: str, env_profile: str, external_doc_id: str
+    ) -> list[dict[str, Any]]:
+        """整簿跳过时用它拿到该文档下的表级来源，好为每个作业补一条 skipped 运行记录。"""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id,
+                       COALESCE(NULLIF(source_name, ''), NULLIF(sheet_name, ''), id::text),
+                       COALESCE(sheet_name, '')
+                FROM external_sources
+                WHERE provider = %s
+                  AND env_profile = %s
+                  AND external_doc_id = %s
+                  AND external_sheet_id <> ''
+                  AND status = 'active'
+                ORDER BY id
+                """,
+                (provider, env_profile, external_doc_id),
+            )
+            return [
+                {"source_id": int(row[0]), "source_name": str(row[1] or ""), "sheet_name": str(row[2] or "")}
+                for row in cur.fetchall()
+            ]
+
+    def prune_sync_job_runs(self, retain_days: int, min_runs_per_job: int) -> int:
+        """按保留期清理运行记录，但每个作业保底留最近若干条。
+
+        纯按时间删会把低频作业删成「无记录」——那正是页面上最容易被误读成
+        「这个作业坏了」的状态，所以保底条数不能省。
+        sync_job_steps 走 ON DELETE CASCADE 一起清；sync_job_alerts.run_id 是
+        ON DELETE SET NULL，告警本身不受影响。
+        """
+        retain_days = max(1, int(retain_days))
+        min_runs_per_job = max(1, int(min_runs_per_job))
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                WITH ranked AS (
+                    SELECT id,
+                           row_number() OVER (PARTITION BY job_id ORDER BY started_at DESC, id DESC) AS rn
+                    FROM sync_job_runs
+                )
+                DELETE FROM sync_job_runs r
+                USING ranked
+                WHERE ranked.id = r.id
+                  AND ranked.rn > %s
+                  AND r.started_at < NOW() - make_interval(days => %s)
+                """,
+                (min_runs_per_job, retain_days),
+            )
+            deleted_count = int(cur.rowcount or 0)
+        self.conn.commit()
+        return deleted_count
+
     def list_image_backfill_targets(self, profiles: list[str] | None = None) -> list[dict[str, Any]]:
         profiles = [str(item).strip() for item in (profiles or []) if str(item).strip()]
         params: list[Any] = []

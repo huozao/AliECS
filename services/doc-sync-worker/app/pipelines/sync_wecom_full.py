@@ -129,10 +129,42 @@ class _PlatformRun:
                 row_count=int(counts.get("record_count", 0) or 0),
                 changed_count=int(counts.get("created_count", 0) or 0) + int(counts.get("updated_count", 0) or 0),
                 error=error,
-                detail_json={"error_count": int(counts.get("error_count", 0) or 0)},
+                detail_json={
+                    "error_count": int(counts.get("error_count", 0) or 0),
+                    "unreadable_record_count": int(counts.get("unreadable_record_count", 0) or 0),
+                },
             )
         except Exception:
             return
+
+
+def _record_skipped_runs(
+    store: Any, *, profile: str, docid: str, legacy_run_id: int | None, mode: str
+) -> None:
+    """整簿跳过也要留痕。
+
+    跳过 ≠ 没跑，但旧写法在跳过分支直接 return，既不写 sync_job_runs 也不动
+    last_sync_at，页面上「最近运行」就停在最后一次内容有变化的日子——看起来像同步坏了。
+    """
+    if legacy_run_id is None or not hasattr(store, "list_active_sheet_sources"):
+        return
+    try:
+        sources = store.list_active_sheet_sources("wecom", profile, docid)
+    except Exception:  # noqa: BLE001 - observability must not alter the legacy result.
+        return
+    for source in sources:
+        try:
+            source_id = int(source["source_id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        run = _PlatformRun.start(
+            store,
+            source_id=source_id,
+            source_name=str(source.get("source_name") or source_id),
+            legacy_run_id=legacy_run_id,
+            mode=mode,
+        )
+        run.finish(legacy_status="skipped", counts={})
 
 
 def _sheet_id(sheet: dict[str, Any]) -> str:
@@ -166,14 +198,22 @@ def _sync_sheet_records(
     field_titles = store.replace_fields(source_id, _fields_from_response(fields_response))
     records_response = client.get_records(docid, sheet_id)
     records = records_response.get("records") or []
+    unreadable_count = int(records_response.get("unreadable_count") or 0)
     if platform_run:
         platform_run.step(3, "fetch_page", "success", items=len(records), message=sheet_name)
         platform_run.step(4, "normalize", "running", message=sheet_name)
     counts["sheet_count"] += 1
     counts["record_count"] += len(records)
+    if unreadable_count:
+        counts["unreadable_record_count"] = counts.get("unreadable_record_count", 0) + unreadable_count
+    unreadable_note = (
+        f"，{unreadable_count} 条企微读不出已跳过（序号 {records_response.get('unreadable_offsets') or []}）"
+        if unreadable_count
+        else ""
+    )
     print(
         f"[企业微信同步] source_id={source_id} sheet={sheet_name or '未命名'} "
-        f"完整拉取 {len(records)} 条，分页 {records_response.get('page_count', 1)} 页。"
+        f"完整拉取 {len(records)} 条，分页 {records_response.get('page_count', 1)} 页{unreadable_note}。"
     )
     seen_record_ids: list[str] = []
     normalized_records = []
@@ -200,7 +240,14 @@ def _sync_sheet_records(
             counts["created_count"] += 1
         elif decision.action == "update":
             counts["updated_count"] += 1
-    if hasattr(store, "delete_missing_records"):
+    # 本轮有记录读不出来时，"没见到"不能推断成"上游已删"——照删会把仍然存在、
+    # 只是这次拉不回来的记录从库里抹掉。有不可读记录就整轮放弃删除比对。
+    if unreadable_count:
+        print(
+            f"[企业微信同步] source_id={source_id} sheet={sheet_name or '未命名'} "
+            f"存在不可读记录，本轮跳过删除比对。"
+        )
+    elif hasattr(store, "delete_missing_records"):
         deleted_count = store.delete_missing_records(source_id, seen_record_ids)
         counts["deleted_count"] = counts.get("deleted_count", 0) + int(deleted_count or 0)
     store.mark_source_synced(source_id)
@@ -239,6 +286,9 @@ def _sync_doc(
             except Exception:  # noqa: BLE001 - locator recovery must not block synchronization.
                 pass
             counts["skipped_doc_count"] = counts.get("skipped_doc_count", 0) + 1
+            _record_skipped_runs(
+                store, profile=profile, docid=docid, legacy_run_id=legacy_run_id, mode=mode
+            )
             print(f"[企业微信同步] {profile} 「{document_name}」modify_time 未变化（{modify_time}），整簿跳过。")
             return
 
@@ -282,6 +332,8 @@ def _sync_doc(
                     "record_count": counts["record_count"] - before_counts.get("record_count", 0),
                     "created_count": counts["created_count"] - before_counts.get("created_count", 0),
                     "updated_count": counts["updated_count"] - before_counts.get("updated_count", 0),
+                    "unreadable_record_count": counts.get("unreadable_record_count", 0)
+                    - before_counts.get("unreadable_record_count", 0),
                     "error_count": 0,
                 }
             )
@@ -306,13 +358,16 @@ def _sync_doc(
         disabled_count = store.disable_missing_sheets("wecom", profile, docid, seen_sheet_ids)
         counts["disabled_sheet_count"] = counts.get("disabled_sheet_count", 0) + int(disabled_count or 0)
     # 全簿处理完才登记 modify_time，半途失败下轮不会被跳过。
+    # ⚠️ 2026-08-28 修：这句注释此前只是注释——modify_time 是无条件登记的，
+    # 于是 wecom.doc.2「产量统计」从 2026-08-13 失败起被每晚跳过、定时任务从未重试过。
+    # 失败时把它清空，下一轮 last_seen 为空就不会命中跳过分支。
     document_source_id = store.upsert_doc_source(
         provider="wecom",
         env_profile=profile,
         external_doc_id=docid,
         document_name=document_name,
         source_url=source_url,
-        external_modified_at=modify_time,
+        external_modified_at="" if document_failure is not None else modify_time,
     )
     try:
         if document_failure is not None:
