@@ -742,10 +742,14 @@ class SyncAlertRepository:
                         ORDER BY started_at DESC, id DESC
                         LIMIT 1
                     ) latest_run ON TRUE
+                    -- 新鲜度看的是「最近一次确认数据是新的」，不是「最近一次真的拉了数据」。
+                    -- 与 backend-api app/sync_read.py 的 `verified` LATERAL 同一判据：
+                    -- 企微 modify_time 未变会整簿跳过，跳过同样确认了内容没变；只认
+                    -- success 的话，配上 SLA 之后那几十张长期无改动的表会集体变 stale。
                     LEFT JOIN LATERAL (
                         SELECT id, started_at, finished_at, detail_json
                         FROM sync_job_runs
-                        WHERE job_id = j.id AND status = 'success'
+                        WHERE job_id = j.id AND status IN ('success', 'skipped')
                         ORDER BY finished_at DESC NULLS LAST, id DESC
                         LIMIT 1
                     ) latest_success ON TRUE
