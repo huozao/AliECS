@@ -105,8 +105,8 @@ aliecs ─docker save|gzip -1─> /srv/peer-restic/repos/transfer/   （root:755
 
 | job | 触发条件（2026-08-10 实读） | 是什么 |
 |---|---|---|
-| `stage-business-cn-peer` | dispatch + `deploy_target=business-cn` | **业务主路径**：aliecs 拉 GHCR → Syncthing → txecs |
-| `deploy-business-cn` | dispatch + `deploy_target=business-cn-tcr-fallback` | ⚠️ **名字骗人**：TCR 回退路径。走主路径部署时它**永远 skipped**，据此判断会把成功的部署误判成没部署 |
+| `stage-business-cn-peer` | dispatch + `deploy_target=business-cn` | ~~**业务主路径**：aliecs 拉 GHCR → Syncthing → txecs~~ ⚠️ **该说法自 2026-08-16 起失效**（aliecs 停机，peer 通道断），见下方〈aliecs 停机期间主路径已换〉 |
+| `deploy-business-cn` | dispatch + `deploy_target=business-cn-tcr-fallback` | ~~⚠️ **名字骗人**：TCR 回退路径。走主路径部署时它**永远 skipped**，据此判断会把成功的部署误判成没部署~~ ⚠️ **判据自 2026-08-16 起反转**：现在它就是主路径，`success` 才算部署成功 |
 | `prepare-business-candidate` | dispatch + `deploy_target=business-candidate` | 候选环境 |
 | `stage-openclaw-bridge-peer` | push 且 bridge 上下文变化，或 dispatch + `bridge-peer` | bridge 独立发布单元 |
 | `mirror-built-to-tcr` | `vars.TCR_BASE != ''`，**push 也跑** | 异步备用镜像，失败不阻塞主发布 |
@@ -126,6 +126,64 @@ gh run view <run-id> --json jobs --jq '.jobs[] | select(.name|test("stage-busine
 ssh txecs "sudo docker ps --format '{{.Names}}\t{{.Status}}\t{{.Image}}'"   # 启动时间要变新、tag 要变
 curl -s https://hydwang.xyz/<改动页面> | grep -c '<本次新增的标记>'            # 外部实证
 ```
+
+## aliecs 停机期间主路径已换：`business-cn-tcr-fallback`（2026-08-16 起，2026-08-28 复核）
+
+> ⚠️ 上一节表格里「`stage-business-cn-peer` 是业务主路径」「`deploy-business-cn` 名字骗人、
+> 恒 skipped」两句**自 2026-08-16 起失效**。照旧句走会 dispatch 一个永远等不到 ACK 的 job，
+> 并把真正成功的部署判成没部署。旧句保留是因为 aliecs 复机后主路径会换回去。
+
+aliecs 于 2026-08-16 停机，peer 通道（aliecs 拉 GHCR → Syncthing → txecs）随之断掉。
+2026-08-28 复核：`ssh aliecs` 直接 `Connection timed out`。
+
+现行部署命令与判据：
+
+```bash
+gh workflow run release-deploy.yml --repo huozao/AliECS --ref main \
+  -f deploy_target=business-cn-tcr-fallback
+
+# 判据：deploy-business-cn 必须 success；stage-business-cn-peer 此时恒 skipped，属正常
+gh run view <run-id> --repo huozao/AliECS --json jobs \
+  --jq '[.jobs[]|select(.name|test("deploy-business-cn|stage-business-cn-peer"))|{name,conclusion}]'
+```
+
+2026-08-25 那次成功部署（run 32802969490）的实测形态就是
+`stage-business-cn-peer=skipped` + `deploy-business-cn=success`。
+
+### 走 TCR 路径时 `mirror-built-to-tcr` 从"可失败"变成硬前置
+
+上一节写着「`mirror-built-to-tcr` 异步备用镜像，失败不阻塞主发布」——那是 peer 路径下的事实。
+**走 `business-cn-tcr-fallback` 时，deploy 是按内容标签从 TCR 拉镜像的，镜像没同步过去就拉不到。**
+
+而这个 job 是 `continue-on-error: true`，`deploy-business-cn` 的 `needs` 里也**没有它**，所以：
+
+- 整个 run 的 conclusion 照样是 `success`
+- dispatch 部署照样会启动，然后在 txecs 上拉镜像时才炸
+
+2026-08-28 实际踩到：`8943200` 那轮 run 33144981492 整体 `success`，但
+`mirror-built-to-tcr` 的 `backend-api` / `doc-sync-worker` / `mcp-coding-server` 三个失败，
+失败形态是 skopeo 从 GHCR 读 blob `unexpected EOF` 后卡住、撞满 `timeout 25m` 退出 124：
+
+```
+Reading blob body from https://ghcr.io/v2/huozao/backend-api/blobs/sha256:396a0f0e... \
+  failed (unexpected EOF), reconnecting after 10485761 bytes…
+##[error]Process completed with exit code 124
+```
+
+**dispatch 之前必须先核对**：本次内容标签变化的每个服务，它的 `mirror-built-to-tcr` 都得是
+`success`。标签变没变这样算（`git rev-parse <sha>:<dir>` 前 12 位就是 `t-` 后面那串）：
+
+```bash
+for d in services/public-web services/admin-ui services/backend-api \
+         services/doc-sync-worker services/tplus-sync-worker services/mcp-coding-server; do
+  old=$(git rev-parse <上次部署的sha>:$d | cut -c1-12)
+  new=$(git rev-parse <本次sha>:$d | cut -c1-12)
+  [ "$old" = "$new" ] && echo "$d t-$new 未变" || echo "$d t-$old -> t-$new 已变"
+done
+```
+
+标签未变的服务，TCR 里已有上一轮的同名镜像，它的 mirror 失败可以忽略。
+失败的补法：`gh run rerun <run-id> --failed`（只重跑 failed，skipped 的不会被拉起）。
 
 **bridge 的判据是另一套，别套用业务那条。** bridge 在 `deploy/openclaw-bridge/**` 内容变化时
 **push 即部署**（不需要 dispatch），走 `stage-openclaw-bridge-peer`；此时
