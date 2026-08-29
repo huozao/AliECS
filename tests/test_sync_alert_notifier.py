@@ -681,6 +681,10 @@ class SyncAlertRepositoryTests(unittest.TestCase):
         self.assertIn("sync_job_alerts", sql)
         self.assertNotIn("external_sources", sql)
         self.assertNotIn("external_doc_id", sql)
+        # latest_success 驱动 stale 判据，必须与 backend-api app/sync_read.py 的
+        # `verified` LATERAL 同一口径：跳过（企微 modify_time 未变）也算「确认数据是新的」，
+        # 否则配上 SLA 后长期无改动、每晚只走跳过的表会集体误判 stale。
+        self.assertIn("status IN ('success', 'skipped')", sql)
 
     def test_load_job_states_rolls_back_and_reraises_query_errors(self) -> None:
         self.conn.execute_error = RuntimeError("synthetic read failure")
