@@ -38,9 +38,14 @@ doc-sync-worker 内部生产者 ── notify_client.enqueue() ┤
 互不可见（CI 的 context 是各自的 `services/<name>`），走 HTTP 会给 worker 平添一个
 「backend-api 必须活着」的依赖。两者连同一个库，所以都只做「往 outbox 写一行」。
 
-投递代码只有 backend-api 一份。触发两条：HTTP 入口同步投递；worker 主循环每轮调一次
-`/v1/internal/notify/flush` 带走积压。所以 worker 写的通知最长延迟一个轮询周期
-（`DOC_SYNC_POLL_SECONDS`，默认 30s）。
+投递代码只有 backend-api 一份。触发两条：HTTP 入口同步投递；worker 的 `_poll_once`
+每轮调一次 `/v1/internal/notify/flush` 带走积压（**不是外层 while True**，理由见下文
+「冲刷频率跟 poll 走」）。所以 worker 写的通知最长延迟一个轮询周期
+（`DOC_SYNC_POLL_SECONDS`，默认 30s）——2026-08-31 上线实测 **34 秒**：
+写入 → 领养 → 投递到飞书。
+
+留下这个数字是为了以后判断得出「慢了」。只写「最长一个轮询周期」的话，
+延迟涨到几分钟也看不出异常。
 
 ## 四张表
 
