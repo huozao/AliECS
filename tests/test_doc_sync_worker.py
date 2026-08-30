@@ -435,6 +435,71 @@ class WorkerLoopTests(WorkerImportTestCase):
             events,
         )
 
+    def test_notify_flush_runs_once_per_poll_not_once_per_cycle(self) -> None:
+        """通知冲刷必须跟着 poll 走，不能跟着外层 cycle 走。
+
+        外层 while True 的一轮 = 一个完整调度周期（interval_seconds 默认 86400），
+        把 flush 放在那一层等于一天才冲刷一次。2026-08-31 上线自检实测到这个：
+        worker 写进 outbox 的通知 120 秒后仍未被带走。判据必须是「每次 poll 一次」，
+        否则同样的错误换个写法还会再犯。
+        """
+        import unittest.mock as mock
+
+        from app.pipelines import worker_loop as module
+
+        events: list[str] = []
+        with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}), mock.patch.object(
+            module.notify_client, "request_flush", lambda: events.append("flush")
+        ):
+            code = module.run_worker_loop(
+                full_sync=lambda: events.append("full") or 0,
+                consume_requests=lambda: events.append("pending") or 0,
+                notifier_once=lambda: {},
+                sleep=lambda _seconds: None,
+                max_cycles=1,
+                schedule_reader=self._one_minute_schedule,
+                config_puller=lambda: "noop",
+                last_full_reader=lambda: None,
+            )
+
+        self.assertEqual(0, code)
+        polls = events.count("pending")
+        flushes = events.count("flush")
+        self.assertGreater(polls, 1, "这个调度下一个 cycle 应该有多次 poll，否则判据失效")
+        self.assertEqual(polls, flushes)
+
+    def test_notify_flush_failure_does_not_break_the_sync_loop(self) -> None:
+        """冲刷失败绝不能影响同步主循环——通知发不出去是小事，同步停了是大事。"""
+        import contextlib
+        import io
+        import unittest.mock as mock
+
+        from app.pipelines import worker_loop as module
+
+        def boom() -> None:
+            raise RuntimeError("synthetic-flush-failure")
+
+        events: list[str] = []
+        output = io.StringIO()
+        with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}), mock.patch.object(
+            module.notify_client, "request_flush", boom
+        ), contextlib.redirect_stdout(output):
+            code = module.run_worker_loop(
+                full_sync=lambda: events.append("full") or 0,
+                consume_requests=lambda: events.append("pending") or 0,
+                notifier_once=lambda: {},
+                sleep=lambda _seconds: None,
+                max_cycles=1,
+                schedule_reader=self._one_minute_schedule,
+                config_puller=lambda: "noop",
+                last_full_reader=lambda: None,
+            )
+
+        self.assertEqual(0, code)
+        self.assertIn("full", events)
+        self.assertIn("pending", events)
+        self.assertIn("RuntimeError", output.getvalue())
+
     def test_notifier_failure_is_fail_open_and_logs_only_exception_type(self) -> None:
         import contextlib
         import io

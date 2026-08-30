@@ -122,6 +122,17 @@ flush 没在跑（worker 主循环挂了，或 `NOTIFY_FLUSH_TOKEN` / `NOTIFY_FL
 
 `flush` 的返回里 `adopted` 是本轮领养的孤儿数，`claimed` 是重投的失败记录数，两者独立。
 
+### 冲刷频率跟 poll 走，不跟 cycle 走
+
+`worker_loop.py` 里 `request_flush()` 必须放在 **`_poll_once` 内**（约 30 秒一次，
+`DOC_SYNC_POLL_SECONDS`），不能放在外层 `while True` 开头——外层一轮 = 一个完整调度
+周期（`interval_seconds` 默认 86400），放那里等于**一天才冲刷一次**。
+
+同一天踩的第二个坑：第一次修完孤儿领养后，通知写进去 120 秒仍未被带走，就是这个。
+`tests/test_doc_sync_worker.py::test_notify_flush_runs_once_per_poll_not_once_per_cycle`
+守着它，判据是「flush 次数 == poll 次数」而不是「flush 次数 > 0」——后者在错误层级下
+照样成立。
+
 ## 已知限制
 
 - **重试出去的消息没有图**。`payload_json` 刻意不存 base64——一张 PNG 是几十万字符，
