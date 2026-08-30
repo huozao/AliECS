@@ -258,7 +258,30 @@ docker compose -f local/docker-compose.local.yml config
   **新代码只对「在新代码下发生的失败」生效，存量卡死的文档必须手工救一次**：清 doc 级来源
   （`external_sources` 里 `source_type='smartsheet_doc'` 的那行）的 `external_modified_at`，
   清完下一轮才会真跑。判别是否卡住：该文档 doc 级行的 `external_modified_at` 非空，
-  但表级作业里有 `last_success_at` 为 NULL 或长期不动的。
+  但表级作业里有 `last_success_at` 为 NULL 或长期不动的。2026-08-30 全库扫过一遍，
+  卡住的只有 `产量统计` 一个，已清空 id=10 的 `external_modified_at`。
+
+## `wecom.doc.2` 从 2026-08-13 起失败的根因是 60111（2026-08-30 定案）
+
+`公开的生产记录表` 里序号 85 / 86 / 97 三条记录的成员字段指向解析不到的 userid，
+企微对**整页**返回 60111，`fetch_page` 直接抛异常——不是网络、不是凭据、不是分页。
+PR#330 已加逐条容错（读不出的跳过、并且本轮跳过删除比对，避免把读不出的记录判成已删除）。
+
+- **修复有效，但一次都没跑到**：容错随 `t-075aa2b70e8a` 于 2026-08-29 22:13 CST 上线，
+  而该文档在 2026-08-29 01:05（旧代码）已被登记 modify_time 卡进跳过循环，见上一节。
+- 复现与恢复用的是同一条命令，绕开跳过分支直接跑单个表级来源：
+
+  ```bash
+  ssh txecs "docker exec business-cn-doc-sync-worker-1 \
+    python -m app.main sync-wecom-source --source-id <external_sources.id>"
+  ```
+
+  2026-08-30 实测：143 条全部拉回、3 条不可读跳过、`success`，
+  那条从 08-13 起通知了 65 次的 `failed` 告警随即自动解除。
+- ⚠️ 排查时**不能只看 `sync_job_runs`**：它的 `error_kind='unknown'` / `error_message='sync failure'`
+  两个字段对这类失败毫无信息量，告警 `payload_json` 里的 `error_message` 还是 `[REDACTED]`。
+  真正定位靠的是 `sync_job_steps`（能看到失败停在 `fetch_page` 且 `message` 是表名）
+  加上现场复现。容器重建后旧日志即丢，别指望翻历史日志。
 
 ## 新鲜度 SLA 分档（2026-08-30）
 
@@ -282,6 +305,33 @@ docker compose -f local/docker-compose.local.yml config
 至今为 NULL——从未成功过一次，但调度器每晚给它写 `skipped`，`verified` 因此天天刷新，
 配上 48h SLA 后会永远显示新鲜。真正覆盖它的是它自己那条从 2026-08-14 起持续通知的
 `failed` 告警，不是新鲜度。根因是上一节的「卡进跳过循环」，不要靠把它排除出 SLA 来绕开。
+（2026-08-30 已恢复：手动 `sync-wecom-source --source-id 2` 拉回 143 条并解除告警，
+根因见下一节。）
+
+### 补 SLA 前必须先确认「告警器」也认 skipped——页面和告警器是两份独立部署（2026-08-30）
+
+**页面新鲜度（backend-api 的 `sync_read.py`）和告警判据（doc-sync-worker 的
+`sync_alert_notifier.py`）是两个服务里的两份代码，部署状态可以不一致。**
+2026-08-30 补完 62 个 SLA 后，页面显示 63 新鲜 / 0 过期（backend-api 已含 PR#330 的
+`verified` 判据），而 doc-sync-worker 还停在 `t-075aa2b70e8a`——PR#332 合并了但没部署，
+告警器仍按 `status = 'success'` 判定，**30 秒内批量发出 41 条 `stale` 告警并实际通知到飞书群**。
+按 success-only 判据够得上 stale 的正是那批长期无改动、只有 `skipped` 记录的作业。
+
+动手前的断言（必须在生产容器里查，不是查代码库）：
+
+```bash
+ssh txecs "docker exec business-cn-doc-sync-worker-1 \
+  grep -n \"WHERE job_id = j.id AND status\" /app/app/pipelines/sync_alert_notifier.py"
+# 必须是 status IN ('success', 'skipped')；是 status = 'success' 就先别配 SLA
+```
+
+⚠️ **误告警不能靠「在库里标 resolved」收场**：告警器在轮询里**每 30 秒**评估一次
+（`_notify_fail_open()` 在 `_poll_once` 里，`DOC_SYNC_POLL_SECONDS=30`），标了 resolved
+会在 30 秒后被重新 `claim_alert` 开出来，且新告警 `notify_count=0` 不受 6 小时节流
+（`SYNC_ALERT_ESCALATION_SECONDS=21600`）保护，**立刻再发一轮**。唯一正确的顺序是
+**先让条件为假**（部署正确判据，或把 SLA 撤回 NULL），再让告警器自己解除。
+解除同样会推送（`resolve_alert` 带 sender），所以 41 条告警对应 41 条「同步已恢复」，
+这笔噪音在配 SLA 之前就该算进去。
 
 ## 「立即同步」的判据只有一个（2026-08-28）
 
