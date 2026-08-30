@@ -19,6 +19,7 @@ from app.routers.exports import router as exports_router
 from app.routers.formula_colors import router as formula_colors_router
 from app.routers.gold_spread_alerts import router as gold_spread_alerts_router
 from app.routers.miniapp_accounts import router as miniapp_accounts_router
+from app.routers.notify import router as notify_router
 from app.routers.ops import router as ops_router
 from app.routers.backups import router as backups_router
 from app.routers.versions import router as versions_router
@@ -38,6 +39,7 @@ app.include_router(backups_router)
 app.include_router(clash_profile_router)
 app.include_router(versions_router)
 app.include_router(gold_spread_alerts_router)
+app.include_router(notify_router)
 app.include_router(auth_admin_router)
 app.include_router(auth_oidc_router)
 app.include_router(recipes_router)

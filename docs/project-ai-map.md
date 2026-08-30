@@ -27,6 +27,15 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 输入：Postgres、runtime env、T+ worker 只读输出（`/app/tplus-output`）。
 验证：`python -m unittest discover -s tests`；相关单测 patch 目标=函数所在文件（已拆域）。
 
+### app/notify/
+
+所有出站通知的唯一出口（飞书 / 企微群机器人 / 企微自建应用）。生产者只产
+`Notification`（标题、段落、图），渲染成各家原生格式是 `channels/` 的事。
+
+汇聚点是 `notify_outbox` 表而不是 HTTP：doc-sync-worker 是另一个镜像、构建上下文
+互不可见，它只写库（`app/notify_client.py`），投递代码只在 backend-api 这一份。
+坑与判据见 `docs/runbooks/notify.md`；飞书那套上传与卡片移植自 `deploy/openclaw-bridge`。
+
 ## services/doc-sync-worker
 
 企微智能表格 + 飞书多维表 → Postgres 的独立 worker。约束必读：`docs/constraints/doc-sync.md`。

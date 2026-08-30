@@ -29,6 +29,7 @@ AliECS 是以 AI 客户端协作为主要开发方式的 Docker 化 Web/API 项�
 | 部署/CI/回滚 | `docs/runbooks/deploy.md` |
 | 设备之间传文件/镜像、跨境推 TCR 失败 | `docs/fleet.md`「设备间既存通道」+ `docs/runbooks/deploy.md`「应急旁路」。已列出可复用通道、各主体拉 GHCR 的实测速率、以及**确认不通的连接**，不要重新逐条试探 |
 | T+ 同步 | `docs/runbooks/tplus.md` |
+| 出站通知（飞书/企微）、某个告警没收到 | `docs/runbooks/notify.md`。四处旧的各写各的飞书发送已收敛到 `app/notify/`；**接口返回 200 不等于对方收到**，判据看 `notify_deliveries` 不看 `notify_outbox` |
 
 ## 关键边界
 

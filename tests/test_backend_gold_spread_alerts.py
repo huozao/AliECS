@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -50,7 +51,7 @@ def _client(monkeypatch, *, sent: bool = True, claimed: bool = True) -> TestClie
     monkeypatch.setenv("VERSION_DIGEST_FEISHU_APP_SECRET", "app-secret")
     monkeypatch.setattr(alerts, "_claim_alert", lambda *_: claimed)
     monkeypatch.setattr(alerts, "_mark_alert", lambda *_: None)
-    monkeypatch.setattr(alerts, "send_feishu_text", lambda *_, **__: sent)
+    monkeypatch.setattr(alerts, "deliver_alert", lambda *_, **__: sent)
     app = FastAPI()
     app.include_router(alerts.router)
     return TestClient(app)
@@ -69,18 +70,17 @@ def test_alert_sends_to_fixed_chat(monkeypatch) -> None:
     captured: dict[str, object] = {}
     client = _client(monkeypatch)
 
-    def fake_send(receive_id: str, text: str, **kwargs) -> bool:
-        captured.update(receive_id=receive_id, text=text, **kwargs)
+    def fake_send(text: str, alert=None) -> bool:
+        captured.update(text=text, alert=alert)
         return True
 
-    monkeypatch.setattr(alerts, "send_feishu_text", fake_send)
+    monkeypatch.setattr(alerts, "deliver_alert", fake_send)
     response = client.post(
         "/v1/internal/gold-spread/alerts",
         headers={"X-Gold-Spread-Token": "test-token"},
         json=_payload(),
     )
     assert response.status_code == 200
-    assert captured["receive_id"] == "oc_target"
     assert "合约：沪金 AU2606（上海期货交易所｜2026年06月合约）" in str(captured["text"])
     assert "到期时间：2026-06-15T15:00:00+08:00" in str(captured["text"])
     assert "行情代码：SHFE.au2606" in str(captured["text"])
@@ -138,11 +138,11 @@ def test_wrong_price_alert_contains_trade_evidence(monkeypatch) -> None:
     captured: dict[str, object] = {}
     client = _client(monkeypatch)
 
-    def fake_send(receive_id: str, text: str, **kwargs) -> bool:
-        captured.update(receive_id=receive_id, text=text, **kwargs)
+    def fake_send(text: str, alert=None) -> bool:
+        captured.update(text=text, alert=alert)
         return True
 
-    monkeypatch.setattr(alerts, "send_feishu_text", fake_send)
+    monkeypatch.setattr(alerts, "deliver_alert", fake_send)
     response = client.post(
         "/v1/internal/gold-spread/alerts",
         headers={"X-Gold-Spread-Token": "test-token"},
@@ -196,11 +196,11 @@ def test_wrong_price_alert_explains_one_second_low_volume(monkeypatch) -> None:
     captured: dict[str, object] = {}
     client = _client(monkeypatch)
 
-    def fake_send(receive_id: str, text: str, **kwargs) -> bool:
-        captured.update(receive_id=receive_id, text=text, **kwargs)
+    def fake_send(text: str, alert=None) -> bool:
+        captured.update(text=text, alert=alert)
         return True
 
-    monkeypatch.setattr(alerts, "send_feishu_text", fake_send)
+    monkeypatch.setattr(alerts, "deliver_alert", fake_send)
     response = client.post(
         "/v1/internal/gold-spread/alerts",
         headers={"X-Gold-Spread-Token": "test-token"},
@@ -245,11 +245,11 @@ def test_wrong_price_mt5_trigger_uses_au_side_benchmark(monkeypatch) -> None:
     captured: dict[str, object] = {}
     client = _client(monkeypatch)
 
-    def fake_send(receive_id: str, text: str, **kwargs) -> bool:
-        captured.update(receive_id=receive_id, text=text, **kwargs)
+    def fake_send(text: str, alert=None) -> bool:
+        captured.update(text=text, alert=alert)
         return True
 
-    monkeypatch.setattr(alerts, "send_feishu_text", fake_send)
+    monkeypatch.setattr(alerts, "deliver_alert", fake_send)
     response = client.post(
         "/v1/internal/gold-spread/alerts",
         headers={"X-Gold-Spread-Token": "test-token"},
@@ -285,11 +285,11 @@ def test_wrong_price_review_recovered_confirms_fat_finger(monkeypatch) -> None:
     captured: dict[str, object] = {}
     client = _client(monkeypatch)
 
-    def fake_send(receive_id: str, text: str, **kwargs) -> bool:
-        captured.update(receive_id=receive_id, text=text, **kwargs)
+    def fake_send(text: str, alert=None) -> bool:
+        captured.update(text=text, alert=alert)
         return True
 
-    monkeypatch.setattr(alerts, "send_feishu_text", fake_send)
+    monkeypatch.setattr(alerts, "deliver_alert", fake_send)
     response = client.post(
         "/v1/internal/gold-spread/alerts",
         headers={"X-Gold-Spread-Token": "test-token"},
@@ -320,11 +320,11 @@ def test_wrong_price_review_timeout_downgrades(monkeypatch) -> None:
     captured: dict[str, object] = {}
     client = _client(monkeypatch)
 
-    def fake_send(receive_id: str, text: str, **kwargs) -> bool:
-        captured.update(receive_id=receive_id, text=text, **kwargs)
+    def fake_send(text: str, alert=None) -> bool:
+        captured.update(text=text, alert=alert)
         return True
 
-    monkeypatch.setattr(alerts, "send_feishu_text", fake_send)
+    monkeypatch.setattr(alerts, "deliver_alert", fake_send)
     response = client.post(
         "/v1/internal/gold-spread/alerts",
         headers={"X-Gold-Spread-Token": "test-token"},
@@ -396,12 +396,11 @@ def test_historical_analysis_uses_interactive_card(monkeypatch) -> None:
     captured: dict[str, object] = {}
     client = _client(monkeypatch)
 
-    def fake_card(receive_id: str, alert, **kwargs) -> bool:
-        captured.update(receive_id=receive_id, alert=alert, **kwargs)
+    def fake_send(text: str, alert=None) -> bool:
+        captured.update(text=text, alert=alert)
         return True
 
-    monkeypatch.setattr(alerts, "send_feishu_historical_card", fake_card)
-    monkeypatch.setattr(alerts, "send_feishu_text", lambda *_, **__: False)
+    monkeypatch.setattr(alerts, "deliver_alert", fake_send)
     response = client.post(
         "/v1/internal/gold-spread/alerts",
         headers={"X-Gold-Spread-Token": "test-token"},
@@ -409,10 +408,11 @@ def test_historical_analysis_uses_interactive_card(monkeypatch) -> None:
     )
 
     assert response.status_code == 200
-    assert captured["receive_id"] == "oc_target"
-    card = alerts.build_historical_report_card(captured["alert"], ["img_key_1"])
-    assert card["header"]["title"]["content"] == "沪金 AU｜历史错价回溯完成"
-    assert any(element.get("tag") == "img" for element in card["elements"])
+    notification = alerts.build_alert_notification(captured["alert"], str(captured["text"]))
+    assert notification.title == "沪金 AU｜历史错价回溯完成"
+    # 图必须进 images 并被某个段落引用，否则会在渲染时被静默丢掉
+    assert len(notification.images) == 1
+    assert any(segment.kind == "image" for segment in notification.segments)
     stored = alerts._stored_alert_payload(captured["alert"])
     stored_chart = stored["historical_analysis"]["charts"][0]
     assert "data_base64" not in stored_chart
@@ -448,12 +448,11 @@ def test_wrong_price_alert_with_chart_goes_out_as_card(monkeypatch) -> None:
     captured: dict[str, object] = {}
     client = _client(monkeypatch)
 
-    def fake_card(receive_id: str, alert, text: str, **kwargs) -> bool:
-        captured.update(receive_id=receive_id, alert=alert, text=text, **kwargs)
+    def fake_send(text: str, alert=None) -> bool:
+        captured.update(text=text, alert=alert)
         return True
 
-    monkeypatch.setattr(alerts, "send_feishu_alert_card", fake_card)
-    monkeypatch.setattr(alerts, "send_feishu_text", lambda *_, **__: False)
+    monkeypatch.setattr(alerts, "deliver_alert", fake_send)
     response = client.post(
         "/v1/internal/gold-spread/alerts",
         headers={"X-Gold-Spread-Token": "test-token"},
@@ -461,15 +460,17 @@ def test_wrong_price_alert_with_chart_goes_out_as_card(monkeypatch) -> None:
     )
 
     assert response.status_code == 200
-    assert captured["receive_id"] == "oc_target"
     alert = captured["alert"]
     assert len(alert.charts) == 1
-    card = alerts.build_alert_card(alert, str(captured["text"]), ["img_key_1"])
-    assert card["header"]["title"]["content"] == "🔴 疑似错单成交｜沪金 AU2606"
-    assert card["header"]["template"] == "orange"
-    images = [element for element in card["elements"] if element.get("tag") == "img"]
-    assert len(images) == 1 and images[0]["img_key"] == "img_key_1"
-    assert any("极值成交价：995.60" in str(element) for element in card["elements"])
+    notification = alerts.build_alert_notification(alert, str(captured["text"]))
+    assert notification.title == "🔴 疑似错单成交｜沪金 AU2606"
+    assert notification.level == "warn"  # severity=warning
+    # 图必须进 images 且被段落引用，否则渲染时会被静默丢掉
+    assert len(notification.images) == 1
+    assert any(segment.kind == "image" for segment in notification.segments)
+    # 正文必须按预格式化走：排版里有 ｜ 和 *，交给 markdown 会被重排
+    body = [seg for seg in notification.segments if seg.kind == "text" and seg.preformatted]
+    assert body and "极值成交价：995.60" in body[0].text
 
 
 def test_alert_chart_bytes_are_not_stored(monkeypatch) -> None:
@@ -497,13 +498,8 @@ def test_alert_without_chart_still_goes_out_as_text(monkeypatch) -> None:
     client = _client(monkeypatch)
     monkeypatch.setattr(
         alerts,
-        "send_feishu_text",
-        lambda receive_id, text, **kwargs: captured.update(text=text) or True,
-    )
-    monkeypatch.setattr(
-        alerts,
-        "send_feishu_alert_card",
-        lambda *_, **__: pytest.fail("no charts, must not build a card"),
+        "deliver_alert",
+        lambda text, alert=None: captured.update(text=text) or True,
     )
     body = _wrong_price_with_chart()
     body.pop("charts")
@@ -517,14 +513,18 @@ def test_alert_without_chart_still_goes_out_as_text(monkeypatch) -> None:
 
 
 def test_card_delivery_failure_falls_back_to_text(monkeypatch) -> None:
-    """上传图失败不能让告警整条丢掉——图没了，字必须还在。"""
+    """上传图失败不能让告警整条丢掉——图没了，字必须还在。
+
+    收敛后降级发生在 channel 层（feishu.send 卡片被拒时退回纯文本），
+    这里守的是上游前提：交给中枢的消息本身带着完整正文，
+    因此即便一张图都传不上去，plain_text() 仍是完整告警。
+    """
     captured: dict[str, object] = {}
     client = _client(monkeypatch)
-    monkeypatch.setattr(alerts, "send_feishu_alert_card", lambda *_, **__: False)
     monkeypatch.setattr(
         alerts,
-        "send_feishu_text",
-        lambda receive_id, text, **kwargs: captured.update(text=text) or True,
+        "deliver_alert",
+        lambda text, alert=None: captured.update(text=text) or True,
     )
     response = client.post(
         "/v1/internal/gold-spread/alerts",
@@ -535,18 +535,17 @@ def test_card_delivery_failure_falls_back_to_text(monkeypatch) -> None:
     assert "疑似错单成交" in str(captured["text"])
 
 
-def test_upload_charts_rejects_non_png() -> None:
-    chart = alerts.AlertChart(
-        name="fake.png",
-        caption="不是 PNG",
-        data_base64=base64.b64encode(b"GIF89a not a png").decode(),
-    )
-    try:
-        alerts._upload_charts([chart], "token")
-    except ValueError as exc:
-        assert "PNG" in str(exc)
-    else:
-        pytest.fail("non-PNG chart must be rejected")
+def test_non_png_chart_is_rejected_at_the_model(monkeypatch) -> None:
+    """非 PNG 必须在构造消息时就被拒，不能一路带到 IM API 才报错。
+
+    收敛前这层校验在 _upload_charts 里；现在搬到了 NotifyImage，
+    三个通道共用同一道闸门。
+    """
+    body = _wrong_price_with_chart()
+    body["charts"][0]["data_base64"] = base64.b64encode(b"GIF89a not a png").decode()
+    alert = alerts.GoldSpreadAlert.model_validate(body)
+    with pytest.raises(ValidationError, match="PNG"):
+        alerts.build_alert_notification(alert, "标题\n正文")
 
 
 def test_data_silence_alert_is_accepted(monkeypatch) -> None:
@@ -555,8 +554,8 @@ def test_data_silence_alert_is_accepted(monkeypatch) -> None:
     client = _client(monkeypatch)
     monkeypatch.setattr(
         alerts,
-        "send_feishu_text",
-        lambda receive_id, text, **kwargs: captured.update(text=text) or True,
+        "deliver_alert",
+        lambda text, alert=None: captured.update(text=text) or True,
     )
     body = {
         "event_id": "mt5:data_silence:20260730T141432",
@@ -581,8 +580,8 @@ def test_data_silence_recovered_alert_is_accepted(monkeypatch) -> None:
     client = _client(monkeypatch)
     monkeypatch.setattr(
         alerts,
-        "send_feishu_text",
-        lambda receive_id, text, **kwargs: captured.update(text=text) or True,
+        "deliver_alert",
+        lambda text, alert=None: captured.update(text=text) or True,
     )
     body = {
         "event_id": "mt5:data_silence_recovered:20260730T141432",
@@ -607,8 +606,8 @@ def test_replay_summary_accepts_replay_source(monkeypatch) -> None:
     client = _client(monkeypatch)
     monkeypatch.setattr(
         alerts,
-        "send_feishu_text",
-        lambda receive_id, text, **kwargs: captured.update(text=text) or True,
+        "deliver_alert",
+        lambda text, alert=None: captured.update(text=text) or True,
     )
     body = {
         "event_id": "replay:20260730T023815",

@@ -16,6 +16,8 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 
 from app.core import _conn, require_admin
+from app.notify import dispatch
+from app.notify.models import Notification
 
 _V_PREFIX = re.compile(r"^(refs/tags/)?v", re.I)
 _SUFFIX = re.compile(r"-(alpine|bookworm|slim|debian|distroless).*$", re.I)
@@ -331,31 +333,6 @@ def render_digest_text(inventory: dict, stale_devices: list[str]) -> str:
     return "\n\n".join(parts)
 
 
-def send_feishu_text(receive_id: str, text: str, *, app_id: str, app_secret: str,
-                     opener=urllib.request.urlopen) -> bool:
-    if not (app_id and app_secret and receive_id):
-        return False
-    try:
-        tok_req = urllib.request.Request(
-            "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
-            data=json.dumps({"app_id": app_id, "app_secret": app_secret}).encode(),
-            headers={"Content-Type": "application/json"}, method="POST")
-        with opener(tok_req, timeout=15) as resp:
-            token = json.loads(resp.read().decode()).get("tenant_access_token")
-        if not token:
-            return False
-        msg_req = urllib.request.Request(
-            "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
-            data=json.dumps({"receive_id": receive_id, "msg_type": "text",
-                             "content": json.dumps({"text": text})}).encode(),
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
-            method="POST")
-        with opener(msg_req, timeout=15) as resp:
-            return json.loads(resp.read().decode()).get("code") == 0
-    except Exception:
-        return False
-
-
 @router.post("/v1/internal/versions/weekly-digest")
 def weekly_digest(_: None = Depends(_require_report_token)) -> dict[str, Any]:
     from datetime import datetime, timedelta, timezone
@@ -380,8 +357,19 @@ def weekly_digest(_: None = Depends(_require_report_token)) -> dict[str, Any]:
     expected = {"aliecs", "webdock1", "webdock2"}
     stale = sorted(d for d in expected if d not in seen or (seen[d] and seen[d] < cutoff))
     text = render_digest_text(inv, stale)
-    sent = send_feishu_text(
-        os.getenv("VERSION_DIGEST_FEISHU_RECEIVE_ID", ""), text,
-        app_id=os.getenv("VERSION_DIGEST_FEISHU_APP_ID", ""),
-        app_secret=os.getenv("VERSION_DIGEST_FEISHU_APP_SECRET", ""))
-    return {"ok": True, "sent": sent, "stale": stale}
+    # 收件人由 notify_routes 决定，不再读 VERSION_DIGEST_FEISHU_RECEIVE_ID。
+    # 周报正文是排好版的文本（含 | 与对齐空格），必须按 preformatted 走，
+    # 否则会被各家 markdown 重排。
+    result = dispatch.deliver(
+        Notification.model_validate(
+            {
+                "source": "aliecs-versions",
+                "event": "weekly_digest",
+                "level": "warn" if stale else "info",
+                "title": "版本周报",
+                "segments": [{"kind": "text", "text": text, "preformatted": True}],
+                "dedup_key": f"versions:weekly:{datetime.now(timezone.utc).strftime('%G-W%V')}",
+            }
+        )
+    )
+    return {"ok": True, "sent": bool(result.get("sent")), "stale": stale}

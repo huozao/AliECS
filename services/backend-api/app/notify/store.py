@@ -1,0 +1,198 @@
+"""notify_* 四张表的读写。这里只碰数据库，不碰任何 IM API。"""
+
+from __future__ import annotations
+
+import fnmatch
+import hashlib
+import hmac
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from psycopg.types.json import Jsonb
+
+from app.notify.models import Notification, level_at_least
+
+# 重试退避：第 n 次失败后等 BACKOFF[n]。用完最后一档就判 dead，不再无限重试。
+BACKOFF_SECONDS = [60, 300, 1800, 7200]
+MAX_ATTEMPTS = len(BACKOFF_SECONDS)
+
+
+def token_digest(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def verify_source_token(conn, source_key: str, token: str) -> bool:
+    """来源 + token 校验。用 compare_digest 防时序侧信道。"""
+    if not (source_key and token):
+        return False
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT token_sha256 FROM notify_sources WHERE source_key = %s AND enabled",
+            (source_key,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return False
+    return hmac.compare_digest(str(row[0]), token_digest(token))
+
+
+def enqueue(conn, notification: Notification) -> tuple[int, bool]:
+    """写 outbox。返回 (outbox_id, 是否新建)。
+
+    dedup_key 撞上已有行时不报错也不覆盖——重复提交是正常现象（生产者重试、
+    网络重发），第二次只是拿到同一个 outbox_id 和 is_new=False。
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO notify_outbox (dedup_key, source_key, event, level, payload_json)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (dedup_key) DO NOTHING
+            RETURNING id
+            """,
+            (
+                notification.dedup_key,
+                notification.source,
+                notification.event,
+                notification.level,
+                Jsonb(notification.storable_payload()),
+            ),
+        )
+        row = cur.fetchone()
+        if row is not None:
+            return int(row[0]), True
+        cur.execute("SELECT id FROM notify_outbox WHERE dedup_key = %s", (notification.dedup_key,))
+        existing = cur.fetchone()
+    return int(existing[0]), False
+
+
+def matching_routes(conn, source_key: str, event: str, level: str) -> list[dict[str, Any]]:
+    """匹配路由。source_key 与 event_pattern 都支持 glob（'*' 即全部）。
+
+    过滤放在 Python 而不是 SQL：event_pattern 是 glob 不是 LIKE，而且路由表规模
+    只有几十行，读全表再筛比在 SQL 里拼模式匹配更好读也更好测。
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, source_key, event_pattern, min_level, channel, target_json, sort_order
+            FROM notify_routes
+            WHERE enabled
+            ORDER BY sort_order, id
+            """
+        )
+        rows = cur.fetchall()
+    matched: list[dict[str, Any]] = []
+    for row in rows:
+        route = dict(
+            zip(
+                ["id", "source_key", "event_pattern", "min_level", "channel", "target_json", "sort_order"],
+                row,
+            )
+        )
+        if not fnmatch.fnmatchcase(source_key, str(route["source_key"])):
+            continue
+        if not fnmatch.fnmatchcase(event, str(route["event_pattern"])):
+            continue
+        if not level_at_least(level, str(route["min_level"])):
+            continue
+        matched.append(route)
+    return matched
+
+
+def create_deliveries(conn, outbox_id: int, routes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """为每个命中的 target 建一条投递记录。重复调用不会重复建（唯一键兜住）。"""
+    created: list[dict[str, Any]] = []
+    with conn.cursor() as cur:
+        for route in routes:
+            cur.execute(
+                """
+                INSERT INTO notify_deliveries (outbox_id, route_id, channel, target_json)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (outbox_id, route_id) DO NOTHING
+                RETURNING id
+                """,
+                (outbox_id, route["id"], route["channel"], Jsonb(route["target_json"])),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                created.append(
+                    {
+                        "id": int(row[0]),
+                        "channel": route["channel"],
+                        "target_json": route["target_json"],
+                        "attempts": 0,
+                    }
+                )
+    return created
+
+
+def mark_sent(conn, delivery_id: int) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE notify_deliveries
+            SET status = 'sent', sent_at = now(), last_error = '', attempts = attempts + 1
+            WHERE id = %s
+            """,
+            (delivery_id,),
+        )
+
+
+def mark_failed(conn, delivery_id: int, error: str) -> str:
+    """记一次失败，安排下一次重试；退避档位用完则判 dead。返回新状态。"""
+    with conn.cursor() as cur:
+        cur.execute("SELECT attempts FROM notify_deliveries WHERE id = %s", (delivery_id,))
+        row = cur.fetchone()
+        attempts = int(row[0]) + 1 if row else 1
+        if attempts >= MAX_ATTEMPTS:
+            status, delay = "dead", 0
+        else:
+            status, delay = "pending", BACKOFF_SECONDS[attempts]
+        cur.execute(
+            """
+            UPDATE notify_deliveries
+            SET status = %s, attempts = %s, last_error = %s, next_attempt_at = %s
+            WHERE id = %s
+            """,
+            (
+                status,
+                attempts,
+                error[:500],
+                datetime.now(timezone.utc) + timedelta(seconds=delay),
+                delivery_id,
+            ),
+        )
+    return status
+
+
+def claim_pending(conn, limit: int = 50) -> list[dict[str, Any]]:
+    """取一批到期的待投递记录，连同它们的 outbox payload。
+
+    用 FOR UPDATE SKIP LOCKED：backend-api 可能有多个副本，两个 flush 撞在一起时
+    各取各的，不会把同一条投两遍。
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT d.id, d.channel, d.target_json, d.attempts, o.payload_json
+            FROM notify_deliveries d
+            JOIN notify_outbox o ON o.id = d.outbox_id
+            WHERE d.status = 'pending' AND d.next_attempt_at <= now()
+            ORDER BY d.next_attempt_at
+            LIMIT %s
+            FOR UPDATE OF d SKIP LOCKED
+            """,
+            (limit,),
+        )
+        rows = cur.fetchall()
+    return [
+        {
+            "id": int(row[0]),
+            "channel": row[1],
+            "target_json": row[2],
+            "attempts": int(row[3]),
+            "payload": row[4],
+        }
+        for row in rows
+    ]
