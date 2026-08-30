@@ -93,6 +93,35 @@ FROM notify_deliveries WHERE status IN ('pending','dead') ORDER BY id DESC LIMIT
 
 全部 target 都失败时返回 502（消息已落库，会重试）。
 
+## 坑：worker 写的行是「孤儿」，必须由 flush 领养
+
+worker 只写 `notify_outbox`，**不建 `notify_deliveries`**——它不读路由表，也不该读
+（路由是投递侧的事）。所以 worker 写的行落库时没有任何投递记录，必须由 flush
+领养：匹配路由 → 建投递记录 → 投递。
+
+2026-08-31 上线自检时踩到：少了领养这一步，worker 写的通知会安全落库然后
+**永远发不出去，且三处观测面全都显示「正常」**——
+
+| 观测点 | 现象 | 看起来 |
+|---|---|---|
+| `notify_outbox` | 有行 | 消息收到了 ✅ |
+| `notify_deliveries` | 没行 | 没有失败记录 ✅ |
+| `flush` 返回 | `claimed: 0` | 没有积压 ✅ |
+
+三个都是「正常」的样子，合起来才是「消息丢了」。判据是那条
+**「有 outbox 行但没有 deliveries 行」**的 SQL：
+
+```sql
+SELECT o.id, o.dedup_key, o.source_key, o.event
+FROM notify_outbox o LEFT JOIN notify_deliveries d ON d.outbox_id = o.id
+WHERE d.id IS NULL;
+```
+
+正常情况下这个查询应当只在「刚写入、还没 flush」的瞬间返回行。持续有行 =
+flush 没在跑（worker 主循环挂了，或 `NOTIFY_FLUSH_TOKEN` / `NOTIFY_FLUSH_URL` 不对）。
+
+`flush` 的返回里 `adopted` 是本轮领养的孤儿数，`claimed` 是重投的失败记录数，两者独立。
+
 ## 已知限制
 
 - **重试出去的消息没有图**。`payload_json` 刻意不存 base64——一张 PNG 是几十万字符，

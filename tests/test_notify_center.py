@@ -289,6 +289,45 @@ class DispatchTests(unittest.TestCase):
         self.assertEqual(result["targets"], 0)
 
 
+class OrphanAdoptionTests(unittest.TestCase):
+    """worker 写的 outbox 行没有 deliveries，必须由 flush 领养后投递。
+
+    2026-08-31 上线自检实测：少了这一步，worker 写的通知会永远躺在 outbox 里，
+    而且 outbox 有行、deliveries 没行、flush 报 claimed=0 —— 三处观测面都像「正常」。
+    同步告警和 T+ 核对告警会静默丢失。
+    """
+
+    ORPHAN = (7, "doc-sync", "sync_alert", "warn", {
+        "source": "doc-sync", "event": "sync_alert", "level": "warn",
+        "title": "同步告警", "summary": "", "segments": [{"kind": "text", "text": "作业失败"}],
+        "images": [], "dedup_key": "auto:doc-sync:abc",
+    })
+    ROUTE = (3, "doc-sync", "*", "info", "feishu", {"receive_id": "oc_x"}, 10)
+
+    def test_orphan_is_adopted_routed_and_delivered(self) -> None:
+        conn = FakeConnection(
+            rows=[(99,)],                       # create_deliveries 返回的 delivery id
+            rowsets=[[self.ORPHAN], [self.ROUTE], []],  # 孤儿 / 路由 / 无 pending
+        )
+        sent: list[tuple] = []
+        with mock.patch.object(
+            dispatch, "sender_for", return_value=lambda n, t: sent.append((n.title, t))
+        ):
+            result = dispatch.flush(conn=conn)
+
+        self.assertEqual(result["adopted"], 1)
+        self.assertEqual(result["sent"], 1)
+        self.assertEqual(sent[0][0], "同步告警")
+        self.assertEqual(sent[0][1], {"receive_id": "oc_x"})
+
+    def test_orphan_without_matching_route_is_not_lost_silently(self) -> None:
+        """没有路由命中时仍要记为已领养，调用方才能从 adopted>0 而 sent=0 看出配置缺失。"""
+        conn = FakeConnection(rows=[], rowsets=[[self.ORPHAN], [], []])
+        result = dispatch.flush(conn=conn)
+        self.assertEqual(result["adopted"], 1)
+        self.assertEqual(result["sent"], 0)
+
+
 class CrossServiceContractTests(unittest.TestCase):
     """doc-sync-worker 写进 outbox 的 payload，必须能被 backend-api 解析回来。
 
