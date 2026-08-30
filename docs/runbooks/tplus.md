@@ -69,28 +69,6 @@
   ⚠️ 上面这句**只在「算出来的 due 还在未来」时成立**（2026-08-30 补）：它判的是到期与否，
   不是"是不是白天"。把锚点挪到一个**今天已经过去**的时刻后，重启算出的 due 就在过去，
   启动会**当场补跑一轮**。2026-08-30 把锚点从 01:00 改到 07:30 后重启即实测如此。
-
-## 改执行时刻（anchor_time）：两处一起改，且睡着的 worker 读不到（2026-08-30）
-
-页面「同步设置 → T+ ERP → 执行时刻」走 `PUT /v1/sync/config/tplus`，后端 `_save_config`
-**在同一事务里写两处**：`integration_sync_config`（`provider='chanjet'`）和
-`sync_jobs.schedule`（`job_key='chanjet.full'`）。绕过页面直接改库时必须两处一起改，
-否则运行态与配置面分叉。后端对 `anchor_time` 的校验是 `^$|^([01]\d|2[0-3]):[0-5]\d$`，
-任意分钟都收，不限于整点/半点。
-
-⚠️ **改完不会自动生效——worker 正睡在一个一次性算好的长睡眠里。**
-`worker_loop` 主循环每轮开头才 `_resolve_sync_config()`；睡眠虽然按
-`TPLUS_SYNC_POLL_SECONDS=30` 分片，但 `remaining` 在进入睡眠时就固定了，
-分片期间只轮询手动请求，**从不重读 `anchor_time`**。2026-08-30 实测：
-改完 7 分钟毫无反应，日志停在上一轮的 `T+ sync worker sleeping: seconds=86190`。
-要立刻生效只能 `docker restart business-cn-tplus-sync-worker-1`（重启前先确认
-`integration_sync_requests` 没有 `pending`/`running`，两个全量并行会互相把对方
-本批未出现的记录标成 `missing_since`）。
-
-**断言新锚点真的生效，只看一个字段**：重启后日志里那行
-`T+ sync worker sleeping: seconds=<N>`，把 `N` 加到该行时间戳上必须正好落在新锚点。
-2026-08-30 实测 `seconds=71725`，从 03:34:34 UTC 推出 08-31 07:30 CST，对上了。
-只看「配置表里已经是 07:30」不算数——那是配置面，不是运行态。
 - **失败详情看 `integration_sync_runs.error_json`**：结构是 `{"modules": [{module, type, message, endpoint, status}]}`。
   `message` 是唯一能看出真因的字段——`status=None body=` 三个字段全空时，
   `read timeout=30` 只在 message 里。2026-08-09 之前 `error_json` 恒为 `{}`，
@@ -103,6 +81,38 @@
   失败、`failed_modules` 非空、或超过 2 天没有成功记录都推飞书；同一轮按 `finished_at` 去重只报一次。
   复用 openToken 告警那组凭据（`OPS_ALERT_FEISHU_*`，回退 `VERSION_DIGEST_FEISHU_*`），无新增密钥。
   开关 `TPLUS_SYNC_ALERT_ENABLED`（默认 1）、间隔 `TPLUS_SYNC_ALERT_INTERVAL_SECONDS`（默认 3600）。
+
+## 改执行时刻（anchor_time）：两处一起改，且改完必须重启才可靠生效（2026-08-30）
+
+页面「同步设置 → T+ ERP → 执行时刻」走 `PUT /v1/sync/config/tplus`，后端 `_save_config`
+**在同一事务里写两处**：`integration_sync_config`（`provider='chanjet'`）和
+`sync_jobs.schedule`（`job_key='chanjet.full'`）。绕过页面直接改库时必须两处一起改，
+否则运行态与配置面分叉。后端对 `anchor_time` 的校验是 `^$|^([01]\d|2[0-3]):[0-5]\d$`，
+任意分钟都收，不限于整点/半点。
+
+⚠️ **改完不要假设会自动生效——worker 正睡在一个进睡前一次性算好的长睡眠里。**
+`worker_loop` 主循环每轮开头才 `_resolve_sync_config()`，睡眠按
+`TPLUS_SYNC_POLL_SECONDS=30` 分片但 `remaining` 进睡即算定。
+
+代码里**确实有热唤醒**（PR#290）：`_sleep_with_legacy_wake` 给分片循环传
+`should_wake=_schedule_target_moved_earlier`，每片重读 `integration_sync_config`，
+算出的新目标比进睡时的 `planned_due` 早 30 秒以上就 break，并打印
+`T+ schedule target moved earlier, replanning sleep`。**但 2026-08-30 实测它没有触发**：
+两处配置都改好后等了约 7 分钟毫无反应，`docker logs … | grep -c 'moved earlier'` 为 0，
+日志停在上一轮的 `T+ sync worker sleeping: seconds=86190`。按判据推算本应触发
+（`planned_due` = 08-30 17:00:59 UTC，新锚点 07:30 算出的目标已在过去），
+**没触发的原因至今未定位**。所以：
+
+- 结论只能是「热唤醒不可依赖」，不是「没有热唤醒」。⚠️ 该点 2026-08-30 首次记录时
+  被我写成「从不重读 `anchor_time`」，是错的——机制存在，只是没生效。
+- 已验证可靠的手段是重启：`docker restart business-cn-tplus-sync-worker-1`
+  （重启前先确认 `integration_sync_requests` 没有 `pending`/`running`，
+  两个全量并行会互相把对方本批未出现的记录标成 `missing_since`）。
+
+**断言新锚点真的生效，只看一个字段**：重启后日志里那行
+`T+ sync worker sleeping: seconds=<N>`，把 `N` 加到该行时间戳上必须正好落在新锚点。
+2026-08-30 实测 `seconds=71725`，从 03:34:34 UTC 推出 08-31 07:30 CST，对上了。
+只看「配置表里已经是 07:30」不算数——那是配置面，不是运行态。
 
 ## 手动全量同步（补跑缺口，2026-08-10 上线，PR#288）
 
