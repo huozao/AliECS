@@ -292,6 +292,15 @@ def run_worker_loop(
     ) -> datetime | None:
         """跑一个既有 poll；睡眠测量仅包住 sleep，且测量异常不能覆盖业务异常。"""
         nonlocal last_pull_monotonic
+        # 请中枢带走 worker 写进 notify_outbox 的通知（worker 只写库不投递）。
+        # ⚠️ 必须放在这一层而不是外层 while True：外层一轮 = 一个完整调度周期
+        # （interval_seconds 默认 86400），放那里等于一天才冲刷一次。
+        # 2026-08-31 上线自检实测：放外层时写进去的通知 120 秒后仍未被带走。
+        # 调不通不影响任何东西——行已落库，下一次 poll 再带。
+        try:
+            notify_client.request_flush()
+        except Exception as exc:  # noqa: BLE001 - 通知冲刷绝不能影响同步主循环
+            print(f"[文档同步循环] 通知冲刷异常：{type(exc).__name__}")
         sleep_started: float | None = None
         try:
             sleep_started = monotonic()
@@ -345,13 +354,6 @@ def run_worker_loop(
     terminal_poll_covered_next_preflight = False
     cycles = 0
     while True:
-        # 请中枢带走上一轮写进 notify_outbox 的通知。worker 只写库不投递，
-        # 所以这一脚油门决定了 worker 侧告警的最大延迟（约一个轮询周期）。
-        # 调不通不影响任何东西——行已落库，下一轮再带。
-        try:
-            notify_client.request_flush()
-        except Exception as exc:  # noqa: BLE001 - 通知冲刷绝不能影响同步主循环
-            print(f"[文档同步循环] 通知冲刷异常：{type(exc).__name__}")
         config = read_config()
         interval_seconds = max(int(config.get("interval_seconds") or 86400), 60)
         anchor_time = str(config.get("anchor_time") or "")
