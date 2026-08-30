@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
 
-from app.providers.feishu import FeishuBitableClient, credentials_for_profile
+from app import notify_client
 
 try:
     from psycopg.types.json import Jsonb
@@ -184,41 +184,30 @@ def build_alert_text(event: str, alert: dict[str, Any], *, now: datetime) -> str
 
 
 def send_feishu_text(chat_id: str, text: str) -> bool:
-    if not str(chat_id or "").strip():
+    """交给统一消息中枢：只往 notify_outbox 写一行，投递由 backend-api 负责。
+
+    收敛前这里自己取 tenant token、自己调 im/v1/messages，与另外三处各写一套。
+    ``chat_id`` 留在签名里是为了不动调用点；**收件人现在由 notify_routes 决定**，
+    这个参数只作为 dedup_key 的一部分参与去重。
+
+    返回 False 的含义随之改变：以前是「飞书没收到」，现在是「没能写进 outbox」。
+    真正的投递结果要查 notify_deliveries。
+    """
+    lines = [line for line in (text or "").splitlines() if line.strip()]
+    if not lines:
         return False
-    client = None
-    try:
-        profile = os.getenv("SYNC_ALERT_FEISHU_PROFILE", "COMPANY_A").strip() or "COMPANY_A"
-        credentials = credentials_for_profile(profile)
-        if not credentials:
-            return False
-        credential = credentials[0]
-        client = FeishuBitableClient(
-            app_id=credential.app_id,
-            app_secret=credential.app_secret,
-            api_base=credential.api_base,
-        )
-        client._request_json(
-            "POST",
-            "/im/v1/messages",
-            headers=client._headers(),
-            params={"receive_id_type": "chat_id"},
-            json={
-                "receive_id": chat_id,
-                "msg_type": "text",
-                "content": json.dumps({"text": text}, ensure_ascii=False),
-            },
-        )
-        return True
-    except Exception as exc:
-        print(f"[sync-alert] feishu send failed: {type(exc).__name__}")
-        return False
-    finally:
-        if client is not None:
-            try:
-                client.session.close()
-            except Exception:
-                pass
+    payload = notify_client.build_payload(
+        source="doc-sync",
+        event="sync_alert",
+        level="warn",
+        title=lines[0].strip(),
+        # 告警正文是排好版的多行文本，交给 markdown 会被重排。
+        text_segments=["\n".join(lines[1:])] if len(lines) > 1 else [],
+    )
+    for segment in payload["segments"]:
+        if segment.get("kind") == "text":
+            segment["preformatted"] = True
+    return notify_client.enqueue(payload)
 
 
 def _positive_env_seconds(name: str, fallback: int) -> int:

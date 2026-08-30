@@ -1077,7 +1077,9 @@ class SyncAlertOrchestrationTests(unittest.TestCase):
         self.assertEqual({"opened": 1, "notified": 0}, self.pick(result, "opened", "notified"))
         self.assertEqual([], self.sent)
 
-    def test_missing_feishu_credentials_records_open_for_later_retry(self) -> None:
+    def test_undeliverable_alert_still_records_open_for_later_retry(self) -> None:
+        """发不出去也要把告警记为 open，留待下一轮重试——不能因为通知失败就丢掉告警。
+        收敛前的触发条件是「飞书凭据缺失」，收敛后是「写不进 notify_outbox」。"""
         state = {
             "job": dict(self.job),
             "latest_run": {
@@ -1090,7 +1092,7 @@ class SyncAlertOrchestrationTests(unittest.TestCase):
             "open_alerts": [],
         }
         self.repository.states = [state]
-        with mock.patch.object(self.notifier, "credentials_for_profile", return_value=[]):
+        with mock.patch.object(self.notifier.notify_client, "enqueue", return_value=False):
             result = self.notifier.run_notifier_once(repository=self.repository, now=self.now)
         self.assertEqual({"opened": 1, "notified": 0}, self.pick(result, "opened", "notified"))
         self.assertEqual("open", self.repository.alerts[1]["state"])
@@ -1213,73 +1215,51 @@ class FeishuAlertSenderTests(unittest.TestCase):
         SyncAlertNotifierTests._clear_app_modules()
         sys.path[:] = self._old_sys_path
 
-    def test_missing_credentials_returns_false_without_request(self) -> None:
-        with mock.patch.object(self.notifier, "credentials_for_profile", return_value=[]), mock.patch.object(
-            self.notifier, "FeishuBitableClient"
-        ) as client:
-            self.assertFalse(self.notifier.send_feishu_text("oc_alert", "hello"))
-        client.assert_not_called()
+    def test_empty_text_is_not_enqueued(self) -> None:
+        with mock.patch.object(self.notifier.notify_client, "enqueue") as enqueue:
+            self.assertFalse(self.notifier.send_feishu_text("oc_alert", "   "))
+        enqueue.assert_not_called()
 
-    def test_sender_posts_feishu_text_with_configured_profile(self) -> None:
-        credential = mock.Mock(app_id="app", app_secret="secret", api_base="https://feishu.invalid")
-        client = mock.Mock()
-        client._headers.return_value = {"Authorization": "Bearer tenant"}
-        with mock.patch.dict(os.environ, {"SYNC_ALERT_FEISHU_PROFILE": "OPS"}, clear=False), mock.patch.object(
-            self.notifier, "credentials_for_profile", return_value=[credential]
-        ) as load_credentials, mock.patch.object(
-            self.notifier, "FeishuBitableClient", return_value=client
-        ):
-            self.assertTrue(self.notifier.send_feishu_text("oc_alert", "同步异常"))
+    def test_alert_is_written_to_the_outbox_as_preformatted_text(self) -> None:
+        """告警正文是排好版的多行文本，必须按 preformatted 走，否则会被 markdown 重排。"""
+        captured: dict[str, Any] = {}
 
-        load_credentials.assert_called_once_with("OPS")
-        client._request_json.assert_called_once_with(
-            "POST", "/im/v1/messages",
-            headers={"Authorization": "Bearer tenant"},
-            params={"receive_id_type": "chat_id"},
-            json={
-                "receive_id": "oc_alert",
-                "msg_type": "text",
-                "content": json.dumps({"text": "同步异常"}, ensure_ascii=False),
-            },
-        )
-        client.session.close.assert_called_once_with()
+        def fake_enqueue(payload: dict[str, Any], **_: Any) -> bool:
+            captured.update(payload)
+            return True
 
-    def test_sender_exception_log_contains_only_exception_type(self) -> None:
-        credential = mock.Mock(app_id="app", app_secret="secret", api_base="https://feishu.invalid")
-        client = mock.Mock()
-        client._headers.side_effect = RuntimeError("response synthetic-secret oc_sensitive")
+        with mock.patch.object(self.notifier.notify_client, "enqueue", fake_enqueue):
+            self.assertTrue(self.notifier.send_feishu_text("oc_alert", "同步告警\n作业：wecom.doc.2\n上次成功：昨天"))
+
+        self.assertEqual(captured["source"], "doc-sync")
+        self.assertEqual(captured["title"], "同步告警")
+        body = [seg for seg in captured["segments"] if seg["kind"] == "text"]
+        self.assertTrue(body and body[0]["preformatted"] is True)
+        self.assertIn("wecom.doc.2", body[0]["text"])
+
+    def test_enqueue_failure_is_reported_as_false(self) -> None:
+        """写不进 outbox 返回 False。注意语义已变：以前是「飞书没收到」，
+        现在是「没能落库」——真正的投递结果要查 notify_deliveries。"""
+        with mock.patch.object(self.notifier.notify_client, "enqueue", return_value=False):
+            self.assertFalse(self.notifier.send_feishu_text("oc_alert", "同步异常"))
+
+    def test_enqueue_error_log_leaks_neither_chat_id_nor_secret(self) -> None:
+        """收敛前这条守着「日志只打异常类型」，收敛后同样要守——
+        notify_client 里的 print 也只打 type(exc).__name__。"""
         output = io.StringIO()
-        with mock.patch.object(
-            self.notifier, "credentials_for_profile", return_value=[credential]
-        ), mock.patch.object(
-            self.notifier, "FeishuBitableClient", return_value=client
-        ), mock.patch("sys.stdout", output):
-            self.assertFalse(self.notifier.send_feishu_text("oc_sensitive", "hello"))
-        self.assertIn("RuntimeError", output.getvalue())
-        self.assertNotIn("synthetic-secret", output.getvalue())
-        self.assertNotIn("oc_sensitive", output.getvalue())
-        client.session.close.assert_called_once_with()
 
-    def test_session_close_exception_does_not_escape_or_change_success(self) -> None:
-        credential = mock.Mock(app_id="app", app_secret="secret", api_base="https://feishu.invalid")
-        client = mock.Mock()
-        client._headers.return_value = {"Authorization": "Bearer tenant"}
-        client.session.close.side_effect = RuntimeError("close failed")
-        with mock.patch.object(
-            self.notifier, "credentials_for_profile", return_value=[credential]
-        ), mock.patch.object(
-            self.notifier, "FeishuBitableClient", return_value=client
-        ):
-            self.assertTrue(self.notifier.send_feishu_text("oc_alert", "hello"))
-        client.session.close.assert_called_once_with()
+        class BoomConnection:
+            def cursor(self) -> Any:
+                raise RuntimeError("synthetic-secret oc_sensitive")
 
-    def test_credential_loader_exception_is_safely_reported(self) -> None:
-        output = io.StringIO()
+            def close(self) -> None:
+                return None
+
         with mock.patch.object(
-            self.notifier, "credentials_for_profile",
-            side_effect=RuntimeError("synthetic-secret oc_sensitive"),
+            self.notifier.notify_client, "connect", return_value=BoomConnection()
         ), mock.patch("sys.stdout", output):
-            self.assertFalse(self.notifier.send_feishu_text("oc_sensitive", "hello"))
+            self.assertFalse(self.notifier.send_feishu_text("oc_sensitive", "同步异常\n明细"))
+
         self.assertIn("RuntimeError", output.getvalue())
         self.assertNotIn("synthetic-secret", output.getvalue())
         self.assertNotIn("oc_sensitive", output.getvalue())

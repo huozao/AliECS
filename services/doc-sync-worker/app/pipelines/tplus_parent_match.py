@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from app.providers.feishu import FeishuBitableClient, credentials_for_profile as feishu_credentials
+from app import notify_client
 from app.providers.wecom import WeComApiError, WeComSmartsheetClient, credentials_for_profile as wecom_credentials
 from app.storage.postgres import connect
 from app.storage.sync_job_platform import open_owned, safe_error_message
@@ -271,27 +271,24 @@ def build_alert(result: MatchResult) -> str:
 
 
 def send_feishu_alert(text: str) -> bool:
-    chat_id = os.getenv("TPLUS_PARENT_MATCH_CHAT_ID", "").strip()
-    if not chat_id:
-        print("[T+核对] 未配置 TPLUS_PARENT_MATCH_CHAT_ID，跳过飞书推送。")
+    """交给统一消息中枢。收件人由 notify_routes 决定，不再读 TPLUS_PARENT_MATCH_CHAT_ID。
+
+    推送失败仍旧不让核对本身算失败——这是收敛前的既有行为，保持不变。
+    """
+    lines = [line for line in (text or "").splitlines() if line.strip()]
+    if not lines:
         return False
-    profile = os.getenv("TPLUS_PARENT_MATCH_FEISHU_PROFILE", "COMPANY_A")
-    creds = feishu_credentials(profile)
-    if not creds:
-        print(f"[T+核对] 飞书 profile {profile} 无凭据，跳过推送。")
-        return False
-    client = FeishuBitableClient(creds[0].app_id, creds[0].app_secret, creds[0].api_base)
-    try:
-        client._request_json(
-            "POST", "/im/v1/messages",
-            headers=client._headers(),
-            params={"receive_id_type": "chat_id"},
-            json={"receive_id": chat_id, "msg_type": "text", "content": json.dumps({"text": text}, ensure_ascii=False)},
-        )
-        return True
-    except Exception as exc:  # noqa: BLE001 - 推送失败不应让核对本身算失败
-        print(f"[T+核对] 飞书推送失败：{exc}")
-        return False
+    payload = notify_client.build_payload(
+        source="tplus",
+        event="parent_match",
+        level="warn",
+        title=lines[0].strip(),
+        text_segments=["\n".join(lines[1:])] if len(lines) > 1 else [],
+    )
+    for segment in payload["segments"]:
+        if segment.get("kind") == "text":
+            segment["preformatted"] = True
+    return notify_client.enqueue(payload)
 
 
 class _PlatformRun:
