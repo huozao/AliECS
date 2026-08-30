@@ -166,6 +166,43 @@ def mark_failed(conn, delivery_id: int, error: str) -> str:
     return status
 
 
+def claim_orphans(conn, limit: int = 50) -> list[dict[str, Any]]:
+    """取还没有任何投递记录的 outbox 行。
+
+    doc-sync-worker 只写 outbox、不建 deliveries——它不读路由表，也不该读（路由是
+    投递侧的事）。所以 worker 写的行落库时是「孤儿」，必须由 flush 领养：匹配路由、
+    建投递记录、再投递。
+
+    ⚠️ 少了这一步，worker 写的通知会安全落库然后永远发不出去，而且没有任何
+    失败信号——outbox 有行、deliveries 没行、flush 报 claimed=0，三处都「正常」。
+    2026-08-31 上线自检时就是这么暴露的。
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT o.id, o.source_key, o.event, o.level, o.payload_json
+            FROM notify_outbox o
+            LEFT JOIN notify_deliveries d ON d.outbox_id = o.id
+            WHERE d.id IS NULL
+            ORDER BY o.id
+            LIMIT %s
+            FOR UPDATE OF o SKIP LOCKED
+            """,
+            (limit,),
+        )
+        rows = cur.fetchall()
+    return [
+        {
+            "outbox_id": int(row[0]),
+            "source_key": row[1],
+            "event": row[2],
+            "level": row[3],
+            "payload": row[4],
+        }
+        for row in rows
+    ]
+
+
 def claim_pending(conn, limit: int = 50) -> list[dict[str, Any]]:
     """取一批到期的待投递记录，连同它们的 outbox payload。
 
