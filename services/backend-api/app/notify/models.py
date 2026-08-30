@@ -1,0 +1,199 @@
+"""统一消息中枢的消息模型。
+
+生产者只描述「发生了什么」，不构造任何飞书 / 企微 payload——否则每加一个投递目标，
+每个生产者都要跟着改。渲染成各家原生格式是 channel 的事。
+
+段落模型（segments）沿用 openclaw-bridge 的 build_feishu_card：文字和图按文档顺序
+交错排成一条消息，而不是拆成好几个气泡。那套结构在飞书链路上已经跑了几个月。
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field, model_validator
+
+LEVELS: dict[str, int] = {"info": 0, "warn": 1, "error": 2, "fatal": 3}
+Level = Literal["info", "warn", "error", "fatal"]
+
+LEVEL_ICONS: dict[str, str] = {"info": "🔵", "warn": "🟡", "error": "🔴", "fatal": "⛔"}
+
+# 图片上限取三家里最紧的那个：企微群机器人 base64 图 2MB。
+# 飞书 im/v1/images 宽松得多，但判据统一在最紧处，省得同一条消息发得出 A 发不出 B。
+MAX_IMAGE_BYTES = 2 * 1024 * 1024
+
+
+def level_at_least(level: str, minimum: str) -> bool:
+    return LEVELS.get(level, 0) >= LEVELS.get(minimum, 0)
+
+
+class NotifyField(BaseModel):
+    """一行「名：值」。各 channel 自己决定渲染成表格、列表还是纯文本。"""
+
+    name: str = Field(max_length=64)
+    value: str = Field(max_length=512)
+
+
+class NotifyImage(BaseModel):
+    """随消息附带的图。ref 是段落里引用它的名字。
+
+    只收 PNG，且在**入口**就校验格式与大小。收敛前这层校验在 gold_spread 的
+    _upload_charts 里，收敛时必须跟着搬过来——否则坏图会一路带到 IM API 才报错，
+    那时消息已经写进 outbox，失败变成异步的、当场看不出来。
+    """
+
+    ref: str = Field(max_length=64)
+    caption: str = Field(default="", max_length=120)
+    png_base64: str = Field(max_length=4_000_000)
+
+    @model_validator(mode="after")
+    def _check_png(self) -> "NotifyImage":
+        try:
+            data = base64.b64decode(self.png_base64, validate=True)
+        except Exception:
+            raise ValueError(f"image {self.ref} is not valid base64") from None
+        if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise ValueError(f"image {self.ref} is not a PNG")
+        if len(data) > MAX_IMAGE_BYTES:
+            raise ValueError(
+                f"image {self.ref} is {len(data)} bytes, over the {MAX_IMAGE_BYTES} limit"
+            )
+        return self
+
+
+class NotifySegment(BaseModel):
+    """一个段落。kind 决定用哪个字段：
+
+    - ``text``   → ``text``，markdown 子集（各 channel 自行适配方言）；
+      置 ``preformatted=True`` 表示这段是**排好版的纯文本**，渲染时不得当 markdown 解析
+    - ``fields`` → ``fields``，键值对
+    - ``image``  → ``image_ref``，指向 ``Notification.images`` 里的某张图
+    """
+
+    kind: Literal["text", "fields", "image"]
+    text: str = Field(default="", max_length=8000)
+    # 排版里含 *、|、# 这类字符时必须置 True，否则会被 markdown 吃掉或变成标题。
+    # gold_spread 的价差排版就是这种情况——旧的 build_alert_card 用 plain_text 而非
+    # lark_md 正是为此，收敛时这个语义必须跟着搬过来，不能丢。
+    preformatted: bool = False
+    fields: list[NotifyField] = Field(default_factory=list, max_length=40)
+    image_ref: str = Field(default="", max_length=64)
+
+    @model_validator(mode="after")
+    def _check_payload(self) -> "NotifySegment":
+        if self.kind == "text" and not self.text.strip():
+            raise ValueError("text segment is empty")
+        if self.kind == "fields" and not self.fields:
+            raise ValueError("fields segment is empty")
+        if self.kind == "image" and not self.image_ref.strip():
+            raise ValueError("image segment has no image_ref")
+        return self
+
+
+class NotifyLink(BaseModel):
+    text: str = Field(max_length=64)
+    url: str = Field(max_length=1024)
+
+
+class Notification(BaseModel):
+    """一条待投递的通知。
+
+    ``dedup_key`` 是幂等闸门：同一个 key 重复提交只会产生一条 outbox 行。
+    生产者应当用「业务事件的自然主键」当 dedup_key（例如 ``gold:wrong_price:<event_id>``），
+    留空则按内容摘要生成——那样重试会被当成新消息，只适合本来就无所谓重复的通知。
+    """
+
+    source: str = Field(max_length=64)
+    event: str = Field(max_length=128)
+    level: Level = "info"
+    title: str = Field(max_length=200)
+    summary: str = Field(default="", max_length=2000)
+    segments: list[NotifySegment] = Field(default_factory=list, max_length=60)
+    images: list[NotifyImage] = Field(default_factory=list, max_length=12)
+    link: NotifyLink | None = None
+    dedup_key: str = Field(default="", max_length=200)
+    occurred_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def _fill_defaults(self) -> "Notification":
+        if self.occurred_at is None:
+            self.occurred_at = datetime.now(timezone.utc)
+        refs = {image.ref for image in self.images}
+        for segment in self.segments:
+            if segment.kind == "image" and segment.image_ref not in refs:
+                raise ValueError(f"image segment references unknown ref: {segment.image_ref}")
+        if not self.dedup_key:
+            self.dedup_key = self._content_dedup_key()
+        return self
+
+    def _content_dedup_key(self) -> str:
+        digest = hashlib.sha256()
+        digest.update(self.source.encode())
+        digest.update(self.event.encode())
+        digest.update(self.title.encode())
+        digest.update(self.summary.encode())
+        for segment in self.segments:
+            digest.update(segment.kind.encode())
+            digest.update(segment.text.encode())
+            for field in segment.fields:
+                digest.update(field.name.encode())
+                digest.update(field.value.encode())
+        # 同一内容在不同时刻发生仍是两条通知，所以把时间也算进去；
+        # 真正需要「重发不重复」的生产者必须自己给 dedup_key。
+        digest.update(str(self.occurred_at).encode())
+        return f"auto:{self.source}:{digest.hexdigest()[:32]}"
+
+    def storable_payload(self) -> dict[str, Any]:
+        """入库用的 payload：剥掉图片字节，只留长度做审计。
+
+        一张 PNG 的 base64 是几十万字符，直接进 JSONB 会把这一列撑爆——
+        gold_spread_alerts 的 _strip_chart_bytes 已经踩过这个坑。
+        代价是重试时没有图，按纯文本降级。
+        """
+        payload = self.model_dump(mode="json", exclude={"images"})
+        payload["images"] = [
+            {
+                "ref": image.ref,
+                "caption": image.caption,
+                "base64_characters": len(image.png_base64),
+            }
+            for image in self.images
+        ]
+        return payload
+
+    @classmethod
+    def from_stored(cls, payload: dict[str, Any]) -> "Notification":
+        """从库里读回来重试用。图片已在入库时剥离，因此重建出来的是无图版本。"""
+        rebuilt = dict(payload)
+        rebuilt["images"] = []
+        rebuilt["segments"] = [
+            segment for segment in rebuilt.get("segments") or []
+            if segment.get("kind") != "image"
+        ]
+        if not rebuilt.get("dedup_key"):
+            rebuilt["dedup_key"] = f"restored:{uuid.uuid4().hex}"
+        return cls.model_validate(rebuilt)
+
+    def plain_text(self) -> str:
+        """所有 channel 的共同兜底：富格式发不出去时至少把字发出去。"""
+        lines = [f"{LEVEL_ICONS.get(self.level, '')} {self.title}".strip()]
+        if self.summary.strip():
+            lines.append(self.summary.strip())
+        for segment in self.segments:
+            if segment.kind == "text":
+                lines.append(segment.text.strip())
+            elif segment.kind == "fields":
+                lines.extend(f"{field.name}：{field.value}" for field in segment.fields)
+            elif segment.kind == "image":
+                caption = next(
+                    (image.caption for image in self.images if image.ref == segment.image_ref),
+                    "",
+                )
+                lines.append(f"🖼️ {caption}".strip() if caption else "🖼️ 图片")
+        if self.link is not None:
+            lines.append(f"{self.link.text}：{self.link.url}")
+        return "\n".join(line for line in lines if line).strip()

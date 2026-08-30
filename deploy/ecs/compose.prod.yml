@@ -38,6 +38,16 @@ services:
       VERSION_DIGEST_FEISHU_RECEIVE_ID: ${VERSION_DIGEST_FEISHU_RECEIVE_ID:-}
       GOLD_SPREAD_ALERT_TOKEN: ${GOLD_SPREAD_ALERT_TOKEN:-}
       GOLD_SPREAD_FEISHU_RECEIVE_ID: ${GOLD_SPREAD_FEISHU_RECEIVE_ID:-}
+      # 统一消息中枢。投递代码只在 backend-api 一份，所以三家的凭据都要在这里可见。
+      # 路由表（notify_routes）只存 profile / env 变量名，密钥仍旧只在 SOPS。
+      NOTIFY_FLUSH_TOKEN: ${NOTIFY_FLUSH_TOKEN:-}
+      FEISHU_COMPANY_A_APP_ID: ${FEISHU_COMPANY_A_APP_ID:-}
+      FEISHU_COMPANY_A_APP_SECRET: ${FEISHU_COMPANY_A_APP_SECRET:-}
+      # agentId 的 key 名在 SOPS 里少了个 A（历史 typo），channels/wecom.py 两种拼写都认。
+      WECOM_COMPANY_A_gentId: ${WECOM_COMPANY_A_gentId:-}
+      WECOM_COMPANY_B_gentId: ${WECOM_COMPANY_B_gentId:-}
+      GROUP1_WEBHOOK: ${GROUP1_WEBHOOK:-}
+      GROUP2_WEBHOOK: ${GROUP2_WEBHOOK:-}
       ADMIN_BOOTSTRAP_USERNAME: ${ADMIN_BOOTSTRAP_USERNAME}
       ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD}
       ADMIN_BOOTSTRAP_DISPLAY_NAME: ${ADMIN_BOOTSTRAP_DISPLAY_NAME}
@@ -142,6 +152,10 @@ services:
       SYNC_ALERT_CHAT_ID: ${SYNC_ALERT_CHAT_ID:-}
       SYNC_ALERT_FEISHU_PROFILE: ${SYNC_ALERT_FEISHU_PROFILE:-COMPANY_A}
       SYNC_ALERT_ESCALATION_SECONDS: ${SYNC_ALERT_ESCALATION_SECONDS:-21600}
+      # worker 只往 notify_outbox 写行，不持有任何 IM 凭据；这两个变量只用来请
+      # backend-api 带走积压。调不通也不丢消息——行已落库，下一轮再带。
+      NOTIFY_FLUSH_URL: ${NOTIFY_FLUSH_URL:-http://backend-api:8000/v1/internal/notify/flush}
+      NOTIFY_FLUSH_TOKEN: ${NOTIFY_FLUSH_TOKEN:-}
       SYNC_ARTIFACT_GRACE_SECONDS: ${SYNC_ARTIFACT_GRACE_SECONDS:-300}
       CHANJET_OPEN_TOKEN_FILE: /app/tplus-sync-requests/chanjet_open_token.txt
       WECOM_ENV_PROFILES: ${WECOM_ENV_PROFILES:-}

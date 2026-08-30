@@ -7,6 +7,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from app import notify_client
 from app.pipelines.backfill_smartsheet_images import run_backfill_images
 from app.pipelines.document_locator import reconcile_document_locators
 from app.pipelines.document_locator_mirror import (
@@ -344,6 +345,13 @@ def run_worker_loop(
     terminal_poll_covered_next_preflight = False
     cycles = 0
     while True:
+        # 请中枢带走上一轮写进 notify_outbox 的通知。worker 只写库不投递，
+        # 所以这一脚油门决定了 worker 侧告警的最大延迟（约一个轮询周期）。
+        # 调不通不影响任何东西——行已落库，下一轮再带。
+        try:
+            notify_client.request_flush()
+        except Exception as exc:  # noqa: BLE001 - 通知冲刷绝不能影响同步主循环
+            print(f"[文档同步循环] 通知冲刷异常：{type(exc).__name__}")
         config = read_config()
         interval_seconds = max(int(config.get("interval_seconds") or 86400), 60)
         anchor_time = str(config.get("anchor_time") or "")
