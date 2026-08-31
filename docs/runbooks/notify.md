@@ -245,6 +245,39 @@ python3 scripts/seed_notify_routes.py --apply    # 写入
 现在会带上该 outbox **当前真实的**投递汇总（`sent`/`pending`/`dead`），
 `sent>0` 时甚至报 `delivered:true`。所以「`duplicate` 就等于没发」这个旧理解不再成立。
 
+### 422 在服务端留痕（2026-08-31 起）
+
+422 的详情原来只回给调用方，服务端日志里只有一行 `status_code: 422`，定位靠猜。
+现在 `app/main.py` 有 `RequestValidationError` 处理器，会记下**出错的字段路径**：
+
+```bash
+ssh txecs "sudo docker logs business-cn-backend-api-1 2>&1 | grep 'request validation failed' | tail -3"
+```
+
+```json
+{"message":"request validation failed","path":"/v1/internal/gold-spread/alerts","status_code":422,
+ "fields":[{"type":"literal_error","loc":"body.kind"},{"type":"missing","loc":"body.occurred_at"}]}
+```
+
+⚠️ **只记 `type` 和 `loc`，故意不记 `input`/`msg`**——那两个会把请求体的值抄进日志，
+而这个处理器对全站所有端点生效（登录、密钥、回调都经过它）。改动前先想清楚这一点。
+
+⚠️ **`docker logs` 会在容器重启时清空**。要留证据就在部署前先捞出来。
+
+**待办（截至 2026-08-31 未完成）**：gold-spread-monitor 的 422 还没抓到真实样本——
+部署（17:03 CST）之后一直没有新的 gold 请求。已知的形状：
+`monitor` 每轮可能出现 3×422 + 200，**但不是每轮都有**（11:14 CST 那轮有、
+15:37 CST 那轮只有 200），所以它是间歇的、跟 payload 种类相关。
+根因机制已定位一半：`gold-spread-monitor` 的 `alerts.py::_try_post` 用
+`for attempt in range(3)` 把 422 当可重试错误重试 3 次——4xx 是确定性错误，
+重试必然全失败，只是把一次失败放大成三条。**缺的是「哪个字段」**，等上面那条日志。
+
+### 读 notify_outbox 时 id 会缺号，这是正常的
+
+`enqueue` 用 `INSERT … ON CONFLICT (dedup_key) DO NOTHING`，而 Postgres 的序列
+**即使没有插入也会消耗掉一个值**。所以重复提交（生产者重试、网络重发）会在
+`notify_outbox.id` 里留下空洞。看到 id 不连续不要当成「有行被删了」去查。
+
 ### ⚠️ 企微 agentid：env 里 A 的值是 B 的
 
 2026-08-31 用各自的 `APP_SECRET` 调 `agent/get` 实测：
