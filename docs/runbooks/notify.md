@@ -19,19 +19,20 @@
 ## 数据流
 
 ```
-外部设备(gold-spread-monitor / 任意脚本)
-    │  POST /v1/internal/notify/send
-    │  X-Notify-Source + X-Notify-Token
-    ▼
-backend-api 内部生产者 ──── dispatch.deliver() ────┐
-doc-sync-worker 内部生产者 ── notify_client.enqueue() ┤
-                                                  ▼
-                                          notify_outbox（唯一汇聚点，dedup_key 幂等）
-                                                  │ 路由匹配 notify_routes
-                                                  ▼
-                                          notify_deliveries（每 target 一行）
-                                                  │
-                                   feishu / wecom_bot / wecom_app
+任意通用脚本 ── POST /v1/internal/notify/send ───────────────────────┐
+gold-spread-monitor ── POST /v1/internal/gold-spread/alerts ── 业务适配 ┤
+backend-api 内部生产者 ────────────────────────────────────────────────┤
+                                                                    ▼
+                                                           dispatch.deliver()
+                                                                    │
+doc-sync-worker ── notify_client.enqueue() ───────────────────────────┤
+                                                                    ▼
+                                                 notify_outbox（唯一汇聚点，dedup_key 幂等）
+                                                                    │ 路由匹配 notify_routes
+                                                                    ▼
+                                                 notify_deliveries（每 target 一行）
+                                                                    │
+                                                     feishu / wecom_bot / wecom_app
 ```
 
 **汇聚点是数据库不是 HTTP**。doc-sync-worker 与 backend-api 是两个镜像、构建上下文
@@ -90,13 +91,26 @@ SELECT id, channel, status, attempts, last_error, next_attempt_at
 FROM notify_deliveries WHERE status IN ('pending','dead') ORDER BY id DESC LIMIT 20;
 ```
 
-⚠️ **`/send` 返回 200 不等于对方收到了**。三种 200 要分开读：
+⚠️ **`/send` 返回 200 不等于对方收到了**。返回值要同时读 `delivered` 和投递计数：
 
 - `delivered: true` — 至少一个 target 发成功
 - `delivered: false, reason: "no matching route"` — 落库了，但没有任何路由命中，**没人会收到**
-- `duplicate: true` — 这个 dedup_key 之前已经进过队，本次不投递
+- `duplicate: true, delivered: true, sent > 0` — 这个 `dedup_key` 以前已经投递成功，本次不重复发送
+- `duplicate: true, delivered: false, pending > 0` — 以前已入队但仍在重试，不能当成收到
+- `duplicate: true, delivered: false, targets: 0` — 以前已入队但没有路由，仍然没人会收到
 
-全部 target 都失败时返回 502（消息已落库，会重试）。
+首次提交时全部 target 都失败会返回 502（消息已落库，会重试）；重复提交读取上面的当前状态。
+
+每次提交都会返回 `outbox_id`。需要确认异步重试后的真实结果时，使用同一来源凭据查询：
+
+```http
+GET /v1/internal/notify/deliveries/<outbox_id>
+X-Notify-Source: <source_key>
+X-Notify-Token: <source_token>
+```
+
+响应只给该来源自己的 `sent / pending / dead` 计数及各 channel 状态，不返回
+`target_json`、收件人或任何凭据引用；查询别的来源统一返回 404。
 
 ## 坑：worker 写的行是「孤儿」，必须由 flush 领养
 
@@ -167,12 +181,20 @@ python3 scripts/seed_notify_routes.py --apply    # 写入
 `NOTIFY_FLUSH_TOKEN` 是新增的，需要先进 SOPS（`sops set infra/secrets/txecs-production.enc.env`）。
 没有它的话 worker 的 flush 调不通——通知仍会落库，但要等到有 HTTP 请求进来才被带走。
 
-### gold-spread-monitor 不需要改
+### gold-spread-monitor 的业务适配边界
 
-它发的还是 `POST /v1/internal/gold-spread/alerts`，schema、token、本地磁盘队列全不动。
-那个端点仍旧存在（它有业务 schema 和 `gold_spread_alerts` 业务表），只是内部把
-「自己拼卡片、自己传图、自己调 im/v1/messages」换成了 `deliver_alert()`。
-少改一个跑在 Windows 上的独立仓，就少一处回归面。
+⚠️ 「gold-spread-monitor 不需要改，schema 和发送确认语义全不动」自 2026-08-31 起确认失效。
+该说法会让复盘进度继续只传一段重复的 `summary`，而且生产者只看 `ok=true`，无法证明
+`notify_deliveries` 里是否真的有成功记录。新的边界如下：
+
+- 它仍调用 `POST /v1/internal/gold-spread/alerts`，保留黄金价差业务校验、
+  `gold_spread_alerts` 业务表和断网时的本机磁盘队列。
+- `replay_summary` 可带结构化的分区进度、并行进程、已运行时间、预计剩余时间、
+  最新产物时间和带分母的正式报告指标；业务适配器把这些字段转换为中枢 `segments`。
+- 端点返回中枢的 `outbox_id / targets / sent / pending / dead / duplicate`；生产者只有在
+  已送达或确认是已送达事件的重复提交时才清除本机队列。
+- 飞书/企微卡片、图片上传、收件人路由、幂等、重试和投递记账仍然只在 `app/notify/`；
+  业务适配器不直接调用任何 IM API，因此没有第二套消息平台。
 
 ## 加一个新来源
 

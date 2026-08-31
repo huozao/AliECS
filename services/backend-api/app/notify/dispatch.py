@@ -40,7 +40,7 @@ def _attempt(conn, delivery: dict[str, Any], notification: Notification) -> str:
 def deliver(notification: Notification, *, conn=None) -> dict[str, Any]:
     """入队并立即投递。
 
-    返回 {"outbox_id", "duplicate", "targets", "sent", "failed"}。
+    返回 {"outbox_id", "duplicate", "targets", "sent", "pending", "dead", "failed"}。
     ``duplicate=True`` 表示这个 dedup_key 之前已经进过队——此时不会重复投递。
     ``targets=0`` 表示没有任何路由命中：消息安全落库了，但没人会收到，
     调用方应当把它当成配置缺失而不是发送成功。
@@ -50,8 +50,9 @@ def deliver(notification: Notification, *, conn=None) -> dict[str, Any]:
     try:
         outbox_id, is_new = store.enqueue(connection, notification)
         if not is_new:
+            summary = store.delivery_summary(connection, outbox_id)
             connection.commit()
-            return {"outbox_id": outbox_id, "duplicate": True, "targets": 0, "sent": 0, "failed": 0}
+            return {"outbox_id": outbox_id, "duplicate": True, **summary}
 
         routes = store.matching_routes(
             connection, notification.source, notification.event, notification.level
@@ -59,13 +60,16 @@ def deliver(notification: Notification, *, conn=None) -> dict[str, Any]:
         deliveries = store.create_deliveries(connection, outbox_id, routes)
         connection.commit()
 
-        sent = failed = 0
+        sent = pending = dead = 0
         for delivery in deliveries:
             # 每条投递单独提交：发送是外部 IO，不该把它圈在一个长事务里。
-            if _attempt(connection, delivery, notification) == "sent":
+            delivery_status = _attempt(connection, delivery, notification)
+            if delivery_status == "sent":
                 sent += 1
+            elif delivery_status == "dead":
+                dead += 1
             else:
-                failed += 1
+                pending += 1
             connection.commit()
 
         if not routes:
@@ -78,7 +82,9 @@ def deliver(notification: Notification, *, conn=None) -> dict[str, Any]:
             "duplicate": False,
             "targets": len(deliveries),
             "sent": sent,
-            "failed": failed,
+            "pending": pending,
+            "dead": dead,
+            "failed": pending + dead,
         }
     finally:
         if owns_conn:
