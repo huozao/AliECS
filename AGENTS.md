@@ -84,7 +84,38 @@ AliECS 是以 AI 客户端协作为主要开发方式的 Docker 化 Web/API 项�
 
 本地验证只用 `local/docker-compose.local.yml` + `local/.env.local`（只含本地测试值），不读取生产 env、不连生产库。优先 `scripts/local-smoke-test.ps1|sh`。
 
-- 通用测试：`python -m unittest discover -s tests`
+- 通用测试：`python -m pytest tests`（CI 用的同一条）。
+  ⚠️ **2026-08-31 起不要再用 `python -m unittest discover -s tests` 当全量判据**：
+  它只收 `TestCase` 子类，`def test_x()` 这种裸函数式用例一个都不收。实测 discover
+  跑 1051 个全绿、pytest 收 1412 个其中 40 个失败——差的 **355 个分布在 18 个文件**里
+  从来没被跑过（含 `test_backend_gold_spread_alerts.py` 全部 20 个）。两个 runner 的
+  收集数对不上，就说明有测试没在跑。
+- **新增 `tests/` 文件时必须遵守既有的 `app` 包隔离协议**（仓里 42 个模块在用）：
+  `services/` 下有四个包都叫 `app`（backend-api / coding-executor / doc-sync-worker /
+  mcp-coding-server），谁先被 import 谁就占住 `sys.modules['app']`，之后模块里延迟到
+  测试体内的 `from app.x import y` 就会拿到**错的包**，报
+  `cannot import name 'app' from 'app.main' (…/doc-sync-worker/app/main.py)`。写法：
+
+  ```python
+  @classmethod
+  def setUpClass(cls):
+      for name in list(sys.modules):
+          if name == "app" or name.startswith("app."):
+              del sys.modules[name]
+      sys.path.insert(0, str(BACKEND_ROOT))
+
+  @classmethod
+  def tearDownClass(cls):
+      ...同样先 purge，再把 BACKEND_ROOT 从 sys.path 摘掉
+  ```
+
+  裸函数式文件没有这两个钩子，把隔离放进 `_module()` 那个 helper（见
+  `tests/test_backend_wecom_kf.py::_ensure_backend_app`），且**只在占位的不是本 service
+  时才清**——无条件清会让每次调用都重新 import、模块身份漂移，`patch` 会打空。
+- **测试里改 `os.environ` 必须还原**。`os.environ.setdefault(...)` 裸写在模块级或 helper
+  里会永久污染进程，后面的用例走进本不该走的分支（2026-08-31 实测：
+  `test_backend_wecom_assistant` 漏还原 `DATABASE_URL`，导致 `test_backend_wecom_kf`
+  两个用例去 `mkdir /app/wecom-kf-materials` 而失败，且**单独跑那个文件不复现**）。
 - shell 脚本：`bash -n deploy/ecs/{deploy,migrate,healthcheck,rollback}.sh`
 - Compose：`docker compose -f local/docker-compose.local.yml config > /dev/null`（含真实凭证时不粘贴完整输出）
 - 前端（尤其 `services/admin-ui/index.html` 内联脚本）：检查 JS 语法/作用域错误 + 至少一次核心入口 smoke（点击能触发网络请求）。

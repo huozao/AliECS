@@ -156,6 +156,18 @@ txecs 127.0.0.1:11800 failover-proxy
 | webdock1 | `webdock` | devbox 人工管理 | **实际走 Tailscale SSH，不过 sshd**；见下方说明 |
 | webdock1 | `restic-peer` | webdock2→webdock1 备份接收 | `nologin`，home `/repo`；2026-06-12~08-31 共 233 次登录，是 webdock1 上唯一真实用过 sshd 的账户 |
 
+**查「谁登录过这台机器」用 `journalctl -t sshd`，不要用 `-u ssh`，也不要查 auth.log。**
+Ubuntu 24.04 的 sshd 是 socket 激活的，每条连接跑在各自的 `ssh@<n>-…` 单元里，
+`journalctl -u ssh` 只有寥寥数行（webdock1 实测 30 天 22 行、0 条 `Accepted`），
+而 `/var/log/auth.log` 里压根没有 sshd 行（只有 sudo/logind）。两处都会给出
+**「0 次登录」这个看起来像结论、实际是没测到**的结果。正确的一条：
+
+```bash
+ssh <host> "sudo journalctl -t sshd --no-pager | grep -oE 'Accepted [a-z]+ for [a-z-]+' | sort | uniq -c"
+```
+
+webdock1 实测（journal 覆盖 2026-06-12 起）：233 次全是 `restic-peer`。
+
 **webdock1 的登录路径与别的机器不同（2026-08-31 实测）**：`ssh webdock1` 由
 **Tailscale SSH 接管**（会话父进程是 `tailscaled` 而不是 `sshd`，`tailscale debug prefs`
 里 `"RunSSH": true`），凭 tailnet 身份放行，**根本不读 `authorized_keys`**。全量 journal
