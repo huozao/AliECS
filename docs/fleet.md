@@ -153,6 +153,23 @@ txecs 127.0.0.1:11800 failover-proxy
 | txecs | `restic-peer` | 跨机备份接收 | SFTP chroot，拿不到 shell |
 | aliecs | `root` | 人工/CI 管理、bridge/console/T+ 隧道、ProductCenter | 5733 次登录（2026-07-09~08-08 区间计数），历史取证时 `authorized_keys` 8 个 key |
 | aliecs | `peer-channel` | txecs→aliecs 备份和双向发布/ACK 传输 | 无 shell；仅 local forward 到 127.0.0.1:18080/22000 |
+| webdock1 | `webdock` | devbox 人工管理 | **实际走 Tailscale SSH，不过 sshd**；见下方说明 |
+| webdock1 | `restic-peer` | webdock2→webdock1 备份接收 | `nologin`，home `/repo`；2026-06-12~08-31 共 233 次登录，是 webdock1 上唯一真实用过 sshd 的账户 |
+
+**webdock1 的登录路径与别的机器不同（2026-08-31 实测）**：`ssh webdock1` 由
+**Tailscale SSH 接管**（会话父进程是 `tailscaled` 而不是 `sshd`，`tailscale debug prefs`
+里 `"RunSSH": true`），凭 tailnet 身份放行，**根本不读 `authorized_keys`**。全量 journal
+（2026-06-12 起）里 sshd 只记录过 `restic-peer` 的 233 次登录，`for webdock` 0 次。
+
+因此 `/home/webdock/.ssh/authorized_keys` 里那把 key（指纹
+`SHA256:DMIUDtUT4HCaMHz6UMIT8n0MyGzgrrmhSroPvoHgorA`，注释
+`webdock1-devbox-fallback-20260831`）是**平时不生效、tailscaled 挂掉时的唯一兜底**——
+它是该账户仅有的一把，`/root/.ssh/authorized_keys` 是 0 字节且
+`PasswordAuthentication no`，删掉它等于放弃 OpenSSH 侧的全部入口。
+**持有者是 devbox 的 `~/.ssh/webdock_ubuntu_ed25519`**（`~/.ssh/config` 里
+`Host webdock webdock1 WebDock01` 的 IdentityFile，指纹已核对一致）。
+⚠️ 该 key 原注释 `codex-temp-webdock-ubuntu-20260524` 自 2026-08-31 起已改名：
+旧名让它看起来像没人认领的临时钥匙，实际一直有明确持有者。
 
 **两条已踩过的红线**（2026-08-08 各拦下一次）：
 

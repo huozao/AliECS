@@ -22,7 +22,7 @@ import urllib.request
 import uuid
 from typing import Any
 
-from app.notify.models import LEVEL_ICONS, Notification
+from app.notify.models import Notification
 
 API_BASE = "https://qyapi.weixin.qq.com/cgi-bin"
 
@@ -59,9 +59,8 @@ def render_markdown(notification: Notification) -> str:
     企微 markdown 不支持表格和图片，所以 fields 走「**名**：值」的列表行，
     image 段在这里只留标题占位，真正的图另发一条消息。
     """
-    icon = LEVEL_ICONS.get(notification.level, "")
     color = LEVEL_COLORS.get(notification.level, "info")
-    lines = [f'{icon} <font color="{color}">**{notification.title}**</font>'.strip()]
+    lines = [f'<font color="{color}">**{notification.display_title()}**</font>']
     if notification.summary.strip():
         lines.append(notification.summary.strip())
     for segment in notification.segments:
@@ -134,8 +133,15 @@ def send_bot(notification: Notification, target: dict[str, Any], *, opener=urlli
 def app_credentials(profile: str) -> tuple[str, str, str]:
     """返回 (corp_id, app_secret, agent_id)。
 
-    ⚠️ agent_id 的 env 名在既有 SOPS 里是 ``WECOM_COMPANY_A_gentId``——少了个 A，
-    是历史 typo。这里两种拼写都认，避免为了改名去动生产 env。
+    ⚠️ 历史 SOPS 键名是 ``WECOM_COMPANY_A_gentId``（少了个 A，历史 typo），这里两种
+    拼写都认。**但 2026-08-31 实测发现那个键的值本身是错的**：
+    ``WECOM_COMPANY_A_gentId=1000003``，而 1000003 是企微 **B** 的 agentid，A 的正确值
+    是 1000005（各自 ``APP_SECRET`` 调 ``agent/get`` 验证：A 的 token 操作 1000003 被拒
+    ``301002 not allow operate another agent with this accesstoken``）。
+
+    所以顺序不能反：``*_AGENT_ID`` 是规范键、优先；``*_gentId`` 只是兼容回落。
+    上线到 2026-08-31 之间 wecom_app 一次都没被真实调用过，所以这个错配没暴露——
+    只要有任何路由指向 wecom_app + COMPANY_A，投递就会一路失败到 dead。
     """
     corp_id = (os.getenv(f"WECOM_{profile}_CORP_ID") or "").strip()
     app_secret = (os.getenv(f"WECOM_{profile}_APP_SECRET") or "").strip()

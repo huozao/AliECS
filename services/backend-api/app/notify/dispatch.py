@@ -73,6 +73,9 @@ def deliver(notification: Notification, *, conn=None) -> dict[str, Any]:
             connection.commit()
 
         if not routes:
+            # 留墓碑：否则这行永远满足「有 outbox 无 deliveries」的孤儿判据。
+            store.mark_unroutable(connection, outbox_id)
+            connection.commit()
             logger.warning(
                 "notify has no matching route source=%s event=%s level=%s",
                 notification.source, notification.event, notification.level,
@@ -114,6 +117,9 @@ def _adopt_orphans(conn, limit: int) -> dict[str, int]:
         conn.commit()
         adopted += 1
         if not routes:
+            # 同上。少了这一步，flush 会每轮把同一行重新领养一次，永远空转。
+            store.mark_unroutable(conn, int(orphan["outbox_id"]))
+            conn.commit()
             logger.warning(
                 "notify orphan matched no route source=%s event=%s",
                 orphan["source_key"], orphan["event"],
