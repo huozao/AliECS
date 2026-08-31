@@ -81,6 +81,37 @@ class HistoricalAnalysis(BaseModel):
     report_files: list[str] = Field(default_factory=list, max_length=20)
 
 
+class ReplayMetric(BaseModel):
+    metric: str = Field(min_length=1, max_length=120)
+    count: int = Field(ge=0)
+    denominator: int = Field(ge=0)
+
+
+class ReplayProgress(BaseModel):
+    job_id: str = Field(min_length=1, max_length=160)
+    status_code: str = Field(min_length=1, max_length=120)
+    phase: str = Field(min_length=1, max_length=40)
+    completed_partitions: int = Field(ge=0)
+    total_partitions: int = Field(gt=0)
+    worker_process_count: int = Field(ge=0)
+    started_at: datetime | None = None
+    status_updated_at: datetime | None = None
+    latest_artifact_at: datetime | None = None
+    elapsed_seconds: int | None = Field(default=None, ge=0)
+    estimated_remaining_seconds: int | None = Field(default=None, ge=0)
+    estimate_basis: str = Field(default="", max_length=240)
+    result_file_count: int | None = Field(default=None, ge=0)
+    error_type: str = Field(default="", max_length=120)
+    error_message: str = Field(default="", max_length=1000)
+    report_metrics: list[ReplayMetric] = Field(default_factory=list, max_length=30)
+
+    @model_validator(mode="after")
+    def validate_partition_progress(self) -> "ReplayProgress":
+        if self.completed_partitions > self.total_partitions:
+            raise ValueError("completed_partitions exceeds total_partitions")
+        return self
+
+
 class GoldSpreadAlert(BaseModel):
     event_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$")
     kind: Literal[
@@ -143,6 +174,7 @@ class GoldSpreadAlert(BaseModel):
     # 在 historical_analysis.charts 里，两者不能同时给，否则不知道该发哪张卡。
     charts: list[AlertChart] = Field(default_factory=list, max_length=4)
     historical_analysis: HistoricalAnalysis | None = None
+    replay_progress: ReplayProgress | None = None
 
     @model_validator(mode="after")
     def validate_kind_fields(self) -> "GoldSpreadAlert":
@@ -192,6 +224,8 @@ class GoldSpreadAlert(BaseModel):
             raise ValueError("historical_analysis is only valid for historical_complete")
         if self.charts and self.historical_analysis is not None:
             raise ValueError("charts and historical_analysis cannot be combined")
+        if self.replay_progress is not None and self.kind != "replay_summary":
+            raise ValueError("replay_progress is only valid for replay_summary")
         return self
 
 
@@ -213,6 +247,89 @@ def _human_time(value: datetime) -> str:
     return rendered
 
 
+def _duration_label(seconds: int | None) -> str:
+    if seconds is None:
+        return "暂无法可靠估算"
+    total_minutes = max(0, seconds // 60)
+    hours, minutes = divmod(total_minutes, 60)
+    return f"{hours} 小时 {minutes} 分钟" if hours else f"{minutes} 分钟"
+
+
+def _replay_title(progress: ReplayProgress) -> str:
+    if progress.status_code == "SUCCEEDED｜作业成功":
+        return "远端正式复盘、审计与报告已完成"
+    if progress.status_code == "FAILED｜作业失败":
+        return "远端正式复盘失败"
+    return "远端正式复盘进行中"
+
+
+def _replay_field_groups(progress: ReplayProgress) -> list[list[dict[str, str]]]:
+    phase_labels = {
+        "replay": "复盘运行",
+        "audit": "分区审计",
+        "global_audit": "全局审计",
+        "report": "汇总报告生成",
+        "finalizing": "最终结果清单生成",
+        "delivery": "结果交付与校验",
+        "complete": "作业完成",
+    }
+    percentage = progress.completed_partitions / progress.total_partitions * 100
+    groups: list[list[dict[str, str]]] = [
+        [
+            {"name": "作业", "value": progress.job_id},
+            {"name": "状态", "value": progress.status_code},
+            {"name": "当前阶段", "value": phase_labels.get(progress.phase, progress.phase)},
+            {
+                "name": "复盘进度",
+                "value": (
+                    f"{progress.completed_partitions} / {progress.total_partitions} "
+                    f"个交易日分区（{percentage:.1f}%）"
+                ),
+            },
+            {"name": "并行进程", "value": f"{progress.worker_process_count} 个分区复盘进程"},
+        ]
+    ]
+    timing: list[dict[str, str]] = []
+    if progress.started_at is not None:
+        timing.append({"name": "开始时间", "value": _human_time(progress.started_at)})
+    if progress.status_updated_at is not None:
+        timing.append({"name": "状态更新时间", "value": _human_time(progress.status_updated_at)})
+    if progress.latest_artifact_at is not None:
+        timing.append({"name": "最新产物写入", "value": _human_time(progress.latest_artifact_at)})
+    if progress.elapsed_seconds is not None:
+        timing.append({"name": "已运行", "value": _duration_label(progress.elapsed_seconds)})
+        estimate = _duration_label(progress.estimated_remaining_seconds)
+        if progress.estimate_basis:
+            estimate += f"（{progress.estimate_basis}）"
+        timing.append({"name": "预计剩余", "value": estimate})
+    if timing:
+        groups.append(timing)
+    result_fields = [
+        {
+            "name": metric.metric.split("｜", 1)[-1],
+            "value": f"{metric.count:,} / {metric.denominator:,}",
+        }
+        for metric in progress.report_metrics
+    ]
+    if progress.result_file_count is not None:
+        result_fields.append(
+            {"name": "结果清单", "value": f"{progress.result_file_count:,} 个已校验文件"}
+        )
+    if progress.error_type or progress.error_message:
+        failure_detail = "｜".join(
+            item for item in (progress.error_type, progress.error_message) if item
+        )
+        result_fields.append(
+            {
+                "name": "失败详情",
+                "value": failure_detail[:512],
+            }
+        )
+    if result_fields:
+        groups.append(result_fields)
+    return groups
+
+
 def render_gold_spread_alert(alert: GoldSpreadAlert) -> str:
     if alert.kind in {"historical_complete", "historical_failed"}:
         icon = "✅" if alert.kind == "historical_complete" else "⛔"
@@ -221,6 +338,12 @@ def render_gold_spread_alert(alert: GoldSpreadAlert) -> str:
 
     if alert.kind in {"wrong_price_detected", "wrong_price_review"}:
         return _render_wrong_price(alert)
+
+    if alert.kind == "replay_summary" and alert.replay_progress is not None:
+        lines = [f"🧾 {_replay_title(alert.replay_progress)}", f"时间：{_human_time(alert.occurred_at)}"]
+        for group in _replay_field_groups(alert.replay_progress):
+            lines.extend(f"{field['name']}：{field['value']}" for field in group)
+        return "\n".join(lines)
 
     if alert.kind in {"data_silence", "data_silence_recovered", "replay_summary"}:
         # 这三类只带 summary，没有行情字段：链路健康类通知，不做价差排版。
@@ -426,6 +549,23 @@ def build_alert_notification(alert: GoldSpreadAlert, text: str) -> Notification:
     """
     if alert.historical_analysis is not None:
         return _build_historical_notification(alert)
+    if alert.replay_progress is not None:
+        segments = [
+            {"kind": "fields", "fields": fields}
+            for fields in _replay_field_groups(alert.replay_progress)
+        ]
+        segments.append({"kind": "text", "text": f"事件编号：{alert.event_id}"})
+        return Notification.model_validate(
+            {
+                "source": "gold-spread-monitor",
+                "event": alert.kind,
+                "level": _severity_level(alert.severity),
+                "title": _replay_title(alert.replay_progress),
+                "segments": segments,
+                "dedup_key": f"gold:{alert.event_id}",
+                "occurred_at": alert.occurred_at,
+            }
+        )
 
     lines = text.split("\n")
     title = lines[0].strip() or "黄金价差告警"
@@ -551,15 +691,14 @@ def _build_historical_notification(alert: GoldSpreadAlert) -> Notification:
     )
 
 
-def deliver_alert(text: str, alert: GoldSpreadAlert) -> bool:
-    """交给统一消息中枢。返回是否至少投中一个目标。
+def deliver_alert(text: str, alert: GoldSpreadAlert) -> dict[str, Any]:
+    """交给统一消息中枢，返回发件箱编号和各投递状态计数。
 
     ⚠️ 收件人现在由 notify_routes 决定，不再读 GOLD_SPREAD_FEISHU_RECEIVE_ID。
     没有配路由时消息会安全落库但没人收到——中枢返回 targets=0，这里视为失败，
     以免「配置缺失」被当成「发送成功」。
     """
-    result = dispatch.deliver(build_alert_notification(alert, text))
-    return bool(result.get("sent"))
+    return dispatch.deliver(build_alert_notification(alert, text))
 
 
 def _strip_chart_bytes(charts: Any) -> None:
@@ -645,9 +784,24 @@ def send_gold_spread_alert(
     # 这个 env 不再影响发到哪里（留空也能发）。
     chat_id = os.getenv("GOLD_SPREAD_FEISHU_RECEIVE_ID", "").strip()
     if not _claim_alert(body, text, chat_id):
-        return {"ok": True, "sent": False, "duplicate": True, "event_id": body.event_id}
-    if not deliver_alert(text, body):
+        # _claim_alert 只在业务表已有 sent 状态时返回 False，因此这是已送达事件的幂等重试。
+        return {
+            "ok": True,
+            "delivered": True,
+            "sent": 1,
+            "duplicate": True,
+            "event_id": body.event_id,
+        }
+    delivery = deliver_alert(text, body)
+    # 兼容测试替身和滚动升级期间的旧布尔返回；生产实现返回统一投递结果字典。
+    delivery_ok = delivery if isinstance(delivery, bool) else bool(delivery.get("sent"))
+    if not delivery_ok:
         _mark_alert(body.event_id, "failed", "notify center delivered to no target")
         raise HTTPException(status_code=502, detail="notify delivery failed")
     _mark_alert(body.event_id, "sent")
-    return {"ok": True, "sent": True, "duplicate": False, "event_id": body.event_id}
+    receipt = (
+        {"sent": 1, "duplicate": False}
+        if isinstance(delivery, bool)
+        else delivery
+    )
+    return {"ok": True, "delivered": True, "event_id": body.event_id, **receipt}

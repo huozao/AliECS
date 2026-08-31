@@ -97,6 +97,8 @@ def test_duplicate_alert_is_not_sent_again(monkeypatch) -> None:
     )
     assert response.status_code == 200
     assert response.json()["duplicate"] is True
+    assert response.json()["delivered"] is True
+    assert response.json()["sent"] == 1
 
 
 def test_history_alert_does_not_require_market_prices(monkeypatch) -> None:
@@ -624,6 +626,123 @@ def test_replay_summary_accepts_replay_source(monkeypatch) -> None:
     )
     assert response.status_code == 200
     assert "收盘复盘" in str(captured["text"])
+
+
+def test_replay_summary_builds_structured_progress_and_report_segments(monkeypatch) -> None:
+    body = {
+        "event_id": "remote-replay:job-123:succeeded",
+        "kind": "replay_summary",
+        "occurred_at": "2026-08-31T11:00:00+08:00",
+        "source": "replay",
+        "severity": "warning",
+        "summary": "正式复盘完成",
+        "replay_progress": {
+            "job_id": "job-123",
+            "status_code": "SUCCEEDED｜作业成功",
+            "phase": "complete",
+            "completed_partitions": 97,
+            "total_partitions": 97,
+            "worker_process_count": 0,
+            "started_at": "2026-08-31T04:00:55+08:00",
+            "latest_artifact_at": "2026-08-31T10:58:00+08:00",
+            "elapsed_seconds": 25085,
+            "estimated_remaining_seconds": 0,
+            "result_file_count": 996,
+            "report_metrics": [
+                {
+                    "metric": "physical_fill_count｜物理成交数",
+                    "count": 2969,
+                    "denominator": 3957,
+                },
+                {
+                    "metric": "net_profitable_position_count｜真实平仓净盈利持仓数",
+                    "count": 2563,
+                    "denominator": 3586,
+                },
+            ],
+        },
+    }
+    alert = alerts.GoldSpreadAlert.model_validate(body)
+    text = alerts.render_gold_spread_alert(alert)
+    notification = alerts.build_alert_notification(alert, text)
+
+    assert notification.title == "远端正式复盘、审计与报告已完成"
+    field_segments = [segment for segment in notification.segments if segment.kind == "fields"]
+    rendered_fields = {
+        field.name: field.value
+        for segment in field_segments
+        for field in segment.fields
+    }
+    assert rendered_fields["作业"] == "job-123"
+    assert rendered_fields["复盘进度"] == "97 / 97 个交易日分区（100.0%）"
+    assert rendered_fields["已运行"] == "6 小时 58 分钟"
+    assert rendered_fields["预计剩余"] == "0 分钟"
+    assert rendered_fields["物理成交数"] == "2,969 / 3,957"
+    assert rendered_fields["真实平仓净盈利持仓数"] == "2,563 / 3,586"
+    assert rendered_fields["结果清单"] == "996 个已校验文件"
+
+
+def test_replay_failure_truncates_long_error_to_notification_field_limit() -> None:
+    alert = alerts.GoldSpreadAlert.model_validate(
+        {
+            "event_id": "remote-replay:job-123:failed",
+            "kind": "replay_summary",
+            "occurred_at": "2026-08-31T11:00:00+08:00",
+            "source": "replay",
+            "severity": "critical",
+            "summary": "正式复盘失败",
+            "replay_progress": {
+                "job_id": "job-123",
+                "status_code": "FAILED｜作业失败",
+                "phase": "global_audit",
+                "completed_partitions": 97,
+                "total_partitions": 97,
+                "worker_process_count": 0,
+                "error_type": "RuntimeError",
+                "error_message": "x" * 900,
+            },
+        }
+    )
+
+    notification = alerts.build_alert_notification(
+        alert, alerts.render_gold_spread_alert(alert)
+    )
+    failure = next(
+        field.value
+        for segment in notification.segments
+        if segment.kind == "fields"
+        for field in segment.fields
+        if field.name == "失败详情"
+    )
+    assert len(failure) == 512
+
+
+def test_gold_endpoint_returns_unified_delivery_receipt(monkeypatch) -> None:
+    client = _client(monkeypatch)
+    monkeypatch.setattr(
+        alerts,
+        "deliver_alert",
+        lambda *_: {
+            "outbox_id": 42,
+            "duplicate": False,
+            "targets": 1,
+            "sent": 1,
+            "pending": 0,
+            "dead": 0,
+            "failed": 0,
+        },
+    )
+
+    response = client.post(
+        "/v1/internal/gold-spread/alerts",
+        headers={"X-Gold-Spread-Token": "test-token"},
+        json=_payload(),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["outbox_id"] == 42
+    assert response.json()["targets"] == 1
+    assert response.json()["sent"] == 1
 
 
 def test_unknown_kind_still_rejected(monkeypatch) -> None:

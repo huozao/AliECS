@@ -7,9 +7,13 @@ import importlib.util
 import json
 import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from unittest import mock
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1] / "services" / "backend-api"
 if str(BACKEND_ROOT) not in sys.path:
@@ -21,6 +25,7 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.notify import dispatch, store  # noqa: E402
 from app.notify.channels import feishu, wecom  # noqa: E402
 from app.notify.models import Notification  # noqa: E402
+from app.routers import notify as notify_router  # noqa: E402
 
 PNG = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * 32).decode()
 
@@ -281,12 +286,110 @@ class DispatchTests(unittest.TestCase):
         self.assertEqual(result["sent"], 0)
         sender.assert_not_called()
 
+    def test_duplicate_reports_existing_delivery_state(self) -> None:
+        conn = FakeConnection(
+            rows=[None, (42,)],
+            rowsets=[[("sent", 1), ("pending", 1)]],
+        )
+        with mock.patch.object(dispatch, "sender_for") as sender:
+            result = dispatch.deliver(make_notification(), conn=conn)
+
+        self.assertTrue(result["duplicate"])
+        self.assertEqual(result["targets"], 2)
+        self.assertEqual(result["sent"], 1)
+        self.assertEqual(result["pending"], 1)
+        self.assertEqual(result["dead"], 0)
+        self.assertEqual(result["failed"], 1)
+        sender.assert_not_called()
+
     def test_no_matching_route_reports_zero_targets(self) -> None:
         """没有路由命中时消息仍然落库，但调用方必须能看出没人收到。"""
         conn = FakeConnection(rows=[(43,)], rowsets=[[]])
         result = dispatch.deliver(make_notification(), conn=conn)
         self.assertFalse(result["duplicate"])
         self.assertEqual(result["targets"], 0)
+
+
+class DeliveryReceiptTests(unittest.TestCase):
+    def test_receipt_endpoint_returns_delivery_evidence_for_own_source(self) -> None:
+        created_at = datetime(2026, 8, 31, 2, 0, tzinfo=timezone.utc)
+        sent_at = datetime(2026, 8, 31, 2, 1, tzinfo=timezone.utc)
+        conn = FakeConnection(
+            rows=[(42, "gold:evt-1", "gold-spread-monitor", "replay_summary", "warn", created_at)],
+            rowsets=[[(7, "feishu", "sent", 1, "", None, sent_at)]],
+        )
+        app = FastAPI()
+        app.include_router(notify_router.router)
+        app.dependency_overrides[notify_router._require_source] = lambda: "gold-spread-monitor"
+
+        with mock.patch.object(notify_router, "_conn", return_value=conn):
+            response = TestClient(app).get("/v1/internal/notify/deliveries/42")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["outbox_id"], 42)
+        self.assertEqual(payload["targets"], 1)
+        self.assertEqual(payload["sent"], 1)
+        self.assertEqual(payload["deliveries"][0]["channel"], "feishu")
+
+    def test_receipt_endpoint_hides_other_sources(self) -> None:
+        conn = FakeConnection(rows=[])
+        app = FastAPI()
+        app.include_router(notify_router.router)
+        app.dependency_overrides[notify_router._require_source] = lambda: "other-source"
+
+        with mock.patch.object(notify_router, "_conn", return_value=conn):
+            response = TestClient(app).get("/v1/internal/notify/deliveries/42")
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_duplicate_send_reports_existing_success_as_delivered(self) -> None:
+        app = FastAPI()
+        app.include_router(notify_router.router)
+        app.dependency_overrides[notify_router._require_source] = lambda: "gold-spread-monitor"
+        result = {
+            "outbox_id": 42,
+            "duplicate": True,
+            "targets": 1,
+            "sent": 1,
+            "pending": 0,
+            "dead": 0,
+            "failed": 0,
+        }
+
+        with mock.patch.object(notify_router.dispatch, "deliver", return_value=result):
+            response = TestClient(app).post(
+                "/v1/internal/notify/send",
+                json=make_notification().model_dump(mode="json"),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["duplicate"])
+        self.assertTrue(response.json()["delivered"])
+
+    def test_duplicate_without_route_is_explicitly_undelivered(self) -> None:
+        app = FastAPI()
+        app.include_router(notify_router.router)
+        app.dependency_overrides[notify_router._require_source] = lambda: "gold-spread-monitor"
+        result = {
+            "outbox_id": 42,
+            "duplicate": True,
+            "targets": 0,
+            "sent": 0,
+            "pending": 0,
+            "dead": 0,
+            "failed": 0,
+        }
+
+        with mock.patch.object(notify_router.dispatch, "deliver", return_value=result):
+            response = TestClient(app).post(
+                "/v1/internal/notify/send",
+                json=make_notification().model_dump(mode="json"),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["delivered"])
+        self.assertEqual(response.json()["reason"], "no matching route")
 
 
 class OrphanAdoptionTests(unittest.TestCase):

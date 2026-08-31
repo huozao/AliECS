@@ -127,6 +127,88 @@ def create_deliveries(conn, outbox_id: int, routes: list[dict[str, Any]]) -> lis
     return created
 
 
+def delivery_summary(conn, outbox_id: int) -> dict[str, int]:
+    """汇总一条 outbox 当前的实际投递状态，供重复提交和查询接口复用。"""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT status, COUNT(*)
+            FROM notify_deliveries
+            WHERE outbox_id = %s
+            GROUP BY status
+            """,
+            (outbox_id,),
+        )
+        rows = cur.fetchall()
+    counts = {str(status): int(count) for status, count in rows}
+    sent = counts.get("sent", 0)
+    pending = counts.get("pending", 0)
+    dead = counts.get("dead", 0)
+    return {
+        "targets": sum(counts.values()),
+        "sent": sent,
+        "pending": pending,
+        "dead": dead,
+        "failed": pending + dead,
+    }
+
+
+def delivery_receipt(conn, outbox_id: int, source_key: str) -> dict[str, Any] | None:
+    """读取属于指定来源的投递凭证；不返回 target_json 或任何渠道凭据引用。"""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, dedup_key, source_key, event, level, created_at
+            FROM notify_outbox
+            WHERE id = %s AND source_key = %s
+            """,
+            (outbox_id, source_key),
+        )
+        outbox = cur.fetchone()
+        if outbox is None:
+            return None
+        cur.execute(
+            """
+            SELECT id, channel, status, attempts, last_error, next_attempt_at, sent_at
+            FROM notify_deliveries
+            WHERE outbox_id = %s
+            ORDER BY id
+            """,
+            (outbox_id,),
+        )
+        rows = cur.fetchall()
+    deliveries = [
+        {
+            "delivery_id": int(row[0]),
+            "channel": str(row[1]),
+            "status": str(row[2]),
+            "attempts": int(row[3]),
+            "last_error": str(row[4] or ""),
+            "next_attempt_at": row[5],
+            "sent_at": row[6],
+        }
+        for row in rows
+    ]
+    counts = {"sent": 0, "pending": 0, "dead": 0}
+    for delivery in deliveries:
+        status = str(delivery["status"])
+        if status in counts:
+            counts[status] += 1
+    return {
+        "outbox_id": int(outbox[0]),
+        "dedup_key": str(outbox[1]),
+        "source": str(outbox[2]),
+        "event": str(outbox[3]),
+        "level": str(outbox[4]),
+        "created_at": outbox[5],
+        "targets": len(deliveries),
+        "sent": counts["sent"],
+        "pending": counts["pending"],
+        "dead": counts["dead"],
+        "deliveries": deliveries,
+    }
+
+
 def mark_sent(conn, delivery_id: int) -> None:
     with conn.cursor() as cur:
         cur.execute(

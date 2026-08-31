@@ -57,9 +57,18 @@ def send_notification(
         raise HTTPException(status_code=403, detail="source mismatch")
     result = dispatch.deliver(body)
     if result["duplicate"]:
-        return {"ok": True, "duplicate": True, **result}
+        if result["sent"] > 0:
+            return {"ok": True, "delivered": True, **result}
+        reason = (
+            "no matching route"
+            if result["targets"] == 0
+            else "queued for retry"
+            if result.get("pending", 0) > 0
+            else "delivery exhausted"
+        )
+        return {"ok": True, "delivered": False, "reason": reason, **result}
     if result["targets"] == 0:
-        # 落库了但没有任何路由命中。返回 202 而不是 200：调用方需要知道
+        # 落库了但没有任何路由命中。显式返回 delivered=false：调用方需要知道
         # 「收下了」和「发出去了」不是一回事，否则配置缺失会被当成投递成功。
         return {"ok": True, "delivered": False, "reason": "no matching route", **result}
     if result["sent"] == 0:
@@ -68,6 +77,20 @@ def send_notification(
             detail=f"all {result['targets']} targets failed; queued for retry (outbox {result['outbox_id']})",
         )
     return {"ok": True, "delivered": True, **result}
+
+
+@router.get("/v1/internal/notify/deliveries/{outbox_id}")
+def get_delivery_receipt(
+    outbox_id: int,
+    source_key: str = Depends(_require_source),
+) -> dict[str, Any]:
+    """返回一条消息的实际投递凭证，并按已鉴权来源隔离。"""
+    with closing(_conn()) as conn:
+        receipt = store.delivery_receipt(conn, outbox_id, source_key)
+    if receipt is None:
+        # 不区分“不存在”和“属于其他来源”，避免泄漏其他生产者的消息编号。
+        raise HTTPException(status_code=404, detail="notification delivery not found")
+    return {"ok": True, **receipt}
 
 
 @router.post("/v1/internal/notify/flush")
