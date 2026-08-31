@@ -98,10 +98,17 @@ class ValidationErrorLoggingTests(unittest.TestCase):
     def _post_invalid(self):
         # 端点先查 token 再校验 body，不给 token 就只会拿到 401，永远走不到 422——
         # 那样两个用例会双双 skip，而 skip 的测试什么也守不住。
+        #
+        # ⚠️ 必须挂**生产用的 JsonFormatter**。这里原来图省事用了
+        # logging.Formatter("%(message)s|%(fields)s")，于是测试读到了 fields、
+        # 而生产那行 JSON 里根本没有——formatter 当时是固定白名单，把它丢了。
+        # 自定义 format 的测试证明的是「记录里有」，不是「日志里输出了」。
+        from app.logging_utils import JsonFormatter
+
         logger = logging.getLogger("aliecs.request")
         stream = io.StringIO()
         handler = logging.StreamHandler(stream)
-        handler.setFormatter(logging.Formatter("%(message)s|%(fields)s"))
+        handler.setFormatter(JsonFormatter())
         logger.addHandler(handler)
         try:
             with mock.patch.dict(os.environ, {"GOLD_SPREAD_ALERT_TOKEN": "unit-test-token"}):
@@ -118,10 +125,14 @@ class ValidationErrorLoggingTests(unittest.TestCase):
     def test_validation_failure_logs_field_paths_but_not_values(self) -> None:
         response, logged = self._post_invalid()
         self.assertEqual(422, response.status_code, "没走到 422 的话这个用例什么都没测")
-        self.assertIn("request validation failed", logged)
-        self.assertIn("loc", logged)
-        self.assertNotIn("SHOULD-NOT-APPEAR-IN-LOG", logged)
-        self.assertNotIn("'input'", logged)
+        line = next(l for l in logged.splitlines() if "request validation failed" in l)
+        record = json.loads(line)   # 解析成 JSON 才算真的走了生产 formatter
+        self.assertEqual(422, record["status_code"])
+        self.assertIn("fields", record, "生产 formatter 必须输出 fields，否则等于没记")
+        locs = [item["loc"] for item in record["fields"]]
+        self.assertTrue(any(loc.startswith("body.") for loc in locs), locs)
+        self.assertNotIn("SHOULD-NOT-APPEAR-IN-LOG", line)
+        self.assertNotIn("input", line)
 
     def test_response_body_shape_is_unchanged(self) -> None:
         """调用方按 FastAPI 默认的 {"detail": [...]} 解析，形状不能变。"""
@@ -131,3 +142,29 @@ class ValidationErrorLoggingTests(unittest.TestCase):
         self.assertIn("detail", body)
         self.assertIsInstance(body["detail"], list)
         self.assertIn("loc", body["detail"][0])
+
+
+class ExtraFieldPassthroughTests(unittest.TestCase):
+    """log_event 收任意字段，formatter 就必须把它们输出。"""
+
+    def test_caller_supplied_field_survives_the_formatter(self) -> None:
+        logging_utils = load_logging_utils()
+        stream = io.StringIO()
+        logger = logging_utils.configure_logging("aliecs.test.extra", stream=stream)
+        logging_utils.log_event(
+            logger, "custom event", request_id="r-1", widget_count=3, note="keep-me"
+        )
+        record = json.loads(stream.getvalue().strip())
+        self.assertEqual("r-1", record["request_id"])
+        self.assertEqual(3, record["widget_count"], "白名单外的字段被丢了")
+        self.assertEqual("keep-me", record["note"])
+
+    def test_unserializable_value_does_not_drop_the_line(self) -> None:
+        """一个字段序列化不了不该让整行日志消失。"""
+        logging_utils = load_logging_utils()
+        stream = io.StringIO()
+        logger = logging_utils.configure_logging("aliecs.test.extra2", stream=stream)
+        logging_utils.log_event(logger, "custom event", odd=object())
+        record = json.loads(stream.getvalue().strip())
+        self.assertEqual("custom event", record["message"])
+        self.assertIn("odd", record)
