@@ -25,7 +25,9 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 | `couple.py` | Couple（相册已由 Immich/AdventureLog 接管，此处仅存量） |
 
 输入：Postgres、runtime env、T+ worker 只读输出（`/app/tplus-output`）。
-验证：`python -m unittest discover -s tests`；相关单测 patch 目标=函数所在文件（已拆域）。
+验证：`python -m pytest tests`（CI 同一条）；相关单测 patch 目标=函数所在文件（已拆域）。
+⚠️ 2026-08-31 起不要再用 `python -m unittest discover -s tests` 当全量判据——它**收不到**
+裸函数式用例（`def test_x()` 而非 TestCase 方法），实测漏跑 355 个（分布在 18 个文件里）。
 
 ### app/notify/
 
@@ -39,6 +41,10 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 `Notification`，不直接发送飞书；复盘进度使用结构化 `fields` 展示分区分母、运行时间、
 预计剩余时间和正式报告指标。重复 `dedup_key` 必须从既有 `notify_deliveries` 回读当前状态；
 通用 `GET /v1/internal/notify/deliveries/{outbox_id}` 按来源隔离返回实际投递凭证。
+一条路由都没命中的 outbox 行会被写一条墓碑投递记录（`channel='none'`、`status='dead'`），
+否则它永远满足「有 outbox 无 deliveries」的孤儿判据、被 flush 无限重领养。
+标题图标只在 `Notification.display_title()` 一处决定，飞书卡片头 / 企微 markdown 首行 /
+纯文本兜底三处共用；生产者自带图标时不再叠加级别图标。
 
 ## services/doc-sync-worker
 

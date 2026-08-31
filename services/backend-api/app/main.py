@@ -6,8 +6,11 @@ import os
 import time
 import uuid
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 
 from app.core import _request_logger
 from app.logging_utils import log_event
@@ -84,6 +87,36 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def _log_validation_errors(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """422 至少要在服务端留下「哪个字段不合法」。
+
+    422 的响应体只回给调用方，服务端日志里原来只有一行 `status_code: 422`，
+    定位靠猜。gold-spread-monitor 每轮固定 3 个 422 + 1 个 200 这件事就是这么
+    卡住的：`_try_post` 把 422 当可重试错误重试 3 次（4xx 是确定性错误，重试必然
+    全失败，只是把一次失败放大成三条），而服务端查不出被拒的是哪个字段。
+
+    ⚠️ 只记 `type` 和 `loc`（字段路径），**不记 `input` 和 `msg`**——那两个字段
+    会把请求体的值抄进日志。行情数字无所谓，但这个处理器对全站所有端点生效，
+    登录、密钥、回调都会经过它。
+
+    响应体保持 FastAPI 默认形状不变，否则调用方的错误处理会跟着变。
+    """
+    log_event(
+        _request_logger,
+        "request validation failed",
+        request_id=request.headers.get("x-request-id", uuid.uuid4().hex),
+        method=request.method,
+        path=request.url.path,
+        status_code=422,
+        fields=[
+            {"type": item.get("type"), "loc": ".".join(str(part) for part in item.get("loc", ()))}
+            for item in exc.errors()[:20]
+        ],
+    )
+    return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
 
 
 @app.middleware("http")

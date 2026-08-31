@@ -139,6 +139,19 @@ WHERE d.id IS NULL;
 正常情况下这个查询应当只在「刚写入、还没 flush」的瞬间返回行。持续有行 =
 flush 没在跑（worker 主循环挂了，或 `NOTIFY_FLUSH_TOKEN` / `NOTIFY_FLUSH_URL` 不对）。
 
+⚠️ **上面这句话在 2026-08-31 之前会误导**：那时「一条路由都没命中」的 outbox 行
+（`delivered:false / no matching route`）**永远**没有投递记录，于是永久满足这个查询，
+flush 每轮（约 30 秒）把它重新领养一次、建不出记录、再记一条 `matched no route`，
+无限空转——而判据会告诉你「flush 没在跑」，方向正好相反。2026-08-31 端到端验证
+`/v1/internal/notify/send` 时实测到（当时的 outbox 7）。
+
+现在这种行会被写一条**墓碑投递记录**（`route_id=NULL`、`channel='none'`、
+`status='dead'`、`last_error='no matching route'`），所以：
+
+- 上面那条孤儿查询恢复成可信判据；
+- 「为什么没发出去」终于出现在 runbook 让你查的那张表里，而不是只能靠读
+  `/send` 的返回值——**「没配路由」和「还没投递」不再长得一样**。
+
 `flush` 的返回里 `adopted` 是本轮领养的孤儿数，`claimed` 是重投的失败记录数，两者独立。
 
 ### 冲刷频率跟 poll 走，不跟 cycle 走
@@ -160,7 +173,20 @@ flush 没在跑（worker 主循环挂了，或 `NOTIFY_FLUSH_TOKEN` / `NOTIFY_FL
 - **企微 B 没有自建应用 agentid**。SOPS 里 B 只有 `WECOM_COMPANY_B_GROUPBOT_ID/SECRET`
   和 `APP_SECRET`，没有 agentid，所以 B 目前只能走群机器人。要用应用消息得先在企微
   后台建应用并把 agentid 进 SOPS。
-- 重试退避 `[60, 300, 1800, 7200]` 秒，四次用完判 `dead`，不再重试。
+
+  ⚠️ **「B 没有自建应用」这个说法自 2026-08-31 起确认不准确**：B 有自建应用
+  （`agentid=1000003`，名称 `AGI-达`），只是 agentid 没进 SOPS，容器里
+  `WECOM_COMPANY_B_gentId` 是空字符串。用 B 的 `APP_SECRET` 调
+  `agent/list` 就能读到。缺的是配置，不是应用。
+- 重试退避 `[60, 300, 1800, 7200]` 秒，四档全部用完判 `dead`，不再重试。
+  ⚠️ **2026-08-31 之前实际不是这个序列**：`mark_failed` 取的是
+  `BACKOFF_SECONDS[attempts]`，而 `attempts` 在取值前已自增，于是第一次失败等的是
+  **300 秒**而不是 60，首档 60 永远取不到，实际序列是 `300 → 1800 → 7200 → dead`。
+  生产实测过（2026-08-31 outbox 10：失败 02:49:30 → 重投 02:54:40，间隔 310 秒）。
+  已改成 `BACKOFF_SECONDS[attempts - 1]` 并把 `MAX_ATTEMPTS` 提到 `len+1`，
+  由 `tests/test_notify_center.py::RetryAccountingTests::test_backoff_uses_every_tier_starting_at_the_first`
+  守着——**那个测试断言的是具体秒数**，原来的测试只断言 `status=='pending'`，
+  在正确和错误索引下都成立，所以它没挡住。
 - **`send_feishu_text` / `send_feishu_alert` 的返回值语义变了**。收敛前 `False` 是
   「飞书没收到」，收敛后是「没能写进 outbox」。写进去之后投递成没成，只有
   `notify_deliveries` 知道——调用点如果拿这个返回值做业务判断，要重新审一遍。
@@ -195,6 +221,67 @@ python3 scripts/seed_notify_routes.py --apply    # 写入
   已送达或确认是已送达事件的重复提交时才清除本机队列。
 - 飞书/企微卡片、图片上传、收件人路由、幂等、重试和投递记账仍然只在 `app/notify/`；
   业务适配器不直接调用任何 IM API，因此没有第二套消息平台。
+
+## 三个通道的首次真实调用（2026-08-31）
+
+上线时只有飞书 + 服务端内部生产者这一条路真的跑过；其余是按「代码就绪」交付的。
+2026-08-31 逐条补验，结果记在这里，免得以后再问「这条路到底通没通」。
+
+| 路径 | 首次真实调用 | 结果 |
+|---|---|---|
+| `POST /v1/internal/notify/send`（外部入口 + `notify_sources` token 鉴权） | 2026-08-31 | 通。此前 `notify_sources` 是空表、nginx 全量日志 0 次请求，**任何调用都必然 401** |
+| `wecom_bot`（群机器人） | 2026-08-31 | 通，含 markdown、图片、4096 字节截断 |
+| `wecom_app`（自建应用） | 2026-08-31 | **通道代码通，但生产 env 的 agentid 是错的**，见下 |
+| 重试 → `dead` 全链路 | 2026-08-31 | 通，四次尝试全程实测 |
+
+`/send` 的四种返回都实测过：缺 header 401、错 token 401、`source` 与 header 不一致 403、
+无匹配路由 200 + `delivered:false`、正常 200 + `delivered:true`、重复提交 200 + `duplicate:true`。
+
+实测当天 `routers/notify.py` 里还留着一句「返回 202 而不是 200」的注释，与实际不符
+（装饰器没有 `status_code`，无路由时返回的是 **200**）；#342 已把那段重写掉，
+现在注释与行为一致。本文档上面「三种 200 要分开读」始终是对的。
+
+⚠️ 重复提交的返回在 #342 之后变了：以前一律 `duplicate:true` + `targets:0`，
+现在会带上该 outbox **当前真实的**投递汇总（`sent`/`pending`/`dead`），
+`sent>0` 时甚至报 `delivered:true`。所以「`duplicate` 就等于没发」这个旧理解不再成立。
+
+### ⚠️ 企微 agentid：env 里 A 的值是 B 的
+
+2026-08-31 用各自的 `APP_SECRET` 调 `agent/get` 实测：
+
+| profile | 正确 agentid | 应用名 | 容器 env 现状 |
+|---|---|---|---|
+| `COMPANY_A` | **1000005** | AGI | `WECOM_COMPANY_A_gentId=1000003` ← **错的** |
+| `COMPANY_B` | **1000003** | AGI-达 | `WECOM_COMPANY_B_gentId=` ← 空 |
+
+拿 A 的 token 去操作 1000003 会被拒：
+`301002 not allow operate another agent with this accesstoken`。
+也就是说**只要有任何路由指向 `wecom_app` + `COMPANY_A`，投递必然失败**（会走完
+四次重试判 dead）。注入正确的 1000005 后同一段代码真实发送成功。
+
+**正确的值其实一直躺在 SOPS 里**：还有一个从来没人读过的
+`WECOM_COMPANY_A_gentId_A=1000005`。同一个键被两种方式改残，compose 恰好只转发了
+错的那个（`gentId`），而 `app_credentials()` 的 typo 容错又刚好认它——三层各自「正常」，
+合起来就是 A 拿着 B 的 agentid。
+
+已修（2026-08-31）：SOPS 两个文件（`txecs.enc.env` / `txecs-production.enc.env`）各加
+`WECOM_COMPANY_A_AGENT_ID=1000005`、`WECOM_COMPANY_B_AGENT_ID=1000003`，compose 转发这两个
+规范键，`app_credentials()` 优先读它们。历史拼写 `gentId` / `gentId_A` 保留不动，只作回落。
+
+`tests/test_notify_center.py::WeComChannelTests::test_canonical_agent_id_wins_over_the_historical_typo_key`
+守着优先级——原来那个测试只验「typo 键能被读到」，**读到的是不是对的值它不关心**，
+所以这个错配从上线一直活到第一次真实调用。
+
+### 标题图标不叠加
+
+生产者自己写的标题图标（gold-spread-monitor 每一类都带：✅ ⛔ 🔴 🟢 🧾 🧪 ℹ️ ⚠️）
+优先于中枢的级别图标——它往往更具体（🧾 收盘复盘说的是「哪一类」不是「多严重」）。
+判断只有 `Notification.display_title()` 一处，飞书卡片头、企微 markdown 首行、
+纯文本兜底三处共用；各写一套迟早会出现两边标题不一致。
+
+⚠️ 判据不能只看 Unicode 类别：`ℹ`（U+2139）的类别是 **Ll（小写字母）**而不是符号，
+只按类别判会漏掉 `ℹ️ ` 和 `⚠️ ` 开头的标题。真正要问的是「是不是按 emoji 呈现」，
+那由后面的变体选择符 `U+FE0F` 决定，两个条件都要看。
 
 ## 加一个新来源
 

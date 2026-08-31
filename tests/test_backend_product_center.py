@@ -13,7 +13,30 @@ BACKEND_ROOT = ROOT / "services" / "backend-api"
 sys.path.insert(0, str(BACKEND_ROOT))
 
 
+def _ensure_backend_app() -> None:
+    """确保 sys.modules['app'] 是 backend-api 的那个包。
+
+    services 下有四个包都叫 `app`（backend-api / coding-executor / doc-sync-worker /
+    mcp-coding-server）。谁先被 import 谁就占住 sys.modules['app']，之后本文件里
+    延迟到测试体内的 import 就会拿到错的包——2026-08-31 实测报错：
+    `cannot import name 'app' from 'app.main' (…/doc-sync-worker/app/main.py)`。
+
+    仓里另外 42 个测试模块用 setUpClass/tearDownClass 做同一件事；本文件是裸函数式
+    没有那两个钩子，所以把隔离放进 _module()。**只在占位的不是 backend-api 时才清**，
+    无条件清会让每次调用都重新 import，模块身份变来变去，patch 会打空。
+    """
+    resident = sys.modules.get("app")
+    if resident is not None:
+        paths = list(getattr(resident, "__path__", []) or [])
+        if not any(str(BACKEND_ROOT) in p for p in paths):
+            for name in list(sys.modules):
+                if name == "app" or name.startswith("app."):
+                    del sys.modules[name]
+    if str(BACKEND_ROOT) not in sys.path:
+        sys.path.insert(0, str(BACKEND_ROOT))
+
 def _module():
+    _ensure_backend_app()
     return importlib.import_module("app.integrations.product_center")
 
 

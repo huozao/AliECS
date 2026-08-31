@@ -15,10 +15,20 @@ HEALTH_PAGE = ROOT / "services" / "public-web" / "health" / "index.html"
 class BackupDashboardTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        # 与仓里其余 42 个测试模块同一套隔离协议：先清 sys.modules['app*'] 再插 root。
+        # 少了这一步，别的 service 的同名 app 包会占着 sys.modules，本模块里延迟到
+        # 测试体内的 `from app.x import y` 就会拿到错的包（2026-08-31 实测报错：
+        # cannot import name 'app' from 'app.main' (…/doc-sync-worker/app/main.py)）。
+        for name in list(sys.modules):
+            if name == "app" or name.startswith("app."):
+                del sys.modules[name]
         sys.path.insert(0, str(BACKEND_ROOT))
 
     @classmethod
     def tearDownClass(cls) -> None:
+        for name in list(sys.modules):
+            if name == "app" or name.startswith("app."):
+                del sys.modules[name]
         sys.path[:] = [item for item in sys.path if item != str(BACKEND_ROOT)]
 
     def test_migration_seeds_full_backup_inventory(self) -> None:

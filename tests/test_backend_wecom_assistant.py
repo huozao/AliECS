@@ -13,6 +13,11 @@ sys.path.insert(0, str(BACKEND_ROOT))
 
 
 def _module():
+    # DATABASE_URL 只在 import 期间需要，用完必须还原：这里原来是裸的 setdefault，
+    # 进程环境被永久污染，后面 test_backend_wecom_kf 的两个用例就会走进
+    # task_store_for_env() 的「有库」分支，去 mkdir /app/wecom-kf-materials 而失败
+    # （2026-08-31 实测；单独跑那个文件不会复现，只在全量顺序下出现）。
+    previous_database_url = os.environ.get("DATABASE_URL")
     os.environ.setdefault("DATABASE_URL", "postgresql://unit-test/not-used")
     previous_modules = {
         name: module for name, module in sys.modules.items()
@@ -30,6 +35,10 @@ def _module():
                 del sys.modules[name]
         sys.modules.update(previous_modules)
         sys.path[:] = previous_path
+        if previous_database_url is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = previous_database_url
 
 
 def test_parse_node_commands_are_separate() -> None:

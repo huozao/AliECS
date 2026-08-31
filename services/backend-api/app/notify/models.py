@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal
@@ -25,6 +26,14 @@ LEVEL_ICONS: dict[str, str] = {"info": "🔵", "warn": "🟡", "error": "🔴", 
 # 图片上限取三家里最紧的那个：企微群机器人 base64 图 2MB。
 # 飞书 im/v1/images 宽松得多，但判据统一在最紧处，省得同一条消息发得出 A 发不出 B。
 MAX_IMAGE_BYTES = 2 * 1024 * 1024
+
+# 判「标题开头是不是一个图标」。So=其他符号（绝大多数 emoji）、Sk=修饰符号。
+_ICON_CATEGORIES = {"So", "Sk"}
+# ⚠️ 只看类别是不够的：U+2139（ℹ）在 Unicode 里的类别是 **Ll（小写字母）**，
+# U+00A9（©）是 So 但常被当字母用——真正要问的是「它是不是按 emoji 呈现的」，
+# 而那件事由后面的变体选择符 U+FE0F 决定。少了这一条，ℹ️ 和 ⚠️ 开头的标题会
+# 被判成「没有图标」，于是照样叠一个级别图标上去（2026-08-31 被测试当场抓到）。
+_EMOJI_VARIATION_SELECTOR = "\ufe0f"
 
 
 def level_at_least(level: str, minimum: str) -> bool:
@@ -178,9 +187,32 @@ class Notification(BaseModel):
             rebuilt["dedup_key"] = f"restored:{uuid.uuid4().hex}"
         return cls.model_validate(rebuilt)
 
+    def display_title(self) -> str:
+        """带级别图标的标题——但生产者已经写了图标就不再叠加。
+
+        2026-08-31 发现：gold-spread-monitor 的每一类标题首行本来就自带图标
+        （✅ ⛔ 🔴 🟢 🧾 🧪 ℹ️ ⚠️），中枢再按 level 前置一个，飞书卡片标题就成了
+        「🔴 🔴 疑似错单成交｜沪金 AU2612」。收敛前的 build_alert_card 直接用生产者
+        那一行，没有这个问题。
+
+        生产者的图标往往比级别更具体（🧾 收盘复盘 / 🧪 历史回放验证 说的是「哪一类」
+        而不是「多严重」），所以保留它、跳过级别图标，而不是反过来剥掉它。
+
+        ⚠️ 这个判断必须只有这一处。飞书卡片头和企微 markdown 首行是「同一件事」，
+        各写一套迟早会出现两边标题不一致。
+        """
+        title = self.title.strip()
+        if title and (
+            unicodedata.category(title[0]) in _ICON_CATEGORIES
+            or title[1:2] == _EMOJI_VARIATION_SELECTOR
+        ):
+            return title
+        icon = LEVEL_ICONS.get(self.level, "")
+        return f"{icon} {title}".strip()
+
     def plain_text(self) -> str:
         """所有 channel 的共同兜底：富格式发不出去时至少把字发出去。"""
-        lines = [f"{LEVEL_ICONS.get(self.level, '')} {self.title}".strip()]
+        lines = [self.display_title()]
         if self.summary.strip():
             lines.append(self.summary.strip())
         for segment in self.segments:

@@ -45,7 +45,11 @@ jobs:
           python -m pip install -r services/coding-executor/requirements.txt
           python -m pip install httpx==0.28.1
           python -m pip install pytest==9.0.3
-          python -m unittest discover -s tests
+          # 用 pytest 而不是 unittest discover：discover 只收 TestCase 子类，收不到
+          # 裸函数式用例（`def test_x()`）。2026-08-31 实测 discover 跑 1051 个、
+          # pytest 收 1412 个，差的 355 个分布在 18 个文件里，CI 一个都没跑过——
+          # 其中包括 test_backend_gold_spread_alerts.py 的全部 20 个用例。
+          python -m pytest tests -q
           (cd services/tplus-sync-worker && PYTHONPATH=src:. python -m unittest discover -s tests -v)
 
       - name: Shell 语法检查

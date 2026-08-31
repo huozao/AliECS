@@ -43,7 +43,15 @@ services:
       NOTIFY_FLUSH_TOKEN: ${NOTIFY_FLUSH_TOKEN:-}
       FEISHU_COMPANY_A_APP_ID: ${FEISHU_COMPANY_A_APP_ID:-}
       FEISHU_COMPANY_A_APP_SECRET: ${FEISHU_COMPANY_A_APP_SECRET:-}
-      # agentId 的 key 名在 SOPS 里少了个 A（历史 typo），channels/wecom.py 两种拼写都认。
+      # 规范键。app_credentials() 优先读 *_AGENT_ID，读不到才回落到下面的历史拼写。
+      WECOM_COMPANY_A_AGENT_ID: ${WECOM_COMPANY_A_AGENT_ID:-}
+      WECOM_COMPANY_B_AGENT_ID: ${WECOM_COMPANY_B_AGENT_ID:-}
+      # ⚠️ 下面两个是历史遗留拼写，2026-08-31 实测确认 **A 的值是错的**：
+      # WECOM_COMPANY_A_gentId=1000003，而 1000003 是**企微 B** 的 agentid；
+      # A 的正确值是 1000005（用各自 APP_SECRET 调 agent/get 验证过，拿 A 的 token
+      # 操作 1000003 会被拒 301002）。SOPS 里另有个没人读的 WECOM_COMPANY_A_gentId_A
+      # 存着正确的 1000005——同一个键被两种方式改残，compose 恰好转发了错的那个。
+      # 保留它们只为兼容，正确值一律走上面的 *_AGENT_ID。
       WECOM_COMPANY_A_gentId: ${WECOM_COMPANY_A_gentId:-}
       WECOM_COMPANY_B_gentId: ${WECOM_COMPANY_B_gentId:-}
       GROUP1_WEBHOOK: ${GROUP1_WEBHOOK:-}

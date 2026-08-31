@@ -20,7 +20,7 @@ import urllib.request
 import uuid
 from typing import Any
 
-from app.notify.models import LEVEL_ICONS, Notification
+from app.notify.models import Notification
 
 DEFAULT_API_BASE = "https://open.feishu.cn/open-apis"
 
@@ -150,7 +150,6 @@ def _lark_md(text: str) -> str:
 
 def build_card(notification: Notification, image_keys: dict[str, str]) -> dict[str, Any]:
     """把段落渲染成一张交互卡片，文字与图按原顺序交错——一条消息而不是几个气泡。"""
-    icon = LEVEL_ICONS.get(notification.level, "")
     elements: list[dict[str, Any]] = []
     if notification.summary.strip():
         elements.append(
@@ -211,7 +210,7 @@ def build_card(notification: Notification, image_keys: dict[str, str]) -> dict[s
     return {
         "config": {"wide_screen_mode": True},
         "header": {
-            "title": {"tag": "plain_text", "content": f"{icon} {notification.title}".strip()},
+            "title": {"tag": "plain_text", "content": notification.display_title()},
             "template": {"info": "blue", "warn": "yellow", "error": "red", "fatal": "red"}.get(
                 notification.level, "blue"
             ),

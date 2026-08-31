@@ -256,6 +256,26 @@ class WecomRenderTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             wecom.send_bot(make_notification(), {})
 
+    def test_canonical_agent_id_wins_over_the_historical_typo_key(self) -> None:
+        """两种拼写同时存在时必须取 *_AGENT_ID。
+
+        2026-08-31 实测：生产 SOPS 里 WECOM_COMPANY_A_gentId=1000003，而 1000003 是
+        企微 **B** 的 agentid，A 的正确值是 1000005。拿 A 的 token 去操作 1000003 会被
+        企微拒掉（301002）。原来的测试只验了「typo 键能被读到」，读到的是不是对的值
+        它不关心——所以这个错配从上线一直活到第一次真实调用。
+        """
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "WECOM_COMPANY_A_CORP_ID": "c",
+                "WECOM_COMPANY_A_APP_SECRET": "s",
+                "WECOM_COMPANY_A_AGENT_ID": "1000005",
+                "WECOM_COMPANY_A_gentId": "1000003",
+            },
+            clear=False,
+        ):
+            self.assertEqual("1000005", wecom.app_credentials("COMPANY_A")[2])
+
     def test_agent_id_accepts_the_historical_typo_key(self) -> None:
         """SOPS 里的 key 是 WECOM_COMPANY_A_gentId（少个 A），是历史 typo。"""
         with mock.patch.dict(
@@ -276,8 +296,102 @@ class RetryAccountingTests(unittest.TestCase):
         conn = FakeConnection(rows=[(store.MAX_ATTEMPTS - 1,)])
         self.assertEqual(store.mark_failed(conn, 7, "boom"), "dead")
 
+    def _scheduled_delay(self, previous_attempts: int) -> float:
+        """跑一次 mark_failed，从写库参数里读回它安排的下一次重试距今多少秒。"""
+        conn = FakeConnection(rows=[(previous_attempts,)])
+        before = datetime.now(timezone.utc)
+        store.mark_failed(conn, 7, "boom")
+        update = [params for sql, params in conn.executed if sql.startswith("UPDATE")][-1]
+        return (update[3] - before).total_seconds()
+
+    def test_backoff_uses_every_tier_starting_at_the_first(self) -> None:
+        """退避必须逐档走完 BACKOFF_SECONDS，第一次失败等的是首档。
+
+        判据是**具体秒数**而不是 status：原来的 test_failure_schedules_backoff_and_keeps_pending
+        只断言 'pending'，在 BACKOFF_SECONDS[attempts] 和 [attempts-1] 两种索引下
+        都通过，所以它没挡住 2026-08-31 那个 off-by-one（首档 60 秒永远取不到，
+        实际第一次重试等了 300 秒，生产 outbox 10 实测）。
+        """
+        for previous_attempts, expected in enumerate(store.BACKOFF_SECONDS):
+            with self.subTest(第几次失败=previous_attempts + 1):
+                self.assertAlmostEqual(
+                    self._scheduled_delay(previous_attempts), expected, delta=5
+                )
+
+    def test_dead_only_after_every_tier_is_spent(self) -> None:
+        """四档没用完不许判 dead——否则最后一档形同虚设。"""
+        for previous_attempts in range(len(store.BACKOFF_SECONDS)):
+            with self.subTest(第几次失败=previous_attempts + 1):
+                conn = FakeConnection(rows=[(previous_attempts,)])
+                self.assertEqual(store.mark_failed(conn, 7, "boom"), "pending")
+        conn = FakeConnection(rows=[(len(store.BACKOFF_SECONDS),)])
+        self.assertEqual(store.mark_failed(conn, 7, "boom"), "dead")
+
+
+class DisplayTitleTests(unittest.TestCase):
+    """标题图标只能有一个，且飞书/企微/纯文本三处必须一致。"""
+
+    def test_level_icon_is_added_when_producer_wrote_none(self) -> None:
+        note = make_notification(title="价差异常", level="error")
+        self.assertEqual("🔴 价差异常", note.display_title())
+
+    def test_producer_icon_is_kept_and_not_doubled(self) -> None:
+        """gold-spread-monitor 的标题自带图标，中枢不得再叠一个。
+
+        2026-08-31 用生产库里真实的 wrong_price_detected payload 对比新旧卡片时发现：
+        旧卡片头是「🔴 疑似错单成交｜沪金 AU2612」，收敛后变成「🔴 🔴 …」。
+        """
+        for title in ("🔴 疑似错单成交｜沪金 AU2612", "🧾 收盘复盘", "🧪 历史回放验证",
+                      "✅ 历史价差回溯完成", "⚠️ 价差异常升级", "ℹ️ 价差异常已确认"):
+            with self.subTest(title=title):
+                note = make_notification(title=title, level="error")
+                self.assertEqual(title, note.display_title())
+                self.assertNotIn("🔴 🔴", note.display_title())
+
+    def test_all_three_renderers_use_the_same_title(self) -> None:
+        """飞书卡片头、企微 markdown 首行、纯文本兜底是同一件事，判据必须共用。"""
+        note = make_notification(title="🧾 收盘复盘", level="warn")
+        expected = note.display_title()
+        card = feishu.build_card(note, {})
+        self.assertEqual(expected, card["header"]["title"]["content"])
+        self.assertIn(expected, wecom.render_markdown(note))
+        self.assertTrue(note.plain_text().startswith(expected))
+
 
 class DispatchTests(unittest.TestCase):
+    def test_unroutable_message_leaves_a_tombstone_delivery(self) -> None:
+        """一条路由都没命中时，必须在 notify_deliveries 里留下痕迹。
+
+        判据落在**两张表的连接处**而不是任一单点：没有墓碑行，这条 outbox 会永远
+        满足 claim_orphans 的「有 outbox 行但没有 deliveries 行」，于是 flush 每轮
+        重新领养一次、永远空转，而 runbook 的孤儿判据（「持续有行 = flush 没在跑」）
+        会把人引向完全相反的结论。2026-08-31 端到端验证时实测到（生产 outbox 7）。
+        """
+        conn = FakeConnection(rows=[(41,), (99,)], rowsets=[[]])
+        result = dispatch.deliver(make_notification(), conn=conn)
+        self.assertEqual(0, result["targets"])
+        self.assertFalse(result["duplicate"])
+        tombstone = [
+            sql for sql, _ in conn.executed
+            if "INSERT INTO notify_deliveries" in sql and "no matching route" in sql
+        ]
+        self.assertEqual(1, len(tombstone), "无路由时应当写且只写一条墓碑投递记录")
+        self.assertIn("WHERE NOT EXISTS", tombstone[0])
+
+    def test_orphan_without_route_also_gets_a_tombstone(self) -> None:
+        """flush 领养到的孤儿同样要留墓碑，否则它每轮都会被重新领养一次。"""
+        orphan = {
+            "outbox_id": 7, "source_key": "devbox-test", "event": "no_route_check",
+            "level": "info", "payload": make_notification().storable_payload(),
+        }
+        conn = FakeConnection(rows=[(99,)], rowsets=[[]])
+        with mock.patch.object(store, "claim_orphans", side_effect=[[orphan]]):
+            dispatch._adopt_orphans(conn, limit=10)
+        self.assertTrue(any(
+            "INSERT INTO notify_deliveries" in sql and "no matching route" in sql
+            for sql, _ in conn.executed
+        ))
+
     def test_duplicate_dedup_key_is_not_delivered_twice(self) -> None:
         conn = FakeConnection(rows=[None, (42,)])  # INSERT 未返回 → 取已有行
         with mock.patch.object(dispatch, "sender_for") as sender:

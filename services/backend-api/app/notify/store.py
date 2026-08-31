@@ -12,9 +12,14 @@ from psycopg.types.json import Jsonb
 
 from app.notify.models import Notification, level_at_least
 
-# 重试退避：第 n 次失败后等 BACKOFF[n]。用完最后一档就判 dead，不再无限重试。
+# 重试退避：第 n 次失败后等 BACKOFF_SECONDS[n-1]，四档全部用完才判 dead。
+# ⚠️ 索引是 n-1 不是 n。2026-08-31 修：原来写 BACKOFF_SECONDS[attempts]，而 attempts
+# 在取值前已自增，于是第一次失败等的是 300 秒而不是 60 秒，列表首档 60 永远取不到。
+# 生产实测过这个偏差（outbox 10：失败到重投间隔 300s）。判据必须断言**具体秒数**，
+# 只断言 status=='pending' 在正确和错误索引下都成立，测不出任何东西。
 BACKOFF_SECONDS = [60, 300, 1800, 7200]
-MAX_ATTEMPTS = len(BACKOFF_SECONDS)
+# 首投 + 四次重试 = 5 次尝试，第 5 次仍失败判 dead。
+MAX_ATTEMPTS = len(BACKOFF_SECONDS) + 1
 
 
 def token_digest(token: str) -> str:
@@ -209,6 +214,37 @@ def delivery_receipt(conn, outbox_id: int, source_key: str) -> dict[str, Any] | 
     }
 
 
+def mark_unroutable(conn, outbox_id: int) -> bool:
+    """给「一条路由都没命中」的 outbox 行留一条墓碑投递记录。
+
+    没有这一步，`delivered:false / no matching route` 的行会**永远**满足
+    claim_orphans 的「有 outbox 行但没有 deliveries 行」，于是：
+
+    1. runbook 的孤儿判据永久报阳性，而那句话写的是「持续有行 = flush 没在跑」——
+       实际 flush 好好的，判据会把人引向完全错误的方向；
+    2. flush 每轮（约 30 秒）重新领养它一次、建不出记录、再记一条
+       `matched no route`，永远空转下去；
+    3. runbook 说「发出去没有只看 notify_deliveries」，可这张表里偏偏什么都没有，
+       「没配路由」和「还没投递」在观测面上长得一模一样。
+
+    2026-08-31 端到端验证 /v1/internal/notify/send 时实测到（outbox 7）。
+    墓碑行 status='dead' 所以 claim_pending 不会捡它，channel='none' 也不会被
+    sender_for 解析——它只是让「没人会收到」这件事在该看的表里留下痕迹。
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO notify_deliveries
+                (outbox_id, route_id, channel, target_json, status, attempts, last_error)
+            SELECT %s, NULL, 'none', '{}'::jsonb, 'dead', 0, 'no matching route'
+            WHERE NOT EXISTS (SELECT 1 FROM notify_deliveries WHERE outbox_id = %s)
+            RETURNING id
+            """,
+            (outbox_id, outbox_id),
+        )
+        return cur.fetchone() is not None
+
+
 def mark_sent(conn, delivery_id: int) -> None:
     with conn.cursor() as cur:
         cur.execute(
@@ -230,7 +266,7 @@ def mark_failed(conn, delivery_id: int, error: str) -> str:
         if attempts >= MAX_ATTEMPTS:
             status, delay = "dead", 0
         else:
-            status, delay = "pending", BACKOFF_SECONDS[attempts]
+            status, delay = "pending", BACKOFF_SECONDS[attempts - 1]
         cur.execute(
             """
             UPDATE notify_deliveries
