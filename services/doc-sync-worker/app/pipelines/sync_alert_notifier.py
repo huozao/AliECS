@@ -30,6 +30,21 @@ ERROR_KIND_LABELS = {
 }
 TOKEN_ALERT_THRESHOLD_SECONDS = 4 * 86400
 ARTIFACT_GRACE_SECONDS = 300
+# 「多久没确认新鲜就该有人管」永远要比调度周期宽出一段，否则每天在「上次完成 +周期」
+# 到「本轮完成」之间必然出现一个 stale 窗口——2026-09-01 实测每晚 16 条误告警 + 16 条
+# 恢复，页面上却是全成功。宽限取绝对值，与周期无关。
+STALE_GRACE_SECONDS = 7200
+DEFAULT_INTERVAL_SECONDS = 86400
+# 作业的 provider → integration_sync_config 里的调度 provider。
+SCHEDULE_PROVIDER_BY_JOB_PROVIDER = {
+    "wecom": "doc_sync",
+    "feishu": "doc_sync",
+    "chanjet": "chanjet",
+}
+SYNC_PAGE_URL = "https://hydwang.xyz/sync/"
+# 一条聚合消息里每个文档最多点名几张表，超出只报数。
+MAX_NAMED_SHEETS_PER_DOCUMENT = 3
+MAX_LISTED_DOCUMENTS = 5
 MIRROR_LAG_SECONDS = 900
 MIRROR_RETRY_ALERT_ATTEMPTS = 3
 MIRROR_JOB_KEY = "wecom.locator_mirror"
@@ -183,7 +198,118 @@ def build_alert_text(event: str, alert: dict[str, Any], *, now: datetime) -> str
     return "\n".join(lines)
 
 
-def send_feishu_text(chat_id: str, text: str) -> bool:
+def _document_name(item: dict[str, Any]) -> str:
+    """告警条目所属的文档。作业挂在表级来源上，来源行带 document_name。
+
+    非文档类作业（chanjet.full、locator_mirror、parent_match）没有来源行，
+    退回 display_name 的「文档 / 表」前半段，再退回 display_name 本身。
+    """
+    document = str(item.get("document_name") or "").strip()
+    if document:
+        return document
+    display_name = str(item.get("display_name") or "").strip()
+    if " / " in display_name:
+        return display_name.split(" / ", 1)[0].strip()
+    return display_name or "未命名任务"
+
+
+def _sheet_name(item: dict[str, Any]) -> str:
+    sheet = str(item.get("sheet_name") or "").strip()
+    if sheet:
+        return sheet
+    display_name = str(item.get("display_name") or "").strip()
+    if " / " in display_name:
+        return display_name.split(" / ", 1)[1].strip()
+    return display_name or "未命名任务"
+
+
+def _kind_of(item: dict[str, Any]) -> str:
+    return str(item.get("alert_kind") or item.get("status") or "")
+
+
+def _earliest_last_success(items: list[dict[str, Any]]) -> str | None:
+    stamps = [_format_time(item.get("last_success_at")) for item in items]
+    present = sorted(stamp for stamp in stamps if stamp)
+    return present[0] if present else None
+
+
+def _document_lines(items: list[dict[str, Any]]) -> list[str]:
+    """把一组条目按文档折成每文档一行：文档名 + 张数 + 点名前几张表。"""
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        grouped.setdefault(_document_name(item), []).append(item)
+    lines: list[str] = []
+    for document, members in list(grouped.items())[:MAX_LISTED_DOCUMENTS]:
+        sheets = [_sheet_name(member) for member in members]
+        named = "、".join(sheets[:MAX_NAMED_SHEETS_PER_DOCUMENT])
+        if len(sheets) > MAX_NAMED_SHEETS_PER_DOCUMENT:
+            named = f"{named} 等 {len(sheets)} 张"
+        lines.append(f"· {document} {len(sheets)} 张：{named}")
+    hidden = len(grouped) - MAX_LISTED_DOCUMENTS
+    if hidden > 0:
+        lines.append(f"· 另有 {hidden} 个文档，详见页面")
+    return lines
+
+
+def build_batch_text(event: str, items: list[dict[str, Any]], *, now: datetime) -> str:
+    """把一次轮询里同一收件人、同一事件方向的多条告警折成一条消息。
+
+    分组只做在发送层：库里仍然一个作业一行告警，notify_count、6 小时升级节流、
+    解除判定全都不变。一个文档下几十张子表同时延迟时，用户收到的是一条而不是几十条。
+    """
+    if len(items) == 1:
+        return build_alert_text(event, items[0], now=now)
+
+    by_kind: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        by_kind.setdefault(_kind_of(item), []).append(item)
+    # 失败永远排在延迟前面：一条消息里最需要先看到的是真故障。
+    ordered_kinds = sorted(by_kind, key=lambda kind: (kind != "failed", kind))
+
+    resolved = event == "resolved"
+    documents = len({_document_name(item) for item in items})
+    single_kind = len(ordered_kinds) == 1
+    if resolved:
+        # 恢复消息不复述告警类型：已经好了，用户要的是「哪些、多少」。
+        headline = f"{len(items)} 张 / {documents} 个文档"
+    elif single_kind:
+        headline = f"{_ALERT_KIND_LABELS.get(ordered_kinds[0], '同步异常')} {len(items)} 张 / {documents} 个文档"
+    else:
+        headline = "、".join(
+            f"{_ALERT_KIND_LABELS.get(kind, '同步异常')} {len(by_kind[kind])} 张"
+            for kind in ordered_kinds
+        )
+    title = _EVENT_TITLES.get(event, _EVENT_TITLES["open"])
+    lines = [f"{title} · {headline}"]
+
+    for kind in ordered_kinds:
+        members = by_kind[kind]
+        label = _ALERT_KIND_LABELS.get(kind, "同步异常")
+        if not single_kind:
+            # 只有一类时标题已经说完了，再来一行段头就是复述。
+            lines.append(f"【{label}】{len(members)} 张 / {len({_document_name(m) for m in members})} 个文档")
+        if kind == "failed" and not resolved:
+            for member in members[:MAX_LISTED_DOCUMENTS]:
+                error_kind = _normalized_error_kind(member.get("error_kind"))
+                failures = member.get("consecutive_failures")
+                suffix = f"，连续 {failures} 次" if isinstance(failures, int) and failures > 0 else ""
+                lines.append(
+                    f"· {member.get('display_name') or '未命名任务'}："
+                    f"{error_kind_label(error_kind)}({error_kind}){suffix}"
+                )
+            if len(members) > MAX_LISTED_DOCUMENTS:
+                lines.append(f"· 另有 {len(members) - MAX_LISTED_DOCUMENTS} 张，详见页面")
+        else:
+            lines.extend(_document_lines(members))
+
+    earliest = _earliest_last_success(items)
+    if earliest is not None:
+        lines.append(f"{'最近成功' if resolved else '最早上次成功'}：{earliest}")
+    lines.append(f"查看：{SYNC_PAGE_URL}")
+    return "\n".join(lines)
+
+
+def send_feishu_text(chat_id: str, text: str, *, conn: Any = None, commit: bool = True) -> bool:
     """交给统一消息中枢：只往 notify_outbox 写一行，投递由 backend-api 负责。
 
     收敛前这里自己取 tenant token、自己调 im/v1/messages，与另外三处各写一套。
@@ -207,7 +333,9 @@ def send_feishu_text(chat_id: str, text: str) -> bool:
     for segment in payload["segments"]:
         if segment.get("kind") == "text":
             segment["preformatted"] = True
-    return notify_client.enqueue(payload)
+    # 传 conn 时这行 outbox 与告警状态的更新落在同一个事务里：要么都成，要么都不成，
+    # 不会出现「标了已通知但消息没写进去」这种失败态与未执行态长得一样的情况。
+    return notify_client.enqueue(payload, conn=conn, commit=commit)
 
 
 def _positive_env_seconds(name: str, fallback: int) -> int:
@@ -248,8 +376,20 @@ def _sanitized_error_message(value: Any) -> str:
     return "[REDACTED]" if str(value or "").strip() else ""
 
 
+def _schedule_interval_seconds(state: dict[str, Any]) -> int:
+    """该作业实际的调度周期；读不到就按一天算（比它小会误报，比它大只是晚报）。"""
+    value = state.get("schedule_interval_seconds")
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return DEFAULT_INTERVAL_SECONDS
+
+
 def _alert_conditions(
-    state: dict[str, Any], *, now: datetime, artifact_grace_seconds: int
+    state: dict[str, Any],
+    *,
+    now: datetime,
+    artifact_grace_seconds: int,
+    stale_grace_seconds: int = STALE_GRACE_SECONDS,
 ) -> dict[str, dict[str, Any]]:
     job = state["job"]
     latest_run = state.get("latest_run") if isinstance(state.get("latest_run"), dict) else None
@@ -273,14 +413,19 @@ def _alert_conditions(
 
     freshness_sla = job.get("freshness_sla_seconds")
     if isinstance(freshness_sla, int) and not isinstance(freshness_sla, bool) and freshness_sla > 0:
+        # ⚠️ 阈值不能直接用配的 SLA：它可能被配成正好等于调度周期（2026-08-30 补的
+        # 「控制面 24h」档就是），那样余量为零，起跑时间只要比昨天晚一分钟就报。
+        # 取「调度周期 + 宽限」兜底，等价于「下一次应有运行时间之后还没来才算延迟」。
+        threshold = max(freshness_sla, _schedule_interval_seconds(state) + stale_grace_seconds)
         stale = last_success_at is None or (
             _as_utc(now) - _as_utc(last_success_at)
-        ).total_seconds() > freshness_sla
+        ).total_seconds() > threshold
         if stale:
             conditions["stale"] = {
                 **base_payload,
                 "status": "stale",
                 "freshness_sla_seconds": freshness_sla,
+                "stale_threshold_seconds": threshold,
             }
 
     artifact_pattern = str(job.get("artifact_glob") or "").strip()
@@ -337,19 +482,44 @@ def _alert_conditions(
                 "max_attempt_count": max_attempt_count,
             }
 
+    for kind, condition_payload in conditions.items():
+        # 分组和文案都按 alert_kind 走：failed 的 payload 里 status 可能是 partial，
+        # 拿 status 当类型会把同一类告警拆成两组。
+        condition_payload.setdefault("alert_kind", kind)
     return conditions
 
 
-def _safe_send(
-    sender: Callable[[str, str], bool], chat_id: str, event: str, alert: dict[str, Any], now: datetime
+def _dispatch_batches(
+    outgoing: list[dict[str, Any]],
+    sender: Callable[[str, str], bool],
+    *,
+    now: datetime,
 ) -> bool:
-    if not chat_id:
-        return False
-    try:
-        return bool(sender(chat_id, build_alert_text(event, alert, now=now)))
-    except Exception as exc:
-        print(f"[sync-alert] sender failed: {type(exc).__name__}")
-        return False
+    """把收集到的告警按「收件人 + 方向」折成聚合消息发出去。
+
+    方向只分两种：告警（open/escalate 合并，升级本质是同一批告警的再通知）和恢复。
+    一条消息里再按 alert_kind、文档二级分组，见 :func:`build_batch_text`。
+    只要有一条发不出去就返回 False，调用方会把这一轮的状态整体回滚。
+    """
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for message in outgoing:
+        direction = "resolved" if message["event"] == "resolved" else "alert"
+        grouped.setdefault((message["chat_id"], direction), []).append(message)
+
+    delivered = True
+    for (chat_id, direction), members in grouped.items():
+        if direction == "resolved":
+            event = "resolved"
+        else:
+            event = "escalate" if all(m["event"] == "escalate" for m in members) else "open"
+        text = build_batch_text(event, [m["item"] for m in members], now=now)
+        try:
+            if not sender(chat_id, text):
+                delivered = False
+        except Exception as exc:  # noqa: BLE001 - 发送异常不得中断本轮其余分组
+            print(f"[sync-alert] sender failed: {type(exc).__name__}")
+            delivered = False
+    return delivered
 
 
 def _alert_has_recovered(
@@ -376,6 +546,7 @@ def run_notifier_once(
     current = _as_utc(now or datetime.now(timezone.utc))
     escalation_seconds = _positive_env_seconds("SYNC_ALERT_ESCALATION_SECONDS", 21600)
     artifact_grace_seconds = _positive_env_seconds("SYNC_ARTIFACT_GRACE_SECONDS", 300)
+    stale_grace_seconds = _positive_env_seconds("SYNC_STALE_GRACE_SECONDS", STALE_GRACE_SECONDS)
     owned_connection = None
     if repository is None:
         from app.storage.postgres import connect
@@ -386,7 +557,14 @@ def run_notifier_once(
         )
     else:
         repository.escalation_seconds = escalation_seconds
-    send = sender or send_feishu_text
+    if sender is not None:
+        send = sender
+    else:
+        # 与告警状态共用同一个连接和事务；拿不到连接（注入的假仓库）就退回自管自提交。
+        shared_conn = getattr(repository, "conn", None)
+        send = lambda cid, text: send_feishu_text(  # noqa: E731
+            cid, text, conn=shared_conn, commit=shared_conn is None
+        )
     result = {
         "checked": 0,
         "opened": 0,
@@ -402,6 +580,17 @@ def run_notifier_once(
         except Exception as exc:  # noqa: BLE001 - 默认值写入不能阻断已有告警轮询
             print(f"[sync-alert] chanjet defaults failed: {type(exc).__name__}")
         states = repository.load_job_states()
+        try:
+            schedule_intervals = repository.load_schedule_intervals()
+        except Exception as exc:  # noqa: BLE001 - 读不到周期就退回默认，不阻断告警
+            print(f"[sync-alert] schedule intervals failed: {type(exc).__name__}")
+            schedule_intervals = {}
+        for state in states:
+            provider = str((state.get("job") or {}).get("provider") or "")
+            schedule_provider = SCHEDULE_PROVIDER_BY_JOB_PROVIDER.get(provider, "")
+            state["schedule_interval_seconds"] = schedule_intervals.get(
+                schedule_provider, DEFAULT_INTERVAL_SECONDS
+            )
         mirror_state = next(
             (
                 state
@@ -423,7 +612,10 @@ def run_notifier_once(
                 continue
             chat_id = str(job.get("alert_chat_id") or os.getenv("SYNC_ALERT_CHAT_ID", "")).strip()
             conditions = _alert_conditions(
-                state, now=current, artifact_grace_seconds=artifact_grace_seconds
+                state,
+                now=current,
+                artifact_grace_seconds=artifact_grace_seconds,
+                stale_grace_seconds=stale_grace_seconds,
             )
             open_alerts = [
                 alert for alert in state.get("open_alerts", []) if isinstance(alert, dict)
@@ -439,6 +631,28 @@ def run_notifier_once(
                 "open_by_kind": open_by_kind,
                 "resolved_kinds": set(),
             })
+
+        # 发送改成两段：先把该发的收集起来，全部处理完再按「收件人 + 方向」折成
+        # 聚合消息发出去。库里仍然一个作业一行告警，notify_count / 6 小时升级节流 /
+        # 解除判定都不变，只是用户不再一次收到几十条。
+        outgoing: list[dict[str, Any]] = []
+
+        def _collector(event: str, chat_id: str, job: dict[str, Any]):
+            def _append(delivered: dict[str, Any]) -> bool:
+                if not chat_id:
+                    return False
+                outgoing.append({
+                    "event": event,
+                    "chat_id": chat_id,
+                    "item": {
+                        **delivered,
+                        "document_name": job.get("document_name"),
+                        "sheet_name": job.get("sheet_name"),
+                    },
+                })
+                return True
+
+            return _append
 
         for context in contexts:
             state = context["state"]
@@ -458,14 +672,13 @@ def run_notifier_once(
                 if repository.resolve_alert(
                     int(alert["id"]),
                     recovery_payload,
-                    lambda delivered, cid=chat_id: _safe_send(
-                        send, cid, "resolved", delivered, current
-                    ),
+                    _collector("resolved", chat_id, job),
+                    defer_commit=True,
                 ):
                     result["resolved"] += 1
                     context["resolved_kinds"].add(alert_kind)
 
-        due_alerts: list[tuple[int, bool, str, dict[str, Any]]] = []
+        due_alerts: list[tuple[int, bool, str, dict[str, Any], dict[str, Any]]] = []
         for context in contexts:
             state = context["state"]
             job = context["job"]
@@ -483,6 +696,7 @@ def run_notifier_once(
                         int(existing.get("notify_count") or 0) > 0,
                         chat_id,
                         payload,
+                        job,
                     ))
                     continue
                 alert_id = repository.claim_alert(
@@ -490,20 +704,31 @@ def run_notifier_once(
                 )
                 if alert_id is not None:
                     result["opened"] += 1
-                    due_alerts.append((int(alert_id), False, chat_id, payload))
+                    due_alerts.append((int(alert_id), False, chat_id, payload, job))
 
-        for alert_id, is_escalation, chat_id, payload in due_alerts:
+        for alert_id, is_escalation, chat_id, payload, job in due_alerts:
             event = "escalate" if is_escalation else "open"
             if repository.deliver_due(
                 alert_id,
-                lambda delivered, cid=chat_id, alert_event=event: _safe_send(
-                    send, cid, alert_event, delivered, current
-                ),
+                _collector(event, chat_id, job),
                 payload=payload,
+                defer_commit=True,
             ):
                 result["notified"] += 1
                 if is_escalation:
                     result["escalated"] += 1
+
+        if outgoing:
+            if _dispatch_batches(outgoing, send, now=current):
+                repository.commit()
+            else:
+                # 一条都没发出去就把这一轮的状态全部退回：宁可下一轮重发，
+                # 也不要留下「标了已通知、消息却没写进 outbox」的静默丢失。
+                repository.rollback()
+                print("[sync-alert] batch dispatch failed, rolled back this round")
+                result["resolved"] = 0
+                result["notified"] = 0
+                result["escalated"] = 0
 
         result["cleaned"] = int(repository.cleanup_steps() or 0)
         return result
@@ -592,6 +817,36 @@ class SyncAlertRepository:
             self.conn.rollback()
             raise
 
+    def commit(self) -> None:
+        self.conn.commit()
+
+    def rollback(self) -> None:
+        self.conn.rollback()
+
+    def load_schedule_intervals(self) -> dict[str, int]:
+        """读各 provider 的调度周期，供 stale 阈值兜底用。
+
+        读不到就返回空 dict，判据那边会退回一天——宁可晚报也不误报。
+        """
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("SELECT provider, interval_seconds FROM integration_sync_config")
+                rows = cur.fetchall()
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            return {}
+        intervals: dict[str, int] = {}
+        for row in rows or []:
+            try:
+                provider = str(row[0])
+                seconds = int(row[1])
+            except (IndexError, TypeError, ValueError):
+                continue
+            if seconds > 0:
+                intervals[provider] = seconds
+        return intervals
+
     def claim_alert(self, job: dict[str, Any], run_id: int | None, alert_kind: str, payload: dict[str, Any]) -> int | None:
         try:
             with self.conn.cursor() as cur:
@@ -639,6 +894,8 @@ class SyncAlertRepository:
         alert_id: int,
         sender: Callable[[dict[str, Any]], bool],
         payload: dict[str, Any] | None = None,
+        *,
+        defer_commit: bool = False,
     ) -> bool:
         cutoff = self.now_fn() - timedelta(seconds=self.escalation_seconds)
         try:
@@ -669,13 +926,21 @@ class SyncAlertRepository:
                     """,
                     (Jsonb(current_payload), alert_id, cutoff),
                 )
-            self.conn.commit()
+            if not defer_commit:
+                self.conn.commit()
             return True
         except Exception:
             self.conn.rollback()
             return False
 
-    def resolve_alert(self, alert_id: int, payload: dict[str, Any], sender: Callable[[dict[str, Any]], bool]) -> bool:
+    def resolve_alert(
+        self,
+        alert_id: int,
+        payload: dict[str, Any],
+        sender: Callable[[dict[str, Any]], bool],
+        *,
+        defer_commit: bool = False,
+    ) -> bool:
         try:
             with self.conn.cursor() as cur:
                 alert = self._lock_open_alert(cur, alert_id)
@@ -692,7 +957,8 @@ class SyncAlertRepository:
                     """,
                     (Jsonb(payload), alert_id),
                 )
-            self.conn.commit()
+            if not defer_commit:
+                self.conn.commit()
             return True
         except Exception:
             self.conn.rollback()
@@ -722,8 +988,12 @@ class SyncAlertRepository:
                             ),
                             0
                         ) AS consecutive_failures,
-                        COALESCE(open_alerts.items, '[]'::jsonb) AS open_alerts
+                        COALESCE(open_alerts.items, '[]'::jsonb) AS open_alerts,
+                        source.document_name, source.sheet_name
                     FROM sync_jobs j
+                    -- 聚合通知按文档分组，文档名在表级来源行上（与 backend-api
+                    -- app/sync_read.py 的资产视图同一个字段）。
+                    LEFT JOIN external_sources source ON source.id = j.source_id
                     LEFT JOIN LATERAL (
                         SELECT id, status, started_at, finished_at, error_kind, error_message, detail_json
                         FROM sync_job_runs
@@ -774,6 +1044,8 @@ class SyncAlertRepository:
                         "alert_chat_id": row[6],
                         "freshness_sla_seconds": row[7],
                         "artifact_glob": row[8],
+                        "document_name": row[22] if len(row) > 22 else None,
+                        "sheet_name": row[23] if len(row) > 23 else None,
                     },
                     "latest_run": {
                         "id": row[9],

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import io
 import json
 import os
@@ -639,7 +640,7 @@ class SyncAlertRepositoryTests(unittest.TestCase):
             7, "wecom.doc.17", "wecom", "点检表", True, True, "oc_alerts", 3600, "exports/*.json",
             31, "failed", NOW - timedelta(minutes=5), NOW - timedelta(minutes=4), "network", "timeout", latest_run_detail,
             29, NOW - timedelta(hours=2), NOW - timedelta(hours=1), latest_success_detail,
-            3, open_alerts,
+            3, open_alerts, "点检表", "日常点检",
         )]]
 
         states = self.repo.load_job_states()
@@ -655,6 +656,9 @@ class SyncAlertRepositoryTests(unittest.TestCase):
                 "alert_chat_id": "oc_alerts",
                 "freshness_sla_seconds": 3600,
                 "artifact_glob": "exports/*.json",
+                # 聚合通知按文档分组，文档名/表名来自表级来源行。
+                "document_name": "点检表",
+                "sheet_name": "日常点检",
             },
             "latest_run": {
                 "id": 31,
@@ -679,7 +683,13 @@ class SyncAlertRepositoryTests(unittest.TestCase):
         self.assertIn("sync_jobs", sql)
         self.assertIn("sync_job_runs", sql)
         self.assertIn("sync_job_alerts", sql)
-        self.assertNotIn("external_sources", sql)
+        # ⚠️ #306 当初断言告警器完全不碰 external_sources（收敛旧看门狗时划的边界）。
+        # 2026-09-01 起放开一条：聚合通知按文档分组，文档名的正本在表级来源行上，
+        # 与 backend-api app/sync_read.py 的资产视图同一个字段。边界改成「只按主键
+        # join、只取名字」——同步状态一律仍从 sync_* 三张表读，不许从来源表推。
+        self.assertIn("LEFT JOIN external_sources source ON source.id = j.source_id", sql)
+        for state_column in ("source.last_sync_at", "source.external_modified_at", "source.enabled"):
+            self.assertNotIn(state_column, sql)
         self.assertNotIn("external_doc_id", sql)
         # latest_success 驱动 stale 判据，必须与 backend-api app/sync_read.py 的
         # `verified` LATERAL 同一口径：跳过（企微 modify_time 未变）也算「确认数据是新的」，
@@ -762,9 +772,13 @@ class InMemoryAlertRepository:
             "payload_json": dict(payload),
             "state": "open",
         }
+        # 真库的 claim_alert 自己提交，回滚不该把已开出的告警行退掉。
+        self._snapshot()
         return alert_id
 
-    def deliver_due(self, alert_id: int, sender, payload: dict[str, Any] | None = None) -> bool:
+    def deliver_due(
+        self, alert_id: int, sender, payload: dict[str, Any] | None = None, *, defer_commit: bool = False
+    ) -> bool:
         self.events.append(f"deliver:{alert_id}")
         alert = self.alerts[alert_id]
         if alert["state"] != "open":
@@ -784,7 +798,9 @@ class InMemoryAlertRepository:
             alert["payload_json"] = dict(payload)
         return True
 
-    def resolve_alert(self, alert_id: int, payload: dict[str, Any], sender) -> bool:
+    def resolve_alert(
+        self, alert_id: int, payload: dict[str, Any], sender, *, defer_commit: bool = False
+    ) -> bool:
         alert = self.alerts[alert_id]
         self.events.append(f"resolve:{alert['job_id']}:{alert['alert_kind']}")
         delivered = dict(alert)
@@ -795,6 +811,22 @@ class InMemoryAlertRepository:
         alert["state"] = "resolved"
         alert["payload_json"] = dict(payload)
         return True
+
+    def load_schedule_intervals(self) -> dict[str, int]:
+        return dict(getattr(self, "schedule_intervals", {}) or {})
+
+    def _snapshot(self) -> None:
+        self._committed = copy.deepcopy(self.alerts)
+
+    def commit(self) -> None:
+        self.events.append("commit")
+        self._snapshot()
+
+    def rollback(self) -> None:
+        # 真库回滚会把本轮未提交的通知记账一起退掉，假仓库必须照做，
+        # 否则「发送失败下一轮重试」这条路在测试里根本走不到。
+        self.events.append("rollback")
+        self.alerts = copy.deepcopy(getattr(self, "_committed", {}))
 
     def cleanup_steps(self) -> int:
         self.events.append("cleanup")
@@ -976,7 +1008,168 @@ class SyncAlertOrchestrationTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, payload)
 
+    def make_state(
+        self,
+        *,
+        job_id: int,
+        document: str,
+        sheet: str,
+        status: str = "success",
+        sla: int | None = 86400,
+        verified_age_hours: float = 24.1,
+        error_kind: str | None = None,
+        open_alerts: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        verified_at = self.now - timedelta(hours=verified_age_hours)
+        return {
+            "job": {
+                **self.job,
+                "id": job_id,
+                "job_key": f"wecom.doc.{job_id}",
+                "display_name": f"{document} / {sheet}",
+                "document_name": document,
+                "sheet_name": sheet,
+                "freshness_sla_seconds": sla,
+            },
+            "latest_run": {
+                "id": job_id * 10,
+                "status": status,
+                "started_at": verified_at,
+                "finished_at": verified_at,
+                "error_kind": error_kind,
+                "error_message": None,
+                "detail_json": {},
+            },
+            "latest_success": {
+                "id": job_id * 10,
+                "started_at": verified_at,
+                "finished_at": verified_at,
+                "detail_json": {},
+            },
+            "consecutive_failures": 3 if status in {"failed", "partial"} else 0,
+            "open_alerts": list(open_alerts or []),
+        }
+
+    def run_states(self, states: list[dict[str, Any]]) -> dict[str, int]:
+        self.repository.states = states
+        return self.notifier.run_notifier_once(
+            repository=self.repository, sender=self.sender, now=self.now
+        )
+
+    def test_sla_equal_to_schedule_interval_does_not_open_at_the_period_boundary(self) -> None:
+        """SLA 恰好等于调度周期时余量为零，起跑时间只要比昨天晚一点就误报。
+
+        2026-09-01 生产实测：16 个 24h 档作业每晚 00:4x 集体开 stale、01:2x 集体解除，
+        而页面上那一轮全是成功。判据必须兜底成「周期 + 宽限」。
+        """
+        self.repository.schedule_intervals = {"doc_sync": 86400}
+        states = [self.make_state(job_id=1, document="管理面板", sheet="企微AI助手配置",
+                                  sla=86400, verified_age_hours=24.2)]
+
+        self.assertEqual(0, self.run_states(states)["opened"])
+        self.assertEqual([], self.sent)
+
+        # 反证：把宽限抹掉，判据退回「只看 SLA」，同一份输入立刻误报。
+        os.environ["SYNC_STALE_GRACE_SECONDS"] = "1"
+        self.repository.alerts.clear()
+        self.assertEqual(1, self.run_states(states)["opened"])
+
+    def test_one_poll_folds_many_sheets_into_a_single_message_grouped_by_document(self) -> None:
+        os.environ["SYNC_STALE_GRACE_SECONDS"] = "60"
+        self.repository.schedule_intervals = {"doc_sync": 600}
+        states = [
+            self.make_state(job_id=1, document="管理面板", sheet="企微AI助手配置", sla=3600),
+            self.make_state(job_id=2, document="管理面板", sheet="微信用户清单", sla=3600),
+            self.make_state(job_id=3, document="管理面板", sheet="飞书用户清单", sla=3600),
+            self.make_state(job_id=4, document="系统配置", sheet="同步配置", sla=3600),
+            self.make_state(job_id=5, document="系统配置", sheet="bridge规则", sla=3600),
+        ]
+
+        result = self.run_states(states)
+
+        self.assertEqual(5, result["opened"])
+        self.assertEqual(5, result["notified"])
+        # 五张表、两个文档 → 一条消息。旧实现是一表一条。
+        self.assertEqual(1, len(self.sent))
+        chat_id, text = self.sent[0]
+        self.assertEqual("oc_job", chat_id)
+        self.assertIn("同步告警 · 同步延迟 5 张 / 2 个文档", text)
+        # 只有一类告警时标题已经说完，正文不再重复一行段头。
+        self.assertNotIn("【同步延迟】", text)
+        self.assertIn("· 管理面板 3 张：企微AI助手配置、微信用户清单、飞书用户清单", text)
+        self.assertIn("· 系统配置 2 张：同步配置、bridge规则", text)
+        self.assertIn("查看：https://hydwang.xyz/sync/", text)
+
+    def test_named_sheets_are_capped_and_the_rest_only_counted(self) -> None:
+        os.environ["SYNC_STALE_GRACE_SECONDS"] = "60"
+        self.repository.schedule_intervals = {"doc_sync": 600}
+        states = [
+            self.make_state(job_id=index, document="飞书 ChatGPT 会话管理台", sheet=f"表{index}", sla=3600)
+            for index in range(1, 9)
+        ]
+
+        self.run_states(states)
+
+        text = self.sent[0][1]
+        self.assertIn("· 飞书 ChatGPT 会话管理台 8 张：表1、表2、表3 等 8 张", text)
+        self.assertNotIn("表4", text)
+
+    def test_single_alert_keeps_the_per_job_format_with_deep_link(self) -> None:
+        os.environ["SYNC_STALE_GRACE_SECONDS"] = "60"
+        self.repository.schedule_intervals = {"doc_sync": 600}
+
+        self.run_states([self.make_state(job_id=1, document="管理面板", sheet="企微AI助手配置", sla=3600)])
+
+        text = self.sent[0][1]
+        self.assertIn("同步延迟：管理面板 / 企微AI助手配置", text)
+        self.assertIn("查看任务：https://hydwang.xyz/sync/?job=wecom.doc.1", text)
+
+    def test_failed_and_stale_share_one_message_with_failures_first(self) -> None:
+        os.environ["SYNC_STALE_GRACE_SECONDS"] = "60"
+        self.repository.schedule_intervals = {"doc_sync": 600}
+        states = [
+            self.make_state(job_id=1, document="管理面板", sheet="企微AI助手配置", sla=3600),
+            self.make_state(job_id=2, document="管理面板", sheet="微信用户清单", sla=3600),
+            self.make_state(job_id=3, document="产量统计", sheet="公开的生产记录表",
+                            status="failed", error_kind="schema", sla=None),
+        ]
+
+        self.run_states(states)
+
+        self.assertEqual(1, len(self.sent))
+        text = self.sent[0][1]
+        self.assertLess(text.index("【同步失败】"), text.index("【同步延迟】"))
+        self.assertIn("数据结构变化(schema)，连续 3 次", text)
+
+    def test_batch_recovery_is_also_one_message(self) -> None:
+        os.environ["SYNC_STALE_GRACE_SECONDS"] = "60"
+        self.repository.schedule_intervals = {"doc_sync": 600}
+        opening = [
+            self.make_state(job_id=1, document="管理面板", sheet="企微AI助手配置", sla=3600),
+            self.make_state(job_id=2, document="系统配置", sheet="同步配置", sla=3600),
+        ]
+        self.run_states(opening)
+        self.sent.clear()
+
+        recovered = [
+            self.make_state(job_id=1, document="管理面板", sheet="企微AI助手配置", sla=3600,
+                            verified_age_hours=0.1,
+                            open_alerts=[dict(self.repository.alerts[1])]),
+            self.make_state(job_id=2, document="系统配置", sheet="同步配置", sla=3600,
+                            verified_age_hours=0.1,
+                            open_alerts=[dict(self.repository.alerts[2])]),
+        ]
+        result = self.run_states(recovered)
+
+        self.assertEqual(2, result["resolved"])
+        self.assertEqual(1, len(self.sent))
+        self.assertIn("同步已恢复", self.sent[0][1])
+
     def test_stale_opens_then_resolves_inside_sla(self) -> None:
+        # 阈值是 max(SLA, 调度周期 + 宽限)：SLA 比周期还紧时不作数，
+        # 所以这里把周期和宽限都调小，让 SLA 成为实际生效的那一个。
+        os.environ["SYNC_STALE_GRACE_SECONDS"] = "60"
+        self.repository.schedule_intervals = {"doc_sync": 600}
         self.job["freshness_sla_seconds"] = 3600
         result = self.run_with_latest(
             status="success", run_id=10, latest_success_at=self.now - timedelta(hours=2)
@@ -1098,6 +1291,8 @@ class SyncAlertOrchestrationTests(unittest.TestCase):
         self.assertEqual("open", self.repository.alerts[1]["state"])
 
     def test_failed_and_stale_can_coexist_without_parent_match_business_message(self) -> None:
+        os.environ["SYNC_STALE_GRACE_SECONDS"] = "60"
+        self.repository.schedule_intervals = {"doc_sync": 600}
         self.job["freshness_sla_seconds"] = 60
         from app.pipelines import tplus_parent_match
 

@@ -1895,6 +1895,46 @@ class WorkerLoopTests(WorkerImportTestCase):
                     self.assertTrue(first_payload["candidate"]["run_full"])
                     self.assertFalse(first_payload["decision_match"])
 
+    def test_poll_overhead_does_not_accumulate_into_the_next_full_start(self) -> None:
+        """每个 poll 干活的时间必须从剩余等待里扣掉，否则会一步步累积成起跑延迟。
+
+        生产实测（2026-09-01）：一轮 2830 个 poll，每个多花约 0.5 秒，
+        名义扣减把这些工时全漏掉，起跑时间从 anchor 的 00:30 漂到 00:54。
+        这里把比例缩小成 6 个 poll × 1 秒：
+        - 按 due - now() 重算：等待在 due 结束，只超出最后一个 poll 的工时 → 61 秒；
+        - 按名义步长扣减：6 个 poll 各漏 1 秒 → 66 秒，且 poll 越多漏得越多。
+        """
+        import unittest.mock as mock
+        from datetime import datetime, timedelta, timezone
+
+        from app.pipelines import worker_loop as module
+
+        started = datetime(2026, 8, 13, tzinfo=timezone.utc)
+        clock = {"now": started}
+        fulls: list[int] = []
+
+        def poll_work() -> int:
+            # 一个 poll 里 sleep 之外的活：消费手动请求 + 告警器 + 中枢 flush。
+            clock["now"] += timedelta(seconds=1)
+            return 0
+
+        with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "10"}), \
+                mock.patch.object(module, "_maybe_start_group_listener"):
+            code = module.run_worker_loop(
+                full_sync=lambda: fulls.append(int((clock["now"] - started).total_seconds())),
+                consume_requests=poll_work,
+                notifier_once=lambda: {},
+                sleep=lambda seconds: clock.__setitem__("now", clock["now"] + timedelta(seconds=seconds)),
+                max_cycles=2,
+                schedule_reader=self._one_minute_schedule,
+                config_puller=lambda: "noop",
+                now_fn=lambda: clock["now"],
+                last_full_reader=lambda: started,
+            )
+
+        self.assertEqual(0, code)
+        self.assertEqual([61], fulls)
+
     def test_shadow_advances_planned_candidate_before_later_earlier_wake(self) -> None:
         import unittest.mock as mock
         from datetime import datetime, timedelta, timezone

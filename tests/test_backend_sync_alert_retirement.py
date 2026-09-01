@@ -59,11 +59,22 @@ class _CredentialAlertRepository:
         })
         return 1
 
-    def deliver_due(self, alert_id: int, sender, *, payload: dict[str, object]) -> bool:
+    def deliver_due(
+        self, alert_id: int, sender, *, payload: dict[str, object], defer_commit: bool = False
+    ) -> bool:
         alert = next(item for item in self.claimed if item["id"] == alert_id)
         delivered = {**alert, **payload}
         self.delivered.append(delivered)
         return bool(sender(delivered))
+
+    def load_schedule_intervals(self) -> dict[str, int]:
+        return {}
+
+    def commit(self) -> None:
+        return None
+
+    def rollback(self) -> None:
+        return None
 
     def cleanup_steps(self) -> int:
         return 0
