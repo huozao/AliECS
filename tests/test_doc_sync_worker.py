@@ -468,6 +468,41 @@ class WorkerLoopTests(WorkerImportTestCase):
         self.assertGreater(polls, 1, "这个调度下一个 cycle 应该有多次 poll，否则判据失效")
         self.assertEqual(polls, flushes)
 
+    def test_heartbeat_watch_runs_once_per_poll_not_once_per_cycle(self) -> None:
+        """心跳看护挂在哪一层，和 flush 是同一个判据，同一个坑。
+
+        它自己内部还有一层「每小时最多查一次库」的节流。若再把调用点放到外层
+        while True（一轮 = 一个完整调度周期，默认 86400s），两层节流叠起来
+        就再也不会触发——而代码读起来完全正确。判据必须是频率关系
+        （checks == polls），写成「checks > 0」在错误层级下照样成立。
+        """
+        import unittest.mock as mock
+
+        from app.pipelines import worker_loop as module
+
+        events: list[str] = []
+        with mock.patch.dict("os.environ", {"DOC_SYNC_POLL_SECONDS": "30"}), mock.patch.object(
+            module.notify_client, "request_flush", lambda: None
+        ), mock.patch.object(
+            module.heartbeat_watch, "check_heartbeat", lambda: events.append("check")
+        ):
+            code = module.run_worker_loop(
+                full_sync=lambda: events.append("full") or 0,
+                consume_requests=lambda: events.append("pending") or 0,
+                notifier_once=lambda: {},
+                sleep=lambda _seconds: None,
+                max_cycles=1,
+                schedule_reader=self._one_minute_schedule,
+                config_puller=lambda: "noop",
+                last_full_reader=lambda: None,
+            )
+
+        self.assertEqual(0, code)
+        polls = events.count("pending")
+        checks = events.count("check")
+        self.assertGreater(polls, 1, "这个调度下一个 cycle 应该有多次 poll，否则判据失效")
+        self.assertEqual(polls, checks)
+
     def test_notify_flush_failure_does_not_break_the_sync_loop(self) -> None:
         """冲刷失败绝不能影响同步主循环——通知发不出去是小事，同步停了是大事。"""
         import contextlib
@@ -1837,9 +1872,16 @@ class WorkerLoopTests(WorkerImportTestCase):
                 self.assertEqual(len(legacy["pending"]), len(shadow["pending"]))
                 self.assertEqual(len(legacy["notifier"]), len(shadow["notifier"]))
                 self.assertEqual(len(legacy["full"]), len(shadow["full"]))
-                self.assertEqual([30, 30, 30, 30], shadow["sleep"])
-                self.assertEqual(4, len(shadow["pending"]))
-                self.assertEqual(5, len(shadow["notifier"]))
+                # 步长不再是清一色的名义 30 秒：睡眠按 due - now() 逐步重算，
+                # 全量自身耗掉的时间会从剩余等待里扣掉，所以最后一步是补齐到 due 的余数。
+                # 旧实现按名义步长扣减，全量跑多久下一轮就整体后移多久（每天累积十几分钟）。
+                expected = {
+                    20: {"sleep": [30, 10, 30, 10], "pending": 4, "notifier": 5},
+                    90: {"sleep": [30, 30], "pending": 2, "notifier": 3},
+                }[full_elapsed_seconds]
+                self.assertEqual(expected["sleep"], shadow["sleep"])
+                self.assertEqual(expected["pending"], len(shadow["pending"]))
+                self.assertEqual(expected["notifier"], len(shadow["notifier"]))
                 self.assertEqual(2, len(shadow["full"]))
 
                 first_payload = shadow["payload"][0]
@@ -1932,7 +1974,9 @@ class WorkerLoopTests(WorkerImportTestCase):
             )
 
         self.assertEqual(0, code)
-        self.assertEqual([([81], 60, False)], finishes)
+        # 墙钟每次 sleep 跳 1 小时（模拟 NTP 前跳），第一步之后就越过 due，等待结束；
+        # 上报的睡眠时长必须是 monotonic 量出来的 30，不能是墙钟的 3600。
+        self.assertEqual([([81], 30, False)], finishes)
 
     def test_shadow_sleep_error_survives_monotonic_and_finisher_failures(self) -> None:
         import unittest.mock as mock
@@ -3716,6 +3760,178 @@ class SyncRequestDispatchTests(WorkerImportTestCase):
             {"id": 3, "source_id": 100, "provider": "wecom", "mode": "manual"},
             "failed",
         )
+
+
+class _HeartbeatCursor:
+    def __init__(self, latest: object) -> None:
+        self.latest = latest
+        self.executed: list[tuple] = []
+
+    def __enter__(self) -> "_HeartbeatCursor":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def execute(self, sql: str, params: object = None) -> None:
+        self.executed.append((sql, params))
+
+    def fetchone(self) -> tuple:
+        return (self.latest,)
+
+
+class _HeartbeatConn:
+    def __init__(self, latest: object) -> None:
+        self.latest = latest
+        self.cursors: list[_HeartbeatCursor] = []
+        self.closed = False
+
+    def cursor(self) -> _HeartbeatCursor:
+        cur = _HeartbeatCursor(self.latest)
+        self.cursors.append(cur)
+        return cur
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class AliecsHeartbeatWatchTests(WorkerImportTestCase):
+    """aliecs 流量心跳的反向看护。
+
+    它守的是「设备该发的日报没来」，而不是流量数字本身——因为「出网被限速」时
+    设备侧的告警自己也发不出去，只有接收端看得见。
+    """
+
+    WATCHED = "aliecs-traffic"
+
+    def _enabled_env(self, **extra: str) -> dict:
+        env = {
+            "ALIECS_TRAFFIC_HEARTBEAT_MAX_AGE_HOURS": "30",
+            "ALIECS_TRAFFIC_HEARTBEAT_SOURCE": self.WATCHED,
+        }
+        env.update(extra)
+        return env
+
+    def test_disabled_by_default_never_touches_the_database(self) -> None:
+        """默认关闭：采集器还没装时打开，只会天天报「还没上线」这种假告警。"""
+        from unittest import mock
+
+        from app.pipelines import heartbeat_watch as module
+
+        module.reset_throttle()
+        # 空值走 _env_float 的默认分支 → 阈值 0 → 关闭，与「env 根本没设」等价。
+        with mock.patch.dict(
+            "os.environ", {"ALIECS_TRAFFIC_HEARTBEAT_MAX_AGE_HOURS": ""}
+        ), mock.patch.object(module.notify_client, "connect") as connect:
+            self.assertFalse(module.check_heartbeat())
+        connect.assert_not_called()
+
+    def test_throttle_limits_database_hits_to_one_per_interval(self) -> None:
+        """每轮 poll 都调它，但查库按小时节流——否则 30 秒一次白打数据库。"""
+        from datetime import datetime, timedelta, timezone
+        from unittest import mock
+
+        from app.pipelines import heartbeat_watch as module
+
+        module.reset_throttle()
+        fresh = datetime.now(timezone.utc) - timedelta(hours=1)
+        conn = _HeartbeatConn(fresh)
+        with mock.patch.dict("os.environ", self._enabled_env()), mock.patch.object(
+            module.notify_client, "connect", return_value=conn
+        ) as connect:
+            hits = [module.check_heartbeat() for _ in range(5)]
+        self.assertEqual([True, False, False, False, False], hits)
+        self.assertEqual(1, connect.call_count)
+
+    def test_fresh_heartbeat_does_not_alert(self) -> None:
+        from datetime import datetime, timedelta, timezone
+        from unittest import mock
+
+        from app.pipelines import heartbeat_watch as module
+
+        module.reset_throttle()
+        conn = _HeartbeatConn(datetime.now(timezone.utc) - timedelta(hours=2))
+        with mock.patch.dict("os.environ", self._enabled_env()), mock.patch.object(
+            module.notify_client, "connect", return_value=conn
+        ), mock.patch.object(module.notify_client, "enqueue") as enqueue:
+            module.check_heartbeat(force=True)
+        enqueue.assert_not_called()
+        self.assertTrue(conn.closed)
+
+    def test_stale_heartbeat_alerts_with_a_per_day_dedup_key(self) -> None:
+        """断了多久都只在每天第一次检查时留一条，不刷屏。"""
+        from datetime import datetime, timedelta, timezone
+        from unittest import mock
+
+        from app.pipelines import heartbeat_watch as module
+
+        now = datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc)
+        conn = _HeartbeatConn(now - timedelta(hours=40))
+        keys = []
+        with mock.patch.dict("os.environ", self._enabled_env()), mock.patch.object(
+            module.notify_client, "connect", return_value=conn
+        ), mock.patch.object(module.notify_client, "enqueue") as enqueue:
+            module.check_heartbeat(now=now, force=True)
+            module.check_heartbeat(now=now + timedelta(hours=6), force=True)
+            keys = [call.kwargs["dedup_key"] for call in enqueue.call_args_list]
+
+        self.assertEqual(2, len(keys))
+        self.assertEqual(keys[0], keys[1])
+        self.assertEqual("aliecs-traffic-heartbeat-missing:2026-09-03", keys[0])
+
+    def test_alert_is_never_written_under_the_watched_source(self) -> None:
+        """反证核心：告警若用被监视的 source_key 写回 outbox，它自己就把心跳「续上」了。
+
+        下一轮检查会看到「最近有行」于是不再告警——自己消掉自己的触发条件，
+        而 outbox 有行、deliveries 有行、看护也在跑，三处观测面全部正常。
+        同族见 AGENTS.md〈每个观测点单独看都正常，合起来才是故障〉。
+        """
+        from datetime import datetime, timedelta, timezone
+        from unittest import mock
+
+        from app.pipelines import heartbeat_watch as module
+
+        now = datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc)
+        conn = _HeartbeatConn(now - timedelta(hours=40))
+        with mock.patch.dict("os.environ", self._enabled_env()), mock.patch.object(
+            module.notify_client, "connect", return_value=conn
+        ), mock.patch.object(module.notify_client, "enqueue") as enqueue:
+            module.check_heartbeat(now=now, force=True)
+
+        payload = enqueue.call_args.args[0]
+        self.assertNotEqual(self.WATCHED, payload["source"])
+        self.assertEqual("error", payload["level"])
+        self.assertIn(self.WATCHED, payload["summary"])
+
+    def test_never_seen_heartbeat_also_alerts(self) -> None:
+        """一次都没来过，和「来过但停了」同样是故障，不能因为查不到就当没事。"""
+        from datetime import datetime, timezone
+        from unittest import mock
+
+        from app.pipelines import heartbeat_watch as module
+
+        now = datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc)
+        conn = _HeartbeatConn(None)
+        with mock.patch.dict("os.environ", self._enabled_env()), mock.patch.object(
+            module.notify_client, "connect", return_value=conn
+        ), mock.patch.object(module.notify_client, "enqueue") as enqueue:
+            module.check_heartbeat(now=now, force=True)
+        enqueue.assert_called_once()
+
+    def test_database_failure_never_escapes(self) -> None:
+        """看护绝不能弄挂同步主循环。"""
+        from unittest import mock
+
+        from app.pipelines import heartbeat_watch as module
+
+        module.reset_throttle()
+        with mock.patch.dict("os.environ", self._enabled_env()), mock.patch.object(
+            module.notify_client, "connect", side_effect=RuntimeError("boom")
+        ):
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                self.assertTrue(module.check_heartbeat())
+            self.assertIn("心跳看护", buffer.getvalue())
 
 
 if __name__ == "__main__":

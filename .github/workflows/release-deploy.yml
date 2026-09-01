@@ -26,6 +26,10 @@ on:
           - business-cn-tcr-fallback
           - business-candidate
           - edge-us
+          # ⛔ 下面两条经 aliecs peer-channel 中转，只作应急旁路。日常不要选：
+          # aliecs 是按流量计费（200GB/月闸门），每次中转约 350-400MB 出方向流量。
+          - business-cn-peer-legacy
+          - bridge-peer-legacy
 
 concurrency:
   group: release-deploy
@@ -87,16 +91,16 @@ jobs:
             # 首推、force push、tag 推送等拿不到可比的前一个状态。bridge 是咽喉服务，
             # 拿不准时宁可不动，人工用 workflow_dispatch 补切。
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "- bridge: 无法与 \`${BEFORE:-<none>}\` 比对，跳过自动发布（需要时手工选择 bridge-peer）" >> "$GITHUB_STEP_SUMMARY"
+            echo "- bridge: 无法与 \`${BEFORE:-<none>}\` 比对，跳过自动切换（需要时手工选择 bridge-peer）" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
           if [ "$CURRENT" = "$PREVIOUS" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "- bridge: 构建上下文未变（\`${CURRENT:0:12}\`），不触发 peer 发布" >> "$GITHUB_STEP_SUMMARY"
+            echo "- bridge: 构建上下文未变（\`${CURRENT:0:12}\`），不触发 TCR 切换" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "- bridge: \`${PREVIOUS:0:12}\` → \`${CURRENT:0:12}\`，构建完成后自动走 peer 发布" >> "$GITHUB_STEP_SUMMARY"
+            echo "- bridge: \`${PREVIOUS:0:12}\` → \`${CURRENT:0:12}\`，构建完成后自动走 TCR 切换（cutover-bridge-tcr）" >> "$GITHUB_STEP_SUMMARY"
           fi
 
   build-push:
@@ -185,12 +189,15 @@ jobs:
           upload-release-assets: false
 
 
-  # TCR is retained as an asynchronous registry fallback. A slow cross-border
-  # mirror must never hold the peer-channel deployment in the critical path.
+  # ⚠️ 2026-09-01 起 TCR 是业务镜像与 bridge 的**唯一**部署来源，不再是异步 fallback。
+  # 旧注释「slow cross-border mirror must never hold the deployment in the critical path」
+  # 的前提（peer-channel 走 aliecs 是主路）已随取消 aliecs 中转而消失。
+  # 因此 continue-on-error 一并去掉：镜像没推到 TCR 就是真故障，必须当场红，
+  # 否则 deploy-business-cn / cutover-bridge-tcr 会去拉一个不存在的镜像，
+  # 失败点被推迟到部署中途。
   mirror-built-to-tcr:
     needs: build-push
     if: ${{ vars.TCR_BASE != '' }}
-    continue-on-error: true
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -238,13 +245,32 @@ jobs:
           target="docker://${TCR_BASE}/${{ matrix.image }}:${{ steps.tree.outputs.tag }}"
           timeout 25m skopeo copy --all --preserve-digests --retry-times 3 --authfile "$auth_file" "$source" "$target"
 
-  # 与 6 个业务镜像共用物理 peer-channel，但保持独立 release、部署、回滚和 ACK。
-  # bridge-cutover.yml 保留为显式 TCR fallback，不再位于日常发布关键路径。
+  # bridge 的日常发布路径（2026-09-01 起）。原来 push main 会自动走
+  # stage-openclaw-bridge-peer（经 aliecs peer-channel 中转镜像），那条每次约
+  # 350-400MB aliecs 出方向流量，而 aliecs 是按流量计费、200GB/月即被限速。
+  # bridge-cutover.yml 早就预留了 workflow_call 入口，这里直接接上，不新写部署逻辑。
+  # needs 里的 mirror-built-to-tcr 不是装饰：bridge 镜像也在那个 matrix 里，
+  # 它没跑完/失败时这条必须跟着不跑，否则 txecs 会去 TCR 拉一个还不存在的 tag。
+  cutover-bridge-tcr:
+    needs:
+      - resolve-release
+      - build-push
+      - mirror-built-to-tcr
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.resolve-release.outputs.bridge_changed == 'true') || (github.event_name == 'workflow_dispatch' && inputs.deploy_target == 'bridge-peer') }}
+    uses: ./.github/workflows/bridge-cutover.yml
+    with:
+      confirmation: CUTOVER_TXECS
+    secrets: inherit
+
+  # ⛔ 应急旁路，日常不走。与 6 个业务镜像共用物理 peer-channel，但保持独立
+  # release、部署、回滚和 ACK。只在显式选 bridge-peer-legacy 时触发。
   stage-openclaw-bridge-peer:
     needs:
       - resolve-release
       - build-push
-    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.resolve-release.outputs.bridge_changed == 'true') || (github.event_name == 'workflow_dispatch' && inputs.deploy_target == 'bridge-peer') }}
+    # ⛔ 2026-09-01：push main 的自动触发已移交 cutover-bridge-tcr。
+    # 这条只在显式选 bridge-peer-legacy 时才走 aliecs，避免开机后自己活过来。
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_target == 'bridge-peer-legacy' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -351,7 +377,9 @@ jobs:
     needs:
       - resolve-release
       - build-push
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_target == 'business-cn' }}
+    # ⛔ 2026-09-01：business-cn 已改指 TCR 路（deploy-business-cn）。
+    # 走 aliecs 中转要显式选 business-cn-peer-legacy。
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_target == 'business-cn-peer-legacy' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -479,7 +507,7 @@ jobs:
 
   mirror-third-party:
     needs: build-push
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.deploy_target == 'mirror-only' || inputs.deploy_target == 'sso-candidate' || inputs.deploy_target == 'business-cn-tcr-fallback' || inputs.deploy_target == 'business-candidate') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.deploy_target == 'mirror-only' || inputs.deploy_target == 'sso-candidate' || inputs.deploy_target == 'business-cn' || inputs.deploy_target == 'business-cn-tcr-fallback' || inputs.deploy_target == 'business-candidate') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -535,7 +563,15 @@ jobs:
       - resolve-release
       - build-push
       - mirror-third-party
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_target == 'business-cn-tcr-fallback' }}
+      # ⚠️ 2026-09-01 补：以前只 needs mirror-third-party（第三方镜像），
+      # 6 个自建业务镜像的 mirror-built-to-tcr 不在 needs 里、还带 continue-on-error，
+      # 于是「镜像还没推到 TCR / 推失败了」时这个 job 照样开跑，失败被推迟到
+      # txecs 上 docker pull 的那一刻。走 aliecs 的主路取消后 TCR 是唯一来源，
+      # 这个竞态必须堵上。
+      - mirror-built-to-tcr
+    # business-cn 自 2026-09-01 起就是这条 TCR 路；business-cn-tcr-fallback 保留为
+    # 别名，既有文档与操作习惯（停机期间一直用它）不失效。
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.deploy_target == 'business-cn' || inputs.deploy_target == 'business-cn-tcr-fallback') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

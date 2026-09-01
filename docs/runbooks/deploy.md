@@ -1,6 +1,34 @@
 # Runbook：部署 / CI / 回滚 / 502 排障
 
-## 链路图
+## ⚠️ 2026-09-01：aliecs 镜像中转已取消，本文以下的链路图按新路径读
+
+原来 `business-cn` 和 bridge 的日常发布都以 **aliecs 为跳板**：aliecs 从 GHCR 拉镜像、
+`regctl image export` 导出 tar、再经 peer-channel 推给 txecs。**导出与推送的字节全部计在
+aliecs 的公网出方向**，每次发布约 350–400 MB，而 aliecs 是按使用流量计费、200 GB/月即被
+限速（2026-08-15 实测越线后掉到约 3.4 KB/s）。
+
+现在两条都默认走 **TCR 直拉**，全程不碰 aliecs：
+
+| deploy_target | 走哪条 | 备注 |
+|---|---|---|
+| `business-cn` | `deploy-business-cn`（TCR） | **语义已改**。2026-08-16～08-31 期间大家习惯选的 `business-cn-tcr-fallback` 保留为同义别名，两个值等效 |
+| `bridge-peer`，以及 push main 触发的 bridge 自动发布 | `cutover-bridge-tcr`（复用 `bridge-cutover.yml` 的 `workflow_call` 入口） | bridge 不再自动走 aliecs |
+| `business-cn-peer-legacy` | `stage-business-cn-peer`（aliecs 中转） | ⛔ 应急旁路，必须显式选 |
+| `bridge-peer-legacy` | `stage-openclaw-bridge-peer`（aliecs 中转） | ⛔ 应急旁路，必须显式选 |
+
+⚠️ **这条改动不是 2026-08 那次 214.75 GB 的成因**——那次归因是 devbox 的 clash 把 aliecs
+选进 GLOBAL 组（`infra/roles/server/aliecs-edge/README.md`），镜像中转不背这个锅。
+取消它**不能替代** aliecs 开机前的三处 clash 检查。它只是一条本来就没必要的持续出流量。
+
+**连带的一个既有缺陷也一并修了**：`deploy-business-cn` 原来只 `needs: mirror-third-party`
+（第三方镜像），6 个自建业务镜像的 `mirror-built-to-tcr` 不在 needs 里、还带
+`continue-on-error: true`。以前 TCR 只是异步 fallback，无所谓；现在它是唯一来源，
+「镜像还没推到 TCR / 推失败了」时部署照样开跑，失败点被推迟到 txecs 上 `docker pull`
+的那一刻。现在 `mirror-built-to-tcr` 去掉了 `continue-on-error`，两个部署 job 都 needs 它。
+
+下面的链路图描述的是 **legacy 那两条旁路**，作为应急时的参考保留。
+
+## 链路图（⛔ 仅 `*-peer-legacy` 旁路，非日常路径）
 
 ```
 push main（PR 合并）
@@ -105,13 +133,15 @@ aliecs ─docker save|gzip -1─> /srv/peer-restic/repos/transfer/   （root:755
 
 | job | 触发条件（2026-08-10 实读） | 是什么 |
 |---|---|---|
-| `stage-business-cn-peer` | dispatch + `deploy_target=business-cn` | ~~**业务主路径**：aliecs 拉 GHCR → Syncthing → txecs~~ ⚠️ **该说法自 2026-08-16 起失效**（aliecs 停机，peer 通道断），见下方〈aliecs 停机期间主路径已换〉 |
-| `deploy-business-cn` | dispatch + `deploy_target=business-cn-tcr-fallback` | ~~⚠️ **名字骗人**：TCR 回退路径。走主路径部署时它**永远 skipped**，据此判断会把成功的部署误判成没部署~~ ⚠️ **判据自 2026-08-16 起反转**：现在它就是主路径，`success` 才算部署成功 |
+| `stage-business-cn-peer` | ~~dispatch + `deploy_target=business-cn`~~ ⚠️ **触发条件自 2026-09-01 起改为 `business-cn-peer-legacy`** | ~~**业务主路径**：aliecs 拉 GHCR → Syncthing → txecs~~ ⚠️ **该说法自 2026-08-16 起失效**（aliecs 停机，peer 通道断）；2026-09-01 起它降为必须显式选择的应急旁路，见本文顶部 |
+| `deploy-business-cn` | dispatch + `deploy_target=business-cn` **或** `business-cn-tcr-fallback`（两值等效） | ~~⚠️ **名字骗人**：TCR 回退路径。走主路径部署时它**永远 skipped**~~ ⚠️ **判据自 2026-08-16 起反转**：现在它就是主路径，`success` 才算部署成功。2026-09-01 起 `business-cn` 也指到这里 |
+| `cutover-bridge-tcr` | push 且 bridge 上下文变化，或 dispatch + `bridge-peer` | **bridge 的日常发布路径（2026-09-01 起）**。调 `bridge-cutover.yml` 的 `workflow_call` 入口，txecs 从 TCR 直拉 |
 | `prepare-business-candidate` | dispatch + `deploy_target=business-candidate` | 候选环境 |
-| `stage-openclaw-bridge-peer` | push 且 bridge 上下文变化，或 dispatch + `bridge-peer` | bridge 独立发布单元 |
+| `stage-openclaw-bridge-peer` | ~~push 且 bridge 上下文变化，或 dispatch + `bridge-peer`~~ ⚠️ **自 2026-09-01 起只认 `bridge-peer-legacy`，不再有任何自动触发** | bridge 独立发布单元，经 aliecs 中转。⛔ 应急旁路 |
 | `mirror-built-to-tcr` | `vars.TCR_BASE != ''`，**push 也跑** | 异步备用镜像，失败不阻塞主发布 |
 
 部署命令：`gh workflow run release-deploy.yml --ref main -f deploy_target=business-cn`
+（2026-09-01 起这条命令走的是 TCR 直拉，不再经 aliecs；命令字面没变，走的路变了）
 
 **2026-08-10 实际踩到**：PR #288 合并后 run #376 显示 `Success`、7 个 `build-push` 全绿，
 据此报告"已部署"是错的——`stage-business-cn-peer` 压根没被触发。取证发现四个容器仍是
@@ -131,7 +161,14 @@ curl -s https://hydwang.xyz/<改动页面> | grep -c '<本次新增的标记>'  
 
 > ⚠️ 上一节表格里「`stage-business-cn-peer` 是业务主路径」「`deploy-business-cn` 名字骗人、
 > 恒 skipped」两句**自 2026-08-16 起失效**。照旧句走会 dispatch 一个永远等不到 ACK 的 job，
-> 并把真正成功的部署判成没部署。旧句保留是因为 aliecs 复机后主路径会换回去。
+> 并把真正成功的部署判成没部署。
+>
+> ⚠️ **「旧句保留是因为 aliecs 复机后主路径会换回去」这个理由自 2026-09-01 起也不成立了。**
+> 那天取消了 aliecs 镜像中转（理由是它每次发布吃 350–400 MB aliecs 出方向流量，而那台机器
+> 按流量计费、200 GB/月即被限速），**复机后主路径也不换回去**。TCR 直拉现在是常态，
+> aliecs 中转降为 `*-peer-legacy` 应急旁路。旧句现在纯粹作为历史留存，见本文顶部那节。
+
+本节标题里的「停机期间」自 2026-09-01 起同样过时——它描述的不再是临时状态，而是常态。
 
 aliecs 于 2026-08-16 停机，peer 通道（aliecs 拉 GHCR → Syncthing → txecs）随之断掉。
 2026-08-28 复核：`ssh aliecs` 直接 `Connection timed out`。
