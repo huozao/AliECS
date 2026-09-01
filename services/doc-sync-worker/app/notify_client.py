@@ -87,12 +87,20 @@ def connect() -> Any:
     return _connect()
 
 
-def enqueue(payload: dict[str, Any], *, dedup_key: str = "", conn: Any = None) -> bool:
+def enqueue(
+    payload: dict[str, Any], *, dedup_key: str = "", conn: Any = None, commit: bool = True
+) -> bool:
     """写 outbox。返回是否新建（False = 这个 dedup_key 已经进过队）。
 
     失败不抛异常：通知发不出去不该让调用它的同步作业算失败——
     这是四处旧实现共同的既有行为，收敛时保持不变。
+
+    ``commit=False`` 只在调用方传了自己的 ``conn`` 时才有意义：这一行会留在调用方的
+    事务里，由调用方连同它自己的状态变更一起提交。自管连接时必须提交，否则连接一关
+    这行就没了，而且返回值仍是 True——失败态和成功态在观测面上长得一样。
     """
+    if conn is None and not commit:
+        commit = True
     key = dedup_key or default_dedup_key(payload)
     payload = dict(payload)
     payload["dedup_key"] = key
@@ -120,7 +128,8 @@ def enqueue(payload: dict[str, Any], *, dedup_key: str = "", conn: Any = None) -
                 ),
             )
             created = cur.fetchone() is not None
-        connection.commit()
+        if commit:
+            connection.commit()
         return created
     except Exception as exc:  # noqa: BLE001
         print(f"[notify] 写 outbox 失败，通知丢弃：{type(exc).__name__}")
