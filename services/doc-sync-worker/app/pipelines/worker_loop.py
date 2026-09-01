@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app import notify_client
+from app.pipelines import heartbeat_watch
 from app.pipelines.backfill_smartsheet_images import run_backfill_images
 from app.pipelines.document_locator import reconcile_document_locators
 from app.pipelines.document_locator_mirror import (
@@ -301,6 +302,14 @@ def run_worker_loop(
             notify_client.request_flush()
         except Exception as exc:  # noqa: BLE001 - 通知冲刷绝不能影响同步主循环
             print(f"[文档同步循环] 通知冲刷异常：{type(exc).__name__}")
+        # aliecs 流量心跳的反向看护。挂这一层的理由与 request_flush 完全相同——
+        # 外层一轮是一个完整调度周期，放那里等于一天最多检查一次，而它自己内部
+        # 还有一层按小时的节流，两层叠起来就再也不会触发了。
+        # 函数自带节流与开关（默认关闭），每轮调它的开销是一次 monotonic 比较。
+        try:
+            heartbeat_watch.check_heartbeat()
+        except Exception as exc:  # noqa: BLE001 - 看护绝不能影响同步主循环
+            print(f"[文档同步循环] 心跳看护异常：{type(exc).__name__}")
         sleep_started: float | None = None
         try:
             sleep_started = monotonic()
@@ -495,17 +504,23 @@ def run_worker_loop(
         try:
             while remaining > 0:
                 step = min(poll_seconds, remaining)
-                remaining -= step
                 observed = _poll_once(
                     step,
-                    observe_clock=remaining <= 0 or planned_candidate_due is not None,
+                    observe_clock=True,
                     on_sleep_elapsed=_add_observed_sleep if shadow_run_ids else None,
                 )
+                assert observed is not None
+                # ⚠️ 不能只写 `remaining -= step`：一步的实际耗时 = sleep + 这一 poll 干的活
+                #（消费手动请求、告警器全表评估、中枢 flush），按名义步长扣减等于把工时
+                # 全部漏算，一天 2800 多步累积成十几分钟的起跑延迟——2026-09-01 实测
+                # anchor 是 00:30 而实际 00:54 才开跑，配上「SLA = 调度周期」每晚必误报。
+                # 目标是墙钟上的 due，所以每步都拿 due - now() 重算。
+                # 同时保留名义扣减做上界：注入的假时钟可能不前进（测试里 sleep 是空实现），
+                # 只靠时钟差会永不退出。
+                remaining = min(remaining - step, (expected_terminal_boundary - observed).total_seconds())
                 if remaining <= 0:
-                    assert observed is not None
                     terminal_poll_covered_next_preflight = observed >= expected_terminal_boundary
                 if planned_candidate_due is not None:
-                    assert observed is not None
                     refreshed_candidate = _read_candidate_decision(observed, last_full, read_platform_schedule_config)
                     if refreshed_candidate is not None:
                         refreshed_decision, _ = refreshed_candidate

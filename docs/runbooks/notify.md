@@ -316,6 +316,49 @@ ssh txecs "sudo docker logs business-cn-backend-api-1 2>&1 | grep 'request valid
 只按类别判会漏掉 `ℹ️ ` 和 `⚠️ ` 开头的标题。真正要问的是「是不是按 emoji 呈现」，
 那由后面的变体选择符 `U+FE0F` 决定，两个条件都要看。
 
+## aliecs 流量看护：一条「靠缺席报警」的通道（2026-09-01）
+
+`aliecs-traffic` 是第一个**设备侧**来源，走 `POST /v1/internal/notify/send`。它发两种：
+跨档告警（50/100/150/180/200 GB，级别 info→fatal）和每天一条日报。
+
+**日报不是可有可无的例行公事，它是心跳。** 理由是这条链路有一个别的来源都没有的性质：
+
+> aliecs 按使用流量计费，越过 200 GB 闸门后公网被限速到约 3.4 KB/s
+> （2026-08-15 实测）。**那时它自己的告警 POST 也发不出去。**
+> 设备侧再怎么重试、落盘补发，都补不上「已经打不出去了」这一种。
+
+所以配套装了一条**反向看护**在 worker 侧：
+`services/doc-sync-worker/app/pipelines/heartbeat_watch.py`，挂在 `_poll_once`
+（不是外层 `while True`，理由同下文〈冲刷频率跟 poll 走〉），自带每小时节流，查
+`notify_outbox` 里 `source_key='aliecs-traffic'` 的最新一行超过阈值就报。
+
+三个容易写错的地方，都有测试守着（`tests/test_doc_sync_worker.py::AliecsHeartbeatWatchTests`）：
+
+1. **告警必须用别的 source_key 写回 outbox**（现在是 `doc-sync`）。用被监视的那个，
+   这条告警行自己就把心跳「续上」了，下一轮发现「最近有行」于是不再告警——
+   自己消掉自己的触发条件，而 outbox 有行、deliveries 有行、看护也在跑，三处全绿。
+2. **默认关闭**（`ALIECS_TRAFFIC_HEARTBEAT_MAX_AGE_HOURS` 不设或 ≤0）。采集器还没装就打开
+   会天天报「心跳缺失」，而那只是「还没上线」。**打开这个开关的前提是已经收到过第一条。**
+3. 阈值建议 **30 小时**，容忍错过一次日报（日报按设备本地日期发，不是固定时刻）。
+
+设备侧的实现、档位依据与 vnstat 对账要求在 infra `roles/server/aliecs-traffic/README.md`。
+
+### 建这条通道的两条 SQL
+
+```sql
+INSERT INTO notify_sources (source_key, token_sha256, note)
+VALUES ('aliecs-traffic', encode(sha256('<明文token>'::bytea), 'hex'),
+        'aliecs 出方向流量看护；token 在 infra secrets/aliecs-traffic.enc.env');
+
+INSERT INTO notify_routes (source_key, event_pattern, min_level, channel, target_json, note)
+VALUES ('aliecs-traffic', '*', 'info', 'feishu',
+        '{"profile":"COMPANY_A","receive_id":"<运维群 chat_id>","receive_id_type":"chat_id"}',
+        'min_level 取 info 是为了日报也进群——只有告警没有基线，涨到一半也看不出异常');
+```
+
+`min_level` 若改成 `warn`，日报不再进群但**仍会写进 outbox**（无路由时写墓碑行），
+心跳看护照常工作——它查的是 outbox 不是 deliveries。
+
 ## 加一个新来源
 
 ```sql
