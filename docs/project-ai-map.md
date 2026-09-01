@@ -1,10 +1,14 @@
 # AliECS AI 项目地图（代码位置版）
 
-> 给 AI 用：功能名 → 代码位置 → 输入/输出 → 验证方式。功能的人类语义对照见工作区顶层 `功能地图-人类版.md`。默认只改 AliECS；涉及 webdock/infra 见顶层 AGENTS.md 边界。
+> 给 AI 用：功能名 → 代码位置 → 输入/输出 → 验证方式。**本文是 AliECS 内「改哪里」的唯一事实源**——
+> 2026-09-01 起 `docs/project-navigation.md` 已并入本文并删除，别再找那份简表。
+> 功能的人类语义对照见工作区顶层 `功能地图-人类版.md`。默认只改 AliECS；涉及 webdock/infra 见顶层 AGENTS.md 边界。
 
 ## services/backend-api
 
 FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/routers/`（拆域见 `docs/backend-api-domains.md`）：
+<!-- nav-check: services/backend-api/app/main.py -->
+<!-- nav-check-python: services/backend-api/app/main.py:app -->
 
 | router | 功能 |
 |---|---|
@@ -104,6 +108,19 @@ MCP 编程路线（OAuth 已上线；⚠️ ECS nginx 域根的 OAuth 路由不�
 排障见 `docs/runbooks/deploy.md`。运行 env 是渲染产物
 （真源=infra `secrets/txecs-production.enc.env`），勿在主机长期直改。
 验证：`docker compose --env-file deploy/ecs/runtime.env.example -f deploy/ecs/compose.prod.yml config`。
+
+入口脚本与工作流：
+
+| 动作 | 入口 |
+|---|---|
+| 生产角色部署 | `deploy/ecs/deploy-role.sh` |
+| 数据迁移 | `deploy/ecs/migrate.sh` |
+| 健康检查 | `deploy/ecs/healthcheck.sh` |
+| 回滚 | `deploy/ecs/rollback.sh`、`deploy/ecs/emergency-rollback.sh` |
+| 构建与目标选择 | `.github/workflows/release-deploy.yml` |
+| bridge 切换 | `.github/workflows/bridge-cutover.yml` |
+
+语法检查：`bash -n deploy/ecs/{deploy-role,migrate,healthcheck,rollback}.sh`。
 
 ## db/migrations
 

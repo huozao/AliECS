@@ -2,7 +2,6 @@
   "documents": [
     "AGENTS.md",
     "README.md",
-    "docs/project-navigation.md",
     "docs/project-ai-map.md",
     "docs/fleet.md",
     "docs/runbooks/deploy.md",
@@ -29,6 +28,7 @@
     "deploy/ecs/migrate.sh",
     "deploy/ecs/healthcheck.sh",
     "deploy/ecs/rollback.sh",
+    "deploy/ecs/emergency-rollback.sh",
     "db/migrations",
     ".github/workflows/release-deploy.yml",
     ".github/workflows/bridge-cutover.yml"
