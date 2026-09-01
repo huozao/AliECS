@@ -343,17 +343,58 @@ ssh txecs "sudo docker logs business-cn-backend-api-1 2>&1 | grep 'request valid
 
 设备侧的实现、档位依据与 vnstat 对账要求在 infra `roles/server/aliecs-traffic/README.md`。
 
-### 建这条通道的两条 SQL
+### 首次真实调用（2026-09-01）
+
+| 项 | 结果 |
+|---|---|
+| 设备侧 `aliecs-traffic` → `/v1/internal/notify/send` | **通**。`delivered=True`，`notify_deliveries` 里 `status=sent, attempts=1`，用户在飞书运维群确认收到 |
+| 心跳缺席看护（接收端） | **代码已上生产**（`doc-sync-worker` 镜像 `t-fdc345c9d06f`），但**开关仍关闭**，因此这条路径**一次都没有被真实触发过** |
+
+⚠️ 按〈代码就绪 ≠ 这条路真被调用过〉，看护那一栏现在是空的。开开关之后必须造一次真实的
+「心跳缺席」（把 `notify_outbox` 里 aliecs-traffic 的最新一行时间改旧，或停设备侧 timer 满
+30 小时），确认它真的报出来，再把结果补进上表。**在那之前不要认为这条反向看护是可用的。**
+
+### 上线时踩到的三个「只有真实调用才会显形」的问题
+
+1. **`doc-sync` 的既有路由 `event_pattern` 是 `sync_alert`，不是 `*`。** 心跳告警的 event 是
+   `aliecs.traffic.heartbeat_missing`，**匹配不到任何路由**，会变成无路由墓碑行、永远发不出去。
+   所以单独加了一条 `doc-sync` / `aliecs.traffic.*` / `warn` 的路由。
+   **加新 event 前先查这张表，别假设某个 source 的路由是通配的。**
+2. **设备先装好、`notify_sources` 行后插，中间窗口内投递全是 401**，而设备侧当时把整个 4xx
+   当成「不可重试」直接丢弃——第一条日报就这么没了。设备侧已改成只丢 400/422，
+   但**上线顺序仍应是「先插 SQL 建好来源和路由，再装设备侧」**，别依赖重试兜底。
+3. **postgres 容器的用户和库都是 `app`，不是 `postgres`。** 用 `psql -U postgres` 会得到
+   `FATAL: role "postgres" does not exist`，看起来像库坏了。正确写法：
+
+   ```bash
+   ssh txecs "sudo docker exec business-cn-postgres-1 psql -U app -d app -c '<SQL>'"
+   ```
+
+   （`notify_deliveries` 没有 `updated_at` 列，写查询时别顺手加。）
+
+### 建这条通道的三条 SQL
+
+**是三条不是两条**——第三条容易漏，漏了心跳告警发不出去（见上文第 1 点）。
 
 ```sql
+-- 1. 来源（库里只存 sha256；token_digest 就是 sha256(utf-8 明文) 的 hex）
 INSERT INTO notify_sources (source_key, token_sha256, note)
 VALUES ('aliecs-traffic', encode(sha256('<明文token>'::bytea), 'hex'),
         'aliecs 出方向流量看护；token 在 infra secrets/aliecs-traffic.enc.env');
 
+-- 2. 设备侧的告警与日报
 INSERT INTO notify_routes (source_key, event_pattern, min_level, channel, target_json, note)
 VALUES ('aliecs-traffic', '*', 'info', 'feishu',
         '{"profile":"COMPANY_A","receive_id":"<运维群 chat_id>","receive_id_type":"chat_id"}',
         'min_level 取 info 是为了日报也进群——只有告警没有基线，涨到一半也看不出异常');
+
+-- 3. 接收端的心跳缺席告警。它用 source='doc-sync' 写回（不能用被监视的
+--    source_key，否则会把心跳「续上」自己消掉触发条件），而 doc-sync 的既有路由
+--    只匹配 event_pattern='sync_alert'，不加这条就永远匹配不到任何路由。
+INSERT INTO notify_routes (source_key, event_pattern, min_level, channel, target_json, note)
+VALUES ('doc-sync', 'aliecs.traffic.*', 'warn', 'feishu',
+        '{"profile":"COMPANY_A","receive_id":"<运维群 chat_id>","receive_id_type":"chat_id"}',
+        '心跳缺席告警');
 ```
 
 `min_level` 若改成 `warn`，日报不再进群但**仍会写进 outbox**（无路由时写墓碑行），
