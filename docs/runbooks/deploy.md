@@ -20,6 +20,32 @@ aliecs 的公网出方向**，每次发布约 350–400 MB，而 aliecs 是按�
 选进 GLOBAL 组（`infra/roles/server/aliecs-edge/README.md`），镜像中转不背这个锅。
 取消它**不能替代** aliecs 开机前的三处 clash 检查。它只是一条本来就没必要的持续出流量。
 
+### ⚠️ 跨境 mirror 现在会挡住部署——部署红了先看是不是它，别从头排查
+
+`mirror-built-to-tcr` 去掉 `continue-on-error` 之后，**任何一个镜像同步失败都会让整个
+workflow 变红、`deploy-business-cn` 根本不跑**。2026-09-01 第一次实跑就撞上：
+
+```
+mirror-built-to-tcr (tplus-sync-worker): failure
+  → skopeo: dial tcp 106.55.124.140:443: i/o timeout
+  → 其余 6 个镜像全 success
+```
+
+**判据：同批多个 mirror 里只挂 1-2 个 + 报 `i/o timeout` = 跨境网络抖动，不是代码问题。**
+形态与 2026-08-04 那次完全一致（也是同批 7 个挂 1 个）。处置就一条：
+
+```bash
+gh run rerun <run-id> --repo huozao/AliECS --failed
+```
+
+重跑只跑失败的 job 和它的下游，`deploy-business-cn` 会跟着跑起来。09-01 实测重跑即过。
+
+不要因为这个去查镜像构建、TCR 凭据或 compose——`build-push` 全绿就说明镜像本身没问题，
+失败只在「从 GHCR 搬到 TCR」这一跨境跳。**也不要因为它抖就把 `continue-on-error` 加回去**：
+TCR 现在是唯一镜像来源，静默跳过同步只会把失败推迟到 txecs 上 `docker pull` 那一刻。
+
+抖动不是罕见事件（上线首日即撞上），日常部署要预留「可能重跑一次」的心理预期。
+
 **连带的一个既有缺陷也一并修了**：`deploy-business-cn` 原来只 `needs: mirror-third-party`
 （第三方镜像），6 个自建业务镜像的 `mirror-built-to-tcr` 不在 needs 里、还带
 `continue-on-error: true`。以前 TCR 只是异步 fallback，无所谓；现在它是唯一来源，
