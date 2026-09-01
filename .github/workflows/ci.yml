@@ -12,12 +12,26 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 —— check_doc_freshness 要跑 base...head 的 diff 和
+      # git log 时间戳，默认的浅检出拿不到，脚本会静默变成死代码。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: 导航一致性与红绿测试
         run: |
           python scripts/check_navigation.py
           python -m unittest discover -s tests -p "test_*navigation*.py"
+
+      # 硬门：新增/删除 router、service 或迁移时，project-ai-map.md 必须同批更新。
+      # 判据落在连接处——只查文档或只查代码都会得到「正常」。
+      # 软告警：导航文档比代码旧太多时 WARN（内容腐烂，硬门看不见这一类）。
+      - name: 文档同批更新检查
+        run: |
+          python scripts/check_doc_freshness.py \
+            --range "${{ github.event.pull_request.base.sha }}" \
+                    "${{ github.event.pull_request.head.sha }}" \
+            --staleness
 
       - name: PR 导航影响记录
         env:

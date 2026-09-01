@@ -5,8 +5,7 @@
 ## AI 与人类首跳
 
 - 工作规则：[`AGENTS.md`](AGENTS.md)
-- 功能到代码：[`docs/project-ai-map.md`](docs/project-ai-map.md)
-- 修改入口：[`docs/project-navigation.md`](docs/project-navigation.md)
+- 功能到代码、修改入口：[`docs/project-ai-map.md`](docs/project-ai-map.md)
 - 设备与运行位置：[`docs/fleet.md`](docs/fleet.md)
 - 部署、回滚与生产验证：[`docs/runbooks/deploy.md`](docs/runbooks/deploy.md)
 - 飞书链路：[`docs/runbooks/feishu.md`](docs/runbooks/feishu.md)

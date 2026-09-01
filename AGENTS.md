@@ -23,7 +23,7 @@ AliECS 是以 AI 客户端协作为主要开发方式的 Docker 化 Web/API 项�
 | 任务涉及 | 必读 |
 |---|---|
 | 设备/主备/端口/SSH | `docs/fleet.md`（单一事实源） |
-| 改哪个目录/入口文件 | `docs/project-navigation.md`、`docs/project-ai-map.md` |
+| 改哪个目录/入口文件 | `docs/project-ai-map.md`（2026-09-01 起是唯一一份，`project-navigation.md` 已并入并删除） |
 | doc-sync-worker / 同步表结构 | `docs/constraints/doc-sync.md` |
 | 飞书↔ChatGPT 链路 | `docs/runbooks/feishu.md` |
 | 部署/CI/回滚 | `docs/runbooks/deploy.md` |
