@@ -164,7 +164,7 @@ aliecs ─docker save|gzip -1─> /srv/peer-restic/repos/transfer/   （root:755
 | `cutover-bridge-tcr` | push 且 bridge 上下文变化，或 dispatch + `bridge-peer` | **bridge 的日常发布路径（2026-09-01 起）**。调 `bridge-cutover.yml` 的 `workflow_call` 入口，txecs 从 TCR 直拉 |
 | `prepare-business-candidate` | dispatch + `deploy_target=business-candidate` | 候选环境 |
 | `stage-openclaw-bridge-peer` | ~~push 且 bridge 上下文变化，或 dispatch + `bridge-peer`~~ ⚠️ **自 2026-09-01 起只认 `bridge-peer-legacy`，不再有任何自动触发** | bridge 独立发布单元，经 aliecs 中转。⛔ 应急旁路 |
-| `mirror-built-to-tcr` | `vars.TCR_BASE != ''`，**push 也跑** | 异步备用镜像，失败不阻塞主发布 |
+| `mirror-built-to-tcr` | `vars.TCR_BASE != ''`，**push 也跑** | ~~异步备用镜像，失败不阻塞主发布~~ ⚠️ 「不阻塞」自 2026-09-01 起只对业务成立：`cutover-bridge-tcr` 的 `needs` 里有它，**这一步失败 bridge 就完全没部署**（cutover 变 skipped）。2026-09-02 实测见〈bridge 的判据〉 |
 
 部署命令：`gh workflow run release-deploy.yml --ref main -f deploy_target=business-cn`
 （2026-09-01 起这条命令走的是 TCR 直拉，不再经 aliecs；命令字面没变，走的路变了）
@@ -246,22 +246,63 @@ done
 ```
 
 标签未变的服务，TCR 里已有上一轮的同名镜像，它的 mirror 失败可以忽略。
-失败的补法：`gh run rerun <run-id> --failed`（只重跑 failed，skipped 的不会被拉起）。
+失败的补法：`gh run rerun <run-id> --failed`。⚠️「skipped 的不会被拉起」这句要分两种 skipped 看
+（2026-09-02 实测）：**因 `if` 条件不满足而 skipped 的确实不会**（如 `stage-business-cn-peer`），
+但**因上游失败而 skipped 的下游 job 会被重新评估并执行**——本次 `cutover-bridge-tcr` 就是在
+mirror 重跑成功后自己跑起来的，不需要另外手工 dispatch。
 
 **bridge 的判据是另一套，别套用业务那条。** bridge 在 `deploy/openclaw-bridge/**` 内容变化时
-**push 即部署**（不需要 dispatch），走 `stage-openclaw-bridge-peer`；此时
-`deploy-business-cn` 和 `stage-business-cn-peer` 都是 skipped，属正常——本轮压根没动业务镜像，
-据此判"没部署"是误判。容器侧证据取这两样（2026-08-14 PR #316 实测）：
+**push 即部署**（不需要 dispatch）；此时 `deploy-business-cn` 和 `stage-business-cn-peer` 都是
+skipped，属正常——本轮压根没动业务镜像，据此判"没部署"是误判。
+
+⚠️ 「走 `stage-openclaw-bridge-peer`、判据取它的 conclusion」这句自 2026-09-01 起失效：那一轮把
+bridge 的日常发布改到了 `cutover-bridge-tcr`（TCR 直拉），`stage-openclaw-bridge-peer` 已降为只认
+`bridge-peer-legacy` 的应急旁路，**日常 push 里它恒为 skipped**（2026-09-02 PR#353 实测），拿它判
+"没部署"会得出相反结论。现在的 job 判据是 `cutover-bridge-tcr`：
 
 ```bash
 gh run view <run-id> --repo huozao/AliECS --json jobs \
-  --jq '.jobs[] | select(.name|test("stage-openclaw-bridge-peer")) | .conclusion'
-ssh txecs "docker ps --filter name=openclaw-bridge --format '{{.Status}}|{{.CreatedAt}}'"
-ssh txecs "grep -i bridge /srv/internal-stack/release.env"
+  --jq '.jobs[] | select(.name|test("cutover-bridge-tcr")) | .conclusion'
+ssh txecs "docker ps --filter name=openclaw-bridge --format '{{.Status}}|{{.Image}}'"
+ssh txecs "sudo grep -i bridge /srv/internal-stack/release.env"
 ```
+
+`release.env` 要 `sudo` 读（文件 0600，直接 `grep` 报 Permission denied）。还有一条更硬的判据：
+`docker exec openclaw-bridge grep -c <本次新增的函数名> /app/openclaw_bridge.py`——digest 和
+run-id 只能证明"换了镜像"，这条直接证明**你写的代码在生产进程里**。
 
 `OPENCLAW_BRIDGE_VERSION` 的值形如 `sha-<commit12>@<run-id>/<attempt>`，**run-id 能直接和本次
 run 对上**——这是比容器 CreatedAt 更硬的证据（CreatedAt 只能证明"重建过"，证明不了是哪一轮）。
+
+### bridge 的 mirror 卡在某个 blob 上（2026-09-02 实测）
+
+现象：`mirror-built-to-tcr (openclaw-bridge)` 连续两次 `exit code 124`（`timeout 25m` 触发），
+日志里反复是同一行——`Reading blob body from https://ghcr.io/... failed (unexpected EOF),
+reconnecting after 10485760 bytes…`，**每次都卡在同一个 blob、同一个 10MB 边界**，而其余 6 个
+镜像的 mirror 全部成功。
+
+**先分清是「GHCR 坏了」还是「runner 那条路坏了」**，两者的处置完全不同。判据是拿同一个 blob 在
+另一台机器上测速（只读，几乎不耗流量）：
+
+```bash
+TOKEN=$(curl -s -u "<gh-user>:$(gh auth token)" \
+  "https://ghcr.io/token?service=ghcr.io&scope=repository:huozao/openclaw-bridge:pull" \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
+ssh aliecs "curl -sL -o /dev/null -w 'http=%{http_code} bytes=%{size_download} secs=%{time_total}\n' \
+  -H 'Authorization: Bearer $TOKEN' -r 0-10485760 \
+  https://ghcr.io/v2/huozao/openclaw-bridge/blobs/sha256:<blob>"
+```
+
+本次 aliecs 拉同一个 blob 是 10MB / 0.3s，**GHCR 本身没问题**，坏的是 runner→GHCR 那一段。
+⚠️ 记得 `-L`：不跟重定向只会拿到 `307` 和 0 字节，容易误判成"拉不到"。
+
+为什么偏偏是 bridge：那个 blob 是**新的基础镜像层**（29.8MB），TCR 里没有所以必须真传；其余 6 个
+镜像的基础层 TCR 已有，skopeo 直接跳过，所以它们看起来"一切正常"。
+
+处置顺序：① `gh run rerun <run-id> --failed`，**本次第三次就过了**，且 `cutover-bridge-tcr` 自己
+被拉起，全程不用手工 dispatch；② 真的连着失败很多次，才考虑 `bridge-peer-legacy`（aliecs 中转，
+⛔ 应急旁路，必须显式选）。**不要自己在设备上搬镜像**：infra 里的 TCR 凭据是 pull-only，推送身份
+只在 GitHub secrets，手工搬运既没权限也绕开了回滚。
 
 ## 同一个 commit 重复部署：ACK 按「每次部署」命名（2026-08-13 修复）
 
