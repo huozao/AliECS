@@ -163,6 +163,12 @@ proxy-groups:
 
 `AI服务` 默认选中第一个自建节点。理由：ChatGPT / Claude 对出口 IP 敏感，机场共享 IP 容易触发风控；自建节点 IP 固定干净。
 
+> ⚠️ 上面这段 `proxy-groups` 与下面「改动 3」的域名清单，**自 2026-09-02 起只反映首版设计，不再是当前产物的样子**。本文是设计时的时间点材料，保留原样以便对照，当前事实源是 `app/clash_profile/render.py` 与两个模板文件，行为由 `tests/test_clash_profile_render.py` 断言。三处已知偏差：
+>
+> - `AI服务` 的应急项 2026-08-15 起是**具体机场节点**（`use: [<provider_key>]`），不再是 `"节点选择"` 组——旧写法在自建节点真挂掉时切过去出口不变，等于没切。
+> - 组从三个增加到六个：新增 `Dukascopy`（结构性不含自建节点，隔离批量抓数据的出口 IP 与计费流量）、`GitHub`（默认自建节点，git 长连接要稳）、`全球直连`（Windows Update / svchost 指向它而不是内置 DIRECT，留一个面板开关）。
+> - AI 域名清单已扩到覆盖 Claude 全域（含 `claude.com` 这个**另一个根域**）、Gemini、grok/x.ai、Copilot、Cursor、Perplexity；每个域名都必须同时出现在规则、`nameserver-policy`、`fallback-filter` 三处。
+
 **边界情况**：一个 provider 都没有（初次部署，或全部禁用）时，`自动选择` 组不生成，`节点选择` 组不带 `use` 字段——空的 url-test 组会让 mihomo 启动失败。
 
 ### 改动 3：AI 相关规则改指向

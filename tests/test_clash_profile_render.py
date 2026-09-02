@@ -164,6 +164,132 @@ class ClashProfileRenderTests(unittest.TestCase):
         ai = next(g for g in groups if g["name"] == "AI服务")
         self.assertNotIn("use", ai)
 
+    def test_dukascopy_group_never_contains_self_nodes(self) -> None:
+        """Dukascopy 组不含自建节点，这一点必须是结构性的而不是靠人工核验。
+
+        2026-08-17 曾在客户端 profile 扩展里靠 exclude-filter 做隔离，08-21 的一次
+        编辑把 filter 改丢了，直到 08-25 排查代理时才发现——期间批量抓数据和 AI
+        账号共用出口 IP。放进产物并在这里断言，是为了让它改不掉。
+
+        两层理由：Dukascopy 按 IP 限流且是「突发配额 + 长封锁」（实测 ≥15 小时），
+        以及自建节点按流量计费，批量补历史会直接吃额度。
+        """
+        out = self.render.render_profile([self.node], [self.provider])
+        groups = _section(out, "proxy-groups")
+        duka = next(g for g in groups if g["name"] == "Dukascopy")
+        self.assertEqual(duka["use"], ["airport7"])
+        self.assertNotIn("proxies", duka)
+        self.assertNotIn("self-a", json.dumps(duka, ensure_ascii=False))
+
+    def test_dukascopy_group_degrades_to_direct_without_provider(self) -> None:
+        """没有订阅源时降级 DIRECT，**不能省略整个组**。
+
+        规则表是静态模板，dukascopy 那一行恒存在；组不存在会让 mihomo 整份配置
+        加载失败，失败形态是内核起不来而不是某条规则失效。
+        """
+        out = self.render.render_profile([self.node], [])
+        groups = _section(out, "proxy-groups")
+        duka = next(g for g in groups if g["name"] == "Dukascopy")
+        self.assertEqual(duka["proxies"], ["DIRECT"])
+        self.assertNotIn("use", duka)
+
+    def test_github_group_defaults_to_self_node(self) -> None:
+        # git 长连接被换节点会断，默认要稳；面板上仍可改选机场节点。
+        out = self.render.render_profile([self.node], [self.provider])
+        groups = _section(out, "proxy-groups")
+        github = next(g for g in groups if g["name"] == "GitHub")
+        self.assertEqual(github["proxies"][0], "self-a")
+        self.assertEqual(github["use"], ["airport7"])
+
+    def test_direct_group_exists_and_prefers_direct(self) -> None:
+        # Windows Update 一类规则指向这个组而不是内置 DIRECT，为的是留一个面板开关。
+        out = self.render.render_profile([self.node], [])
+        groups = _section(out, "proxy-groups")
+        direct = next(g for g in groups if g["name"] == "全球直连")
+        self.assertEqual(direct["proxies"][0], "DIRECT")
+
+    def test_every_rule_target_group_exists(self) -> None:
+        """规则里引用的每个策略组都必须在产物里存在。
+
+        引用一个不存在的组不会只让那条规则失效，而是让 mihomo **整份配置加载失败**。
+        无订阅源是最容易漏的分支，所以两种情况都测。
+        """
+        for providers in ([], [self.provider]):
+            out = self.render.render_profile([self.node], providers)
+            names = {g["name"] for g in _section(out, "proxy-groups")}
+            builtin = {"DIRECT", "REJECT", "no-resolve"}
+            for line in out.splitlines():
+                stripped = line.strip()
+                if not stripped.startswith("- ") or "," not in stripped:
+                    continue
+                target = stripped.split(",")[-1].strip()
+                if target in builtin or target.endswith(")"):
+                    continue
+                self.assertIn(target, names | builtin, f"规则指向了不存在的组：{stripped}")
+
+    def test_new_ai_domains_are_covered_in_rules_and_dns(self) -> None:
+        """2026-09-02 新增的 AI 域名，同样三处齐全。
+
+        claude.com 是**另一个根域**，anthropic.com 与 claude.ai 都盖不到——当天日志
+        实测 code.claude.com 和 platform.claude.com 都落在兜底 MATCH。
+        """
+        out = self.render.render_profile([self.node], [])
+        lines = out.splitlines()
+        for suffix in (
+            "claude.com",
+            "oaistatsig.com",
+            "grok.com",
+            "x.ai",
+            "githubcopilot.com",
+            "cursor.com",
+            "cursor.sh",
+            "perplexity.ai",
+            "gemini.google.com",
+            "aistudio.google.com",
+            "generativelanguage.googleapis.com",
+        ):
+            self.assertIn(f"  - DOMAIN-SUFFIX,{suffix},AI服务", lines)
+            self.assertIn(f'"+.{suffix}":', out)
+            self.assertIn(f'      - "+.{suffix}"', lines)
+
+    def test_gemini_rules_precede_the_generic_google_rules(self) -> None:
+        """generativelanguage.googleapis.com 必须排在 googleapis.com 之前。
+
+        规则是首次命中即止，顺序反了 Gemini 就被 googleapis.com 吃掉走「节点选择」。
+        顺序只靠位置维持，这条断言是唯一的保护。
+        """
+        lines = self.render.render_profile([self.node], []).splitlines()
+        specific = lines.index("  - DOMAIN-SUFFIX,generativelanguage.googleapis.com,AI服务")
+        generic = lines.index("  - DOMAIN-SUFFIX,googleapis.com,节点选择")
+        self.assertLess(specific, generic)
+
+    def test_dukascopy_and_github_rules_point_to_their_own_groups(self) -> None:
+        out = self.render.render_profile([self.node], [self.provider])
+        lines = out.splitlines()
+        self.assertIn("  - DOMAIN-SUFFIX,dukascopy.com,Dukascopy", lines)
+        for suffix in ("github.com", "githubusercontent.com", "githubassets.com", "ghcr.io"):
+            self.assertIn(f"  - DOMAIN-SUFFIX,{suffix},GitHub", lines)
+            self.assertNotIn(f"  - DOMAIN-SUFFIX,{suffix},节点选择", lines)
+
+    def test_dukascopy_and_github_dns_follow_their_own_groups(self) -> None:
+        # 连接从一个出口走、DNS 从另一个出口查，GeoDNS 会给出不匹配的边缘 IP。
+        out = self.render.render_profile([self.node], [self.provider])
+        for domain, group in (("+.dukascopy.com", "#Dukascopy"), ("+.github.com", "#GitHub")):
+            block = out.split(f'"{domain}":')[1].split('"+.')[0]
+            self.assertIn(group, block)
+
+    def test_system_update_traffic_goes_to_the_direct_group(self) -> None:
+        """Windows Update 与 svchost 走直连组。
+
+        2026-08-18 实测：订阅规则表里没有 windowsupdate 条目，全部吃兜底走代理，
+        当天 svchost.exe 烧掉 734.9MB；裸 IP 的 Delivery Optimization 缓存节点连
+        域名都没有，只能靠 PROCESS-NAME 兜住。
+        """
+        lines = self.render.render_profile([self.node], []).splitlines()
+        for suffix in ("windowsupdate.com", "update.microsoft.com", "delivery.mp.microsoft.com"):
+            self.assertIn(f"  - DOMAIN-SUFFIX,{suffix},全球直连", lines)
+        self.assertIn("  - PROCESS-NAME,svchost.exe,全球直连", lines)
+
     def test_empty_self_nodes_raises(self) -> None:
         with self.assertRaises(ValueError):
             self.render.render_profile([], [self.provider])
