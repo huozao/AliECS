@@ -590,6 +590,7 @@ def request_details(body: dict[str, Any]) -> dict[str, Any]:
             metadata["message_id"] = str(message_id)
     if metadata.get("channel") == "feishu":
         user_text = _strip_feishu_sender_prefix(user_text, get_last_user_metadata(messages))
+        annotate_feishu_mention_facts(raw_metadata, user_text)
         user_text = strip_feishu_mention_helper_text(user_text, raw_metadata)
         enrich_feishu_metadata_with_session_route(metadata, raw_metadata, user_text)
         chat_mode = feishu_chat_mode({"metadata": metadata, "raw_metadata": raw_metadata})
@@ -949,6 +950,64 @@ _FEISHU_SELF_MENTION_ID_RE = re.compile(
     r"If user_id is [\"']?([^\"'\s,]+)[\"']?,\s*that mention refers to you",
     re.IGNORECASE,
 )
+# <at user_id="ou_xxx">name</at> — the id Feishu puts in the tag is the open_id,
+# the same value the helper line above names.
+_FEISHU_AT_TAG_USER_ID_RE = re.compile(r"<at\s+[^>]*user_id=([\"'])(.*?)\1", re.IGNORECASE)
+
+
+def _feishu_mention_ids(mention: Any) -> set[str]:
+    """Every identifier one mention entry carries (open_id / user_id / union_id)."""
+    if not isinstance(mention, dict):
+        return set()
+    ids: set[str] = set()
+    identifier = mention.get("id")
+    if isinstance(identifier, dict):
+        ids.update(str(value) for value in identifier.values() if value)
+    elif identifier:
+        ids.add(str(identifier))
+    for key in ("open_id", "user_id", "union_id"):
+        value = mention.get(key)
+        if value:
+            ids.add(str(value))
+    return ids
+
+
+def feishu_mentioned_ids(raw_metadata: dict[str, Any] | None, text: str) -> set[str]:
+    """Ids of everyone this message mentioned: the event's mention list, OpenClaw's
+    `mentioned_user_ids`, and the <at user_id="..."> tags still in the raw text."""
+    ids: set[str] = set()
+    mentions = (raw_metadata or {}).get("mentions")
+    if isinstance(mentions, list):
+        for mention in mentions:
+            ids.update(_feishu_mention_ids(mention))
+    listed = (raw_metadata or {}).get("mentioned_user_ids")
+    if isinstance(listed, list):
+        ids.update(str(value) for value in listed if value)
+    for _quote, user_id in _FEISHU_AT_TAG_USER_ID_RE.findall(text or ""):
+        if user_id:
+            ids.add(user_id)
+    return ids
+
+
+def annotate_feishu_mention_facts(raw_metadata: dict[str, Any], text: str) -> None:
+    """Settle "was the bot itself mentioned?" while the text still has the helper
+    block and every <at> tag, and record it as `mentioned_bot`.
+
+    2026-09-02: the question cannot be answered later. strip_feishu_mention_helper_text
+    removes the bot's OWN mention, so the cleaned text of a message that @-ed the bot
+    looks exactly like one that only @-ed a colleague. The old fallbacks in
+    feishu_mentions_bot ("mentions list non-empty", "text contains <at ") fired on ANY
+    mention, so @-ing a group member sent that member's message to ChatGPT."""
+    match = _FEISHU_SELF_MENTION_ID_RE.search(text or "")
+    bot_open_id = match.group(1).strip() if match else ""
+    if not bot_open_id:
+        # No helper line means no bot id to compare against; leave the decision to
+        # feishu_mentions_bot's conservative fallback rather than guessing here.
+        return
+    raw_metadata.setdefault("bot_open_id", bot_open_id)
+    ids = feishu_mentioned_ids(raw_metadata, text)
+    if ids:
+        raw_metadata["mentioned_bot"] = bot_open_id in ids
 
 
 def _feishu_self_mention_names(bot_id: str, raw_metadata: dict[str, Any] | None) -> list[str]:
@@ -963,16 +1022,7 @@ def _feishu_self_mention_names(bot_id: str, raw_metadata: dict[str, Any] | None)
     for mention in mentions:
         if not isinstance(mention, dict):
             continue
-        identifier = mention.get("id")
-        ids = set()
-        if isinstance(identifier, dict):
-            ids.update(str(value) for value in identifier.values() if value)
-        elif identifier:
-            ids.add(str(identifier))
-        for key in ("open_id", "user_id", "union_id"):
-            value = mention.get(key)
-            if value:
-                ids.add(str(value))
+        ids = _feishu_mention_ids(mention)
         name = str(mention.get("name") or "").strip()
         if not name:
             continue
@@ -1001,9 +1051,14 @@ def _strip_feishu_self_mentions(text: str, bot_id: str, raw_metadata: dict[str, 
             flags=re.IGNORECASE | re.DOTALL,
         )
     names = _feishu_self_mention_names(bot_id, raw_metadata)
+    mentioned_ids = feishu_mentioned_ids(raw_metadata, text) if bot_id else set()
     if names:
         for name in names:
             cleaned = cleaned.replace("@" + name, " ")
+    elif bot_id and mentioned_ids and bot_id not in mentioned_ids:
+        # The message only @-ed colleagues, so there is no self mention to strip —
+        # leaving their @ in place keeps the text ChatGPT sees faithful.
+        pass
     else:
         # No name available: only strip a mention that stands alone on its own
         # line, or sits at the very start/end — never one inside a sentence,
@@ -2424,19 +2479,47 @@ def feishu_has_group_mention_hint(text: str) -> bool:
     return "content may include mention tags" in lowered or "that mention refers to you" in lowered
 
 
+FEISHU_MENTION_BOT_FLAG_KEYS = (
+    "mentionedBot",
+    "mentioned_bot",
+    "explicitly_mentioned_bot",
+    "explicitlyMentionedBot",
+    "is_mentioned",
+    "isMentioned",
+    "wasMentioned",
+    "was_mentioned",
+)
+
+
 def feishu_mentions_bot(details: dict[str, Any]) -> bool:
     raw_metadata = details.get("raw_metadata") or {}
     metadata = details.get("metadata") or {}
-    for key in ("mentionedBot", "mentioned_bot", "is_mentioned", "isMentioned", "wasMentioned", "was_mentioned"):
-        value = _first_metadata_value(raw_metadata, key) or _first_metadata_value(metadata, key)
-        if isinstance(value, bool):
-            return value
-        if str(value or "").strip().lower() in {"1", "true", "yes"}:
-            return True
+    for source in (raw_metadata, metadata):
+        for key in FEISHU_MENTION_BOT_FLAG_KEYS:
+            value = _first_metadata_value(source, key)
+            if isinstance(value, bool):
+                # An explicit False must win. The old `a or b` lookup swallowed it
+                # and fell through to the fallbacks below.
+                return value
+            lowered = str(value or "").strip().lower()
+            if lowered in {"1", "true", "yes"}:
+                return True
+            if lowered in {"0", "false", "no"}:
+                return False
+    # ⚠️ An absent `was_mentioned` does NOT mean "not mentioned": OpenClaw emits it
+    # as `ctx.WasMentioned === true ? true : void 0`, so the key simply disappears
+    # when the bot was not mentioned. Compare ids instead.
+    bot_open_id = str(_first_metadata_value(raw_metadata, "bot_open_id", "botOpenId") or "").strip()
+    text = str(details.get("user_text") or "")
+    if bot_open_id:
+        ids = feishu_mentioned_ids(raw_metadata, text)
+        if ids:
+            return bot_open_id in ids
     mentions = raw_metadata.get("mentions")
     if isinstance(mentions, list) and mentions:
         return True
-    text = str(details.get("user_text") or "")
+    # Last resort, only when the upstream metadata told us nothing at all: answer
+    # rather than go silent on a group that really did call the bot.
     return feishu_has_group_mention_hint(text) or "<at " in text.lower()
 
 

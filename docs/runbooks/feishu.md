@@ -36,7 +36,7 @@
 | 回复只有半截/只有开场白 | 存档 `outbound.chars`；WebDock detector 完成判定 | ⛔ stop 按钮(`data-testid='stop-button'`)是完成判定权威信号，别改回以 streaming 为准 |
 | 回复图片变成链接 | bridge 环境变量 FEISHU_APP_ID/SECRET 是否在 | 缺凭据静默退 fallback；补后必须 force-recreate（restart 不重读 env_file） |
 | 图改图只回"Edit"/文件名 | imagegen_pending 窗口、预览层兜底、copy 按钮信号 | 07-18 已修（webdock 6550a70+c1bd76a+c9bf9a5）；08-14 因 08-12 的协议快通道绕过 scaffold 闸门而回归，已二修，详见 `webdock/docs/runbooks/browser.md`「图改图的完成判据只有一个能信」 |
-| 用户 @ 机器人的文本被一起发进了 ChatGPT | 存档 inbound 末尾是否残留 `@<机器人名>`；bridge 是否收到 `raw_metadata.mentions` | 旧实现只剥**开头**的 mention（`^\s*@\S+`），而用户习惯把 @ 放在正文末尾，08-17 实测原样穿透。已改为位置无关：helper 行里的 `If user_id is "ou_x"` 给出机器人自己的 id，`<at user_id=...>` 按 id 精确剥；明文 `@名字` 取自事件 `mentions` 的 name，**因此机器人改名（如改成 ChatGPT）不需要改代码**。拿不到 mentions 时只剥独占一行或首尾的 @，句中的 @同事 一律保留 |
+| 用户 @ 机器人的文本被一起发进了 ChatGPT | 存档 inbound 末尾是否残留 `@<机器人名>`；bridge 是否收到 `raw_metadata.mentions` | 旧实现只剥**开头**的 mention（`^\s*@\S+`），而用户习惯把 @ 放在正文末尾，08-17 实测原样穿透。已改为位置无关：helper 行里的 `If user_id is "ou_x"` 给出机器人自己的 id，`<at user_id=...>` 按 id 精确剥；明文 `@名字` 取自事件 `mentions` 的 name，**因此机器人改名（如改成 ChatGPT）不需要改代码**。拿不到 mentions 时只剥独占一行或首尾的 @，句中的 @同事 一律保留。⚠️ 2026-09-02 起再收一层：只要拿得到机器人 open_id 且它**不在**被 @ 名单里，就一个 @ 都不剥（此前首尾的 @同事 会被误剥）|
 | 群里冒出空白气泡（没人 @ 也冒） | bridge trace 该条是不是 `result:"empty"`、`reply_len:0`；OpenClaw 日志同刻是不是 `dispatch complete … replies=1` | 「仅@回复」把消息挡下是对的，错在**回了 content=""，OpenClaw 照样投递**（08-18 实测）。08-18 起改为回 OpenClaw 自己的静默令牌 `NO_REPLY`（`OPENCLAW_SILENT_REPLY_TOKEN`，群聊默认 `silentReply: allow` 才生效）。⚠️ 这个字面量必须和 OpenClaw 的 `SILENT_REPLY_TOKEN` 一字不差，写错就是把令牌本身发进群 |
 | 设了「仅@回复」，某条明明 @ 了却没反应 | 消息日志表该条的「是否 @ 机器人」「原始事件 JSON」有没有 `was_mentioned` | **手打或粘贴出来的「@某某」不是 @**（08-18 实测）：只有用 @ 选择器选出来的才带 mention 元数据（事件里有 `was_mentioned`，且 @ 文本会被剥掉）；明文 @ 在飞书眼里就是普通文字，判「未@机器人」是判对的，不是 bug |
 | 串频道/消息进错项目 | bridge channel 识别、`feishu_projects.json`、Sender 信封剥离 | 06-15 已修（PR#118/#119）；真实 metadata 是 `peer_id:"user:ou_…"` 无 channel 字段 |
@@ -45,6 +45,7 @@
 | 多图消息后全线卡死 | WebDock 单 worker 被重请求堵死；healthz 是假绿（只探 /healthz） | 13 图请求 142-153s 堵死单 worker（06-23） |
 | 开机后收不到回复 | webdock 设备 Chrome 是否卡「恢复页面」提示 | 人工关浏览器→自动重开干净 Chrome 即自愈（勿自动登录） |
 | 卡片格式乱/表格丢失 | lark_md 不认 GFM 表格/`##`/引用 | 表格必须截图、标题转粗体、引用转 `▎`（卡片合成在 bridge） |
+| 群里 @ 的是同事，消息却被送进了 ChatGPT | 消息日志表该条的「是否 @ 机器人」「@对象列表」；`raw_metadata` 里有没有 `mentioned_bot` | `feishu_mentions_bot` 的三条兜底（`mentions` 非空 / helper 文案命中 / 文本含 `<at `）对「@ 了任何人」都为真，2026-09-02 修（PR#353）。OpenClaw 的两行 helper 是 `if (ctx.hasAnyMention)` 注入的，**与 @ 的是谁无关**；判据改成拿 helper 第二行里的机器人 open_id 去比对被 @ 的 id 集合。⚠️ 判定必须在 `strip_feishu_mention_helper_text` **之前**做——清洗会删掉机器人自己的 mention，清洗后「@ 了机器人」和「只 @ 了同事」长得一模一样 |
 | /新对话 /模式 不生效 | 群表「对话模式」列类型、sender 前缀剥离 | 旧构建误建 Checkbox 列（PR#165 加 reconcile_type）；粘性状态优先级链已修（PR#177） |
 | 同群后续消息很快返回 `LANE_BUSY` | WebDock archive 查同一 `lane.key` 的 active 请求和被拒请求 | WebDock 只短等车道锁；被拒消息没有发进 ChatGPT。等待当前任务，或发送 `/新对话` 抢占并重建该车道 |
 | 长任务超过 320s 但处理卡片仍更新 | bridge trace 查 job submit/poll；WebDock archive 查最终状态 | 正常：浏览器任务已与 failover-proxy 的单连接 320s 解耦；占位卡轮播持续显示“处理中 + 已等待秒数”，最终结果仍回填原卡片 |
@@ -72,6 +73,11 @@ ssh webdock2 "wsl -d Ubuntu-24.04-WebDock -- docker ps"  # WebDock 容器状态
 - 改 bridge env 后 `restart` 无效，必须 force-recreate。
 - 新 webdock 节点必须复制 `runtime.json`，否则飞书图/表全丢。
 - OpenClaw 的 dispatch→bridge 延迟 0.9-2.4s 属正常（处理中占位卡即为此设计）。
+- **群 @ 判定只认 id，不认「有没有人被 @」**（2026-09-02，PR#353）。三条容易写错的判据：
+  - OpenClaw 的两行 mention helper 由 `if (ctx.hasAnyMention)` 注入，@ 谁都注入；第二行 `If user_id is "ou_xxx"` 里的 id 是**机器人自己的 open_id**，这是唯一能把「@ 我」和「@ 同事」分开的东西。
+  - conversation info 里的 `was_mentioned` 写作 `ctx.WasMentioned === true ? true : void 0`——**没 @ 机器人时这个 key 整个消失**，所以「字段不在」推不出 false，只能去比对 id。反过来 `explicitly_mentioned_bot` 是 `typeof === "boolean"` 才保留，false 会真的出现，取值时别用 `a or b` 把它吞掉。
+  - 判定要在剥离 helper/mention **之前**落账（`annotate_feishu_mention_facts` 写 `mentioned_bot`/`bot_open_id` 进 `raw_metadata`），清洗后的文本已经答不了这个问题。
+  - 兜底保留「元数据全空就当被 @」——宁可多回一次，也不能让群里叫不动机器人。
 - bridge 单测：`tests/test_openclaw_bridge.py`；mock 形状必须对齐真实 OpenClaw 输出（合成形状掩盖过串频道 bug）。
 - WebDock HTTP 429 会读取错误体：`LANE_BUSY` 的错误码和“已等待/未执行”文案会进入飞书诊断卡片；旧 `BUSY` 仍保留原 browser-lock 文案。
 - bridge 默认先提交 WebDock 异步 job，再以不超过 30s 的短 HTTP 查询状态；提交响应必须带合法的 `X-Webdock-Route`，后续固定轮询 `11810`（primary）或 `11811`（standby）。短暂超时/5xx 在总时限内重试；若提交响应丢失，bridge 用确定性 job id 到两节点找回已接单任务。只有 job 接口明确返回 404/405 才降级旧同步接口，避免重复执行。这项粘性不能去掉，否则 standby 接单后 primary 恢复会查到错误节点。
