@@ -7,6 +7,25 @@
   - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
   - IP-CIDR,100.64.0.0/10,DIRECT,no-resolve
 
+  # --- Windows 系统更新 / 分发（原在 devbox 的 profile 扩展里，2026-09-02 并入）------
+  #
+  # 订阅规则表里没有任何 windowsupdate 条目，DOMAIN-KEYWORD,microsoft 也匹配不到
+  # "3.au.download.windowsupdate.com"，于是全部吃兜底走代理。2026-08-18 实测当天
+  # svchost.exe 因此烧掉 734.9MB 机场流量（走节点 734.9MB / 直连 0.00MB）。
+  #
+  # 走代理还有次生代价：mihomo 用代理侧 DNS 解析，把下载调度到境外。实测本地 DNS
+  # 解析同一批域名返回的全是国内电信 CDN，走代理时拿到的是 Fastly 和澳洲节点。
+  #
+  # PROCESS-NAME 这条覆盖裸 IP 的分发节点：Delivery Optimization 从 Connected Cache
+  # 拉包时 mihomo 侧只有 IP、没有域名，上面三条 DOMAIN-SUFFIX 物理上匹配不到，
+  # GEOIP,CN 也不命中（那批 103.x 在 geoip 库里不算 CN）。2026-08-18/19/20 三天
+  # 为同一个 757MB 包烧掉约 1.5GB。范围确实大（svchost 承载几十个系统服务），
+  # 但实测本机 svchost 走代理的量只有 WU 下载和 login.live.com（1.7MB），无功能损失。
+  - DOMAIN-SUFFIX,windowsupdate.com,全球直连
+  - DOMAIN-SUFFIX,update.microsoft.com,全球直连
+  - DOMAIN-SUFFIX,delivery.mp.microsoft.com,全球直连
+  - PROCESS-NAME,svchost.exe,全球直连
+
   # 自建节点服务器地址的直连规则不在这里 —— 由 render.py 从节点定义运行时推导后
   # 插在本文件之前。写死在模板里既是硬编码，也会把节点地址带进 public 仓库。
 
@@ -31,18 +50,58 @@
   - DOMAIN-SUFFIX,oaistatic.com,AI服务
   - DOMAIN-SUFFIX,oaiusercontent.com,AI服务
   - DOMAIN-SUFFIX,auth.openai.com,AI服务
+  # OpenAI 的遥测/特性开关域名。2026-09-02 从 mihomo 日志里实测到 api.oaistatsig.com
+  # 落在兜底 MATCH，与正文走不同出口。
+  - DOMAIN-SUFFIX,oaistatsig.com,AI服务
+
   # Claude / Anthropic —— 覆盖网页版、桌面版、手机版和终端 CLI（api.anthropic.com）。
   # 2026-08-15 补：此前一条都没有，四个端全部落到兜底 MATCH,节点选择 走机场共享 IP。
   - DOMAIN-SUFFIX,anthropic.com,AI服务
   - DOMAIN-SUFFIX,claude.ai,AI服务
   - DOMAIN-SUFFIX,claudeusercontent.com,AI服务
+  # ⚠️ claude.com 是**另一个根域**，anthropic.com 和 claude.ai 都盖不到它。
+  # 2026-09-02 日志实测 code.claude.com 与 platform.claude.com 正在使用，
+  # 当时双双落在兜底 MATCH。
+  - DOMAIN-SUFFIX,claude.com,AI服务
+
+  # 其余境外 AI —— 同样锁自建节点，理由和 OpenAI/Claude 一致：机场共享 IP 的信誉
+  # 会触发登录风控。grok/x.ai 是 2026-09-02 日志实测在用；其余是预置，
+  # 等到真用上时不必再改一次配置（改一次要同步三处，漏一处就是 DNS 与出口不一致）。
+  - DOMAIN-SUFFIX,grok.com,AI服务
+  - DOMAIN-SUFFIX,x.ai,AI服务
+  - DOMAIN-SUFFIX,githubcopilot.com,AI服务
+  - DOMAIN-SUFFIX,cursor.com,AI服务
+  - DOMAIN-SUFFIX,cursor.sh,AI服务
+  - DOMAIN-SUFFIX,perplexity.ai,AI服务
+
+  # Gemini —— ⚠️ 这三条必须排在下面 Google 段的 DOMAIN-SUFFIX,googleapis.com 之前，
+  # 否则 generativelanguage.googleapis.com 会先被 googleapis.com 吃掉走「节点选择」。
+  # 顺序是靠位置维持的，tests 里有断言锁住，不要把 AI 段挪到 Google 段之后。
+  # Chrome 自带的十几个 *-pa.googleapis.com 不受影响，仍走「节点选择」。
+  - DOMAIN-SUFFIX,gemini.google.com,AI服务
+  - DOMAIN-SUFFIX,aistudio.google.com,AI服务
+  - DOMAIN-SUFFIX,generativelanguage.googleapis.com,AI服务
+
+  # Dukascopy 历史行情抓取 —— 走专用组，与 AI 出口隔离。
+  # 组内结构性不含自建节点（见 render.py），所以这条规则永远不会把批量下载
+  # 送到 AI 账号的出口 IP 上，也不会吃自建节点的计费流量。
+  - DOMAIN-SUFFIX,dukascopy.com,Dukascopy
 
   # GitHub
-  - DOMAIN-SUFFIX,github.com,节点选择
-  - DOMAIN-SUFFIX,githubusercontent.com,节点选择
-  - DOMAIN-SUFFIX,githubassets.com,节点选择
-  - DOMAIN-SUFFIX,github.dev,节点选择
-  - DOMAIN-SUFFIX,raw.githubusercontent.com,节点选择
+  #
+  # 单独一个组而不是指向「节点选择」：GitHub 和 Google 的诉求不同——GitHub 要稳
+  # （git 长连接被换节点会断），Google 要快，共用一个组就没法分别调。
+  # 默认落自建节点，面板可改选机场节点。
+  #
+  # 补充背景：直连 GitHub 是**间歇性**可用而非持续不可用（2026-08-25 实测：12:0x
+  # 配对测 10 次全失败，40 分钟后同一条命令 5/5 成功）。走代理是拿流量换掉这份
+  # 间歇性，流量吃紧时改回直连是真实选项。
+  - DOMAIN-SUFFIX,github.com,GitHub
+  - DOMAIN-SUFFIX,githubusercontent.com,GitHub
+  - DOMAIN-SUFFIX,githubassets.com,GitHub
+  - DOMAIN-SUFFIX,github.dev,GitHub
+  - DOMAIN-SUFFIX,raw.githubusercontent.com,GitHub
+  - DOMAIN-SUFFIX,ghcr.io,GitHub
 
   # Google / Google Cloud
   - DOMAIN-SUFFIX,google.com,节点选择

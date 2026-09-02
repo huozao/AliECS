@@ -30,6 +30,11 @@ TEMPLATE_RULES = _HERE / "template_rules.yaml"
 GROUP_SELECT = "节点选择"
 GROUP_AUTO = "自动选择"
 GROUP_AI = "AI服务"
+# 以下三个组名同样被 template_rules.yaml 的规则引用，改名会让整份配置加载失败。
+# 组名一律用自建的中英文名，不复用机场提供的组名（机场改名不影响本产物）。
+GROUP_DUKASCOPY = "Dukascopy"
+GROUP_GITHUB = "GitHub"
+GROUP_DIRECT = "全球直连"
 
 HEALTH_CHECK_URL = "https://www.gstatic.com/generate_204"
 HEALTH_CHECK_INTERVAL = 300
@@ -132,6 +137,35 @@ def render_profile(self_nodes: list[dict], providers: list[dict]) -> str:
     if keys:
         ai_group["use"] = keys
     groups.append(ai_group)
+
+    # Dukascopy 复盘数据抓取专用出口。**结构性排除自建节点**：批量补历史不能和 AI 账号
+    # 共用出口 IP（Dukascopy 按 IP 限流，且是「突发配额 + 长封锁」，实测封 ≥15 小时），
+    # 而自建节点是按流量计费的，批量下载走它会直接吃计费额度。
+    #
+    # 2026-08-17 曾在客户端 profile 扩展里建过同名组，靠 exclude-filter 排除；
+    # 08-21 的一次编辑把 filter 改丢了没人发现。放进产物并由 tests 断言，是为了让
+    # 「不含自建节点」变成结构性事实，而不是需要定期人工核验的行为约定。
+    #
+    # ⚠️ 没有任何订阅源时降级成 DIRECT，不能省略整个组：规则表是静态模板，
+    # 里面的 dukascopy 一行恒存在，组不存在会让 mihomo **整份配置加载失败**。
+    groups.append({
+        "name": GROUP_DUKASCOPY,
+        "type": "select",
+        **({"use": keys} if keys else {"proxies": ["DIRECT"]}),
+    })
+
+    # GitHub 默认走自建节点：git 长连接被换节点会断，要的是稳而不是快。
+    # 代价是 git clone 大仓库与 ghcr 拉镜像都计入自建节点的流量额度，
+    # 面板上可随时改选机场节点（用户 2026-09-02 明确知悉并选择默认自建）。
+    github_group: dict[str, Any] = {"name": GROUP_GITHUB, "type": "select", "proxies": [*names]}
+    if keys:
+        github_group["use"] = keys
+    groups.append(github_group)
+
+    # 明确的直连组。Windows Update / svchost 一类规则指向它而不是内置 DIRECT，
+    # 目的是留一个面板开关：这些流量平时直连（走代理会被调度到境外 CDN 白烧流量），
+    # 真需要时不用改配置就能临时切回代理。
+    groups.append({"name": GROUP_DIRECT, "type": "select", "proxies": ["DIRECT", *names]})
 
     parts.append("proxy-groups: " + _dump(groups))
     parts.append("")

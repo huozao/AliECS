@@ -108,25 +108,69 @@ dns:
     "+.challenges.cloudflare.com":
       - https://1.1.1.1/dns-query#AI服务
       - https://dns.google/dns-query#AI服务
+    "+.oaistatsig.com":
+      - https://1.1.1.1/dns-query#AI服务
+      - https://dns.google/dns-query#AI服务
+    "+.claude.com":
+      - https://1.1.1.1/dns-query#AI服务
+      - https://dns.google/dns-query#AI服务
+    "+.grok.com":
+      - https://1.1.1.1/dns-query#AI服务
+      - https://dns.google/dns-query#AI服务
+    "+.x.ai":
+      - https://1.1.1.1/dns-query#AI服务
+      - https://dns.google/dns-query#AI服务
+    "+.githubcopilot.com":
+      - https://1.1.1.1/dns-query#AI服务
+      - https://dns.google/dns-query#AI服务
+    "+.cursor.com":
+      - https://1.1.1.1/dns-query#AI服务
+      - https://dns.google/dns-query#AI服务
+    "+.cursor.sh":
+      - https://1.1.1.1/dns-query#AI服务
+      - https://dns.google/dns-query#AI服务
+    "+.perplexity.ai":
+      - https://1.1.1.1/dns-query#AI服务
+      - https://dns.google/dns-query#AI服务
+    # ⚠️ 下面三条与已有的 "+.google.com" / "+.googleapis.com" 重叠。mihomo 按
+    # domain trie 最长匹配，更具体的这三条优先，与 YAML 里的先后无关；写在一起
+    # 只是为了能和规则表逐条对照。
+    "+.gemini.google.com":
+      - https://1.1.1.1/dns-query#AI服务
+      - https://dns.google/dns-query#AI服务
+    "+.aistudio.google.com":
+      - https://1.1.1.1/dns-query#AI服务
+      - https://dns.google/dns-query#AI服务
+    "+.generativelanguage.googleapis.com":
+      - https://1.1.1.1/dns-query#AI服务
+      - https://dns.google/dns-query#AI服务
     # cloudflare.com 整体不再压进 AI服务（规则侧同步收窄），DNS 走常规境外解析。
     "+.cloudflare.com":
       - https://1.1.1.1/dns-query#节点选择
       - https://dns.google/dns-query#节点选择
     "+.github.com":
-      - https://1.1.1.1/dns-query#节点选择
-      - https://dns.google/dns-query#节点选择
+      - https://1.1.1.1/dns-query#GitHub
+      - https://dns.google/dns-query#GitHub
     "+.githubusercontent.com":
-      - https://1.1.1.1/dns-query#节点选择
-      - https://dns.google/dns-query#节点选择
+      - https://1.1.1.1/dns-query#GitHub
+      - https://dns.google/dns-query#GitHub
     "+.githubassets.com":
-      - https://1.1.1.1/dns-query#节点选择
-      - https://dns.google/dns-query#节点选择
+      - https://1.1.1.1/dns-query#GitHub
+      - https://dns.google/dns-query#GitHub
     "+.github.dev":
-      - https://1.1.1.1/dns-query#节点选择
-      - https://dns.google/dns-query#节点选择
+      - https://1.1.1.1/dns-query#GitHub
+      - https://dns.google/dns-query#GitHub
     "+.raw.githubusercontent.com":
-      - https://1.1.1.1/dns-query#节点选择
-      - https://dns.google/dns-query#节点选择
+      - https://1.1.1.1/dns-query#GitHub
+      - https://dns.google/dns-query#GitHub
+    # 规则把 GitHub 送去 GitHub 组、把 dukascopy 送去 Dukascopy 组，DNS 必须同组，
+    # 否则连接从一个出口走、解析从另一个出口查，GeoDNS 会给出不匹配的边缘 IP。
+    "+.ghcr.io":
+      - https://1.1.1.1/dns-query#GitHub
+      - https://dns.google/dns-query#GitHub
+    "+.dukascopy.com":
+      - https://1.1.1.1/dns-query#Dukascopy
+      - https://dns.google/dns-query#Dukascopy
     "+.jetbrains.com":
       - https://1.1.1.1/dns-query#节点选择
       - https://dns.google/dns-query#节点选择
@@ -167,11 +211,24 @@ dns:
       - "+.claudeusercontent.com"
       - "+.cloudflare.com"
       - "+.challenges.cloudflare.com"
+      - "+.oaistatsig.com"
+      - "+.claude.com"
+      - "+.grok.com"
+      - "+.x.ai"
+      - "+.githubcopilot.com"
+      - "+.cursor.com"
+      - "+.cursor.sh"
+      - "+.perplexity.ai"
+      - "+.gemini.google.com"
+      - "+.aistudio.google.com"
+      - "+.generativelanguage.googleapis.com"
       - "+.github.com"
       - "+.githubusercontent.com"
       - "+.githubassets.com"
       - "+.github.dev"
       - "+.raw.githubusercontent.com"
+      - "+.ghcr.io"
+      - "+.dukascopy.com"
       - "+.jetbrains.com"
       - "+.jetbrains.space"
       - "+.intellij.net"
