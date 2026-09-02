@@ -4874,3 +4874,156 @@ def test_silent_token_is_the_literal_openclaw_expects():
     bridge = load_bridge()
     assert bridge.OPENCLAW_SILENT_REPLY_TOKEN == "NO_REPLY"
     assert bridge.OPENCLAW_SILENT_REPLY_TOKEN != bridge.NO_REPLY
+
+
+# --- 群里 @ 同事不等于 @ 机器人（2026-09-02）--------------------------------
+# OpenClaw 两行 helper 只要群里 @ 了任何人就注入（dist: `if (ctx.hasAnyMention)`），
+# 第二行给的是机器人自己的 open_id。旧判据「mentions 非空」「文本含 <at 」因此对
+# @ 同事一样为真，把同事的消息送进了 ChatGPT。
+
+FEISHU_MENTION_HELPER = (
+    '[System: The content may include mention tags in the form '
+    '<at user_id="...">name</at>. Treat these as real mentions of Feishu entities (users or bots).]\n'
+    '[System: If user_id is "ou_bot", that mention refers to you.]'
+)
+
+
+def _feishu_group_mention_body(text, mentions, extra_metadata=None):
+    metadata = {
+        "channel": "feishu",
+        "chat_type": "group",
+        "chat_id": "oc_group_mention",
+        "mentions": mentions,
+    }
+    metadata.update(extra_metadata or {})
+    return {
+        "messages": [{"role": "user", "content": f"{text}\n\n{FEISHU_MENTION_HELPER}"}],
+        "metadata": metadata,
+    }
+
+
+def test_mentioning_a_colleague_is_not_a_mention_of_the_bot():
+    """群成员 @ 姜丽娜：机器人的 open_id 不在被 @ 名单里，判据必须为假。"""
+    bridge = load_bridge()
+    body = _feishu_group_mention_body(
+        '<at user_id="ou_jiang">姜丽娜</at> 这批料明天能到吗',
+        [{"id": {"open_id": "ou_jiang"}, "name": "姜丽娜"}],
+    )
+
+    details = bridge.request_details(body)
+
+    assert bridge.feishu_mentions_bot(details) is False
+    # 判定必须在清洗前落账：清洗后的文本已经没有 helper 行了
+    assert details["raw_metadata"]["mentioned_bot"] is False
+    assert details["raw_metadata"]["bot_open_id"] == "ou_bot"
+
+
+def test_mentioning_the_bot_still_counts():
+    bridge = load_bridge()
+    body = _feishu_group_mention_body(
+        '<at user_id="ou_bot">ChatGPT</at> 帮我算一下',
+        [{"id": {"open_id": "ou_bot"}, "name": "ChatGPT"}],
+    )
+
+    details = bridge.request_details(body)
+
+    assert bridge.feishu_mentions_bot(details) is True
+    assert details["raw_metadata"]["mentioned_bot"] is True
+
+
+def test_mentioning_bot_and_colleague_together_counts():
+    """一条消息同时 @ 两个人，只要其中一个是机器人就算。"""
+    bridge = load_bridge()
+    body = _feishu_group_mention_body(
+        '<at user_id="ou_jiang">姜丽娜</at> <at user_id="ou_bot">ChatGPT</at> 一起看下',
+        [
+            {"id": {"open_id": "ou_jiang"}, "name": "姜丽娜"},
+            {"id": {"open_id": "ou_bot"}, "name": "ChatGPT"},
+        ],
+    )
+
+    details = bridge.request_details(body)
+
+    assert bridge.feishu_mentions_bot(details) is True
+
+
+def test_colleague_mention_is_not_forwarded_in_mention_only_groups(monkeypatch):
+    """「仅@回复」群里，@ 同事的消息不得送 ChatGPT——这就是用户报的现象。"""
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "feishu_group_reply_policy", lambda details: (True, "仅@回复"))
+    body = _feishu_group_mention_body(
+        '<at user_id="ou_jiang">姜丽娜</at> 这批料明天能到吗',
+        [{"id": {"open_id": "ou_jiang"}, "name": "姜丽娜"}],
+    )
+
+    details = bridge.request_details(body)
+
+    assert bridge.feishu_should_send_chatgpt(details) is False
+    fields = bridge.build_feishu_message_log_fields(details, reply="", status="未处理")
+    assert fields["是否 @ 机器人"] is False
+    assert fields["不处理原因"] == "未@机器人"
+
+
+def test_colleague_mention_survives_into_the_text(monkeypatch):
+    """没有自我 mention 可剥时，别顺手把同事的 @ 剥掉。"""
+    bridge = load_bridge()
+    body = _feishu_group_mention_body(
+        "@姜丽娜 这批料明天能到吗",
+        [{"id": {"open_id": "ou_jiang"}, "name": "姜丽娜"}],
+    )
+
+    details = bridge.request_details(body)
+
+    assert details["user_text"] == "@姜丽娜 这批料明天能到吗"
+
+
+def test_explicit_false_from_upstream_wins():
+    """上游给了 false 就是 false；旧的 `a or b` 取值会把 False 吞掉再落到兜底。"""
+    bridge = load_bridge()
+    details = {
+        "user_text": '<at user_id="ou_jiang">姜丽娜</at> 在吗',
+        "metadata": {"channel": "feishu", "chat_type": "group", "chat_id": "oc_group_mention"},
+        "raw_metadata": {
+            "explicitly_mentioned_bot": False,
+            "mentions": [{"id": {"open_id": "ou_jiang"}, "name": "姜丽娜"}],
+        },
+    }
+
+    assert bridge.feishu_mentions_bot(details) is False
+
+
+def test_absent_was_mentioned_does_not_mean_not_mentioned():
+    """OpenClaw 写的是 `WasMentioned === true ? true : void 0`，未 @ 时字段直接消失。
+    所以「字段不在」不能当作 false，只能靠 id 比对。"""
+    bridge = load_bridge()
+    details = {
+        "user_text": '<at user_id="ou_bot">ChatGPT</at> 在吗',
+        "metadata": {"channel": "feishu", "chat_type": "group", "chat_id": "oc_group_mention"},
+        "raw_metadata": {"bot_open_id": "ou_bot", "mentions": [{"id": {"open_id": "ou_bot"}, "name": "ChatGPT"}]},
+    }
+
+    assert bridge.feishu_mentions_bot(details) is True
+
+
+def test_falls_back_to_answering_when_upstream_metadata_says_nothing():
+    """完全拿不到 bot id 和 mention 列表时保持旧行为：宁可多回，不让群里叫不动。"""
+    bridge = load_bridge()
+    details = {
+        "user_text": '<at user_id="ou_someone">谁</at> 在吗',
+        "metadata": {"channel": "feishu", "chat_type": "group", "chat_id": "oc_group_mention"},
+        "raw_metadata": {},
+    }
+
+    assert bridge.feishu_mentions_bot(details) is True
+
+
+def test_mentioned_user_ids_alone_is_enough_to_tell_them_apart():
+    """OpenClaw 的 conversation info 里带 mentioned_user_ids，没有 mentions 列表也能判。"""
+    bridge = load_bridge()
+    details = {
+        "user_text": "这批料明天能到吗",
+        "metadata": {"channel": "feishu", "chat_type": "group", "chat_id": "oc_group_mention"},
+        "raw_metadata": {"bot_open_id": "ou_bot", "mentioned_user_ids": ["ou_jiang"]},
+    }
+
+    assert bridge.feishu_mentions_bot(details) is False
