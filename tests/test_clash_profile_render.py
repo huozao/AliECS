@@ -290,6 +290,38 @@ class ClashProfileRenderTests(unittest.TestCase):
             self.assertIn(f"  - DOMAIN-SUFFIX,{suffix},全球直连", lines)
         self.assertIn("  - PROCESS-NAME,svchost.exe,全球直连", lines)
 
+    def test_provider_excludes_pseudo_nodes(self) -> None:
+        """机场的套餐提示伪节点必须在 provider 层就被排掉。
+
+        2026-09-02 实测漏掉它的后果：伪节点排在节点列表最前，`select` 组默认选中
+        第一个，`Dukascopy` 组开箱就指向「剩余流量：16.99 GB」，经它请求
+        datafeed.dukascopy.com 返回 503；`自动选择`（url-test）落在「套餐到期」上。
+        **两个组都是坏的，而配置本身不报任何错。**
+
+        加在 provider 上是刻意的：一处生效，所有 use 它的组都干净。
+        """
+        out = self.render.render_profile([self.node], [self.provider])
+        providers = _section(out, "proxy-providers")
+        pattern = providers["airport7"]["exclude-filter"]
+        for keyword in ("剩余流量", "距离下次重置", "套餐到期"):
+            self.assertIn(keyword, pattern)
+
+    def test_pseudo_node_filter_actually_matches_real_airport_names(self) -> None:
+        """断言本身要先验一次：拿机场真实用过的名字跑一遍正则。
+
+        只断言「字段里有这几个关键词」是不够的——写成一个语法上正确但匹配不上的
+        正则，上面那条测试照样绿。这里直接用 2026-09-02 从节点文件里取到的两个真名
+        （以及一个必须**不**被误伤的正常节点名）过一遍。
+        """
+        import re
+
+        out = self.render.render_profile([self.node], [self.provider])
+        pattern = _section(out, "proxy-providers")["airport7"]["exclude-filter"]
+        for pseudo in ("剩余流量：16.99 GB", "距离下次重置剩余：7 天", "套餐到期：2026-10-09"):
+            self.assertTrue(re.search(pattern, pseudo), f"应被排除却没匹配：{pseudo}")
+        for real in ("【1x】香港 01", "【1x】美国 06", "self-a"):
+            self.assertIsNone(re.search(pattern, real), f"正常节点被误伤：{real}")
+
     def test_empty_self_nodes_raises(self) -> None:
         with self.assertRaises(ValueError):
             self.render.render_profile([], [self.provider])

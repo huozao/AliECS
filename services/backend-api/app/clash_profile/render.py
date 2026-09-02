@@ -36,6 +36,20 @@ GROUP_DUKASCOPY = "Dukascopy"
 GROUP_GITHUB = "GitHub"
 GROUP_DIRECT = "全球直连"
 
+# 机场把套餐信息塞成"节点"放在订阅里（剩余流量、距离下次重置、套餐到期），它们在
+# 面板上是给人看的提示，不是可用出口。
+#
+# 不排除的后果不是「多几个没用的选项」——2026-09-02 实测：伪节点排在节点列表最前，
+# `select` 组默认选中第一个，于是 `Dukascopy` 组开箱就指向「剩余流量：16.99 GB」，
+# 经它请求 datafeed.dukascopy.com 返回 **503**；`自动选择`（url-test）也落在
+# 「套餐到期：2026-10-09」上。两个组都是坏的，而配置本身没有任何报错。
+#
+# 加在 provider 上而不是各个组上：一处生效，所有 use 它的组都干净。
+# 关键词与 gold-spread-monitor 的 `clash_rotation._PSEUDO_NODE` 保持一致——那边是
+# 轮换时的运行期过滤，这里是配置期过滤，两处都要有：配置期防的是「默认就选中」，
+# 运行期防的是「轮换轮到它」。
+PSEUDO_NODE_FILTER = "(?i)剩余流量|距离下次重置|套餐到期"
+
 HEALTH_CHECK_URL = "https://www.gstatic.com/generate_204"
 HEALTH_CHECK_INTERVAL = 300
 
@@ -100,6 +114,7 @@ def render_profile(self_nodes: list[dict], providers: list[dict]) -> str:
                 # 消失"而不是"起不来"，排查时容易往错的方向找。导入配置时务必确认
                 # providers/ 下有对应文件。
                 "path": f"{PROVIDER_FILE_DIR}/{provider_key(p['id'])}.yaml",
+                "exclude-filter": PSEUDO_NODE_FILTER,
                 "health-check": {
                     "enable": True,
                     "url": HEALTH_CHECK_URL,
