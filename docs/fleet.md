@@ -333,11 +333,30 @@ GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会�
 - 结构：**SSH 登录进的是 Windows（PowerShell）**，WebDock 跑在 WSL2 发行版 `Ubuntu-24.04-WebDock` 内的 docker 里。Linux 命令一律 `ssh webdock2 "wsl -d Ubuntu-24.04-WebDock -- <cmd>"`。
 - 运行：仅 `webdock` 容器（与 webdock1 同镜像同 tag）。Immich / AdventureLog / Gokapi 暂不部署（按需再拉）。
 - 反向隧道：WSL 内 `webdock-business-tunnel` 将 WebDock 18000 映射到
-  txecs 11810（当前生产）；旧 `webdock-ecs-tunnel` 已停，console 仍单独
-  落 AliECS。
-- 远程控制台：Windows TightVNC :5900 服务模式（`UseVncAuthentication=0` 免密，防火墙只放行 172.16.0.0/12+100.64.0.0/10，MSI 自建全放行规则已 Disable）+ WSL noVNC 6091（`novnc-desktop`，启动时动态解析 WSL 网关）+ WSL `console-ecs-tunnel`（`-R 16090`←容器 noVNC 6080、`-R 16091`←桌面 6091）。
+  txecs 11810（当前生产）。
+  ⚠️「旧 `webdock-ecs-tunnel` 已停，console 仍单独落 AliECS」这句自 2026-09-02 起
+  确认与实际不符：① console 早在 2026-08-16 就随 webdock1 一起改成落 txecs，设备侧
+  unit 是 `console-txecs-tunnel.service`（`-R 16090`←容器 noVNC 6080、`-R 16091`←桌面 6091），
+  旧的 `console-ecs-tunnel` 已 disable，两者上游端口号相同、不能同时跑；② `webdock-ecs-tunnel`
+  09-02 实测**仍是 active running**（aliecs 上 `127.0.0.1:11810` 有 sshd 监听），没停。
+  新情况见本节〈远程控制台〉与 txecs 段〈远程控制台〉。
+- 远程控制台：Windows TightVNC :5900 服务模式（`UseVncAuthentication=0` 免密，防火墙只放行 172.16.0.0/12+100.64.0.0/10，MSI 自建全放行规则已 Disable）+ WSL noVNC 6091（`novnc-desktop`，启动时动态解析 WSL 网关）+ WSL `console-txecs-tunnel`（`-R 16090`←容器 noVNC 6080、`-R 16091`←桌面 6091，落 **txecs**）。
 - noVNC：`http://100.67.38.52:6080/` 可用。⚠️ 已知怪癖：Tailscale 直连 `100.67.38.52:18000` 返回 502（Windows→WSL 端口转发问题），**生产链路不受影响**（隧道从 WSL 内 localhost 拉出）；从 ECS 探 `127.0.0.1:11810/healthz` 才是有效健康检查。
 - 日志：WSL 内 `/var/log/webdock/archive/`。
+- **整台机器的生死开关是一个 Windows 计划任务**（2026-09-02 事故）：`WebDock2WSLKeepAlive`
+  （`wsl.exe -d Ubuntu-24.04-WebDock -u root -- sleep infinity`，S4U + 开机/登录触发）。
+  它是 WSL2 里唯一的常驻客户端；它不在跑，WSL 就在最后一个外部调用退出后自动关机，
+  容器、业务隧道、console 隧道**一起没**。本次它 08-20 10:24 跑过一次、退出码 1，此后
+  Windows 一直没重启（08-12 16:36 开机至今），触发器再没机会触发，于是断到 09-02。
+  - **判据（照抄 07-12 那次的取证手法）**：`wsl -- uptime -p` 和 `docker ps` 的 `Up` 时长
+    是否**大于你这条命令的年龄**。大于才是常驻，等于就是被你自己的 ssh 唤醒的假象——
+    此时 `systemctl is-active` 一样回 active，别信。
+  - **判据落在对端更省事**：txecs `ss -ltn` 里 `16090`/`16091`（console）和 `11810`（业务）
+    三个 loopback 端口在不在；`curl -s http://127.0.0.1:11800/healthz` 的 `X-Webdock-Device`
+    掉成 `webdock1` 就说明主力没了。**设备自己断线时发不出告警，所以看护必须放在 txecs 侧。**
+  - 恢复：`Start-ScheduledTask -TaskName 'WebDock2WSLKeepAlive'`，确认 `State=Running`。
+  - ⚠️ 08-20 那次退出码 1 的直接原因**未取证**：TaskScheduler/Operational 里查不到该任务的
+    事件，WSL journal 只留到 08-30。别当作已定案。
 
 ### WebDock 双向加密备份
 
