@@ -950,9 +950,15 @@ _FEISHU_SELF_MENTION_ID_RE = re.compile(
     r"If user_id is [\"']?([^\"'\s,]+)[\"']?,\s*that mention refers to you",
     re.IGNORECASE,
 )
-# <at user_id="ou_xxx">name</at> — the id Feishu puts in the tag is the open_id,
-# the same value the helper line above names.
-_FEISHU_AT_TAG_USER_ID_RE = re.compile(r"<at\s+[^>]*user_id=([\"'])(.*?)\1", re.IGNORECASE)
+# <at user_id="ou_xxx">name</at> — the id Feishu puts in the tag is the open_id.
+# ⚠️ The id pattern is not decoration: the helper text itself contains the literal
+# example `<at user_id="...">name</at>`, and a permissive `(.*?)` captures "..." as
+# if it were a real mention (2026-09-03: that made the id set never empty and drove
+# the whole comparison to a wrong answer).
+_FEISHU_AT_TAG_USER_ID_RE = re.compile(
+    r"<at\s+[^>]*user_id=([\"'])((?:ou|on|cli)_[A-Za-z0-9]+)\1",
+    re.IGNORECASE,
+)
 
 
 def _feishu_mention_ids(mention: Any) -> set[str]:
@@ -990,24 +996,25 @@ def feishu_mentioned_ids(raw_metadata: dict[str, Any] | None, text: str) -> set[
 
 
 def annotate_feishu_mention_facts(raw_metadata: dict[str, Any], text: str) -> None:
-    """Settle "was the bot itself mentioned?" while the text still has the helper
-    block and every <at> tag, and record it as `mentioned_bot`.
+    """Record the bot's own open_id and the ids this message mentioned, while the
+    helper block and the <at> tags are still in the text.
 
-    2026-09-02: the question cannot be answered later. strip_feishu_mention_helper_text
-    removes the bot's OWN mention, so the cleaned text of a message that @-ed the bot
-    looks exactly like one that only @-ed a colleague. The old fallbacks in
-    feishu_mentions_bot ("mentions list non-empty", "text contains <at ") fired on ANY
-    mention, so @-ing a group member sent that member's message to ChatGPT."""
+    strip_feishu_mention_helper_text removes both, so these facts are unrecoverable
+    afterwards. ⚠️ 2026-09-03: this function must NOT conclude "the bot was mentioned"
+    from those ids. In a real Feishu group message OpenClaw renders the bot's own
+    mention as plain `@名字` and keeps `<at user_id="ou_...">` only for the colleagues,
+    so the bot's id is simply absent from the text and any comparison answers "no".
+    The authoritative signal is upstream's `was_mentioned`; see feishu_mentions_bot."""
     match = _FEISHU_SELF_MENTION_ID_RE.search(text or "")
     bot_open_id = match.group(1).strip() if match else ""
     if not bot_open_id:
-        # No helper line means no bot id to compare against; leave the decision to
-        # feishu_mentions_bot's conservative fallback rather than guessing here.
+        # No helper line means the message mentioned nobody (OpenClaw injects the
+        # block only when `ctx.hasAnyMention`), so there is nothing to record.
         return
     raw_metadata.setdefault("bot_open_id", bot_open_id)
     ids = feishu_mentioned_ids(raw_metadata, text)
     if ids:
-        raw_metadata["mentioned_bot"] = bot_open_id in ids
+        raw_metadata.setdefault("mentioned_open_ids", sorted(ids))
 
 
 def _feishu_self_mention_names(bot_id: str, raw_metadata: dict[str, Any] | None) -> list[str]:
@@ -2479,15 +2486,17 @@ def feishu_has_group_mention_hint(text: str) -> bool:
     return "content may include mention tags" in lowered or "that mention refers to you" in lowered
 
 
+# Only keys OpenClaw itself emits belong here. Anything this bridge writes into
+# raw_metadata must stay out: 2026-09-03 a self-written `mentioned_bot` sat in this
+# list, outranked upstream's `was_mentioned: true`, and silenced the bot in groups.
 FEISHU_MENTION_BOT_FLAG_KEYS = (
-    "mentionedBot",
-    "mentioned_bot",
+    "was_mentioned",
+    "wasMentioned",
     "explicitly_mentioned_bot",
     "explicitlyMentionedBot",
+    "mentionedBot",
     "is_mentioned",
     "isMentioned",
-    "wasMentioned",
-    "was_mentioned",
 )
 
 
@@ -2506,15 +2515,26 @@ def feishu_mentions_bot(details: dict[str, Any]) -> bool:
                 return True
             if lowered in {"0", "false", "no"}:
                 return False
-    # ⚠️ An absent `was_mentioned` does NOT mean "not mentioned": OpenClaw emits it
-    # as `ctx.WasMentioned === true ? true : void 0`, so the key simply disappears
-    # when the bot was not mentioned. Compare ids instead.
+    # ⚠️ An absent `was_mentioned` does NOT mean "not mentioned" on its own: OpenClaw
+    # emits it as `ctx.WasMentioned === true ? true : void 0`, so the key disappears
+    # rather than turning false. What makes the absence readable is a sibling from the
+    # SAME payload builder: `is_group_chat` comes out of buildConversationMentionMetadataPayload
+    # too, so its presence proves that batch of mention metadata arrived. Given that,
+    # plus a helper block (bot_open_id — OpenClaw injects it only when the message
+    # mentions somebody), an absent `was_mentioned` means the mention was aimed at
+    # somebody else. 2026-09-03 verified against both live messages.
     bot_open_id = str(_first_metadata_value(raw_metadata, "bot_open_id", "botOpenId") or "").strip()
+    group_flag = _first_metadata_value(raw_metadata, "is_group_chat", "isGroupChat")
+    if bot_open_id and group_flag is not None:
+        return False
+    # No usable upstream signal: fall back to comparing real open_ids where we have
+    # them. ⚠️ The bot's own mention reaches us as plain `@名字`, so a miss here means
+    # "cannot tell", not "not mentioned" — hence this runs only after the check above.
     text = str(details.get("user_text") or "")
     if bot_open_id:
         ids = feishu_mentioned_ids(raw_metadata, text)
-        if ids:
-            return bot_open_id in ids
+        if ids and bot_open_id in ids:
+            return True
     mentions = raw_metadata.get("mentions")
     if isinstance(mentions, list) and mentions:
         return True
