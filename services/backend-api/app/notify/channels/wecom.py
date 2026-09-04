@@ -61,6 +61,11 @@ def render_markdown(notification: Notification) -> str:
     """
     color = LEVEL_COLORS.get(notification.level, "info")
     lines = [f'<font color="{color}">**{notification.display_title()}**</font>']
+    # 企微没有标签组件，也没有副标题——降级成标题下的两行，信息不丢就行。
+    if notification.tags:
+        lines.append(" ".join(f"`{tag.text}`" for tag in notification.tags))
+    if notification.subtitle.strip():
+        lines.append(notification.subtitle.strip())
     if notification.summary.strip():
         lines.append(notification.summary.strip())
     for segment in notification.segments:
@@ -68,8 +73,9 @@ def render_markdown(notification: Notification) -> str:
             lines.append(segment.text.strip())
         elif segment.kind == "fields":
             lines.extend(f"**{field.name}**：{field.value}" for field in segment.fields)
-    if notification.link is not None:
-        lines.append(f"[{notification.link.text}]({notification.link.url})")
+    # 企微 markdown 没有按钮，一律降级成链接行——每个按钮一行，样式（primary/danger）丢掉。
+    for button in notification.all_buttons():
+        lines.append(f"[{button.text}]({button.url})")
     lines.append(f"> {notification.source} · {notification.event}")
     return _truncate_utf8("\n".join(line for line in lines if line).strip())
 

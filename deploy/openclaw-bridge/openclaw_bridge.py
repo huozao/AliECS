@@ -3625,7 +3625,18 @@ def build_feishu_card(segments: list[tuple[str, str]], footer: str = "") -> dict
     """Build a Feishu interactive card whose elements interleave markdown text and
     images in document order — a single coherent message instead of separate image
     bubbles. Image segments must already be resolved to image_keys; empty text is
-    dropped. A non-empty ``footer`` renders as a gray note element at the bottom."""
+    dropped. A non-empty ``footer`` renders as gray small print at the bottom.
+
+    2026-09-04：卡片 JSON 1.0 → 2.0，与 backend-api 的 app/notify/channels/feishu.py
+    对齐。1.0 的三处写法在 2.0 里不存在，照抄会被整张拒收：
+      - `note` 组件           → markdown + text_size=notation + <font color='grey'>
+      - `div`+`text.lark_md`  → markdown 组件（顺带拿到 1.0 没有的表格与代码块渲染）
+      - 顶层 `elements`       → `body.elements`，且要声明 `schema: "2.0"`
+    图片的 `mode` 在 2.0 里改叫 `scale_type`，**并且 `fit_horizontal` 不能带 `size`**
+    （生产实测：带任何 size 值都报 `img size is not allowed`）。
+
+    ⚠️ `config.update_multi` 必须保留：feishu_patch_card 靠它做占位卡原地更新。
+    """
     elements: list[dict[str, Any]] = []
     for kind, value in segments:
         if kind == "image":
@@ -3634,15 +3645,25 @@ def build_feishu_card(segments: list[tuple[str, str]], footer: str = "") -> dict
                     "tag": "img",
                     "img_key": value,
                     "alt": {"tag": "plain_text", "content": "图片"},
-                    "mode": "fit_horizontal",
+                    "scale_type": "fit_horizontal",
                     "preview": True,
                 }
             )
         elif value.strip():
-            elements.append({"tag": "div", "text": {"tag": "lark_md", "content": _lark_md(value)}})
+            elements.append({"tag": "markdown", "content": _lark_md(value)})
     if footer.strip():
-        elements.append({"tag": "note", "elements": [{"tag": "plain_text", "content": footer.strip()}]})
-    return {"config": {"wide_screen_mode": True, "update_multi": True}, "elements": elements}
+        elements.append(
+            {
+                "tag": "markdown",
+                "content": f"<font color='grey'>{footer.strip()}</font>",
+                "text_size": "notation",
+            }
+        )
+    return {
+        "schema": "2.0",
+        "config": {"update_multi": True, "width_mode": "fill"},
+        "body": {"direction": "vertical", "elements": elements},
+    }
 
 
 PROJECT_SLUG_RE = re.compile(r"/g/g-p-[0-9a-f]+-([^/?#]+)")
