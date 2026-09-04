@@ -4568,6 +4568,77 @@ def test_reconcile_defaults_to_the_ops_group_chat_id():
     assert bridge.FEISHU_ALERT_CHAT_ID == "oc_84d1130542509e374f7ea20c13d11ca4"
 
 
+def test_send_feishu_alert_prefers_notify_center(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "NOTIFY_CENTER_ENDPOINT", "http://127.0.0.1:8000/v1/internal/notify/send")
+    monkeypatch.setattr(bridge, "NOTIFY_CENTER_SOURCE", "openclaw-bridge")
+    monkeypatch.setattr(bridge, "NOTIFY_CENTER_TOKEN", "secret")
+    captured: dict[str, object] = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return b'{"ok":true,"delivered":true,"outbox_id":42}'
+
+    def fake_urlopen(request, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", fake_urlopen)
+    direct: list[str] = []
+    monkeypatch.setattr(bridge, "_send_feishu_alert_direct", direct.append)
+
+    bridge.send_feishu_alert("bridge test")
+
+    request = captured["request"]
+    assert request.full_url == "http://127.0.0.1:8000/v1/internal/notify/send"
+    assert request.get_header("X-notify-source") == "openclaw-bridge"
+    assert request.get_header("X-notify-token") == "secret"
+    payload = json.loads(request.data.decode())
+    assert payload["source"] == "openclaw-bridge"
+    assert payload["event"] == "bridge.alert"
+    assert payload["summary"] == ""
+    assert payload["segments"] == [{"kind": "text", "text": "bridge test"}]
+    assert direct == []
+
+
+def test_send_feishu_alert_does_not_direct_fallback_after_notify_center_502(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "NOTIFY_CENTER_ENDPOINT", "http://notify/send")
+    monkeypatch.setattr(bridge, "NOTIFY_CENTER_SOURCE", "openclaw-bridge")
+    monkeypatch.setattr(bridge, "NOTIFY_CENTER_TOKEN", "secret")
+    error = urllib.error.HTTPError(
+        "http://notify/send", 502, "bad gateway", {}, io.BytesIO(b'{"detail":"queued for retry (outbox 9)"}')
+    )
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", lambda request, timeout: (_ for _ in ()).throw(error))
+    direct: list[str] = []
+    monkeypatch.setattr(bridge, "_send_feishu_alert_direct", direct.append)
+
+    bridge.send_feishu_alert("queued alert")
+
+    assert direct == []
+
+
+def test_send_feishu_alert_falls_back_to_direct_when_notify_center_unreachable(monkeypatch):
+    bridge = load_bridge()
+    monkeypatch.setattr(bridge, "NOTIFY_CENTER_ENDPOINT", "http://notify/send")
+    monkeypatch.setattr(bridge, "NOTIFY_CENTER_SOURCE", "openclaw-bridge")
+    monkeypatch.setattr(bridge, "NOTIFY_CENTER_TOKEN", "secret")
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", lambda request, timeout: (_ for _ in ()).throw(OSError("refused")))
+    direct: list[str] = []
+    monkeypatch.setattr(bridge, "_send_feishu_alert_direct", direct.append)
+
+    bridge.send_feishu_alert("fallback alert")
+
+    assert direct == ["fallback alert"]
+
+
 def test_refresh_cycle_defaults_to_a_minute():
     # The only knob trading Feishu API volume for config-apply speed. Tightening it
     # buys nothing on the message path (which reads memory) and doubles the bill.

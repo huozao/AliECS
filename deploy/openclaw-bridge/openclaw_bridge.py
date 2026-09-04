@@ -4705,14 +4705,22 @@ def get_bridge_hosts() -> list[str]:
 # Where the daily reconcile reports drift. Defaults to the ops group so the check
 # is never silently unrouted; override per deployment.
 FEISHU_ALERT_CHAT_ID = os.getenv("FEISHU_ALERT_CHAT_ID", "oc_84d1130542509e374f7ea20c13d11ca4")
+# Unified notify-center ingress.  The bridge runs with host networking on txecs,
+# so production points at backend-api's host-published loopback port.
+NOTIFY_CENTER_ENDPOINT = (os.getenv("NOTIFY_CENTER_ENDPOINT") or "").strip()
+NOTIFY_CENTER_SOURCE = (os.getenv("NOTIFY_CENTER_SOURCE") or "openclaw-bridge").strip()
+NOTIFY_CENTER_TOKEN = (os.getenv("NOTIFY_CENTER_TOKEN") or "").strip()
+try:
+    NOTIFY_CENTER_TIMEOUT_SECONDS = max(0.2, float(os.getenv("NOTIFY_CENTER_TIMEOUT_SECONDS", "2")))
+except ValueError:
+    NOTIFY_CENTER_TIMEOUT_SECONDS = 2.0
 # Local wall-clock time (container TZ) for the daily full reconcile — an idle hour,
 # because it re-scans every table back to back.
 FEISHU_BITABLE_RECONCILE_AT = os.getenv("FEISHU_BITABLE_RECONCILE_AT", "04:00")
 
 
-def send_feishu_alert(text: str) -> None:
-    """Post a plain-text alert to the ops group. Best effort: an alert that fails
-    to send must never take down the thread that noticed the problem."""
+def _send_feishu_alert_direct(text: str) -> None:
+    """Legacy direct Feishu delivery used as the last-resort fallback."""
     chat_id = FEISHU_ALERT_CHAT_ID
     if not chat_id:
         return
@@ -4732,6 +4740,84 @@ def send_feishu_alert(text: str) -> None:
         )
     except Exception as exc:
         log_line(f"feishu_alert_failed {exc}")
+
+
+def _notify_center_payload(text: str) -> dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    minute = now.strftime("%Y%m%d%H%M")
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
+    return {
+        "source": NOTIFY_CENTER_SOURCE,
+        "event": "bridge.alert",
+        "level": "warn",
+        "title": "[bridge] 运维告警",
+        # Keep the complete alert in one segment; putting it in summary as well
+        # would duplicate the body in every channel and hit its shorter limit.
+        "summary": "",
+        "segments": [{"kind": "text", "text": text}],
+        "images": [],
+        "occurred_at": now.isoformat(),
+        "dedup_key": f"bridge-alert:{digest}:{minute}",
+    }
+
+
+def _send_feishu_alert_via_notify_center(text: str) -> bool:
+    """Try the unified notify center; return whether it accepted/delivered the alert.
+
+    A 502 means backend-api accepted the outbox row but all targets currently
+    failed, so direct fallback would create a duplicate when retry succeeds.
+    Other HTTP errors and transport failures fall back to the legacy direct path.
+    """
+    if not (NOTIFY_CENTER_ENDPOINT and NOTIFY_CENTER_SOURCE and NOTIFY_CENTER_TOKEN):
+        return False
+    payload = _notify_center_payload(text)
+    request = urllib.request.Request(
+        NOTIFY_CENTER_ENDPOINT,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json; charset=utf-8",
+            "X-Notify-Source": NOTIFY_CENTER_SOURCE,
+            "X-Notify-Token": NOTIFY_CENTER_TOKEN,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=NOTIFY_CENTER_TIMEOUT_SECONDS) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        if isinstance(result, dict) and result.get("ok") and (
+            result.get("delivered") or result.get("duplicate")
+        ):
+            log_line(
+                "feishu_alert_notify_center "
+                f"outbox={result.get('outbox_id', '')} delivered={result.get('delivered')}"
+            )
+            return True
+        log_line("feishu_alert_notify_center_failed invalid_success_response")
+        return False
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            body = ""
+        if exc.code == 502 and "outbox" in body:
+            log_line("feishu_alert_notify_center_queued")
+            return True
+        log_line(f"feishu_alert_notify_center_failed http={exc.code}")
+        return False
+    except Exception as exc:
+        log_line(f"feishu_alert_notify_center_unreachable {type(exc).__name__}")
+        return False
+
+
+def send_feishu_alert(text: str) -> None:
+    """Post an ops alert without ever affecting the thread that noticed it.
+
+    The unified notify center is preferred; direct Feishu delivery remains the
+    silent fallback for an unavailable or misconfigured center.
+    """
+    if _send_feishu_alert_via_notify_center(text):
+        return
+    _send_feishu_alert_direct(text)
 
 
 def _seconds_until(hhmm: str) -> float:
