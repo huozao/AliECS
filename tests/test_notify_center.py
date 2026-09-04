@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import base64
 import importlib.util
+import io
 import json
 import sys
 import unittest
+import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -125,6 +127,55 @@ class ModelTests(unittest.TestCase):
         self.assertIn("合约：AU2612", text)
         self.assertIn("持续 12 秒", text)
 
+    def test_bad_colors_and_styles_are_rejected_at_the_entrance(self) -> None:
+        """颜色写错 → 飞书拒收整张卡片 → send 静默降级成纯文本。
+
+        那条降级路径专治「结构没问题但飞书不收」，正好把配色错误也一起吞掉，
+        所以校验必须落在入口，不能等投递。
+        """
+        with self.assertRaises(ValueError):
+            make_notification(theme="翠绿")
+        with self.assertRaises(ValueError):
+            make_notification(tags=[{"text": "标签", "color": "rainbow"}])
+        with self.assertRaises(ValueError):
+            make_notification(buttons=[{"text": "x", "url": "https://a/", "style": "huge"}])
+
+    def test_more_than_three_tags_is_rejected_not_truncated(self) -> None:
+        """飞书上限 3 个。悄悄截掉第 4 个的话，生产者以为发出去了、实际没有。"""
+        with self.assertRaises(ValueError):
+            make_notification(tags=[{"text": f"t{index}"} for index in range(4)])
+
+    def test_link_is_folded_into_buttons_in_order(self) -> None:
+        """link 不删——doc-sync-worker 还在用它，那是另一个镜像另一次部署。"""
+        notification = make_notification(
+            link={"text": "查看", "url": "https://hydwang.xyz/sync/"},
+            buttons=[{"text": "重跑", "url": "https://hydwang.xyz/run"}],
+        )
+        self.assertEqual(["查看", "重跑"], [button.text for button in notification.all_buttons()])
+        self.assertIn("查看：https://hydwang.xyz/sync/", notification.plain_text())
+        self.assertIn("重跑：https://hydwang.xyz/run", notification.plain_text())
+
+    def test_new_fields_survive_the_storage_roundtrip(self) -> None:
+        """storable_payload 是白名单式 dump，新字段必须确认真的进得去、读得回来。
+
+        rule backend-notify.md 记着这个坑：序列化白名单漏字段时，重试投出去的那条
+        消息会比首投少东西，而首投是成功的，所以平时看不见。
+        """
+        notification = make_notification(
+            subtitle="副标题",
+            theme="green",
+            tags=[{"text": "已发布", "color": "green"}],
+            buttons=[{"text": "打开应用", "url": "https://hydwang.xyz/", "style": "primary"}],
+        )
+        restored = Notification.from_stored(notification.storable_payload())
+        self.assertEqual("副标题", restored.subtitle)
+        self.assertEqual("green", restored.theme)
+        self.assertEqual([("已发布", "green")], [(tag.text, tag.color) for tag in restored.tags])
+        self.assertEqual(
+            [("打开应用", "https://hydwang.xyz/", "primary")],
+            [(button.text, button.url, button.style) for button in restored.buttons],
+        )
+
 
 class RouteMatchingTests(unittest.TestCase):
     ROUTES = [
@@ -163,10 +214,33 @@ class FeishuRenderTests(unittest.TestCase):
             images=[{"ref": "chart", "png_base64": PNG}],
         )
         card = feishu.build_card(notification, {"chart": "img_key_1"})
-        kinds = [element.get("tag") for element in card["elements"]]
-        # summary、开头、图、结尾、footer note
-        self.assertEqual(kinds[:4], ["div", "div", "img", "div"])
+        kinds = [element.get("tag") for element in card["body"]["elements"]]
+        # summary、开头、图、结尾、页脚
+        self.assertEqual(kinds[:4], ["markdown", "markdown", "img", "markdown"])
         self.assertEqual(card["header"]["template"], "red")
+
+    def test_card_declares_json_2_and_uses_no_1_0_only_tags(self) -> None:
+        """卡片 JSON 1.0 的 note / action / div.fields 在 2.0 里不存在。
+
+        照抄过来飞书会整张拒收，而 send 的降级是**退回纯文本**——于是「结构写错」
+        和「卡片发不出去」在观测面上长得一样，线上完全查不出来。判据放在结构上，
+        不放在「发送有没有报错」上。
+        """
+        notification = make_notification(
+            segments=[
+                {"kind": "fields", "fields": [{"name": "合约", "value": "AU2612"}]},
+                {"kind": "image", "image_ref": "chart"},
+            ],
+            images=[{"ref": "chart", "png_base64": PNG}],
+            buttons=[{"text": "打开", "url": "https://hydwang.xyz/"}],
+        )
+        card = feishu.build_card(notification, {"chart": "k"})
+        self.assertEqual("2.0", card["schema"])
+        self.assertIn("elements", card["body"])
+        self.assertNotIn("elements", card)  # 1.0 把 elements 放在顶层
+        dumped = json.dumps(card, ensure_ascii=False)
+        for dead_tag in ('"tag": "note"', '"tag": "action"', '"is_short"'):
+            self.assertNotIn(dead_tag, dumped)
 
     def test_missing_image_key_leaves_a_visible_note(self) -> None:
         """图传失败不能让卡片凭空少一块，否则读的人不知道本该有图。"""
@@ -176,14 +250,106 @@ class FeishuRenderTests(unittest.TestCase):
         )
         card = feishu.build_card(notification, {})
         notes = [
-            element for element in card["elements"]
-            if element.get("tag") == "note"
-            and "失败" in json.dumps(element, ensure_ascii=False)
+            element for element in card["body"]["elements"]
+            if element.get("tag") == "markdown"
+            and feishu.IMAGE_FAILED_MARK in element.get("content", "")
         ]
         self.assertEqual(len(notes), 1)
 
+    def test_fit_horizontal_image_carries_no_size(self) -> None:
+        """2026-09-04 对生产飞书实测：fit_horizontal 与 size 互斥，带 size 整张卡片被拒
+        （`ErrMsg: img size is not allowed`），而 send 会把这个拒收静默降级成纯文本。
+        文档没写这条互斥，所以判据留在测试里，别再加回去。
+        """
+        notification = make_notification(
+            segments=[{"kind": "image", "image_ref": "chart"}],
+            images=[{"ref": "chart", "caption": "价差走势", "png_base64": PNG}],
+        )
+        image = [
+            element for element in feishu.build_card(notification, {"chart": "k"})["body"]["elements"]
+            if element.get("tag") == "img"
+        ][0]
+        self.assertEqual("fit_horizontal", image["scale_type"])
+        self.assertNotIn("size", image)
+        self.assertEqual("价差走势", image["title"]["content"])
+
+    def test_explicit_theme_overrides_the_level_color(self) -> None:
+        """成功、例行通报这类语义级别说不出来，得让生产者自己指定颜色。"""
+        card = feishu.build_card(make_notification(level="error", theme="green"), {})
+        self.assertEqual("green", card["header"]["template"])
+        # 没给 theme 时仍按 level 走，现有告警行为不能变
+        self.assertEqual("red", feishu.build_card(make_notification(level="error"), {})["header"]["template"])
+
+    def test_subtitle_and_tags_land_in_the_header(self) -> None:
+        notification = make_notification(
+            subtitle="企业业务系统开发的第一选择",
+            tags=[{"text": "低代码开发", "color": "red"}, {"text": "全代码能力", "color": "blue"}],
+        )
+        header = feishu.build_card(notification, {})["header"]
+        self.assertEqual("企业业务系统开发的第一选择", header["subtitle"]["content"])
+        self.assertEqual(
+            [("低代码开发", "red"), ("全代码能力", "blue")],
+            [(tag["text"]["content"], tag["color"]) for tag in header["text_tag_list"]],
+        )
+
+    def test_single_button_fills_the_card_width(self) -> None:
+        notification = make_notification(
+            buttons=[{"text": "立即领取免费体验名额", "url": "https://hydwang.xyz/", "style": "primary"}]
+        )
+        button = feishu.build_card(notification, {})["body"]["elements"][-2]
+        self.assertEqual("button", button["tag"])
+        self.assertEqual("primary", button["type"])
+        self.assertEqual("fill", button["width"])
+        # 2.0 的跳转走 behaviors，不是 1.0 的顶层 url 字段
+        self.assertEqual([{"type": "open_url", "default_url": "https://hydwang.xyz/"}], button["behaviors"])
+
+    def test_multiple_buttons_are_laid_out_side_by_side(self) -> None:
+        notification = make_notification(
+            link={"text": "查看详情", "url": "https://hydwang.xyz/sync/"},
+            buttons=[{"text": "重跑", "url": "https://hydwang.xyz/run", "style": "primary"}],
+        )
+        row = feishu.build_card(notification, {})["body"]["elements"][-2]
+        self.assertEqual("column_set", row["tag"])
+        buttons = [column["elements"][0] for column in row["columns"]]
+        # link 折算成第一个按钮，buttons 接在后面——顺序是 all_buttons 的唯一口径
+        self.assertEqual(["查看详情", "重跑"], [button["text"]["content"] for button in buttons])
+        self.assertEqual(["default", "primary"], [button["type"] for button in buttons])
+
+    def test_fields_are_rendered_two_per_row(self) -> None:
+        notification = make_notification(
+            segments=[
+                {
+                    "kind": "fields",
+                    "fields": [{"name": f"k{index}", "value": f"v{index}"} for index in range(3)],
+                }
+            ]
+        )
+        rows = [
+            element for element in feishu.build_card(notification, {})["body"]["elements"]
+            if element.get("tag") == "column_set"
+        ]
+        self.assertEqual([2, 1], [len(row["columns"]) for row in rows])
+
     def test_atx_heading_is_converted_to_bold(self) -> None:
         self.assertEqual(feishu._lark_md("## 详情"), "**详情**")
+
+    def test_http_error_body_is_kept_in_the_exception(self) -> None:
+        """飞书把「哪个元素哪个字段不合法」写在 400 的响应体里。
+
+        urlopen 在读响应体之前就抛 HTTPError，丢掉这行的话，线上只会看到卡片静默
+        降级成纯文本，完全查不出是结构问题还是权限问题。
+        """
+        detail = '{"code":230099,"msg":"ErrPath: ROOT -> body -> elements -> [4](tag: img)"}'
+
+        def fake_opener(request, timeout=0):  # noqa: ANN001
+            raise urllib.error.HTTPError(
+                request.full_url, 400, "Bad Request", {}, io.BytesIO(detail.encode())
+            )
+
+        with self.assertRaises(RuntimeError) as caught:
+            feishu._post_json("COMPANY_A", "/im/v1/messages", {}, "token", opener=fake_opener)
+        self.assertIn("ErrPath", str(caught.exception))
+        self.assertIn("400", str(caught.exception))
 
     def test_send_falls_back_to_text_when_card_is_rejected(self) -> None:
         """卡片被拒时退回纯文本：图丢了但字还在，与 gold_spread 现有降级同口径。"""
@@ -228,6 +394,20 @@ class WecomRenderTests(unittest.TestCase):
         self.assertIn("**合约**：AU2612", rendered)
         self.assertIn("[查看](https://hydwang.xyz/sync/)", rendered)
         self.assertIn("> gold-spread-monitor · wrong_price_detected", rendered)
+
+    def test_every_button_degrades_to_a_markdown_link(self) -> None:
+        """企微没有按钮组件，但 URL 一个都不能丢——丢了对方就点不到了。"""
+        notification = make_notification(
+            subtitle="副标题",
+            tags=[{"text": "已发布", "color": "green"}],
+            link={"text": "查看", "url": "https://hydwang.xyz/sync/"},
+            buttons=[{"text": "打开应用", "url": "https://hydwang.xyz/app", "style": "primary"}],
+        )
+        rendered = wecom.render_markdown(notification)
+        self.assertIn("[查看](https://hydwang.xyz/sync/)", rendered)
+        self.assertIn("[打开应用](https://hydwang.xyz/app)", rendered)
+        self.assertIn("`已发布`", rendered)
+        self.assertIn("副标题", rendered)
 
     def test_markdown_is_truncated_to_wecom_limit(self) -> None:
         notification = make_notification(segments=[{"kind": "text", "text": "长" * 5000}])

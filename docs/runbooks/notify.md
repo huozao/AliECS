@@ -68,10 +68,80 @@ doc-sync-worker ── notify_client.enqueue() ───────────
 | 正文上限 | 宽松 | markdown **4096 字节** | markdown 4096 字节 |
 | 收件人 | chat_id / open_id | 固定群，改不了 | 人 / 部门 / 标签 |
 | 需要的凭据 | app_id + secret | 只要 webhook URL | corpid + secret + agentid |
+| 标题背景色 | ✅ 12 色可选 | ❌ 只能给标题文字上色 | ❌ 同左 |
+| 副标题 / 标题标签 | ✅ 标签最多 3 个 | ❌ 降级成标题下两行 | ❌ 同左 |
+| 按钮 | ✅ 最多 5 个，9 种样式 | ❌ 降级成 markdown 链接行 | ❌ 同左 |
+| 交互回调（点赞/确认） | ❌ 中枢没有入站链路 | ❌ | ❌ |
 
-飞书那套上传与卡片结构移植自 `deploy/openclaw-bridge/openclaw_bridge.py`
-（`feishu_upload_image` / `build_feishu_card` / `_lark_md`），那份在飞书链路上已经
-跑了几个月，富文本、图片、文件都验证过。
+飞书那套上传移植自 `deploy/openclaw-bridge/openclaw_bridge.py`
+（`feishu_upload_image` / `_lark_md`），那份在飞书链路上已经跑了几个月，
+富文本、图片、文件都验证过。
+
+⚠️ **「卡片结构也移植自 bridge 的 `build_feishu_card`」这句自 2026-09-04 起不再成立**：
+卡片已从 JSON 1.0 重写为 2.0（见下一节），与 bridge 那份不再同构。bridge 自己仍是 1.0，
+两边现在是两套结构，改一边不会同步另一边。
+
+## 卡片能力与消息模型字段（新来源按这张表接入）
+
+生产者**不构造任何飞书 / 企微 payload**，只填 `Notification` 的字段，渲染是 channel 的事。
+下面是全部可填字段；不填就没有，全部有默认值，所以**老来源一个字都不用改**。
+
+| 字段 | 类型 | 飞书渲染成 | 企微降级成 |
+|---|---|---|---|
+| `title` | str | 卡片标题（自带图标就不叠级别图标） | markdown 首行加粗 |
+| `subtitle` | str | 标题下的副标题 | 标题下一行 |
+| `theme` | 枚举 | 标题条背景色；**留空则按 `level` 取蓝/黄/红** | 无（只有字色） |
+| `tags` | ≤3 个 | 标题右侧彩色标签 | 标题下一行的 `` `行内代码` `` |
+| `summary` | str | 正文首段（markdown） | 第二行 |
+| `segments[].text` | str | markdown 段；`preformatted=true` 走纯文本段 | 原样一行 |
+| `segments[].fields` | ≤40 | **两列并排**（`column_set`） | `**名**：值` 逐行 |
+| `segments[].image` | ≤12 张 | 卡片内嵌图，`caption` 成图题 | 另发独立图片消息 |
+| `buttons` | ≤5 | 1 个占满宽度，多个横排 | 每个一行 markdown 链接 |
+| `link` | 兼容字段 | 折算成第一个按钮 | 同上 |
+
+`theme` 取值：`blue` `wathet` `turquoise` `green` `yellow` `orange` `red` `carmine`
+`violet` `purple` `indigo` `grey` `default`。
+
+`buttons[].style` 取值与**实测观感**（别照名字猜）：
+
+| style | 实际长相 |
+|---|---|
+| `default` | 白底黑字灰边框 |
+| `primary` | 白底蓝字蓝边框——**是描边不是实心** |
+| `primary_filled` | 蓝底白字实心，视觉最重的主按钮 |
+| `danger` / `danger_filled` | 同上，红色 |
+| `text` / `primary_text` / `danger_text` | 无边框纯文字 |
+| `laser` | 渐变强调 |
+
+### 三条会让整张卡片被拒的硬约束
+
+被拒的后果是 `feishu.send` **静默降级成纯文本**，群里只会看到卡片变成了一段字，
+不报错。所以这三条都在 `Notification` 入口就校验，不等投递：
+
+1. `theme` / `tags[].color` / `buttons[].style` 必须在白名单内。
+2. `tags` 最多 3 个，第 4 个是**拒绝**不是截断。
+3. 图片用 `scale_type: fit_horizontal` 时**不能带 `size`**——2026-09-04 实测，
+   带任何 size 值（含官方文档列出的 `stretch` / `large` / …）都会被拒：
+   `ErrCode 10002; ErrPath: ROOT -> body -> elements -> [N](tag: img); ErrMsg: img size is not allowed`。
+   不带才过；`crop_center` / `crop_top` 则允许带 size。文档没写这条互斥。
+
+### 做不到的（别答应业务）
+
+- **交互回调按钮**（点赞、点踩、确认、屏蔽）：需要公网入站端点 + 飞书验签 + 在开放
+  平台配「消息卡片请求网址」。中枢现在是纯出站管道（`notify_outbox → notify_deliveries`），
+  没有反方向的链路。
+- **复制 / 朗读按钮**：飞书 AI 回复气泡上那三个是**客户端原生 UI**，不是卡片组件，
+  机器人发的卡片渲染不出来。
+
+### 改了卡片渲染怎么验（本地测试挡不住这类问题）
+
+本地单测只能证明「我按文档拼对了」，证明不了「飞书收不收」。两步都要做：
+
+1. **零噪音结构校验**：在卡片末尾追加一个必错哨兵元素再 POST。飞书只报第一个错误，
+   所以报错路径指向哨兵 = 前面全部合法，而整张卡片仍被拒、群里不留消息。
+   拿它可以批量试枚举值，也可以拿生产 `notify_outbox` 里的**真实 payload** 全量回归
+   （2026-09-04 用 11 条不同 (source, event) 的真样本跑过，11/11 通过）。
+2. **发一条真卡片**肉眼看排版。合成样本全绿不代表真样本能过。
 
 ## 排障：消息没收到
 
@@ -193,6 +263,10 @@ flush 每轮（约 30 秒）把它重新领养一次、建不出记录、再记�
 - 图片只收 PNG，2MB 上限，在 `NotifyImage` 入口就校验（收敛前这层在 gold_spread 的
   `_upload_charts` 里）。2MB 取的是三家里最紧的企微群机器人限制，省得同一条消息
   发得出飞书发不出企微。
+- **卡片被拒的具体原因，2026-09-04 之前在日志里读不到**。飞书用 HTTP 400 返回，
+  把「哪个元素哪个字段不合法」写在响应体里，而 `urlopen` 在读响应体之前就抛
+  `HTTPError`——原来的 `_post_json` 没接这个异常，那行信息整个丢掉，线上只剩
+  「卡片怎么变成纯文本了」一个现象。现已把响应体前 400 字带进异常消息。
 
 ## 上线步骤
 
@@ -413,6 +487,9 @@ VALUES ('my-device', '*', 'warn', 'feishu',
 ```
 
 改完路由不需要重启：`matching_routes` 每次投递都读表。
+
+消息本身能填哪些字段、飞书能渲染成什么样、哪些写法会让卡片被拒——见
+〈卡片能力与消息模型字段〉。新来源不需要了解飞书卡片 JSON，只填那张表里的字段。
 
 ## 跨镜像契约
 

@@ -108,6 +108,61 @@ class NotifyLink(BaseModel):
     url: str = Field(max_length=1024)
 
 
+# 飞书卡片头的主题色。取值抄自官方枚举，**必须在入口校验**：写错一个值飞书会整张卡片
+# 拒收，而 feishu.send 的降级策略是退回纯文本——于是「配色写错」在观测面上长得和
+# 「卡片发不出去」一模一样，事后完全查不出来。宁可在这里当场报错。
+HEADER_TEMPLATES = frozenset(
+    {
+        "blue", "wathet", "turquoise", "green", "yellow", "orange",
+        "red", "carmine", "violet", "purple", "indigo", "grey", "default",
+    }
+)
+
+# 标签底色。官方颜色枚举还有 -50 ~ -900 的深浅变体和 RGBA 自定义，这里只放基础色：
+# 白名单窄一点最多是拒掉一个能用的颜色，放宽了则是整张卡片静默降级成纯文本。
+TAG_COLORS = frozenset(
+    {
+        "neutral", "blue", "carmine", "green", "indigo", "lime", "grey", "orange",
+        "purple", "red", "sunflower", "turquoise", "violet", "wathet", "yellow",
+    }
+)
+
+# 按钮样式，取值同上。default 是描边按钮，primary 是蓝色实心。
+BUTTON_STYLES = frozenset(
+    {
+        "default", "primary", "danger", "text",
+        "primary_text", "danger_text", "primary_filled", "danger_filled", "laser",
+    }
+)
+
+
+class NotifyTag(BaseModel):
+    """标题后缀标签。飞书最多 3 个，企微没有对应组件（降级成标题行里的行内代码）。"""
+
+    text: str = Field(max_length=24)
+    color: str = "neutral"
+
+    @model_validator(mode="after")
+    def _check_color(self) -> "NotifyTag":
+        if self.color not in TAG_COLORS:
+            raise ValueError(f"unknown tag color: {self.color}")
+        return self
+
+
+class NotifyButton(BaseModel):
+    """一个跳转按钮。只支持 open_url——回调按钮需要一条入站链路，中枢现在没有。"""
+
+    text: str = Field(max_length=64)
+    url: str = Field(max_length=1024)
+    style: str = "default"
+
+    @model_validator(mode="after")
+    def _check_style(self) -> "NotifyButton":
+        if self.style not in BUTTON_STYLES:
+            raise ValueError(f"unknown button style: {self.style}")
+        return self
+
+
 class Notification(BaseModel):
     """一条待投递的通知。
 
@@ -120,10 +175,18 @@ class Notification(BaseModel):
     event: str = Field(max_length=128)
     level: Level = "info"
     title: str = Field(max_length=200)
+    subtitle: str = Field(default="", max_length=200)
+    # 留空则按 level 映射颜色（现有告警全部走这条，行为不变）。生产者要绿色成功卡、
+    # 灰色例行通报这类「级别说明不了的语义」时才显式给。
+    theme: str = ""
+    # 飞书上限 3 个，超了整张卡片被拒。max_length 让 pydantic 在入口就拒，
+    # 而不是悄悄截掉第 4 个——生产者以为发出去了、实际没有，是最难查的一类。
+    tags: list[NotifyTag] = Field(default_factory=list, max_length=3)
     summary: str = Field(default="", max_length=2000)
     segments: list[NotifySegment] = Field(default_factory=list, max_length=60)
     images: list[NotifyImage] = Field(default_factory=list, max_length=12)
     link: NotifyLink | None = None
+    buttons: list[NotifyButton] = Field(default_factory=list, max_length=5)
     dedup_key: str = Field(default="", max_length=200)
     occurred_at: datetime | None = None
 
@@ -131,6 +194,8 @@ class Notification(BaseModel):
     def _fill_defaults(self) -> "Notification":
         if self.occurred_at is None:
             self.occurred_at = datetime.now(timezone.utc)
+        if self.theme and self.theme not in HEADER_TEMPLATES:
+            raise ValueError(f"unknown header theme: {self.theme}")
         refs = {image.ref for image in self.images}
         for segment in self.segments:
             if segment.kind == "image" and segment.image_ref not in refs:
@@ -210,9 +275,26 @@ class Notification(BaseModel):
         icon = LEVEL_ICONS.get(self.level, "")
         return f"{icon} {title}".strip()
 
+    def all_buttons(self) -> list[NotifyButton]:
+        """按钮的唯一口径：老的单个 ``link`` 折算成第一个按钮，后面接 ``buttons``。
+
+        ``link`` 不删——doc-sync-worker 的 notify_client 还在用它，而那是另一个镜像、
+        另一次部署。两个字段并存时必须只有这一处折算，否则飞书卡片、企微 markdown、
+        纯文本兜底三处迟早出现「有的渲染了 link 有的没有」。
+        """
+        buttons: list[NotifyButton] = []
+        if self.link is not None:
+            buttons.append(NotifyButton(text=self.link.text, url=self.link.url))
+        buttons.extend(self.buttons)
+        return buttons
+
     def plain_text(self) -> str:
         """所有 channel 的共同兜底：富格式发不出去时至少把字发出去。"""
         lines = [self.display_title()]
+        if self.subtitle.strip():
+            lines.append(self.subtitle.strip())
+        if self.tags:
+            lines.append(" ".join(f"[{tag.text}]" for tag in self.tags))
         if self.summary.strip():
             lines.append(self.summary.strip())
         for segment in self.segments:
@@ -226,6 +308,6 @@ class Notification(BaseModel):
                     "",
                 )
                 lines.append(f"🖼️ {caption}".strip() if caption else "🖼️ 图片")
-        if self.link is not None:
-            lines.append(f"{self.link.text}：{self.link.url}")
+        for button in self.all_buttons():
+            lines.append(f"{button.text}：{button.url}")
         return "\n".join(line for line in lines if line).strip()
