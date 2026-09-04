@@ -421,3 +421,41 @@ VALUES ('my-device', '*', 'warn', 'feishu',
 **没有编译期检查**，由 `tests/test_notify_center.py::CrossServiceContractTests` 守着。
 改任一侧的 payload 结构都要跑那个测试——否则 worker 写进去的消息会在投递侧解析失败，
 而且失败是异步的、当场看不出来。
+
+### openclaw-bridge 运维告警
+
+bridge 的多维表格配置变更和每日核对告警使用来源 openclaw-bridge、事件
+bridge.alert，优先走 POST /v1/internal/notify/send。txecs 上 bridge 是
+network_mode: host，因此 endpoint 使用 backend-api 发布的
+http://127.0.0.1:8000/v1/internal/notify/send，不要写 Docker 服务名。
+
+中枢请求设有短超时；连接失败、超时或配置类 HTTP 错误会静默回落现有 Feishu 直发，
+不能影响发现问题的线程。HTTP 502 表示 outbox 已建立并等待重试，不再直发，以免中枢
+恢复后重复发送。回落路径仍捕获所有异常。
+
+启用前按顺序完成：先写来源和路由，再渲染 bridge env，最后重建 bridge 容器。token
+明文只在执行 INSERT 时存在，数据库只保存 sha256，路由不保存任何凭据：
+
+SQL：
+INSERT INTO notify_sources (source_key, token_sha256, note)
+VALUES (
+  'openclaw-bridge',
+  encode(sha256('<明文 token>'::bytea), 'hex'),
+  'openclaw-bridge 运维告警；token 在 infra secrets/txecs-bridge.enc.env'
+);
+
+INSERT INTO notify_routes
+  (source_key, event_pattern, min_level, channel, target_json, note)
+VALUES (
+  'openclaw-bridge',
+  'bridge.alert',
+  'info',
+  'feishu',
+  '{"profile":"COMPANY_A","receive_id":"oc_84d1130542509e374f7ea20c13d11ca4","receive_id_type":"chat_id"}',
+  'bridge 运维告警'
+);
+
+重复执行前先按 source_key 和 (source_key,event_pattern,channel,target_json)
+查重；数据库命令使用 psql -U app -d app。bridge 的 env 键为
+NOTIFY_CENTER_ENDPOINT、NOTIFY_CENTER_SOURCE、NOTIFY_CENTER_TOKEN 和
+NOTIFY_CENTER_TIMEOUT_SECONDS，其中 token 只从 SOPS 渲染。
