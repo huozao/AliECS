@@ -76,21 +76,21 @@ doc-sync-worker ── notify_client.enqueue() ───────────
 飞书那套上传移植自 `deploy/openclaw-bridge/openclaw_bridge.py`
 （`feishu_upload_image` / `build_feishu_card`）。代码目标是让两条发送路径统一使用
 JSON 2.0；卡片结构、图片字段和 Markdown 语义必须保持一致，避免同一条通知在中枢和
-bridge 上出现不同渲染结果。生产切换必须等客户端能力验收通过后再做。
+bridge 上出现不同渲染结果。
 
-⚠️ **迁移中的结论（2026-09-05）**：代码已完成 2.0 构造，但现场真实客户端仍显示
-「请升级至最新版本客户端」。因此生产运行态暂时保持已验证的 JSON 1.0；切换门槛是
-客户端支持 7.20+、API 接受、真实消息肉眼可见，以及同 schema 的 PATCH 更新全部通过。
+⚠️ **过时结论（2026-09-05，已被后续验收取代）**：早期真实客户端曾显示「请升级至最新版本客户端」，
+因此当时暂时保持 JSON 1.0。后续 `preview7` 至 `preview10` 在当前接收群已真实可见，
+并已按 JSON 2.0 正式部署；今后的切换门槛仍是 API 接受、真实消息肉眼可见和同 schema 的 PATCH 更新。
 
-### JSON 2.0 现场验证记录（2026-09-05）
+### JSON 2.0 早期现场验证记录（2026-09-05，历史证据）
 
 - 未部署代码用 bridge 生产凭据向通用告警群发送 2.0 卡片：API 返回 `code=0`，消息 ID
   `om_x100b668cda11f4a0c322ef1e3266394`。
 - 对同一条 2.0 卡片执行 PATCH：API 返回 `code=0`，读取结果 `updated=true`。
 - 两次 GET 的 `body.content` 都是「请升级至最新版本客户端，以查看内容」，没有出现卡片
-  正文。因此结构接受和 PATCH 接受均通过，但当前接收端渲染验收失败，不能部署切换。
-- 生产已恢复一致的 1.0 bridge/backend 镜像；等客户端升级后，必须重新发送新卡片并肉眼验收，
-  不能把本次 API `200` 当作完成判据。
+  正文。因此结构接受和 PATCH 接受均通过，但**当时**接收端渲染验收失败，不能据此部署切换。
+- ⚠️ 上述记录只代表早期接收端路径，不能推翻后续真实预览；当前以本节下方的
+  `preview7` 至 `preview10` 和正式部署记录为准，不要据此回退到 JSON 1.0。
 
 ## 卡片能力与消息模型字段（新来源按这张表接入）
 
@@ -124,9 +124,17 @@ bridge 上出现不同渲染结果。生产切换必须等客户端能力验收�
 - 月底外推按当月实际天数计算；
 - `txecs：心跳用于判断失联/限速。` 是日报尾部说明；日报缺席仍是失联判据。
 
-历史预览链 `preview4` / `preview7` / `preview10` 只证明当时测试客户端的排版，不能替代
-当前接收群的兼容性验收。后续调整先发真实卡片肉眼验收，再部署；在验收通过前保持生产
-1.0，不要把三列改成等宽 `div.fields`。
+真实客户端验证过的预览链：`preview4`（两列）、`preview5`（三等宽失败）、
+`preview7`（JSON 2.0 加权列）、`preview10`（当前紧凑字号版本）。本次已在当前接收群
+完成肉眼验收并正式部署；后续调整仍须先发真实卡片再部署，不要回退到 JSON 1.0，也不要把
+三列改成等宽 `div.fields`。
+
+### 正式部署记录（2026-09-05）
+
+- AliECS 生产代码为 `27b7faa`（日报与 JSON 2.0 渲染）+ `e363c05`（bridge 同 schema、测试和渲染语义统一）。
+- `release-deploy.yml` run `33941286766` attempt `2` 的构建、TCR 镜像同步均成功，peer job 按当前路由为 `skipped`。
+- 该 run 的 GitHub runner 在 txecs 的 `docker compose` 重建 backend 瞬间取消了 SSH action；同一 run 上传的 release 已保留，随后在 txecs 现场用该 release 和同一 `deploy-role.sh` 完成部署。
+- txecs `/srv/business-cn/state/release-meta/current.json` 已记录 deployment `e363c0571cb4-33941286766-2`；backend 使用 `t-8dc4f32ca037`，容器 healthy，`/health/` 通过。后续 session 先核对这个 manifest 和容器 tag，不要因 Actions 总状态为 cancelled 而重复发布。
 
 `theme` 取值：`blue` `wathet` `turquoise` `green` `yellow` `orange` `red` `carmine`
 `violet` `purple` `indigo` `grey` `default`。
