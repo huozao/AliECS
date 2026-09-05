@@ -369,8 +369,8 @@ class FeishuRenderTests(unittest.TestCase):
         ]
         self.assertEqual([2, 1], [len(row["columns"]) for row in rows])
 
-    def test_atx_heading_is_converted_to_bold(self) -> None:
-        self.assertEqual(feishu._lark_md("## 详情"), "**详情**")
+    def test_json_2_markdown_keeps_standard_atx_heading(self) -> None:
+        self.assertEqual(feishu._markdown("## 详情"), "## 详情")
 
     def test_http_error_body_is_kept_in_the_exception(self) -> None:
         """飞书把「哪个元素哪个字段不合法」写在 400 的响应体里。

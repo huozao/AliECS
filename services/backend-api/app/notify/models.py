@@ -88,7 +88,7 @@ class NotifySegment(BaseModel):
     text: str = Field(default="", max_length=8000)
     # 排版里含 *、|、# 这类字符时必须置 True，否则会被 markdown 吃掉或变成标题。
     # gold_spread 的价差排版就是这种情况——旧的 build_alert_card 用 plain_text 而非
-    # lark_md 正是为此，收敛时这个语义必须跟着搬过来，不能丢。
+    # markdown 正是为此，收敛时这个语义必须跟着搬过来，不能丢。
     preformatted: bool = False
     fields: list[NotifyField] = Field(default_factory=list, max_length=40)
     section_title: str = Field(default="", max_length=64)

@@ -1,8 +1,8 @@
 """飞书投递。
 
 上传与卡片结构移植自 deploy/openclaw-bridge/openclaw_bridge.py（feishu_upload_image /
-build_feishu_card / _lark_md）——那套在飞书链路上已经跑了几个月，富文本、图片、
-文件都验证过，没有理由重写一遍 im/v1/messages。
+build_feishu_card / _markdown）——两条路径共用 JSON 2.0 语义，避免同一条通知在不同
+发送入口出现不同渲染结果；没有理由重写一遍 im/v1/messages。
 
 与 bridge 的差别只有两点：这里发的是主动通知而不是回复（没有 message_id 可 reply），
 以及凭据按 profile 取而不是取单一全局 app。
@@ -153,9 +153,9 @@ def upload_image(profile: str, data: bytes, token: str, *, opener=urllib.request
     return str(image_key)
 
 
-def _lark_md(text: str) -> str:
-    """lark_md 不渲染 ATX 标题（## X 会原样显示），转成它认的粗体。抄自 bridge。"""
-    return re.sub(r"(?m)^[ \t]{0,3}#{1,6}[ \t]+(.+?)[ \t]*$", r"**\1**", text)
+def _markdown(text: str) -> str:
+    """JSON 2.0 markdown component accepts standard Markdown and selected HTML."""
+    return text
 
 
 LEVEL_TEMPLATES = {"info": "blue", "warn": "yellow", "error": "red", "fatal": "red"}
@@ -266,7 +266,7 @@ def build_card(notification: Notification, image_keys: dict[str, str]) -> dict[s
     """
     elements: list[dict[str, Any]] = []
     if notification.summary.strip():
-        elements.append({"tag": "markdown", "content": _lark_md(notification.summary.strip()), "text_size": "normal"})
+        elements.append({"tag": "markdown", "content": _markdown(notification.summary.strip()), "text_size": "normal"})
     for segment in notification.segments:
         if segment.kind == "text":
             if segment.preformatted:
@@ -274,7 +274,7 @@ def build_card(notification: Notification, image_keys: dict[str, str]) -> dict[s
                     {"tag": "div", "text": {"tag": "plain_text", "content": segment.text.strip(), "text_size": "normal"}}
                 )
             else:
-                elements.append({"tag": "markdown", "content": _lark_md(segment.text.strip()), "text_size": "normal"})
+                elements.append({"tag": "markdown", "content": _markdown(segment.text.strip()), "text_size": "normal"})
         elif segment.kind == "fields":
             elements.extend(_fields_columns(segment.fields))
         elif segment.kind == "section":

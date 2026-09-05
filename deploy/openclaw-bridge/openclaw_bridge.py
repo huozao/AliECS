@@ -3625,11 +3625,9 @@ def build_feishu_card(segments: list[tuple[str, str]], footer: str = "") -> dict
     """Build a Feishu interactive card whose elements interleave markdown text and
     images in document order — a single coherent message instead of separate image
     bubbles. Image segments must already be resolved to image_keys; empty text is
-    dropped. A non-empty ``footer`` renders as a gray note element at the bottom.
-
-    当前生产客户端对 JSON 2.0 卡片会接受请求却渲染成「请升级至最新版本客户端」，
-    所以这里保留已经在实际会话中验证过的 JSON 1.0 结构；``update_multi`` 是占位卡
-    原地更新的前提，不能删。
+    dropped. A non-empty ``footer`` renders as a gray notation markdown element at
+    the bottom. Every card produced here is JSON 2.0 so a placeholder, rotation
+    patch, and final patch never cross schemas.
     """
     elements: list[dict[str, Any]] = []
     for kind, value in segments:
@@ -3639,15 +3637,27 @@ def build_feishu_card(segments: list[tuple[str, str]], footer: str = "") -> dict
                     "tag": "img",
                     "img_key": value,
                     "alt": {"tag": "plain_text", "content": "图片"},
-                    "mode": "fit_horizontal",
+                    # JSON 2.0 uses scale_type; size is deliberately omitted because
+                    # Feishu rejects size together with fit_horizontal in production.
+                    "scale_type": "fit_horizontal",
                     "preview": True,
                 }
             )
         elif value.strip():
-            elements.append({"tag": "div", "text": {"tag": "lark_md", "content": _lark_md(value)}})
+            elements.append({"tag": "markdown", "content": _markdown(value.strip())})
     if footer.strip():
-        elements.append({"tag": "note", "elements": [{"tag": "plain_text", "content": footer.strip()}]})
-    return {"config": {"wide_screen_mode": True, "update_multi": True}, "elements": elements}
+        elements.append(
+            {
+                "tag": "markdown",
+                "content": f"<font color='grey'>{footer.strip()}</font>",
+                "text_size": "notation",
+            }
+        )
+    return {
+        "schema": "2.0",
+        "config": {"width_mode": "fill", "update_multi": True},
+        "body": {"direction": "vertical", "elements": elements},
+    }
 
 
 PROJECT_SLUG_RE = re.compile(r"/g/g-p-[0-9a-f]+-([^/?#]+)")
@@ -3679,10 +3689,9 @@ def format_card_footer(details: dict[str, Any]) -> str:
     return " | ".join(parts)
 
 
-def _lark_md(text: str) -> str:
-    """Adapt markdown to Feishu lark_md: ATX headings (## X) render as literal text,
-    so turn them into bold, which lark_md does render."""
-    return re.sub(r"(?m)^[ \t]{0,3}#{1,6}[ \t]+(.+?)[ \t]*$", r"**\1**", text)
+def _markdown(text: str) -> str:
+    """JSON 2.0 markdown component accepts standard Markdown and selected HTML."""
+    return text
 
 
 def visible_media_fallback(body: str, urls: list[str]) -> str:
