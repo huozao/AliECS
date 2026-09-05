@@ -546,6 +546,7 @@ def immich_assets(
     query: str | None = Query(default=None),
     taken_after: str | None = Query(default=None),
     taken_before: str | None = Query(default=None),
+    album_id: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     user: dict[str, Any] = Depends(require_login),
 ) -> dict[str, Any]:
@@ -554,18 +555,23 @@ def immich_assets(
 
     config = _user_immich_config(_require_couple_user(user))
     if config is None:
-        return {"enabled": False, "items": []}
+        return {"enabled": False, "items": [], "page": page, "next_page": None, "has_more": False}
     try:
-        assets = ImmichClient(config).search_assets(
+        assets, total, next_page = ImmichClient(config).search_assets_page(
             query=query,
             taken_after=taken_after,
             taken_before=taken_before,
             page=page,
+            album_ids=[album_id] if album_id and album_id.strip() else None,
         )
     except Exception as exc:
-        return {"enabled": True, "items": [], "detail": str(exc)}
+        return {"enabled": True, "items": [], "page": page, "next_page": None, "has_more": False, "detail": str(exc)}
     return {
         "enabled": True,
+        "page": page,
+        "total": total,
+        "next_page": next_page,
+        "has_more": next_page is not None,
         "items": [
             {
                 "asset_id": asset.asset_id,
@@ -1007,12 +1013,14 @@ def _memory_space_for_user(cur: Any, memory_id: int, user_id: int) -> int:
 
 
 def _immich_asset_payload(row: tuple[Any, ...]) -> dict[str, Any]:
+    asset_id = row[4]
     return {
         "id": row[0],
         "couple_space_id": row[1],
         "memory_id": row[2],
         "provider": row[3],
-        "immich_asset_id": row[4],
+        "immich_asset_id": asset_id,
+        "thumbnail_url": f"/api/v1/immich/assets/{asset_id}/thumbnail" if asset_id else None,
         "immich_album_id": row[5],
         "original_filename": row[6],
         "taken_at": str(row[7]) if row[7] else None,
@@ -1430,6 +1438,79 @@ def get_photo_content(key: str) -> Response:
         media_type=mime,
         headers={"Cache-Control": "private, max-age=86400"},
     )
+
+
+@router.get("/v1/couple/media")
+def list_couple_media(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=30, ge=1, le=100),
+    memory_id: int | None = Query(default=None),
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, Any]:
+    """Return one gallery feed combining local uploads and Immich bindings."""
+    user_id = _require_couple_user(user)
+    space_id = _resolve_couple_space_id(user_id, None)
+    offset = (page - 1) * page_size
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            params: list[Any] = [space_id]
+            memory_clause = ""
+            if memory_id is not None:
+                memory_clause = " AND memory_id = %s"
+                params.append(memory_id)
+            cur.execute(
+                f"""
+                SELECT * FROM (
+                    SELECT p.id::text AS media_id, p.memory_id, p.original_filename,
+                           p.thumbnail_url, p.display_url, p.taken_at, p.created_at,
+                           'local' AS source, NULL::text AS immich_asset_id,
+                           m.title AS memory_title
+                    FROM photos p
+                    LEFT JOIN memories m ON m.id = p.memory_id
+                    WHERE p.couple_space_id = %s{memory_clause}
+                    UNION ALL
+                    SELECT ('immich-' || cma.id)::text AS media_id, cma.memory_id,
+                           cma.original_filename, NULL::text AS thumbnail_url,
+                           NULL::text AS display_url, cma.taken_at, cma.created_at,
+                           'immich' AS source, cma.immich_asset_id,
+                           m.title AS memory_title
+                    FROM couple_memory_assets cma
+                    LEFT JOIN memories m ON m.id = cma.memory_id
+                    WHERE cma.couple_space_id = %s{memory_clause}
+                ) media
+                ORDER BY COALESCE(taken_at, created_at) DESC, media_id DESC
+                LIMIT %s OFFSET %s
+                """,
+                [*params, space_id, *([memory_id] if memory_id is not None else []), page_size, offset],
+            )
+            rows = cur.fetchall()
+            cur.execute(
+                f"""
+                SELECT COUNT(*) FROM photos WHERE couple_space_id = %s{memory_clause}
+                """,
+                params,
+            )
+            local_total = cur.fetchone()[0]
+            cur.execute(
+                f"""
+                SELECT COUNT(*) FROM couple_memory_assets WHERE couple_space_id = %s{memory_clause}
+                """,
+                [space_id, *([memory_id] if memory_id is not None else [])],
+            )
+            total = local_total + cur.fetchone()[0]
+    items = []
+    for row in rows:
+        source = row[7]
+        asset_id = row[8]
+        items.append({
+            "id": row[0], "memory_id": row[1], "original_filename": row[2],
+            "thumbnail_url": row[3] if source == "local" else (f"/api/v1/immich/assets/{asset_id}/thumbnail" if asset_id else None),
+            "display_url": row[4], "taken_at": str(row[5]) if row[5] else None,
+            "created_at": str(row[6]), "source": source, "immich_asset_id": asset_id,
+            "memory_title": row[9],
+        })
+    return {"items": items, "page": page, "page_size": page_size, "total": total,
+            "total_pages": (total + page_size - 1) // page_size}
 
 
 @router.get("/v1/photos/{photo_id}")

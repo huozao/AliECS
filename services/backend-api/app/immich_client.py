@@ -80,7 +80,25 @@ class ImmichClient:
         taken_after: str | None = None,
         taken_before: str | None = None,
         page: int = 1,
+        album_ids: list[str] | None = None,
     ) -> list[ImmichAsset]:
+        assets, _total, _next_page = self.search_assets_page(
+            query=query,
+            taken_after=taken_after,
+            taken_before=taken_before,
+            page=page,
+            album_ids=album_ids,
+        )
+        return assets
+
+    def search_assets_page(
+        self,
+        query: str | None = None,
+        taken_after: str | None = None,
+        taken_before: str | None = None,
+        page: int = 1,
+        album_ids: list[str] | None = None,
+    ) -> tuple[list[ImmichAsset], int | None, int | None]:
         payload: dict[str, object] = {"page": max(1, int(page)), "size": 30}
         if query:
             payload["query"] = query
@@ -88,6 +106,9 @@ class ImmichClient:
             payload["takenAfter"] = taken_after
         if taken_before:
             payload["takenBefore"] = taken_before
+        clean_album_ids = [str(album_id).strip() for album_id in (album_ids or []) if str(album_id).strip()]
+        if clean_album_ids:
+            payload["albumIds"] = list(dict.fromkeys(clean_album_ids))
         data = self._request_json("/api/search/metadata", method="POST", payload=payload)
         raw_items = data.get("items")
         assets = data.get("assets")
@@ -95,7 +116,18 @@ class ImmichClient:
             raw_items = assets.get("items")
         if raw_items is None:
             raw_items = data.get("results") or []
-        return [self._asset_from_payload(item) for item in raw_items if isinstance(item, dict)]
+        asset_page = assets if isinstance(assets, dict) else data
+        total_raw = asset_page.get("total") if isinstance(asset_page, dict) else None
+        next_page_raw = asset_page.get("nextPage") if isinstance(asset_page, dict) else None
+        try:
+            total = int(total_raw) if total_raw is not None else None
+        except (TypeError, ValueError):
+            total = None
+        try:
+            next_page = int(next_page_raw) if next_page_raw is not None else None
+        except (TypeError, ValueError):
+            next_page = None
+        return [self._asset_from_payload(item) for item in raw_items if isinstance(item, dict)], total, next_page
 
     def get_thumbnail(self, asset_id: str) -> tuple[bytes, str]:
         return self._request_bytes(f"/api/assets/{urllib.parse.quote(asset_id, safe='')}/thumbnail?size=thumbnail")

@@ -74,7 +74,7 @@
           <div><label>纬度</label><input id="mLat" type="number" step="0.000001" placeholder="30.2741" /></div>
           <div><label>经度</label><input id="mLng" type="number" step="0.000001" placeholder="120.1551" /></div>
           <div style="grid-column:1/-1"><label>内容</label><textarea id="mContent" rows="4" placeholder="写下这段回忆..."></textarea></div>
-          <div style="grid-column:1/-1"><label>照片</label><input id="mPhoto" type="file" accept="image/*" /></div>
+          <div style="grid-column:1/-1"><label>照片</label><input id="mPhoto" type="file" accept="image/*,video/*" /><div class="small" style="margin-top:6px">也可以在下方 Immich 选片后发布；个人库照片会自动进入家庭相册。</div></div>
           <div class="row" style="grid-column:1/-1"><button class="primary" type="submit">发布回忆</button><span id="publishHint" class="small"></span></div>
         </form>
       </article>
@@ -104,11 +104,20 @@
       <h2>从 Immich 选片</h2>
       <p class="small">浏览当前用户的个人库；选中的照片会加入 Couple 家庭相册，也可以同时绑定到指定回忆。</p>
       <div class="row">
+        <select id="immichSource" style="max-width:230px">
+          <option value="personal">个人库</option>
+          <option value="family">家庭相册</option>
+        </select>
         <input id="immichQuery" placeholder="按文件名或内容搜索" style="max-width:260px" />
         <input id="immichMemoryId" type="number" min="1" placeholder="可选：回忆 ID" style="max-width:150px" />
         <button id="loadImmichPickerBtn" type="button">加载个人库</button>
         <button id="addImmichSelectedBtn" class="primary" type="button">加入家庭相册并绑定</button>
         <span id="immichPickerHint" class="small"></span>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="immichPrevBtn" type="button" disabled>上一页</button>
+        <button id="immichNextBtn" type="button" disabled>下一页</button>
+        <span id="immichPageHint" class="small"></span>
       </div>
       <div id="immichPickerGrid" class="photo-grid" style="margin-top:12px"></div>
     </section>
@@ -165,7 +174,7 @@
   <script>
     const API_BASE = window.AliECSAuth.API_BASE;
     const token = () => window.AliECSAuth.getToken();
-    const state = {space:null, memories:[], map:[], photos:[], anniversaries:[], bucket:[], immich:null, immichAssets:[]};
+    const state = {space:null, memories:[], map:[], photos:[], anniversaries:[], bucket:[], immich:null, immichAlbums:[], immichAssets:[], immichPage:1, immichNextPage:null, immichPreviewUrls:[], immichSelected:new Set()};
     let miniMap, markerLayer;
     const $ = (id) => document.getElementById(id);
     const esc = (v) => String(v ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#039;");
@@ -190,7 +199,7 @@
         api('/v1/couple/space'),
         api('/v1/memories?page=1&page_size=60'),
         api('/v1/map/memories'),
-        api('/v1/photos?page=1&page_size=30'),
+        api('/v1/couple/media?page=1&page_size=30').catch(()=>api('/v1/photos?page=1&page_size=30')),
         api('/v1/anniversaries'),
         api('/v1/bucket-items'),
         api('/v1/immich/status').catch((e)=>({enabled:false,ok:false,detail:e.message}))
@@ -244,23 +253,72 @@
       miniMap.fitBounds(bounds, {padding:[20,20], maxZoom:12});
     }
     function renderGallery(){
-      $('galleryGrid').innerHTML = state.photos.map(p => `<a class="photo" href="${esc(p.display_url)}" target="_blank" rel="noreferrer"><img src="${esc(p.thumbnail_url || p.display_url)}" alt="${esc(p.original_filename || 'photo')}" loading="lazy"><div class="small">${esc(p.taken_at || p.created_at || '')}<br>${p.memory_id ? `<span>${esc(p.memory_title || '回忆')}</span>` : '未关联回忆'}</div></a>`).join('') || '<div class="muted">暂无照片。</div>';
+      const placeholder='data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
+      $('galleryGrid').innerHTML = state.photos.map(p => `<a class="photo" href="${esc(p.display_url || p.thumbnail_url || '#')}" target="_blank" rel="noreferrer"><img src="${p.source==='immich'?placeholder:esc(p.thumbnail_url || p.display_url || placeholder)}" ${p.source==='immich'?`data-thumbnail-url="${esc(p.thumbnail_url)}"`:''} alt="${esc(p.original_filename || 'photo')}" loading="lazy"><div class="small">${esc(p.taken_at || p.created_at || '')}<br>${p.memory_id ? `<span>${esc(p.memory_title || '回忆')}</span>` : '未关联回忆'}</div></a>`).join('') || '<div class="muted">暂无照片。</div>';
+      [...document.querySelectorAll('#galleryGrid img[data-thumbnail-url]')].forEach(async (img)=>{try{const r=await fetch(img.dataset.thumbnailUrl,{headers:headers()});if(!r.ok)throw new Error(`thumbnail HTTP ${r.status}`);img.src=URL.createObjectURL(await r.blob());}catch(e){img.alt+='（预览失败）';}});
+    }
+    function revokeImmichPreviewUrls(){
+      state.immichPreviewUrls.forEach((url) => URL.revokeObjectURL(url));
+      state.immichPreviewUrls = [];
+    }
+    async function hydrateImmichThumbnails(){
+      const images = [...document.querySelectorAll('#immichPickerGrid img[data-thumbnail-url]')];
+      await Promise.all(images.map(async (img) => {
+        try {
+          const resp = await fetch(img.dataset.thumbnailUrl, {headers: headers()});
+          if (!resp.ok) throw new Error(`thumbnail HTTP ${resp.status}`);
+          const url = URL.createObjectURL(await resp.blob());
+          state.immichPreviewUrls.push(url);
+          img.src = url;
+          img.classList.remove('is-loading');
+        } catch (err) {
+          img.alt = `${img.alt}（预览加载失败）`;
+          img.classList.remove('is-loading');
+          img.classList.add('is-error');
+          console.warn('Immich thumbnail failed', err);
+        }
+      }));
     }
     function renderImmichPicker(){
-      $('immichPickerGrid').innerHTML = state.immichAssets.map(a => `<label class="photo"><img src="${esc(a.thumbnail_url)}" alt="${esc(a.original_filename || 'photo')}" loading="lazy"><div><input type="checkbox" data-immich-asset="${esc(a.asset_id)}"> ${esc(a.original_filename || a.asset_id)}<br><span class="small">${esc(a.taken_at || '')}</span></div></label>`).join('') || '<div class="muted">暂无结果，请先加载个人库。</div>';
+      revokeImmichPreviewUrls();
+      const placeholder = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
+      $('immichPickerGrid').innerHTML = state.immichAssets.map(a => `<label class="photo"><img class="is-loading" src="${placeholder}" data-thumbnail-url="${esc(a.thumbnail_url)}" alt="${esc(a.original_filename || 'photo')}" loading="lazy"><div><input type="checkbox" data-immich-asset="${esc(a.asset_id)}" ${state.immichSelected.has(a.asset_id)?'checked':''}> ${esc(a.original_filename || a.asset_id)}<br><span class="small">${esc(a.taken_at || '')}</span></div></label>`).join('') || '<div class="muted">暂无结果，请先加载个人库。</div>';
+      document.querySelectorAll('[data-immich-asset]').forEach((el)=>{el.onchange=()=>{if(el.checked)state.immichSelected.add(el.dataset.immichAsset);else state.immichSelected.delete(el.dataset.immichAsset);$('immichPickerHint').textContent=`已选择 ${state.immichSelected.size} 张，可用于发布回忆。`;};});
+      hydrateImmichThumbnails();
     }
-    async function loadImmichPicker(){
+    async function loadImmichAlbums(){
+      if(state.immichAlbums.length) return;
+      const data = await api('/v1/immich/albums');
+      state.immichAlbums = data.items || [];
+      const familyId = data.family_album_id || state.immich?.family_album_id;
+      if(familyId && state.immich) state.immich.family_album_id = familyId;
+      const family = state.immichAlbums.find(a => a.id === familyId);
+      if(family) $('immichSource').querySelector('[value="family"]').textContent = `家庭相册（${family.assetCount || 0} 张）`;
+    }
+    async function loadImmichPicker(page=1){
       if(!state.immich?.connected){$('immichPickerHint').textContent='请先连接 Immich。';return;}
       $('immichPickerHint').textContent='加载中...';
-      const q=$('immichQuery').value.trim(); const data=await api(`/v1/immich/assets?page=1${q?`&query=${encodeURIComponent(q)}`:''}`);
-      state.immichAssets=data.items||[]; renderImmichPicker(); $('immichPickerHint').textContent=`已加载 ${state.immichAssets.length} 张。`;
+      await loadImmichAlbums();
+      const q=$('immichQuery').value.trim(); const source=$('immichSource').value; const albumId=source==='family'?(state.immich?.family_album_id||''):'';
+      if(source==='family' && !albumId){$('immichPickerHint').textContent='尚未配置家庭相册。';return;}
+      const params = new URLSearchParams({page:String(Math.max(1, page))});
+      if(q) params.set('query', q);
+      if(albumId) params.set('album_id', albumId);
+      const data=await api(`/v1/immich/assets?${params.toString()}`);
+      state.immichAssets=data.items||[]; state.immichPage=data.page||page; state.immichNextPage=data.next_page||null;
+      renderImmichPicker();
+      $('immichPrevBtn').disabled = state.immichPage <= 1;
+      $('immichNextBtn').disabled = !state.immichNextPage;
+      $('immichPageHint').textContent = `${source==='family'?'家庭相册':'个人库'} · 第 ${state.immichPage} 页${data.total ? ` · 本页 ${state.immichAssets.length} 张` : ''}`;
+      $('immichPickerHint').textContent=`已加载 ${state.immichAssets.length} 张。`;
     }
     async function addImmichSelected(){
-      const ids=[...document.querySelectorAll('[data-immich-asset]:checked')].map(x=>x.dataset.immichAsset).filter(Boolean);
+      const ids=[...state.immichSelected];
       if(!ids.length){$('immichPickerHint').textContent='请先选择照片。';return;}
       $('immichPickerHint').textContent='处理中...';
       await api('/v1/immich/albums/assets',{method:'POST',body:JSON.stringify({asset_ids:ids})});
       const memoryId=Number($('immichMemoryId').value); if(Number.isInteger(memoryId)&&memoryId>0) await api(`/v1/memories/${memoryId}/immich-assets`,{method:'POST',body:JSON.stringify({asset_ids:ids})});
+      if(Number.isInteger(memoryId)&&memoryId>0) ids.forEach((assetId)=>state.immichSelected.delete(assetId));
       $('immichPickerHint').textContent=`已处理 ${ids.length} 张。`; await loadAll();
     }
     function renderAnniversaries(){
@@ -277,6 +335,12 @@
       $('publishHint').textContent='发布中...';
       const body = {title:$('mTitle').value.trim(),content:$('mContent').value.trim()||null,memory_date:$('mDate').value||null,place_name:$('mPlace').value.trim()||null,latitude:numberOrNull('mLat'),longitude:numberOrNull('mLng'),visibility:'private',tags:($('mTags').value||'').split(',').map(x=>x.trim()).filter(Boolean)};
       const created = await api('/v1/memories', {method:'POST', body:JSON.stringify(body)});
+      const selectedIds=[...state.immichSelected];
+      if(selectedIds.length){
+        await api('/v1/immich/albums/assets',{method:'POST',body:JSON.stringify({asset_ids:selectedIds})});
+        await api(`/v1/memories/${created.id}/immich-assets`,{method:'POST',body:JSON.stringify({asset_ids:selectedIds})});
+        selectedIds.forEach((assetId)=>state.immichSelected.delete(assetId));
+      }
       const file = selectedFile;
       if (file) {if(!state.immich?.connected) throw new Error('请先连接 Immich，直传照片才会进入家庭相册。'); const fd = new FormData(); fd.append('file', file); await api(`/v1/immich/upload?memory_id=${created.id}`, {method:'POST', body:fd});}
       ev.target.reset(); $('publishHint').textContent='已发布。'; await loadAll();
@@ -327,12 +391,17 @@
       const route = await checkAccess(); if(!route){location.replace('/');return;}
       await window.AliECSAuth.renderUserBadge('userChip','用户：'); $('userChip').classList.remove('hidden');
       $('booting').classList.add('hidden'); $('protectedApp').classList.remove('hidden');
+      const preselectedMemoryId = new URLSearchParams(location.search).get('memory_id');
+      if(preselectedMemoryId) $('immichMemoryId').value = preselectedMemoryId;
       $('topHeart').onclick = () => location.assign(route);
       $('memoryForm').onsubmit = (e) => submitMemory(e).catch(err => $('publishHint').textContent = err.message);
       $('anniversaryForm').onsubmit = (e) => submitAnniversary(e).catch(err => $('anniversaryHint').textContent = err.message);
       $('bucketForm').onsubmit = (e) => submitBucket(e).catch(err => $('bucketHint').textContent = err.message);
       $('refreshGalleryBtn').onclick = () => loadAll().catch(console.error);
-      $('loadImmichPickerBtn').onclick = () => loadImmichPicker().catch(err => $('immichPickerHint').textContent=err.message);
+      $('loadImmichPickerBtn').onclick = () => loadImmichPicker(1).catch(err => $('immichPickerHint').textContent=err.message);
+      $('immichSource').onchange = () => loadImmichPicker(1).catch(err => $('immichPickerHint').textContent=err.message);
+      $('immichPrevBtn').onclick = () => loadImmichPicker(state.immichPage - 1).catch(err => $('immichPickerHint').textContent=err.message);
+      $('immichNextBtn').onclick = () => loadImmichPicker(state.immichNextPage).catch(err => $('immichPickerHint').textContent=err.message);
       $('addImmichSelectedBtn').onclick = () => addImmichSelected().catch(err => $('immichPickerHint').textContent=err.message);
       $('immichConnectForm').onsubmit = async (e) => { e.preventDefault(); const key=$('immichApiKey').value.trim(); if(!key){$('immichConnectHint').textContent='请输入 API key。';return;} $('immichConnectHint').textContent='验证中...'; try { await api('/v1/immich/connection',{method:'POST',body:JSON.stringify({api_key:key})}); $('immichApiKey').value=''; $('immichConnectHint').textContent='已连接。'; await loadAll(); } catch(err) { $('immichConnectHint').textContent=err.message; } };
       $('immichDisconnectBtn').onclick = async () => { if(!confirm('断开当前 Immich 连接？已绑定的回忆不会删除。')) return; await api('/v1/immich/connection',{method:'DELETE'}); $('immichConnectHint').textContent='已断开。'; await loadAll(); };

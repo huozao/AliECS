@@ -143,6 +143,25 @@ class ImmichClientTests(unittest.TestCase):
         self.assertEqual(2, body["page"])
         self.assertEqual([ImmichAsset("asset-2", "b.jpg", "2026-04-01T08:00:00Z", 31.2, 121.4)], assets)
 
+    def test_search_assets_page_supports_album_filter_and_next_page(self) -> None:
+        _, ImmichClient, ImmichConfig = load_immich_client()
+        payload = {"assets": {"total": 30, "count": 30, "nextPage": "2", "items": []}}
+        response = Mock()
+        response.status = 200
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=None)
+        response.read.return_value = json.dumps(payload).encode("utf-8")
+
+        with patch("app.immich_client.urllib.request.urlopen", return_value=response) as urlopen:
+            client = ImmichClient(ImmichConfig(True, "https://immich.example", "secret"))
+            assets, total, next_page = client.search_assets_page(page=1, album_ids=["album-1", "album-1"])
+
+        request = urlopen.call_args.args[0]
+        self.assertEqual([], assets)
+        self.assertEqual(30, total)
+        self.assertEqual(2, next_page)
+        self.assertEqual(["album-1"], json.loads(request.data.decode())["albumIds"])
+
 
 if __name__ == "__main__":
     unittest.main()
