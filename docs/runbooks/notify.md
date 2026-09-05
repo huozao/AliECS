@@ -594,3 +594,14 @@ VALUES (
 查重；数据库命令使用 psql -U app -d app。bridge 的 env 键为
 NOTIFY_CENTER_ENDPOINT、NOTIFY_CENTER_SOURCE、NOTIFY_CENTER_TOKEN 和
 NOTIFY_CENTER_TIMEOUT_SECONDS，其中 token 只从 SOPS 渲染。
+
+#### 当前生产状态（2026-09-05 收尾核对）
+
+- 代码已由 `eca3fa2` 合并到 `main` 并随 bridge 发布；`send_feishu_alert()` 现在优先走中枢，
+  失败时静默直发回落。
+- txecs 运行时已确认 endpoint 为
+  `http://127.0.0.1:8000/v1/internal/notify/send`，source 为 `openclaw-bridge`，timeout 为
+  2 秒；token 已渲染但不打印。
+- 数据库已确认 `notify_sources.source_key='openclaw-bridge'` 为 enabled，且存在
+  `bridge.alert` / `warn` / `feishu` / `COMPANY_A` 运维群路由。
+- 本次收尾没有人为制造一条运维告警，避免额外刷群；因此“中枢真实成功 + 断链回落”的运行日志仍应在下一次自然告警或专门维护窗口补一条端到端证据。代码单测已覆盖 HTTP 成功、502 入队不直发、网络失败回落。
