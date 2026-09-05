@@ -135,6 +135,7 @@ bridge 上出现不同渲染结果。
 - `release-deploy.yml` run `33941286766` attempt `2` 的构建、TCR 镜像同步均成功，peer job 按当前路由为 `skipped`。
 - 该 run 的 GitHub runner 在 txecs 的 `docker compose` 重建 backend 瞬间取消了 SSH action；同一 run 上传的 release 已保留，随后在 txecs 现场用该 release 和同一 `deploy-role.sh` 完成部署。
 - txecs `/srv/business-cn/state/release-meta/current.json` 已记录 deployment `e363c0571cb4-33941286766-2`；backend 使用 `t-8dc4f32ca037`，容器 healthy，`/health/` 通过。后续 session 先核对这个 manifest 和容器 tag，不要因 Actions 总状态为 cancelled 而重复发布。
+- 收尾复核时发现另一条并行操作曾短暂把 `compose.env` 改回旧 backend tag `t-d12a5387870b`；已按 manifest 恢复 `t-8dc4f32ca037`，容器再次 healthy 且 15 秒观察未被覆盖。多 session 并行时，关闭前必须把 `compose.env`、容器 image 和 `current.json` 三者对账。
 
 `theme` 取值：`blue` `wathet` `turquoise` `green` `yellow` `orange` `red` `carmine`
 `violet` `purple` `indigo` `grey` `default`。
