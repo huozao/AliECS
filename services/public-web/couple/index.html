@@ -11,7 +11,7 @@
     *{box-sizing:border-box}body{margin:0;background:#f8f4ec;color:var(--text);font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}a{color:var(--primary-dark)}
     .wrap{max-width:1180px;margin:0 auto;padding:22px 16px 54px}.hidden{display:none!important}.muted,.small{color:var(--muted)}.small{font-size:13px}.topbar{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap;margin-bottom:14px}
     .topbar h1{margin:0 0 6px;font-size:30px}.top-actions,.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.btn,button{border:0;border-radius:999px;padding:9px 13px;background:#e9dfd0;color:var(--text);text-decoration:none;font-weight:700;cursor:pointer}button.primary,.btn.primary{background:var(--primary);color:white}button.danger{background:#f1d4d1;color:var(--danger)}
-    .card{background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:16px;padding:16px}.grid{display:grid;gap:12px}.kpis{grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin-bottom:12px}.modules{grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-bottom:12px}.two{grid-template-columns:repeat(2,minmax(0,1fr))}.three{grid-template-columns:repeat(3,minmax(0,1fr))}
+    .card{background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px;padding:16px}.grid{display:grid;gap:14px}.kpis{grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin-bottom:14px}.kpis .card:first-child{background:linear-gradient(135deg,#8c5f6a,#68424e);color:#fff;border-color:transparent}.kpis .card:first-child .label{color:#f7e8eb}.modules{grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-bottom:14px}.modules .card{transition:transform .18s ease,box-shadow .18s ease}.modules .card:hover{transform:translateY(-2px);box-shadow:0 14px 30px rgba(93,71,52,.14)}.two{grid-template-columns:repeat(2,minmax(0,1fr))}.three{grid-template-columns:repeat(3,minmax(0,1fr))}
     @media(max-width:860px){.two,.three{grid-template-columns:1fr}.topbar h1{font-size:24px}}.label{font-size:13px;color:var(--muted)}.value{font-size:28px;font-weight:850;margin-top:5px}.section{margin-top:14px}.section h2{margin:0 0 10px;font-size:20px}input,select,textarea{width:100%;border:1px solid var(--line);border-radius:12px;padding:10px 11px;background:white;color:var(--text);font-size:14px}label{display:block;margin:7px 0 5px;color:var(--muted);font-size:13px}
     .memory-card h3{margin:0 0 5px}.memory-card p{line-height:1.65}.pill{display:inline-block;border-radius:999px;padding:3px 8px;background:#f0e6dc;color:#6f5d50;font-size:12px;margin:2px}.photo-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}.photo{display:block;border-radius:12px;overflow:hidden;background:#eee;border:1px solid var(--line);text-decoration:none;color:inherit}.photo img{width:100%;aspect-ratio:4/3;object-fit:cover;display:block}.photo div{padding:8px}
     #miniMap{height:260px;border:1px solid var(--line);border-radius:14px;overflow:hidden}.timeline-group{border-left:3px solid #d8c2cb;padding-left:10px;margin:8px 0}.bucket-board{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.bucket-col{border:1px solid var(--line);border-radius:14px;padding:10px;background:#fff}.bucket-item{border:1px solid var(--line);border-radius:12px;padding:10px;margin-top:8px;background:#fffdfa}
@@ -174,7 +174,7 @@
   <script>
     const API_BASE = window.AliECSAuth.API_BASE;
     const token = () => window.AliECSAuth.getToken();
-    const state = {space:null, memories:[], map:[], photos:[], anniversaries:[], bucket:[], immich:null, immichAlbums:[], immichAssets:[], immichPage:1, immichNextPage:null, immichPreviewUrls:[], immichSelected:new Set()};
+    const state = {space:null, memories:[], timeline:[], map:[], photos:[], anniversaries:[], bucket:[], immich:null, immichAlbums:[], immichAssets:[], immichPage:1, immichNextPage:null, immichPreviewUrls:[], immichSelected:new Set()};
     let miniMap, markerLayer;
     const $ = (id) => document.getElementById(id);
     const esc = (v) => String(v ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#039;");
@@ -195,9 +195,10 @@
     }
     function numberOrNull(id){const v=$(id).value;return v === '' ? null : Number(v);}
     async function loadAll(){
-      const [space, memories, map, photos, anniversaries, bucket, immich] = await Promise.all([
+      const [space, memories, timeline, map, photos, anniversaries, bucket, immich] = await Promise.all([
         api('/v1/couple/space'),
         api('/v1/memories?page=1&page_size=60'),
+        api('/v1/timeline').catch(()=>({items:[]})),
         api('/v1/map/memories'),
         api('/v1/couple/media?page=1&page_size=30').catch(()=>api('/v1/photos?page=1&page_size=30')),
         api('/v1/anniversaries'),
@@ -206,6 +207,7 @@
       ]);
       state.space = space;
       state.memories = memories.items || [];
+      state.timeline = timeline.items || [];
       state.map = map.items || [];
       state.photos = photos.items || [];
       state.anniversaries = anniversaries.items || [];
@@ -232,9 +234,9 @@
       $('recentMemories').innerHTML = state.memories.slice(0,6).map(m => `<article class="card memory-card"><h3>${esc(m.title)}</h3><div class="small">${esc(m.memory_date || '未知日期')} · ${esc(m.place_name || '未知地点')} · ${m.photo_count || 0} 张照片</div><p>${esc((m.content || '').slice(0,110))}</p><div>${(m.tags||[]).map(t=>`<span class="pill">${esc(t)}</span>`).join('')}</div><p><a class="btn" href="/memories/detail.html?id=${m.id}">详情</a></p></article>`).join('') || '<article class="card">暂无回忆，先发布第一条。</article>';
     }
     function renderTimeline(){
-      const groups = {};
-      state.memories.forEach(m => {const key = (m.memory_date || '未设置日期').slice(0,7);(groups[key] ||= []).push(m);});
-      $('timelineList').innerHTML = Object.entries(groups).slice(0,8).map(([month, items]) => `<div class="timeline-group"><strong>${esc(month)}</strong>${items.map(m=>`<div><a href="/memories/detail.html?id=${m.id}">${esc(m.title)}</a> <span class="small">${esc(m.place_name || '')}</span></div>`).join('')}</div>`).join('') || '<div class="muted">暂无时间线数据。</div>';
+      const labels={memory:'回忆',anniversary:'纪念日',wish_completed:'愿望完成'};
+      const groups={};state.timeline.forEach(e=>{const key=(e.date||'未设置日期').slice(0,7);(groups[key] ||= []).push(e);});
+      $('timelineList').innerHTML = Object.entries(groups).slice(0,12).map(([month, items]) => `<div class="timeline-group"><strong>${esc(month)}</strong>${items.map(e=>`<div><span class="pill">${labels[e.type]||'事件'}</span> ${e.memory_id?`<a href="/memories/detail.html?id=${e.memory_id}">${esc(e.title)}</a>`:`<strong>${esc(e.title)}</strong>`} <span class="small">${esc(e.place_name||'')}</span>${e.days_remaining!=null?` <span class="small">· 还有 ${e.days_remaining} 天</span>`:''}</div>`).join('')}</div>`).join('') || '<div class="muted">暂无时间线数据。</div>';
     }
     function renderMiniMap(){
       if (!state.map.length) {$('mapHint').textContent='暂无带坐标的回忆点。';return;}
@@ -326,8 +328,9 @@
     }
     function renderBucket(){
       const labels = {want:'想做', planned:'计划中', done:'已完成'};
-      $('bucketBoard').innerHTML = ['want','planned','done'].map(status => `<section class="bucket-col"><strong>${labels[status]}</strong>${state.bucket.filter(b=>b.status===status).map(b => `<div class="bucket-item"><strong>${esc(b.title)}</strong><div class="small">${esc(b.target_date || '')}${b.completed_memory_title ? ` · ${esc(b.completed_memory_title)}` : ''}</div><p>${esc(b.description || '')}</p><div class="row"><button data-bucket-status="${b.id}:want">想做</button><button data-bucket-status="${b.id}:planned">计划</button><button data-bucket-status="${b.id}:done">完成</button><button class="danger" data-bucket-del="${b.id}">删除</button></div></div>`).join('') || '<div class="small">暂无</div>'}</section>`).join('');
+      $('bucketBoard').innerHTML = ['want','planned','done'].map(status => `<section class="bucket-col"><strong>${labels[status]}</strong>${state.bucket.filter(b=>b.status===status).map(b => `<div class="bucket-item"><strong>${esc(b.title)}</strong><div class="small">${esc(b.target_date || '')}${b.completed_memory_title ? ` · ${esc(b.completed_memory_title)}` : ''}</div><p>${esc(b.description || '')}</p><div class="row"><button data-bucket-status="${b.id}:want">想做</button><button data-bucket-status="${b.id}:planned">计划</button><button data-bucket-status="${b.id}:done">完成</button>${status==='done'&&!b.completed_memory_id?`<button data-bucket-memory="${b.id}">生成回忆</button>`:''}<button class="danger" data-bucket-del="${b.id}">删除</button></div></div>`).join('') || '<div class="small">暂无</div>'}</section>`).join('');
     }
+    async function createMemoryFromBucket(id){const item=state.bucket.find(x=>x.id===id);if(!item)return;const title=prompt('回忆标题',item.title);if(title===null)return;const content=prompt('写下这段回忆',item.description||'');if(content===null)return;const created=await api('/v1/memories',{method:'POST',body:JSON.stringify({title:title.trim()||item.title,content:content.trim()||null,memory_date:item.target_date||null,visibility:'private',tags:['愿望完成']})});await api(`/v1/bucket-items/${id}`,{method:'PUT',body:JSON.stringify({title:item.title,description:item.description,status:'done',target_date:item.target_date,completed_memory_id:created.id})});await loadAll();}
     async function submitMemory(ev){
       ev.preventDefault();
       const selectedFile = $('mPhoto').files[0];
@@ -385,6 +388,7 @@
       if (t.dataset?.annivEdit) await editAnniversary(Number(t.dataset.annivEdit));
       if (t.dataset?.bucketDel && confirm('删除这个愿望？')) {await api(`/v1/bucket-items/${t.dataset.bucketDel}`,{method:'DELETE'}); await loadAll();}
       if (t.dataset?.bucketStatus) {const [id,status]=t.dataset.bucketStatus.split(':'); await updateBucketStatus(Number(id),status);}
+      if (t.dataset?.bucketMemory) await createMemoryFromBucket(Number(t.dataset.bucketMemory));
       if (t.dataset?.removeMember) {const [sid,uid]=t.dataset.removeMember.split(':'); await removeCoupleMember(Number(sid),Number(uid));}
     });
     document.addEventListener('DOMContentLoaded', async () => {

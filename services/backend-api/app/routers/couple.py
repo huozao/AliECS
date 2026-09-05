@@ -1317,6 +1317,67 @@ def map_memories(
     }
 
 
+@router.get("/v1/timeline")
+def couple_timeline(
+    limit: int = Query(default=100, ge=1, le=300),
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, Any]:
+    """Aggregate memories, anniversaries and completed wishes into one relation timeline."""
+    user_id = _require_couple_user(user)
+    space_id = _resolve_couple_space_id(user_id, None)
+    today = date.today()
+    events: list[dict[str, Any]] = []
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, title, content, memory_date, place_name, cover_photo_url
+                FROM memories
+                WHERE couple_space_id = %s AND archived = false
+                ORDER BY memory_date DESC NULLS LAST, id DESC
+                LIMIT %s
+                """,
+                (space_id, limit),
+            )
+            for row in cur.fetchall():
+                events.append({
+                    "type": "memory", "id": row[0], "date": str(row[3]) if row[3] else None,
+                    "title": row[1], "description": row[2], "place_name": row[4],
+                    "memory_id": row[0], "cover_photo_url": row[5],
+                })
+            cur.execute(
+                """
+                SELECT id, title, date, repeat_type, description
+                FROM anniversaries
+                WHERE couple_space_id = %s
+                """,
+                (space_id,),
+            )
+            for row in cur.fetchall():
+                item = _anniversary_payload(row, today)
+                if item:
+                    events.append({
+                        "type": "anniversary", "id": row[0], "date": item["next_occurrence"],
+                        "title": row[1], "description": row[4], "days_remaining": item["days_remaining"],
+                        "memory_id": None,
+                    })
+            cur.execute(
+                """
+                SELECT id, title, description, target_date, completed_memory_id
+                FROM bucket_items
+                WHERE couple_space_id = %s AND status = 'done'
+                """,
+                (space_id,),
+            )
+            for row in cur.fetchall():
+                events.append({
+                    "type": "wish_completed", "id": row[0], "date": str(row[3]) if row[3] else None,
+                    "title": row[1], "description": row[2], "memory_id": row[4],
+                })
+    events.sort(key=lambda item: (item.get("date") or "0000-00-00", item["type"], item["id"]), reverse=True)
+    return {"items": events[:limit]}
+
+
 @router.post("/v1/photos/upload")
 async def upload_photo(
     file: UploadFile = File(...),
