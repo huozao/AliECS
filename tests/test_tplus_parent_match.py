@@ -33,7 +33,7 @@ class _FakeWeComClient:
 
     def get_fields(self, docid, sheet_id):
         self.calls.append("get_fields")
-        return {"fields": [{"field_title": name} for name in ("父件名称", "T+匹配状态", "T+核对时间", "T+停用")]}
+        return {"fields": [{"field_title": name} for name in ("父件名称", "版本号", "T+匹配状态", "T+核对时间", "T+停用")]}
 
     def add_fields(self, docid, sheet_id, fields):
         self.calls.append("add_fields")
@@ -331,6 +331,21 @@ class TplusParentMatchTests(unittest.TestCase):
         self.assertEqual(result.updates[0]["values"]["父件名称"], _cells("0539-耐候ABS  玄武灰色母"))
         self.assertEqual(result.updates[0]["values"]["T+匹配状态"], _cells("一致"))
 
+    def test_matched_row_updates_version_from_tplus_bom(self) -> None:
+        records = [{"record_id": "r1", "values": {
+            "父件编码": _cells("06009062"), "父件名称": _cells("HYD-9256F蓝"),
+            "版本号": _cells("旧版本"), "T+匹配状态": _cells("一致"), "T+停用": _cells("启用")}}]
+        result = self._plan(records, {"06009062": ("HYD-9256F蓝", "260828", False)})
+        self.assertEqual(result.updates[0]["values"]["版本号"], _cells("260828"))
+        self.assertEqual(result.updates[0]["values"]["T+核对时间"], _cells("2026-08-04 03:00"))
+
+    def test_inventory_only_parent_keeps_existing_version(self) -> None:
+        records = [{"record_id": "r1", "values": {
+            "父件编码": _cells("INV-1"), "父件名称": _cells("存货父件"),
+            "版本号": _cells("人工版本"), "T+匹配状态": _cells("一致"), "T+停用": _cells("启用")}}]
+        result = self._plan(records, {"INV-1": ("存货父件", "", False)})
+        self.assertEqual(result.updates, [])
+
     def test_enabled_parent_writes_enabled_into_the_disabled_column(self) -> None:
         records = [{"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("甲")}}]
         result = self._plan(records, {"A": ("甲", "v1", False)})
@@ -369,7 +384,7 @@ class TplusParentMatchTests(unittest.TestCase):
         """新列同样走「只有真变了才写」，否则停用件每轮都被重写一次。"""
         records = [{"record_id": "r1", "values": {
             "父件编码": _cells("A"), "父件名称": _cells("甲"),
-            "T+匹配状态": _cells("一致"), "T+停用": _cells("停用")}}]
+            "版本号": _cells("v1"), "T+匹配状态": _cells("一致"), "T+停用": _cells("停用")}}]
         result = self._plan(records, {"A": ("甲", "v1", True)})
         self.assertEqual(result.updates, [])
 
@@ -411,7 +426,7 @@ class TplusParentMatchTests(unittest.TestCase):
         """全表每天重写核对时间，在补建后会变成上千行的无效写入。"""
         records = [{"record_id": "r1", "values": {
             "父件编码": _cells("40000019"), "父件名称": _cells("已经对了"),
-            "T+匹配状态": _cells("一致"), "T+停用": _cells("启用")}}]
+            "版本号": _cells("v1"), "T+匹配状态": _cells("一致"), "T+停用": _cells("启用")}}]
         result = self._plan(records, {"40000019": ("已经对了", "v1", False)})
         self.assertEqual(result.updates, [])
         self.assertEqual(result.ok, 1)
@@ -429,13 +444,14 @@ class TplusParentMatchTests(unittest.TestCase):
         self.assertEqual(len(creates), 1)
         self.assertEqual(creates[0]["values"]["父件编码"], _cells("B"))
         self.assertEqual(creates[0]["values"]["父件名称"], _cells("乙"))
+        self.assertEqual(creates[0]["values"]["版本号"], _cells("v2"))
         self.assertEqual(creates[0]["values"]["T+匹配状态"], _cells("一致"))
         self.assertEqual(creates[0]["values"]["T+核对时间"], _cells("2026-08-06 03:00"))
 
     def test_created_rows_leave_model_and_standard_columns_empty(self) -> None:
         """型号留空是人工筛选待补标准行的唯一依据，不能顺手填上。"""
         creates = self._creates([], {"B": ("乙", "v2", False)})
-        self.assertEqual(set(creates[0]["values"]), {"父件编码", "父件名称", "T+匹配状态", "T+核对时间", "T+停用"})
+        self.assertEqual(set(creates[0]["values"]), {"父件编码", "父件名称", "版本号", "T+匹配状态", "T+核对时间", "T+停用"})
 
     def test_created_rows_carry_the_disabled_column(self) -> None:
         creates = self._creates([], {"B": ("乙", "v2", True)})
@@ -561,7 +577,7 @@ class TplusParentMatchTests(unittest.TestCase):
         self.assertIn("'06'", self.module._ACTIVE_INVENTORY_SQL)
     def test_managed_fields_never_include_the_parent_code(self) -> None:
         self.assertNotIn(self.module.F_PARENT_CODE, self.module.MANAGED_FIELDS)
-        self.assertEqual(self.module.MANAGED_FIELDS, ("父件名称", "T+匹配状态", "T+核对时间", "T+停用"))
+        self.assertEqual(self.module.MANAGED_FIELDS, ("父件名称", "版本号", "T+匹配状态", "T+核对时间", "T+停用"))
 
     def test_bom_watermark_sql_covers_both_real_writers(self) -> None:
         """integration_sync_runs 有两个真实写入点：module='bom'（BOM builder 回写，
@@ -642,7 +658,7 @@ class TplusParentMatchTests(unittest.TestCase):
         """get_records() 命中网络/权限故障时，同一层必须捕获，且不能走到写入分支。"""
         class _FailingClient:
             def get_fields(self, docid, sheet_id):
-                return {"fields": [{"field_title": n} for n in ("父件名称", "T+匹配状态", "T+核对时间", "T+停用")]}
+                return {"fields": [{"field_title": n} for n in ("父件名称", "版本号", "T+匹配状态", "T+核对时间", "T+停用")]}
 
             def add_fields(self, docid, sheet_id, fields):
                 raise AssertionError("不应走到 add_fields")
