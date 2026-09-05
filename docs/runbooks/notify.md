@@ -124,9 +124,9 @@ bridge 上出现不同渲染结果。生产切换必须等客户端能力验收�
 - 月底外推按当月实际天数计算；
 - `txecs：心跳用于判断失联/限速。` 是日报尾部说明；日报缺席仍是失联判据。
 
-真实客户端验证过的预览链：`preview4`（两列）、`preview5`（三等宽失败）、
-`preview7`（JSON 2.0 加权列）、`preview10`（当前紧凑字号版本）。后续调整先发真实卡片
-肉眼验收，再部署；在验收通过前保持生产 1.0，不要把三列改成等宽 `div.fields`。
+历史预览链 `preview4` / `preview7` / `preview10` 只证明当时测试客户端的排版，不能替代
+当前接收群的兼容性验收。后续调整先发真实卡片肉眼验收，再部署；在验收通过前保持生产
+1.0，不要把三列改成等宽 `div.fields`。
 
 `theme` 取值：`blue` `wathet` `turquoise` `green` `yellow` `orange` `red` `carmine`
 `violet` `purple` `indigo` `grey` `default`。
