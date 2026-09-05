@@ -160,140 +160,166 @@ def _lark_md(text: str) -> str:
 
 LEVEL_TEMPLATES = {"info": "blue", "warn": "yellow", "error": "red", "fatal": "red"}
 
+# JSON 2.0 中没有 1.0 的 note/action/div.fields，页脚和错误提示统一用 markdown。
+_NOTATION = "notation"
 IMAGE_FAILED_MARK = "🖼️ 图片发送失败"
-SECTION_COLORS = {
-    "blue": "blue",
-    "green": "green",
-    "orange": "orange",
-    "red": "red",
-    "violet": "purple",
-    "grey": "grey",
-}
 
 
-def _section_heading(segment: Any) -> list[dict[str, Any]]:
-    """日报指标区块的标题，保持 JSON 1.0 客户端兼容。"""
-    color = SECTION_COLORS.get(segment.section_color, "blue")
+def _section_element(segment: Any) -> dict[str, Any]:
+    """日报区块采用 JSON 2.0 加权三列：标题、指标标签、指标值。"""
     heading = " ".join(
         part for part in (segment.section_icon.strip(), segment.section_title.strip()) if part
     )
-    elements = [
+    left_elements: list[dict[str, Any]] = [
         {
-            "tag": "div",
-            "text": {
-                "tag": "lark_md",
-                "content": f"<font color='{color}'>●</font>  **{heading}**",
-            },
+            "tag": "markdown",
+            "content": f"**{heading}**",
+            "text_size": "normal",
         }
     ]
     if segment.section_subtitle.strip():
-        elements.append(
+        left_elements.append(
             {
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": f"<font color='grey'>{segment.section_subtitle.strip()}</font>",
-                },
+                "tag": "markdown",
+                "content": f"<font color='grey'>{segment.section_subtitle.strip()}</font>",
+                "text_size": _NOTATION,
             }
         )
-    return elements
+    label_content = "\n".join(field.name for field in segment.fields)
+    value_content = "\n".join(field.value for field in segment.fields)
+    return {
+        "tag": "column_set",
+        "flex_mode": "none",
+        "horizontal_spacing": "4px",
+        "columns": [
+            {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 4,
+                "vertical_align": "top",
+                "elements": left_elements,
+            },
+            {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 3,
+                "vertical_align": "top",
+                "elements": [{"tag": "markdown", "content": label_content, "text_size": _NOTATION}],
+            },
+            {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 5,
+                "vertical_align": "top",
+                "elements": [{"tag": "markdown", "content": value_content, "text_size": "normal"}],
+            },
+        ],
+    }
+
+
+def _notation(content: str) -> dict[str, Any]:
+    return {"tag": "markdown", "content": f"<font color='grey'>{content}</font>", "text_size": _NOTATION}
+
+
+def _fields_columns(fields: list[Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for start in range(0, len(fields), 2):
+        rows.append(
+            {
+                "tag": "column_set",
+                "flex_mode": "bisect",
+                "horizontal_spacing": "8px",
+                "columns": [
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "elements": [
+                            {
+                                "tag": "markdown",
+                                "content": f"**{field.name}**\n{field.value}",
+                                "text_size": "normal",
+                            }
+                        ],
+                    }
+                    for field in fields[start : start + 2]
+                ],
+            }
+        )
+    return rows
+
+
+def _button(text: str, url: str, style: str, *, width: str) -> dict[str, Any]:
+    return {
+        "tag": "button",
+        "text": {"tag": "plain_text", "content": text},
+        "type": style,
+        "width": width,
+        "behaviors": [{"type": "open_url", "default_url": url}],
+    }
 
 
 def build_card(notification: Notification, image_keys: dict[str, str]) -> dict[str, Any]:
     """把段落渲染成一张交互卡片，文字与图按原顺序交错——一条消息而不是几个气泡。
 
-    当前生产客户端对 JSON 2.0 卡片会接受请求却渲染成「请升级至最新版本客户端」，
-    所以这里保留已经在实际会话中验证过的 JSON 1.0 结构。模型层仍可保留副标题、标签
-    和按钮等字段，但 payload 必须使用客户端兼容的 1.0 组件。
+    使用 JSON 2.0：支持 column_set 加权列和独立字号，适配日报的三列排版。
     """
     elements: list[dict[str, Any]] = []
     if notification.summary.strip():
-        elements.append(
-            {"tag": "div", "text": {"tag": "lark_md", "content": _lark_md(notification.summary.strip())}}
-        )
+        elements.append({"tag": "markdown", "content": _lark_md(notification.summary.strip()), "text_size": "normal"})
     for segment in notification.segments:
         if segment.kind == "text":
-            # preformatted 段走 plain_text 组件：排版里的 *、|、# 交给 markdown 会被吃掉。
-            tag = "plain_text" if segment.preformatted else "lark_md"
-            content = segment.text.strip() if segment.preformatted else _lark_md(segment.text.strip())
-            elements.append({"tag": "div", "text": {"tag": tag, "content": content}})
+            if segment.preformatted:
+                elements.append(
+                    {"tag": "div", "text": {"tag": "plain_text", "content": segment.text.strip(), "text_size": "normal"}}
+                )
+            else:
+                elements.append({"tag": "markdown", "content": _lark_md(segment.text.strip()), "text_size": "normal"})
         elif segment.kind == "fields":
-            elements.append(
-                {
-                    "tag": "div",
-                    "fields": [
-                        {
-                            "is_short": True,
-                            "text": {"tag": "lark_md", "content": f"**{field.name}**\n{field.value}"},
-                        }
-                        for field in segment.fields
-                    ],
-                }
-            )
+            elements.extend(_fields_columns(segment.fields))
         elif segment.kind == "section":
             if elements:
-                elements.append(
-                    {
-                        "tag": "div",
-                        "text": {"tag": "lark_md", "content": "<font color='grey'>────────</font>"},
-                    }
-                )
-            elements.extend(_section_heading(segment))
-            elements.append(
-                {
-                    "tag": "div",
-                    "fields": [
-                        {
-                            "is_short": True,
-                            "text": {"tag": "lark_md", "content": f"**{field.name}**\n{field.value}"},
-                        }
-                        for field in segment.fields
-                    ],
-                }
-            )
+                elements.append({"tag": "hr"})
+            elements.append(_section_element(segment))
         elif segment.kind == "image":
             image_key = image_keys.get(segment.image_ref)
             if not image_key:
                 # 这张图没传上去：留一行说明，别让卡片里凭空少一块。
-                elements.append(
-                    {"tag": "note", "elements": [{"tag": "plain_text", "content": IMAGE_FAILED_MARK}]}
-                )
+                elements.append(_notation(IMAGE_FAILED_MARK))
                 continue
-            elements.append(
-                {
-                    "tag": "img",
-                    "img_key": image_key,
-                    "alt": {"tag": "plain_text", "content": "图片"},
-                    "mode": "fit_horizontal",
-                    "preview": True,
-                }
-            )
+            caption = next((image.caption for image in notification.images if image.ref == segment.image_ref), "")
+            image_element: dict[str, Any] = {
+                "tag": "img",
+                "img_key": image_key,
+                "alt": {"tag": "plain_text", "content": caption or "图片"},
+                "scale_type": "fit_horizontal",
+                "preview": True,
+            }
+            if caption:
+                image_element["title"] = {"tag": "plain_text", "content": caption}
+            elements.append(image_element)
 
     buttons = notification.all_buttons()
-    if buttons:
+    if len(buttons) == 1:
+        elements.append(_button(buttons[0].text, buttons[0].url, buttons[0].style, width="fill"))
+    elif buttons:
         elements.append(
             {
-                "tag": "action",
-                "actions": [
+                "tag": "column_set",
+                "flex_mode": "flow",
+                "horizontal_spacing": "8px",
+                "columns": [
                     {
-                        "tag": "button",
-                        "text": {"tag": "plain_text", "content": button.text},
-                        "url": button.url,
-                        "type": button.style,
+                        "tag": "column",
+                        "width": "auto",
+                        "elements": [_button(button.text, button.url, button.style, width="default")],
                     }
                     for button in buttons
                 ],
             }
         )
 
-    elements.append(
-        {
-            "tag": "note",
-            "elements": [
-                {"tag": "plain_text", "content": f"{notification.source} · {notification.event}"}
-            ],
-        }
-    )
+    elements.append(_notation(f"{notification.source} · {notification.event}"))
 
     header: dict[str, Any] = {
         "title": {"tag": "plain_text", "content": notification.display_title()},
@@ -311,9 +337,10 @@ def build_card(notification: Notification, image_keys: dict[str, str]) -> dict[s
             for tag in notification.tags
         ]
     return {
-        "config": {"wide_screen_mode": True},
+        "schema": "2.0",
+        "config": {"width_mode": "fill", "update_multi": True},
         "header": header,
-        "elements": elements,
+        "body": {"direction": "vertical", "elements": elements},
     }
 
 

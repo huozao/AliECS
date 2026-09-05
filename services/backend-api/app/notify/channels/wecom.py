@@ -71,7 +71,15 @@ def render_markdown(notification: Notification) -> str:
     for segment in notification.segments:
         if segment.kind == "text":
             lines.append(segment.text.strip())
-        elif segment.kind == "fields":
+        elif segment.kind in {"fields", "section"}:
+            if segment.kind == "section":
+                heading = " ".join(
+                    part for part in (segment.section_icon.strip(), segment.section_title.strip()) if part
+                )
+                if heading:
+                    lines.append(f"**{heading}**")
+                if segment.section_subtitle.strip():
+                    lines.append(segment.section_subtitle.strip())
             lines.extend(f"**{field.name}**：{field.value}" for field in segment.fields)
     # 企微 markdown 没有按钮，一律降级成链接行——每个按钮一行，样式（primary/danger）丢掉。
     for button in notification.all_buttons():

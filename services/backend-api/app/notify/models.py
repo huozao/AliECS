@@ -80,16 +80,21 @@ class NotifySegment(BaseModel):
     - ``text``   → ``text``，markdown 子集（各 channel 自行适配方言）；
       置 ``preformatted=True`` 表示这段是**排好版的纯文本**，渲染时不得当 markdown 解析
     - ``fields`` → ``fields``，键值对
+    - ``section`` → ``section_title`` / ``section_icon`` / ``fields``，带视觉标题的指标区块
     - ``image``  → ``image_ref``，指向 ``Notification.images`` 里的某张图
     """
 
-    kind: Literal["text", "fields", "image"]
+    kind: Literal["text", "fields", "section", "image"]
     text: str = Field(default="", max_length=8000)
     # 排版里含 *、|、# 这类字符时必须置 True，否则会被 markdown 吃掉或变成标题。
     # gold_spread 的价差排版就是这种情况——旧的 build_alert_card 用 plain_text 而非
     # lark_md 正是为此，收敛时这个语义必须跟着搬过来，不能丢。
     preformatted: bool = False
     fields: list[NotifyField] = Field(default_factory=list, max_length=40)
+    section_title: str = Field(default="", max_length=64)
+    section_icon: str = Field(default="", max_length=8)
+    section_color: str = "blue"
+    section_subtitle: str = Field(default="", max_length=120)
     image_ref: str = Field(default="", max_length=64)
 
     @model_validator(mode="after")
@@ -98,6 +103,13 @@ class NotifySegment(BaseModel):
             raise ValueError("text segment is empty")
         if self.kind == "fields" and not self.fields:
             raise ValueError("fields segment is empty")
+        if self.kind == "section":
+            if not self.section_title.strip():
+                raise ValueError("section segment has no title")
+            if not self.fields:
+                raise ValueError("section segment is empty")
+            if self.section_color not in {"blue", "green", "orange", "red", "violet", "grey"}:
+                raise ValueError(f"unknown section color: {self.section_color}")
         if self.kind == "image" and not self.image_ref.strip():
             raise ValueError("image segment has no image_ref")
         return self
@@ -210,9 +222,14 @@ class Notification(BaseModel):
         digest.update(self.event.encode())
         digest.update(self.title.encode())
         digest.update(self.summary.encode())
+        digest.update(self.subtitle.encode())
         for segment in self.segments:
             digest.update(segment.kind.encode())
             digest.update(segment.text.encode())
+            digest.update(segment.section_title.encode())
+            digest.update(segment.section_icon.encode())
+            digest.update(segment.section_color.encode())
+            digest.update(segment.section_subtitle.encode())
             for field in segment.fields:
                 digest.update(field.name.encode())
                 digest.update(field.value.encode())
@@ -300,7 +317,15 @@ class Notification(BaseModel):
         for segment in self.segments:
             if segment.kind == "text":
                 lines.append(segment.text.strip())
-            elif segment.kind == "fields":
+            elif segment.kind in {"fields", "section"}:
+                if segment.kind == "section":
+                    heading = " ".join(
+                        part for part in (segment.section_icon.strip(), segment.section_title.strip()) if part
+                    )
+                    if heading:
+                        lines.append(heading)
+                    if segment.section_subtitle.strip():
+                        lines.append(segment.section_subtitle.strip())
                 lines.extend(f"{field.name}：{field.value}" for field in segment.fields)
             elif segment.kind == "image":
                 caption = next(

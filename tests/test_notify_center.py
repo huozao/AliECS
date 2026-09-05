@@ -121,6 +121,21 @@ class ModelTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             make_notification(segments=[{"kind": "image", "image_ref": "missing"}])
 
+    def test_report_section_requires_title_and_fields(self) -> None:
+        with self.assertRaises(ValueError):
+            make_notification(segments=[{"kind": "section", "fields": [{"name": "x", "value": "y"}]}])
+        with self.assertRaises(ValueError):
+            make_notification(
+                segments=[
+                    {
+                        "kind": "section",
+                        "section_title": "状态",
+                        "section_color": "rainbow",
+                        "fields": [{"name": "x", "value": "y"}],
+                    }
+                ]
+            )
+
     def test_plain_text_contains_every_segment(self) -> None:
         text = make_notification().plain_text()
         self.assertIn("价差异常", text)
@@ -204,6 +219,35 @@ class RouteMatchingTests(unittest.TestCase):
 
 
 class FeishuRenderTests(unittest.TestCase):
+    def test_report_sections_render_as_weighted_three_column_fields(self) -> None:
+        notification = make_notification(
+            segments=[
+                {
+                    "kind": "section",
+                    "section_title": "昨日流量",
+                    "section_icon": "🗓️",
+                    "section_color": "blue",
+                    "section_subtitle": "9/4 周五",
+                    "fields": [
+                        {"name": "出方向", "value": "**2.41 GB**"},
+                        {"name": "入方向", "value": "**2.26 GB**"},
+                    ],
+                }
+            ]
+        )
+        card = feishu.build_card(notification, {})
+        dumped = json.dumps(card, ensure_ascii=False)
+        self.assertIn("昨日流量", dumped)
+        self.assertIn("9/4 周五", dumped)
+        section_elements = [
+            element for element in card["body"]["elements"] if element.get("tag") == "column_set"
+        ]
+        self.assertEqual(1, len(section_elements))
+        self.assertEqual([4, 3, 5], [column["weight"] for column in section_elements[0]["columns"]])
+        self.assertEqual("normal", section_elements[0]["columns"][0]["elements"][0]["text_size"])
+        self.assertEqual("notation", section_elements[0]["columns"][0]["elements"][1]["text_size"])
+        self.assertEqual("notation", section_elements[0]["columns"][1]["elements"][0]["text_size"])
+
     def test_card_interleaves_text_and_images_in_order(self) -> None:
         notification = make_notification(
             segments=[
@@ -214,13 +258,13 @@ class FeishuRenderTests(unittest.TestCase):
             images=[{"ref": "chart", "png_base64": PNG}],
         )
         card = feishu.build_card(notification, {"chart": "img_key_1"})
-        kinds = [element.get("tag") for element in card["elements"]]
+        kinds = [element.get("tag") for element in card["body"]["elements"]]
         # summary、开头、图、结尾、页脚
-        self.assertEqual(kinds[:4], ["div", "div", "img", "div"])
+        self.assertEqual(kinds[:4], ["markdown", "markdown", "img", "markdown"])
         self.assertEqual(card["header"]["template"], "red")
 
-    def test_card_uses_json_1_0_compatible_components(self) -> None:
-        """当前客户端兼容性回归：bridge/backend 必须继续发 JSON 1.0。"""
+    def test_card_uses_json_2_components(self) -> None:
+        """当前客户端已升级，通知中枢使用 JSON 2.0 组件。"""
         notification = make_notification(
             segments=[
                 {"kind": "fields", "fields": [{"name": "合约", "value": "AU2612"}]},
@@ -230,12 +274,12 @@ class FeishuRenderTests(unittest.TestCase):
             buttons=[{"text": "打开", "url": "https://hydwang.xyz/"}],
         )
         card = feishu.build_card(notification, {"chart": "k"})
-        self.assertNotIn("schema", card)
-        self.assertIn("elements", card)
-        self.assertNotIn("body", card)
+        self.assertEqual("2.0", card["schema"])
+        self.assertIn("body", card)
+        self.assertNotIn("elements", card)
         dumped = json.dumps(card, ensure_ascii=False)
-        for supported_tag in ('"tag": "note"', '"tag": "action"', '"is_short"'):
-            self.assertIn(supported_tag, dumped)
+        for removed_tag in ('"tag": "note"', '"tag": "action"', '"is_short"'):
+            self.assertNotIn(removed_tag, dumped)
 
     def test_missing_image_key_leaves_a_visible_note(self) -> None:
         """图传失败不能让卡片凭空少一块，否则读的人不知道本该有图。"""
@@ -246,8 +290,8 @@ class FeishuRenderTests(unittest.TestCase):
         card = feishu.build_card(notification, {})
         notes = [
             element
-            for element in card["elements"]
-            if element.get("tag") == "note" and feishu.IMAGE_FAILED_MARK in json.dumps(element, ensure_ascii=False)
+            for element in card["body"]["elements"]
+            if element.get("tag") == "markdown" and feishu.IMAGE_FAILED_MARK in json.dumps(element, ensure_ascii=False)
         ]
         self.assertEqual(len(notes), 1)
         self.assertIn(feishu.IMAGE_FAILED_MARK, json.dumps(notes[0], ensure_ascii=False))
@@ -261,8 +305,12 @@ class FeishuRenderTests(unittest.TestCase):
             segments=[{"kind": "image", "image_ref": "chart"}],
             images=[{"ref": "chart", "caption": "价差走势", "png_base64": PNG}],
         )
-        image = [element for element in feishu.build_card(notification, {"chart": "k"})["elements"] if element.get("tag") == "img"][0]
-        self.assertEqual("fit_horizontal", image["mode"])
+        image = [
+            element
+            for element in feishu.build_card(notification, {"chart": "k"})["body"]["elements"]
+            if element.get("tag") == "img"
+        ][0]
+        self.assertEqual("fit_horizontal", image["scale_type"])
         self.assertNotIn("size", image)
 
     def test_explicit_theme_overrides_the_level_color(self) -> None:
@@ -288,19 +336,20 @@ class FeishuRenderTests(unittest.TestCase):
         notification = make_notification(
             buttons=[{"text": "立即领取免费体验名额", "url": "https://hydwang.xyz/", "style": "primary"}]
         )
-        action = feishu.build_card(notification, {})["elements"][-2]
-        self.assertEqual("action", action["tag"])
-        self.assertEqual("primary", action["actions"][0]["type"])
-        self.assertEqual("https://hydwang.xyz/", action["actions"][0]["url"])
+        button = feishu.build_card(notification, {})["body"]["elements"][-2]
+        self.assertEqual("button", button["tag"])
+        self.assertEqual("primary", button["type"])
+        self.assertEqual("fill", button["width"])
+        self.assertEqual([{"type": "open_url", "default_url": "https://hydwang.xyz/"}], button["behaviors"])
 
     def test_multiple_buttons_are_laid_out_side_by_side(self) -> None:
         notification = make_notification(
             link={"text": "查看详情", "url": "https://hydwang.xyz/sync/"},
             buttons=[{"text": "重跑", "url": "https://hydwang.xyz/run", "style": "primary"}],
         )
-        action = feishu.build_card(notification, {})["elements"][-2]
-        self.assertEqual("action", action["tag"])
-        buttons = action["actions"]
+        row = feishu.build_card(notification, {})["body"]["elements"][-2]
+        self.assertEqual("column_set", row["tag"])
+        buttons = [column["elements"][0] for column in row["columns"]]
         # link 折算成第一个按钮，buttons 接在后面——顺序是 all_buttons 的唯一口径
         self.assertEqual(["查看详情", "重跑"], [button["text"]["content"] for button in buttons])
         self.assertEqual(["default", "primary"], [button["type"] for button in buttons])
@@ -314,9 +363,11 @@ class FeishuRenderTests(unittest.TestCase):
                 }
             ]
         )
-        rows = [element for element in feishu.build_card(notification, {})["elements"] if element.get("tag") == "div"]
-        fields = [row for row in rows if "fields" in row]
-        self.assertEqual([3], [len(row["fields"]) for row in fields])
+        rows = [
+            element for element in feishu.build_card(notification, {})["body"]["elements"]
+            if element.get("tag") == "column_set"
+        ]
+        self.assertEqual([2, 1], [len(row["columns"]) for row in rows])
 
     def test_atx_heading_is_converted_to_bold(self) -> None:
         self.assertEqual(feishu._lark_md("## 详情"), "**详情**")

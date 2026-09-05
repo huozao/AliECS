@@ -100,6 +100,24 @@ JSON 1.0 结构；2.0 暂不算生产支持，除非先完成客户端能力探�
 | `buttons` | ≤5 | 1.0 `action` 按钮组 | 每个一行 markdown 链接 |
 | `link` | 兼容字段 | 折算成第一个按钮 | 同上 |
 
+### aliecs 流量日报卡片（2026-09-05 已确认）
+
+日报不是普通 `fields` 两列，而是 `section` 段落；飞书使用 JSON 2.0 的加权
+`column_set`，每个区块固定为「标题 / 指标名 / 指标值」三列，当前权重为 `4 / 3 / 5`。
+标题使用 `normal`，日期与指标名使用 `notation`，指标值使用 `normal`，并且不在行内添加
+彩色圆点，以避免移动端自动换行。
+
+日报生产者位于 `infra/roles/server/aliecs-traffic/files/traffic-guard.py`：
+
+- 「昨日流量」来自 `vnstat --json d` 的上一自然日；
+- 「昨日 sing-box」来自脚本按轮次差值封存的 `previous_day_total`，不可用时显示「未计到」；
+- 月底外推按当月实际天数计算；
+- `txecs：心跳用于判断失联/限速。` 是日报尾部说明；日报缺席仍是失联判据。
+
+真实客户端验证过的预览链：`preview4`（两列）、`preview5`（三等宽失败）、
+`preview7`（JSON 2.0 加权列）、`preview10`（当前紧凑字号版本）。后续调整先发真实卡片
+肉眼验收，再部署；不要回退到 JSON 1.0，也不要把三列改成等宽 `div.fields`。
+
 `theme` 取值：`blue` `wathet` `turquoise` `green` `yellow` `orange` `red` `carmine`
 `violet` `purple` `indigo` `grey` `default`。
 
