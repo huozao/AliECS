@@ -195,10 +195,15 @@
           <br />
           只有<strong>「节点最后一次变化」时间更新了</strong>，才需要重新下载配置并在各客户端重新导入；
           流量数字每天变动不算变更，不会触发提示。
+          <br />
+          手机可直接下载<strong>自包含配置</strong>：节点会嵌入一个 YAML，不需要另外下载
+          <code>providers/*.yaml</code>；文件包含当前快照，订阅更新后需重新下载。
         </div>
         <div class="sec-tools">
           <button id="toggleClashProviderForm" type="button">＋ 新增订阅源</button>
-          <button id="clashDownloadBtn" type="button">下载配置</button>
+          <button id="clashDownloadBtn" type="button">下载 devbox 配置</button>
+          <button id="clashDownloadWebdockBtn" type="button">下载 WebDock 配置</button>
+          <button id="clashDownloadMobileBtn" type="button">下载手机配置</button>
           <button id="clashCopyBtn" type="button">复制配置文本</button>
         </div>
         <div id="clashProviderForm" class="collapse hidden">
@@ -553,20 +558,23 @@
       await loadClashProviders();
     }
     // /preview 返回纯文本，不能走会做 JSON 解析的 api()。
-    async function fetchClashProfileText(){
+    async function fetchClashProfileText(target="desktop"){
       const headers={};
       if(state.token)headers.Authorization=`Bearer ${state.token}`;
-      const resp=await fetch(`${API_BASE}/v1/admin/clash-profile/preview`,{headers});
+      const suffix=target==="desktop"?"":"?target="+encodeURIComponent(target);
+      const resp=await fetch(`${API_BASE}/v1/admin/clash-profile/preview${suffix}`,{headers});
       const text=await resp.text();
       if(!resp.ok)throw new Error(text||`HTTP ${resp.status}`);
       return text;
     }
-    async function downloadClashProfile(){
-      const text=await fetchClashProfileText();
+    async function downloadClashProfile(target="desktop"){
+      const text=await fetchClashProfileText(target);
       const blob=new Blob([text],{type:"text/yaml;charset=utf-8"});
       const href=URL.createObjectURL(blob);
       const a=document.createElement("a");
-      a.href=href;a.download="clash-profile.yaml";a.click();
+      a.href=href;
+      a.download=target==="webdock"?"clash-profile-webdock.yaml":target==="mobile"?"clash-profile-mobile.yaml":"clash-profile.yaml";
+      a.click();
       URL.revokeObjectURL(href);
     }
     async function copyClashProfile(){
@@ -702,6 +710,8 @@
       $("toggleClashProviderForm").addEventListener("click",()=>$("clashProviderForm").classList.toggle("hidden"));
       $("createClashProviderBtn").addEventListener("click",()=>createClashProvider().catch((e)=>showError(e.message)));
       $("clashDownloadBtn").addEventListener("click",()=>downloadClashProfile().catch((e)=>showError(`生成配置失败：${e.message}`)));
+      $("clashDownloadWebdockBtn").addEventListener("click",()=>downloadClashProfile("webdock").catch((e)=>showError(`生成 WebDock 配置失败：${e.message}`)));
+      $("clashDownloadMobileBtn").addEventListener("click",()=>downloadClashProfile("mobile").catch((e)=>showError(`生成手机配置失败：${e.message}`)));
       $("clashCopyBtn").addEventListener("click",()=>copyClashProfile().catch((e)=>showError(`复制失败：${e.message}`)));
       $("clashProviderBody").addEventListener("click",(e)=>{
         const fetchNow=e.target.getAttribute("data-clash-fetch");

@@ -48,8 +48,16 @@ class AdminFrontendTests(unittest.TestCase):
         self.assertIn('id="sec-clash-profile"', self.html)
         self.assertIn('id="clashProviderBody"', self.html)
         self.assertIn('id="clashDownloadBtn"', self.html)
+        self.assertIn('id="clashDownloadWebdockBtn"', self.html)
+        self.assertIn('id="clashDownloadMobileBtn"', self.html)
         self.assertIn('id="clashCopyBtn"', self.html)
         self.assertIn('api("/v1/admin/clash-profile/providers")', self.html)
+
+    def test_clash_profile_can_download_webdock_target(self) -> None:
+        self.assertIn('downloadClashProfile("webdock")', self.html)
+        self.assertIn('downloadClashProfile("mobile")', self.html)
+        self.assertIn('clash-profile-mobile.yaml', self.html)
+        self.assertIn('target==="desktop"?"":"?target="', self.html)
         self.assertIn("async function loadClashProviders()", self.html)
         self.assertIn("function renderClashProviders()", self.html)
 

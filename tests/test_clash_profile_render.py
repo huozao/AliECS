@@ -37,6 +37,15 @@ class ClashProfileRenderTests(unittest.TestCase):
             "enabled": True,
             "sort_order": 0,
         }
+        self.provider_content = """proxies:
+  - {name: 剩余流量：1 GB, type: vless, server: pseudo.example.com, port: 443}
+  - {name: 机场香港, type: vless, server: hk.example.com, port: 443, uuid: u}
+  - name: 机场日本
+    type: vless
+    server: jp.example.com
+    port: 443
+    uuid: u2
+"""
 
     def tearDown(self) -> None:
         sys.path[:] = self._old_sys_path
@@ -52,6 +61,37 @@ class ClashProfileRenderTests(unittest.TestCase):
         self.assertIsNone(_section(out, "proxy-providers"))
         select = next(g for g in groups if g["name"] == "节点选择")
         self.assertNotIn("use", select)
+
+    def test_webdock_target_keeps_routes_but_exposes_docker_bridge(self) -> None:
+        out = self.render.render_profile([self.node], [], target="webdock")
+        self.assertIn("allow-lan: true", out)
+        self.assertIn("bind-address: 172.17.0.1", out)
+        self.assertNotIn("\ntun:\n", out)
+        self.assertIn("DOMAIN-SUFFIX,openai.com,AI服务", out)
+
+    def test_unknown_target_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            self.render.render_profile([self.node], [], target="unknown")
+
+    def test_mobile_target_embeds_snapshot_nodes_without_provider_files(self) -> None:
+        out = self.render.render_profile(
+            [self.node],
+            [self.provider],
+            target="mobile",
+            provider_contents={self.provider["id"]: self.provider_content},
+        )
+        self.assertNotIn("proxy-providers:", out)
+        self.assertIn("机场香港", out)
+        self.assertIn("机场日本", out)
+        self.assertNotIn("剩余流量：1 GB", out)
+        self.assertNotIn("token=x", out)
+        groups = _section(out, "proxy-groups")
+        dukascopy = next(g for g in groups if g["name"] == "Dukascopy")
+        self.assertEqual(dukascopy["proxies"], ["机场香港", "机场日本"])
+
+    def test_mobile_target_requires_every_enabled_snapshot(self) -> None:
+        with self.assertRaisesRegex(ValueError, "没有可用快照"):
+            self.render.render_profile([self.node], [self.provider], target="mobile", provider_contents={})
 
     def test_enabled_providers_only(self) -> None:
         disabled = {**self.provider, "id": 8, "name": "机场乙", "enabled": False}

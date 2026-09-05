@@ -8,12 +8,38 @@ devbox 的 Clash Verge 里存着两个 profile：一个本地配置（只有自�
 
 目标：**一份配置同时含两边节点**，客户端里自由选，规则与 DNS 只有一套。
 
+## 2026-09-05：三类客户端共用一套合成逻辑
+
+合成器仍以本目录的 `render.py`、`template_base.yaml` 和 `template_rules.yaml` 为唯一
+规则事实源，不在 `webdock` 仓库再维护一份规则副本。渲染只区分客户端的宿主能力：
+
+| target | 消费方 | 差异 |
+|---|---|---|
+| `desktop`（默认） | devbox / Clash Verge | `allow-lan: false`，保留 TUN |
+| `webdock` | webdock1 / webdock2 | 监听 Docker bridge `172.17.0.1`，不启用 TUN；Chrome 仍显式使用 mixed-port |
+| `mobile` | 手机 Clash.Meta/mihomo 客户端 | 保留桌面版宿主能力，但把启用 provider 的节点快照嵌入单个 YAML，不依赖 `providers/` 目录 |
+
+三种 target 的节点、策略组、DNS 与规则完全由同一份渲染代码生成；`desktop` 与 `webdock`
+继续使用 file provider，`mobile` 为便携单文件例外。后台「Clash 配置」页签提供三种下载；
+服务器端 CLI 也支持：
+
+```bash
+docker exec business-cn-backend-api-1 python -m app.clash_profile.cli profile desktop
+docker exec business-cn-backend-api-1 python -m app.clash_profile.cli profile webdock
+docker exec business-cn-backend-api-1 python -m app.clash_profile.cli profile mobile
+```
+
+`desktop`/`webdock` 配置正文不包含机场 URL，机场节点仍通过 `nodes <provider>` 单独下载到客户端
+`providers/airportN.yaml`；`mobile` 只嵌入最新快照中的节点正文，同样不包含 URL 和订阅头。
+WebDock 的配置切换必须先在临时目录用 mihomo `-t` 校验，
+再在无 ChatGPT 任务的维护窗口重启 mihomo；不要把配置渲染步骤绑定到浏览器容器重启。
+
 ## 关键决策
 
 | 决策 | 内容 | 理由 |
 |---|---|---|
 | 不做托管订阅端点 | 服务端只生成配置**文件**供下载，不提供长期可访问的订阅 URL | 托管端点意味着国内备案主机上存在一个返回节点信息的公网端点。生成文件没有这个问题 |
-| 机场节点走 `proxy-providers` | 客户端 mihomo 自己去机场拉节点，服务端**完全不接触机场** | 定期刷新由 mihomo 按 `interval` 自动完成，比服务端拉取再转发更实时。服务端因此不需要 HTTP 客户端、YAML 解析器、快照表、定时任务、拉取容错 |
+| 机场节点走 `proxy-providers` | `desktop`/`webdock` 客户端只读服务端同步的 file provider；`mobile` 使用服务端快照嵌入节点 | 家宽无法稳定直拉机场；手机需要单文件导入，不能要求用户额外维护 providers 目录 |
 | 只输出 Clash YAML | 不做 sing-box JSON、不做 base64 | 客户端只有 Windows Clash Verge 和 Android FlClash，同为 mihomo 内核 |
 | 不解析代理协议 | 自建节点定义整段来自环境变量，原样搬进输出 | 以后换协议、加节点都不用改代码 |
 | 零新增依赖 | 用现有 fastapi + psycopg + 标准库 `json` | YAML 1.2 是 JSON 超集，`json.dumps` 的输出就是合法 YAML，且转义由标准库保证 |
@@ -221,7 +247,7 @@ CREATE TABLE IF NOT EXISTS clash_profile_providers (
 `render.py` 暴露一个纯函数：
 
 ```
-render_profile(self_nodes: list[dict], providers: list[dict]) -> str
+    render_profile(self_nodes: list[dict], providers: list[dict], target="desktop", provider_contents=None) -> str
 ```
 
 输出按顺序拼接，全程不解析 YAML：
@@ -243,6 +269,11 @@ render_profile(self_nodes: list[dict], providers: list[dict]) -> str
 - 是域名 → `- DOMAIN,<host>,DIRECT`
 
 机场节点的服务器地址来自 provider、动态且未知，无法预生成同类规则。TUN 模式下 mihomo 依靠 `auto-route` + `auto-detect-interface` 自动绕过自身发出的代理连接，理论上不需要显式规则；此项列入验证清单。
+
+`target=mobile` 是便携单文件例外：读取每个启用 provider 的最新快照，只提取 `proxies`
+段并嵌入主配置，同时过滤套餐提示伪节点；不输出 provider URL、`subscription-userinfo`
+或 `proxy-providers`。若任一启用 provider 没有快照、节点缺 `name/server` 或节点名重复，
+整次生成失败，不输出不完整的手机配置。手机配置因此是快照，不会随机场自动更新。
 
 ### 环境变量
 
@@ -273,8 +304,8 @@ render_profile(self_nodes: list[dict], providers: list[dict]) -> str
 | POST | `/v1/admin/clash-profile/providers` | 新增 |
 | PUT | `/v1/admin/clash-profile/providers/{id}` | 修改（含启用/禁用） |
 | DELETE | `/v1/admin/clash-profile/providers/{id}` | 删除 |
-| GET | `/v1/admin/clash-profile/download` | 下载生成的配置，`Content-Disposition: attachment` |
-| GET | `/v1/admin/clash-profile/preview` | 返回配置文本，供页面上复制 |
+| GET | `/v1/admin/clash-profile/download?target=desktop|webdock|mobile` | 下载生成的配置，`Content-Disposition: attachment`；不传 `target` 默认为 `desktop` |
+| GET | `/v1/admin/clash-profile/preview?target=desktop|webdock|mobile` | 返回配置文本，供页面上复制 |
 | GET | `/v1/admin/clash-profile/snapshots` | 各订阅源的拉取状态（节点数、指纹、上次成功、最后变化、错误）。**不含节点正文** |
 | POST | `/v1/admin/clash-profile/providers/{id}/fetch` | 立即拉取。失败返回 502（失败方是上游机场，不是本服务） |
 | GET | `/v1/admin/clash-profile/nodes/{id}` | 下载节点文件，落到客户端 `providers/airportN.yaml` |
@@ -290,6 +321,7 @@ admin-ui 新增页签，复用现有 `common/toast.js` 风格：
 - 每行两个新按钮：「立即拉取」「下载节点文件」
 - 新增机场表单
 - 「下载配置」按钮 + 「复制配置文本」按钮
+- 「下载手机配置」按钮：节点嵌入单个 YAML，手机无需另放 `providers/*.yaml`
 - 一段固定说明：**只有节点指纹变化时才需要重新导入**；流量数字每天变动不算变更
 
 显示「最后一次变化」而不是「上次拉取」是有意的：后者每天都在动，没有信息量，用户看久了会忽略；前者才对应"需要动手"这个动作。
@@ -301,6 +333,7 @@ admin-ui 新增页签，复用现有 `common/toast.js` 风格：
 | 机场增删节点、节点改名 | 本阶段需人工：admin-ui 点「立即拉取」→「下载节点文件」→ 覆盖 `providers/airportN.yaml`。覆盖后 mihomo 约 2 秒自动重载，**不用重启内核、不用重新导入配置**（2026-08-15 实测，日志 `[Provider] xxx's content update`）。下一阶段由计划任务代劳 |
 | 机场换域名/换协议（节点指纹变化） | admin-ui 会显示「节点最后一次变化」时间 → 下载配置 + 节点文件 → 各客户端重新导入 |
 | 更换机场 | admin-ui 改 URL → 点「立即拉取」→ 下载配置 → 两台设备重新导入 |
+| 手机使用 | admin-ui 点「下载手机配置」→ 将单个 YAML 导入支持 Clash.Meta/mihomo 的客户端；机场快照变化后重新下载 |
 | 自建节点参数变更 | SOPS 改 `CLASH_SELF_NODES_B64` → 重建容器 → 下载配置 → 重新导入 |
 | 调整分流规则 | 改 `template_rules.yaml` → PR → 部署 → 下载配置 → 重新导入 |
 

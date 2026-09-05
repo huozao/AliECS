@@ -65,7 +65,7 @@ txecs 上另有三条同形的容器侧通路。四条规则都只允许
 ```
 webdock2 WSL
   ├─ 已停旧业务隧道 → aliecs 127.0.0.1:11810
-  ├─ console 隧道   → aliecs 127.0.0.1:16090/16091
+  ├─ console 隧道   → txecs 127.0.0.1:16090/16091/16092
   └─ 生产业务隧道   → txecs 127.0.0.1:11810
 
 txecs 127.0.0.1:11800 failover-proxy
@@ -90,7 +90,7 @@ txecs 127.0.0.1:11800 failover-proxy
 | txecs → aliecs | 旧 `restic-peer` SFTP，chroot 到 `/srv/peer-restic` | 同一把 txecs 私钥的独立 `restic-peer` 公钥身份 | 历史每日备份与手工镜像旁路 | **仅回退**。不再承载日常备份；身份和配置暂保留，删除须另行确认 |
 | webdock1 ↔ webdock2 | Restic over SFTP(:2222) + SMB | `webdock-peer-backup.enc.env` | 两机互为加密备份 | 未验证他用 |
 | webdock2 → txecs | SSH 反向隧道 11810 | infra roles | 生产业务隧道（bridge 主路） | 勿占用 |
-| webdock2 → aliecs | SSH 隧道 16090/16091 | infra roles | console 通道 | 勿占用 |
+| webdock2 → txecs | SSH 隧道 16090/16091/16092 | infra roles | console 通道 | 勿占用 |
 
 `peer-channel` 是一条物理传输通道，不等于一个部署单元。当前在同一目录协议上承载两类
 互不连坐的 release：
@@ -148,7 +148,7 @@ txecs 127.0.0.1:11800 failover-proxy
 | 设备 | 账户 | 用途 | 形态 |
 |---|---|---|---|
 | txecs | `ubuntu` | devbox 人工管理 + GitHub Actions 部署 | 唯一日常 shell 账户 |
-| txecs | `webdock-tunnel` | 生产隧道 11810/11811、console 16080/16081/16090/16091/16101、ERP 18200/18201 | `Match User` 块，`PermitListen` 锁定这九个端口 |
+| txecs | `webdock-tunnel` | 生产隧道 11810/11811、console 16080/16081/16090/16091/16092/16101、ERP 18200/18201 | `Match User` 块，`PermitListen` 锁定这十个端口 |
 | txecs | `artifact-drop` | artifact 投递 | SFTP chroot，拿不到 shell |
 | txecs | `restic-peer` | 跨机备份接收 | SFTP chroot，拿不到 shell |
 | aliecs | `root` | 人工/CI 管理、bridge/console/T+ 隧道、ProductCenter | 5733 次登录（2026-07-09~08-08 区间计数），历史取证时 `authorized_keys` 8 个 key |
@@ -229,7 +229,8 @@ GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会�
   所有承载 `ssh -R` 的服务端（aliecs、txecs）必须有 `ClientAliveInterval` 非 0，否则对端失联时
   转发端口永不释放、隧道无限重连。配置由 `infra` 的 `server/ssh/10-tunnel-keepalive.conf`
   统一下发，`roles/server/{tencent,aliecs-edge}/verify.sh` 各有断言。查：`sshd -T | grep clientalive`。
-- 远程控制台（2026-07-04，`https://hydwang.xyz/console/`）：nginx `/console/*` 七路 location（认证=Authelia `two_factor` + lldap `console_admins` 组，成对 deny 兜底；**VNC 层免密设计**，2FA 是唯一闸门）；本机组件 ttyd 7681（unit `ttyd-console`，⚠️ apt 自带 `ttyd.service` 抢端口须 disable）、webtop 3000 按需启停（`/opt/aliecs/aliecs-temp-desktop.sh`，2G 内存用完必须 stop）；ECS `authorized_keys` permitlisten 新增四条 160xx（16080/16081←webdock1、16090/16091←webdock2，与生产 118xx 隔离）。⚠️ 2026-08-03 起 `/console/devbox/desktop/` 已改为在 txecs 本地终止，不再回源本机；AliECS 侧对应的 16101 location 与 authorized_keys 条目**刻意保留**，仅作回滚路径，不再有流量。详见 infra `console/README.md`。
+- 远程控制台（2026-07-04，`https://hydwang.xyz/console/`）：nginx `/console/*` 九路 location（认证=Authelia `two_factor` + lldap `console_admins` 组，成对 deny 兜底；**VNC 层免密设计**，2FA 是唯一闸门）；本机组件 ttyd 7681（unit `ttyd-console`，⚠️ apt 自带 `ttyd.service` 抢端口须 disable）、webtop 3000 按需启停（`/opt/aliecs/aliecs-temp-desktop.sh`，2G 内存用完必须 stop）；ECS `authorized_keys` permitlisten 新增五条 160xx（16080/16081←webdock1、16090/16091/16092←webdock2，与生产 118xx 隔离）。⚠️ 2026-08-03 起 `/console/devbox/desktop/` 已改为在 txecs 本地终止，不再回源本机；AliECS 侧对应的 16101 location 与 authorized_keys 条目**刻意保留**，仅作回滚路径，不再有流量。详见 infra `console/README.md`。
+- 2026-09-05 实测 WebDock2 Feishu 入口已闭环：容器 `6081`、CDP `9223`、显示器 `:100`、txecs `16092` 和公网 `/console/webdock2/feishu/` 均就绪；ChatGPT `9222`、原 `16090` 与 Windows 桌面 `16091` 回归正常。公网未登录时应得到 302→Authelia，不能用未登录的 302 判断 noVNC 内容是否缺失。
 - 部署：push AliECS main → release-deploy 构建镜像；获授权后业务 6 镜像选择 `business-cn`。当 `deploy/openclaw-bridge/**` 的内容树 hash 变化时，bridge 自动发布，使用独立 release、systemd 切换、失败回滚；bridge 没变的合并不碰它。手工重发选 `bridge-peer`。
 
   ⚠️ **「走同一 peer-channel」「TCR 回滚才用 bridge-cutover」两句自 2026-09-01 起失效。**
@@ -285,7 +286,7 @@ GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会�
   `location /console` 虽然仍写着回源 aliecs，但已经没有路径会落到它。
   本机终止的五条及其 loopback 上游：`devbox/desktop`←16101（2026-08-03）、
   `webdock1/browser`←16080、`webdock1/desktop`←16081、`webdock2/browser`←16090、
-  `webdock2/desktop`←16091（均 2026-08-16）。sshd `PermitListen` 与
+  `webdock2/desktop`←16091、`webdock2/feishu`←16092（Feishu 2026-09-05 新增）。sshd `PermitListen` 与
   `webdock-tunnel` authorized_keys 均由 infra `roles/server/tencent` 管理；
   设备侧 unit 是 `console-txecs-tunnel.service`（旧的 `console-ecs-tunnel` 已 disable，
   两者不能同时跑，上游端口号相同）。
@@ -336,11 +337,12 @@ GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会�
   txecs 11810（当前生产）。
   ⚠️「旧 `webdock-ecs-tunnel` 已停，console 仍单独落 AliECS」这句自 2026-09-02 起
   确认与实际不符：① console 早在 2026-08-16 就随 webdock1 一起改成落 txecs，设备侧
-  unit 是 `console-txecs-tunnel.service`（`-R 16090`←容器 noVNC 6080、`-R 16091`←桌面 6091），
+  unit 是 `console-txecs-tunnel.service`（`-R 16090`←容器 ChatGPT noVNC 6080、`-R 16091`←桌面 6091）和独立的
+  `console-feishu-txecs-tunnel.service`（`-R 16092`←容器 Feishu noVNC 6081），
   旧的 `console-ecs-tunnel` 已 disable，两者上游端口号相同、不能同时跑；② `webdock-ecs-tunnel`
   09-02 实测**仍是 active running**（aliecs 上 `127.0.0.1:11810` 有 sshd 监听），没停。
   新情况见本节〈远程控制台〉与 txecs 段〈远程控制台〉。
-- 远程控制台：Windows TightVNC :5900 服务模式（`UseVncAuthentication=0` 免密，防火墙只放行 172.16.0.0/12+100.64.0.0/10，MSI 自建全放行规则已 Disable）+ WSL noVNC 6091（`novnc-desktop`，启动时动态解析 WSL 网关）+ WSL `console-txecs-tunnel`（`-R 16090`←容器 noVNC 6080、`-R 16091`←桌面 6091，落 **txecs**）。
+- 远程控制台：Windows TightVNC :5900 服务模式（`UseVncAuthentication=0` 免密，防火墙只放行 172.16.0.0/12+100.64.0.0/10，MSI 自建全放行规则已 Disable）+ WSL noVNC 6091（`novnc-desktop`，启动时动态解析 WSL 网关）+ WSL `console-txecs-tunnel`（`-R 16090`←容器 ChatGPT noVNC 6080、`-R 16091`←桌面 6091，落 **txecs**）+ `console-feishu-txecs-tunnel`（`-R 16092`←容器 Feishu noVNC 6081）。
 - noVNC：`http://100.67.38.52:6080/` 可用。⚠️ 已知怪癖：Tailscale 直连 `100.67.38.52:18000` 返回 502（Windows→WSL 端口转发问题），**生产链路不受影响**（隧道从 WSL 内 localhost 拉出）；从 ECS 探 `127.0.0.1:11810/healthz` 才是有效健康检查。
 - 日志：WSL 内 `/var/log/webdock/archive/`。
 - **整台机器的生死开关是一个 Windows 计划任务**（2026-09-02 事故）：`WebDock2WSLKeepAlive`
@@ -351,7 +353,7 @@ GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会�
   - **判据（照抄 07-12 那次的取证手法）**：`wsl -- uptime -p` 和 `docker ps` 的 `Up` 时长
     是否**大于你这条命令的年龄**。大于才是常驻，等于就是被你自己的 ssh 唤醒的假象——
     此时 `systemctl is-active` 一样回 active，别信。
-  - **判据落在对端更省事**：txecs `ss -ltn` 里 `16090`/`16091`（console）和 `11810`（业务）
+  - **判据落在对端更省事**：txecs `ss -ltn` 里 `16090`/`16091`/`16092`（console）和 `11810`（业务）
     三个 loopback 端口在不在；`curl -s http://127.0.0.1:11800/healthz` 的 `X-Webdock-Device`
     掉成 `webdock1` 就说明主力没了。**设备自己断线时发不出告警，所以看护必须放在 txecs 侧。**
   - 恢复：`Start-ScheduledTask -TaskName 'WebDock2WSLKeepAlive'`，确认 `State=Running`。

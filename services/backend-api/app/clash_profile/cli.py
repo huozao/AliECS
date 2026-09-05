@@ -5,6 +5,7 @@
     docker exec business-cn-backend-api-1 python -m app.clash_profile.cli list
     docker exec business-cn-backend-api-1 python -m app.clash_profile.cli refresh
     docker exec business-cn-backend-api-1 python -m app.clash_profile.cli nodes airport1
+    docker exec business-cn-backend-api-1 python -m app.clash_profile.cli profile mobile
 
 为什么不走 HTTP：后台接口挂在 require_admin（SSO）后面，无人值守的定时任务过不去；
 而把下载端点开成公网免鉴权就变成了对外分发订阅，是这次刻意避开的形态。
@@ -21,7 +22,7 @@ from contextlib import closing
 
 from app.clash_profile import store
 from app.clash_profile.fetch import fetch_snapshot
-from app.clash_profile.render import provider_key
+from app.clash_profile.render import load_self_nodes, provider_key, render_profile
 from app.core import _conn
 
 
@@ -29,11 +30,18 @@ def _providers() -> list[dict]:
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, name, url, enabled FROM clash_profile_providers ORDER BY sort_order, id"
+                "SELECT id, name, url, enabled, sort_order FROM clash_profile_providers ORDER BY sort_order, id"
             )
             rows = cur.fetchall()
     return [
-        {"id": r[0], "key": provider_key(r[0]), "name": r[1], "url": r[2], "enabled": r[3]}
+        {
+            "id": r[0],
+            "key": provider_key(r[0]),
+            "name": r[1],
+            "url": r[2],
+            "enabled": r[3],
+            "sort_order": r[4],
+        }
         for r in rows
     ]
 
@@ -91,6 +99,27 @@ def cmd_nodes(token: str) -> int:
     return 0
 
 
+def cmd_profile(target: str = "desktop") -> int:
+    """Write a complete generated profile to stdout for an authenticated operator."""
+    try:
+        providers = _providers()
+        contents = None
+        if target == "mobile":
+            contents = {
+                provider["id"]: store.read_content(provider["id"])
+                for provider in providers
+                if provider["enabled"]
+            }
+        profile = render_profile(
+            load_self_nodes(), providers, target=target, provider_contents=contents
+        )
+    except ValueError as exc:
+        print(f"生成 Clash 配置失败：{exc}", file=sys.stderr)
+        return 1
+    sys.stdout.write(profile)
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if not argv:
         print(__doc__, file=sys.stderr)
@@ -105,6 +134,11 @@ def main(argv: list[str]) -> int:
             print("用法：nodes <provider_id|provider_key>", file=sys.stderr)
             return 2
         return cmd_nodes(args[0])
+    if command == "profile":
+        if len(args) > 1:
+            print("用法：profile [desktop|webdock|mobile]", file=sys.stderr)
+            return 2
+        return cmd_profile(args[0] if args else "desktop")
     print(f"未知命令：{command}", file=sys.stderr)
     return 2
 
