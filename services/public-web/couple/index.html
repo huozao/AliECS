@@ -199,7 +199,7 @@
         api('/v1/couple/space'),
         api('/v1/memories?page=1&page_size=60'),
         api('/v1/map/memories'),
-        api('/v1/couple/media?page=1&page_size=30'),
+        api('/v1/couple/media?page=1&page_size=30').catch(()=>api('/v1/photos?page=1&page_size=30')),
         api('/v1/anniversaries'),
         api('/v1/bucket-items'),
         api('/v1/immich/status').catch((e)=>({enabled:false,ok:false,detail:e.message}))
