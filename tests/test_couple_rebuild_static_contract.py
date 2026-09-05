@@ -48,3 +48,16 @@ def test_detail_page_hides_immich_picker_when_disabled_and_can_search_when_enabl
     assert "/v1/immich/assets?" in html
     assert "immichCard').classList.add('hidden')" in html
     assert "data-immich-bind" in html
+
+
+def test_detail_page_has_in_place_memory_editor_and_batch_media_picker():
+    html = (ROOT / "services" / "public-web" / "memories" / "detail.html").read_text(encoding="utf-8")
+
+    assert 'id="mediaPickerDialog"' in html
+    assert 'id="pickerSource"' in html
+    assert "data-picker-asset" in html
+    assert "data-photo-del" in html
+    assert "data-cover-local" in html
+    assert "data-cover-immich" in html
+    assert "cover_photo_url" in html
+    assert "绑定已选" in html
