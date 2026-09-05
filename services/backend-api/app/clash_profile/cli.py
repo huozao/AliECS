@@ -5,6 +5,7 @@
     docker exec business-cn-backend-api-1 python -m app.clash_profile.cli list
     docker exec business-cn-backend-api-1 python -m app.clash_profile.cli refresh
     docker exec business-cn-backend-api-1 python -m app.clash_profile.cli nodes airport1
+    ... | docker exec -i business-cn-backend-api-1 python -m app.clash_profile.cli import-base64 airport1
     docker exec business-cn-backend-api-1 python -m app.clash_profile.cli profile mobile
 
 为什么不走 HTTP：后台接口挂在 require_admin（SSO）后面，无人值守的定时任务过不去；
@@ -17,11 +18,13 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import sys
 from contextlib import closing
 
 from app.clash_profile import store
-from app.clash_profile.fetch import fetch_snapshot
+from app.clash_profile.fetch import Snapshot, fetch_snapshot, summarize
 from app.clash_profile.render import load_self_nodes, provider_key, render_profile
 from app.core import _conn
 
@@ -99,6 +102,41 @@ def cmd_nodes(token: str) -> int:
     return 0
 
 
+def cmd_import_base64(token: str) -> int:
+    """Import a provider body fetched by the trusted devbox sync task.
+
+    The body travels over SSH stdin as base64 so PowerShell/native SSH newline
+    and encoding conversions cannot corrupt YAML.  It is deliberately not an
+    HTTP endpoint: exposing this write path publicly would turn it into an
+    arbitrary node injection API.
+    """
+    provider = _resolve(token)
+    if provider is None:
+        print(f"找不到订阅源：{token}", file=sys.stderr)
+        return 1
+    encoded = sys.stdin.read().strip()
+    try:
+        content = base64.b64decode(encoded, validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError, ValueError) as exc:
+        print(f"导入订阅快照失败：不是合法 base64/UTF-8：{exc}", file=sys.stderr)
+        return 1
+    if "proxies:" not in content:
+        print("导入订阅快照失败：正文不含 proxies:", file=sys.stderr)
+        return 1
+    node_count, fingerprint = summarize(content)
+    if node_count == 0:
+        print("导入订阅快照失败：解析出 0 个节点", file=sys.stderr)
+        return 1
+    changed = store.save_snapshot(
+        provider["id"], Snapshot(content, node_count, fingerprint, "")
+    )
+    print(
+        f"已导入 {provider['key']}：{node_count} 个节点，"
+        f"指纹 {fingerprint}，changed={changed}"
+    )
+    return 0
+
+
 def cmd_profile(target: str = "desktop") -> int:
     """Write a complete generated profile to stdout for an authenticated operator."""
     try:
@@ -134,6 +172,11 @@ def main(argv: list[str]) -> int:
             print("用法：nodes <provider_id|provider_key>", file=sys.stderr)
             return 2
         return cmd_nodes(args[0])
+    if command == "import-base64":
+        if len(args) != 1:
+            print("用法：import-base64 <provider_id|provider_key>", file=sys.stderr)
+            return 2
+        return cmd_import_base64(args[0])
     if command == "profile":
         if len(args) > 1:
             print("用法：profile [desktop|webdock|mobile]", file=sys.stderr)
