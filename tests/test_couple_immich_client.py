@@ -23,6 +23,14 @@ def load_immich_client():
 
 
 class ImmichClientTests(unittest.TestCase):
+    def test_current_user_uses_api_key_route(self) -> None:
+        _, ImmichClient, ImmichConfig = load_immich_client()
+        response = Mock(); response.__enter__ = Mock(return_value=response); response.__exit__ = Mock(return_value=None); response.read.return_value = b'{"id":"user-1"}'
+        with patch("app.immich_client.urllib.request.urlopen", return_value=response) as urlopen:
+            result = ImmichClient(ImmichConfig(True, "https://immich.example", "secret")).current_user()
+        self.assertEqual("user-1", result["id"])
+        self.assertEqual("https://immich.example/api/users/me", urlopen.call_args.args[0].full_url)
+
     def test_add_assets_to_album_uses_idempotent_ids(self) -> None:
         _, ImmichClient, ImmichConfig = load_immich_client()
         response = Mock(); response.__enter__ = Mock(return_value=response); response.__exit__ = Mock(return_value=None); response.read.return_value = b""

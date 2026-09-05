@@ -66,7 +66,9 @@ class ImmichClient:
         return True
 
     def current_user(self) -> dict[str, object]:
-        return self._request_json("/api/auth/user")
+        # Immich exposes the API-key-authenticated identity at /api/users/me.
+        # /api/auth/user is a browser-session route and rejects valid API keys.
+        return self._request_json("/api/users/me")
 
     def get_asset(self, asset_id: str) -> ImmichAsset:
         payload = self._request_json(f"/api/assets/{urllib.parse.quote(asset_id, safe='')}")
