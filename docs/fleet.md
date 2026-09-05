@@ -229,7 +229,8 @@ GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会�
   所有承载 `ssh -R` 的服务端（aliecs、txecs）必须有 `ClientAliveInterval` 非 0，否则对端失联时
   转发端口永不释放、隧道无限重连。配置由 `infra` 的 `server/ssh/10-tunnel-keepalive.conf`
   统一下发，`roles/server/{tencent,aliecs-edge}/verify.sh` 各有断言。查：`sshd -T | grep clientalive`。
-- 远程控制台（2026-07-04，`https://hydwang.xyz/console/`）：nginx `/console/*` 八路 location（认证=Authelia `two_factor` + lldap `console_admins` 组，成对 deny 兜底；**VNC 层免密设计**，2FA 是唯一闸门）；本机组件 ttyd 7681（unit `ttyd-console`，⚠️ apt 自带 `ttyd.service` 抢端口须 disable）、webtop 3000 按需启停（`/opt/aliecs/aliecs-temp-desktop.sh`，2G 内存用完必须 stop）；ECS `authorized_keys` permitlisten 新增五条 160xx（16080/16081←webdock1、16090/16091/16092←webdock2，与生产 118xx 隔离）。⚠️ 2026-08-03 起 `/console/devbox/desktop/` 已改为在 txecs 本地终止，不再回源本机；AliECS 侧对应的 16101 location 与 authorized_keys 条目**刻意保留**，仅作回滚路径，不再有流量。详见 infra `console/README.md`。
+- 远程控制台（2026-07-04，`https://hydwang.xyz/console/`）：nginx `/console/*` 九路 location（认证=Authelia `two_factor` + lldap `console_admins` 组，成对 deny 兜底；**VNC 层免密设计**，2FA 是唯一闸门）；本机组件 ttyd 7681（unit `ttyd-console`，⚠️ apt 自带 `ttyd.service` 抢端口须 disable）、webtop 3000 按需启停（`/opt/aliecs/aliecs-temp-desktop.sh`，2G 内存用完必须 stop）；ECS `authorized_keys` permitlisten 新增五条 160xx（16080/16081←webdock1、16090/16091/16092←webdock2，与生产 118xx 隔离）。⚠️ 2026-08-03 起 `/console/devbox/desktop/` 已改为在 txecs 本地终止，不再回源本机；AliECS 侧对应的 16101 location 与 authorized_keys 条目**刻意保留**，仅作回滚路径，不再有流量。详见 infra `console/README.md`。
+- 2026-09-05 实测 WebDock2 Feishu 入口已闭环：容器 `6081`、CDP `9223`、显示器 `:100`、txecs `16092` 和公网 `/console/webdock2/feishu/` 均就绪；ChatGPT `9222`、原 `16090` 与 Windows 桌面 `16091` 回归正常。公网未登录时应得到 302→Authelia，不能用未登录的 302 判断 noVNC 内容是否缺失。
 - 部署：push AliECS main → release-deploy 构建镜像；获授权后业务 6 镜像选择 `business-cn`。当 `deploy/openclaw-bridge/**` 的内容树 hash 变化时，bridge 自动发布，使用独立 release、systemd 切换、失败回滚；bridge 没变的合并不碰它。手工重发选 `bridge-peer`。
 
   ⚠️ **「走同一 peer-channel」「TCR 回滚才用 bridge-cutover」两句自 2026-09-01 起失效。**
