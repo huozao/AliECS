@@ -2,7 +2,7 @@
 
 ## Service Location
 
-- Host: `webdock`
+- Host: `webdock1` (`webdock-laptop`)
 - Directory: `~/immich-app`
 - Public route: `immich.hydwang.xyz` after the reverse proxy phase is complete
 - Local health: `http://127.0.0.1:2283/api/server/ping`
@@ -24,7 +24,7 @@
 
 ## Basic Operations
 
-Check service health from the old laptop:
+Check service health from webdock1:
 
 ```bash
 cd ~/immich-app
@@ -53,7 +53,7 @@ Initial deployment used the official Immich release assets:
 - `https://github.com/immich-app/immich/releases/latest/download/docker-compose.yml`
 - `https://github.com/immich-app/immich/releases/latest/download/example.env`
 
-Runtime `.env` was adjusted on `webdock`:
+Runtime `.env` was adjusted on `webdock1`:
 
 - `UPLOAD_LOCATION=./library`
 - `DB_DATA_LOCATION=./postgres`
@@ -63,11 +63,11 @@ Runtime `.env` was adjusted on `webdock`:
 
 ## ECS Reverse Tunnel
 
-Immich uses a separate reverse SSH tunnel from the old laptop to ECS. It does not replace the existing WebDock API tunnel.
+Immich uses a separate reverse SSH tunnel from webdock1 to ECS. It does not replace the existing WebDock API tunnel.
 
-- Existing WebDock tunnel: ECS `127.0.0.1:11800` -> old laptop `100.97.176.57:18000`
-- Immich tunnel: ECS `127.0.0.1:12283` -> old laptop `100.97.176.57:2283`
-- Old laptop service: `webdock-immich-tunnel.service`
+- Existing WebDock tunnel: ECS `127.0.0.1:11800` -> webdock1 `100.97.176.57:18000`
+- Immich tunnel: ECS `127.0.0.1:12283` -> webdock1 `100.97.176.57:2283`
+- Tunnel service: `webdock-immich-tunnel.service`
 - ECS SSH authorized key was extended to allow `permitlisten="127.0.0.1:12283"` for the existing `webdock-ecs-tunnel` key.
 
 Verify from ECS:
@@ -121,3 +121,12 @@ IMMICH_DIR=~/immich-app deploy/laptop/immich/update-immich-safe.sh
 ```
 
 The safe update script runs backup preflight first, then `docker compose pull`, `docker compose up -d`, and a health check. It refuses to continue unless a recent Immich database backup exists. Media files still require a separate backup of `UPLOAD_LOCATION`.
+
+## Couple user connections
+
+Couple authenticates users through the existing SSO. Each user binds a personal
+Immich API key in Couple; the backend stores it AES-GCM encrypted. Set
+`IMMICH_KEY_ENCRYPTION_SECRET` and the fixed shared-album ID
+`COUPLE_IMMICH_FAMILY_ALBUM_ID` in the private ECS runtime environment. Never put
+individual API keys in `IMMICH_API_KEY` or in Git. Couple direct uploads and selected
+personal-library assets are added to that shared album before being linked to a memory.

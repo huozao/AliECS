@@ -97,6 +97,13 @@ class FakeConn:
 
 
 class CoupleImmichAssetTests(unittest.TestCase):
+    def test_immich_api_key_round_trip_is_encrypted(self) -> None:
+        main = load_main()
+        with patch.dict(os.environ, {"AUTH_TOKEN_SECRET": "a" * 40, "ENV": "test"}, clear=False):
+            encoded = main._encrypt_immich_key("user-secret-api-key")
+            self.assertNotIn("user-secret-api-key", encoded)
+            self.assertEqual("user-secret-api-key", main._decrypt_immich_key(encoded))
+
     def test_bind_manual_asset_when_immich_disabled(self) -> None:
         main = load_main()
         cursor = FakeCursor()

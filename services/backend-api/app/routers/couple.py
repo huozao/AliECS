@@ -12,6 +12,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import base64
+import hashlib
 
 from contextlib import closing
 from datetime import date, datetime, timedelta, timezone
@@ -79,6 +81,15 @@ class BucketItemUpsertRequest(BaseModel):
 
 class CreateShareLinkRequest(BaseModel):
     expires_in_days: int | None = Field(default=None, ge=1, le=365)
+
+
+class ImmichConnectRequest(BaseModel):
+    api_key: str = Field(min_length=20, max_length=256)
+
+
+class ImmichAlbumRequest(BaseModel):
+    album_id: str | None = None
+    asset_ids: list[str] = Field(default_factory=list)
 
 
 ALLOWED_UPLOAD_MIMES = {
@@ -428,7 +439,100 @@ def immich_status(user: dict[str, Any] = Depends(require_login)) -> dict[str, ob
     require_permission("couple_memory_access", user)
     from app.immich_client import ImmichClient
 
-    return ImmichClient().status()
+    user_id = _require_couple_user(user)
+    config = _user_immich_config(user_id)
+    if config is None:
+        return {"enabled": False, "ok": False, "connected": False, "family_album_id": os.getenv("COUPLE_IMMICH_FAMILY_ALBUM_ID", "") or None, "detail": "尚未连接 Immich"}
+    result = ImmichClient(config).status()
+    result["connected"] = True
+    result["family_album_id"] = os.getenv("COUPLE_IMMICH_FAMILY_ALBUM_ID", "") or None
+    return result
+
+
+def _immich_encryption_key() -> bytes:
+    secret = os.getenv("IMMICH_KEY_ENCRYPTION_SECRET") or os.getenv("AUTH_TOKEN_SECRET", "")
+    if not secret or (os.getenv("ENV", "dev") == "prod" and len(secret) < 32):
+        raise HTTPException(status_code=500, detail="IMMICH_KEY_ENCRYPTION_SECRET must be configured")
+    return hashlib.sha256(secret.encode("utf-8")).digest()
+
+
+def _encrypt_immich_key(value: str) -> str:
+    from Crypto.Cipher import AES
+    nonce = os.urandom(12)
+    cipher = AES.new(_immich_encryption_key(), AES.MODE_GCM, nonce=nonce)
+    ciphertext, tag = cipher.encrypt_and_digest(value.encode("utf-8"))
+    return "v1:" + ":".join(base64.urlsafe_b64encode(part).decode("ascii") for part in (nonce, ciphertext, tag))
+
+
+def _decrypt_immich_key(value: str) -> str:
+    from Crypto.Cipher import AES
+    try:
+        version, nonce, ciphertext, tag = value.split(":", 3)
+        if version != "v1":
+            raise ValueError("unsupported key version")
+        cipher = AES.new(_immich_encryption_key(), AES.MODE_GCM, nonce=base64.urlsafe_b64decode(nonce))
+        return cipher.decrypt_and_verify(base64.urlsafe_b64decode(ciphertext), base64.urlsafe_b64decode(tag)).decode("utf-8")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="stored Immich key cannot be decrypted") from exc
+
+
+def _user_immich_config(user_id: int):
+    from app.immich_client import ImmichConfig, load_immich_config
+    base = load_immich_config()
+    if not base.enabled or not base.base_url:
+        return None
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT encrypted_api_key FROM couple_immich_accounts WHERE user_id = %s AND status = 'active'", (user_id,))
+            row = cur.fetchone()
+    if not row:
+        return None
+    return ImmichConfig(enabled=True, base_url=base.base_url, api_key=_decrypt_immich_key(row[0]), timeout_seconds=base.timeout_seconds)
+
+
+@router.get("/v1/immich/connection")
+def immich_connection(user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
+    user_id = _require_couple_user(user)
+    config = _user_immich_config(user_id)
+    return {"connected": config is not None, "family_album_id": os.getenv("COUPLE_IMMICH_FAMILY_ALBUM_ID", "") or None}
+
+
+@router.post("/v1/immich/connection")
+def connect_immich(body: ImmichConnectRequest, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
+    user_id = _require_couple_user(user)
+    from app.immich_client import ImmichClient, load_immich_config
+    base = load_immich_config()
+    if not base.enabled or not base.base_url:
+        raise HTTPException(status_code=503, detail="Immich integration is not configured")
+    config = base.__class__(enabled=True, base_url=base.base_url, api_key=body.api_key.strip(), timeout_seconds=base.timeout_seconds)
+    client = ImmichClient(config)
+    if not client.ping():
+        raise HTTPException(status_code=400, detail="Immich API key 无法验证")
+    try:
+        immich_user_id = str((client.current_user() or {}).get("id") or "").strip() or None
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Immich API key 无法读取用户身份") from exc
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO couple_immich_accounts(user_id, encrypted_api_key, immich_user_id, status, updated_at)
+                   VALUES (%s, %s, %s, 'active', NOW())
+                   ON CONFLICT (user_id) DO UPDATE SET encrypted_api_key = EXCLUDED.encrypted_api_key,
+                     immich_user_id = EXCLUDED.immich_user_id, status = 'active', updated_at = NOW()""",
+                (user_id, _encrypt_immich_key(body.api_key.strip()), immich_user_id),
+            )
+        conn.commit()
+    return {"connected": True}
+
+
+@router.delete("/v1/immich/connection")
+def disconnect_immich(user: dict[str, Any] = Depends(require_login)) -> dict[str, str]:
+    user_id = _require_couple_user(user)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE couple_immich_accounts SET status = 'revoked', encrypted_api_key = NULL, updated_at = NOW() WHERE user_id = %s", (user_id,))
+        conn.commit()
+    return {"status": "ok"}
 
 
 def _public_immich_thumbnail_url(asset_id: str) -> str:
@@ -448,8 +552,8 @@ def immich_assets(
     require_permission("couple_memory_access", user)
     from app.immich_client import ImmichClient, load_immich_config
 
-    config = load_immich_config()
-    if not config.enabled:
+    config = _user_immich_config(_require_couple_user(user))
+    if config is None:
         return {"enabled": False, "items": []}
     try:
         assets = ImmichClient(config).search_assets(
@@ -477,13 +581,74 @@ def immich_assets(
     }
 
 
+@router.get("/v1/immich/albums")
+def immich_albums(user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
+    config = _user_immich_config(_require_couple_user(user))
+    if config is None:
+        raise HTTPException(status_code=409, detail="请先连接 Immich")
+    from app.immich_client import ImmichClient
+    return {"items": ImmichClient(config).list_albums(), "family_album_id": os.getenv("COUPLE_IMMICH_FAMILY_ALBUM_ID", "") or None}
+
+
+@router.post("/v1/immich/albums/assets")
+def add_immich_assets_to_album(body: ImmichAlbumRequest, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
+    config = _user_immich_config(_require_couple_user(user))
+    if config is None:
+        raise HTTPException(status_code=409, detail="请先连接 Immich")
+    album_id = (body.album_id or os.getenv("COUPLE_IMMICH_FAMILY_ALBUM_ID", "")).strip()
+    asset_ids = list(dict.fromkeys(x.strip() for x in body.asset_ids if x and x.strip()))
+    if not album_id or not asset_ids:
+        raise HTTPException(status_code=400, detail="album_id and asset_ids are required")
+    from app.immich_client import ImmichClient
+    try:
+        ImmichClient(config).add_assets_to_album(album_id, asset_ids)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Immich album update failed: {exc}") from exc
+    return {"album_id": album_id, "asset_ids": asset_ids}
+
+
+@router.post("/v1/immich/upload")
+async def upload_immich_asset(
+    file: UploadFile = File(...),
+    memory_id: int | None = Query(default=None),
+    user: dict[str, Any] = Depends(require_login),
+) -> dict[str, Any]:
+    user_id = _require_couple_user(user)
+    config = _user_immich_config(user_id)
+    if config is None:
+        raise HTTPException(status_code=409, detail="请先连接 Immich")
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="empty file")
+    album_id = os.getenv("COUPLE_IMMICH_FAMILY_ALBUM_ID", "").strip()
+    if not album_id:
+        raise HTTPException(status_code=503, detail="Couple 家庭相册尚未配置")
+    from app.immich_client import ImmichClient
+    try:
+        uploaded = ImmichClient(config).upload_asset(file.filename or "upload", file.content_type or "application/octet-stream", content)
+        asset_id = str(uploaded.get("id") or uploaded.get("assetId") or "").strip()
+        if not asset_id:
+            raise ValueError("Immich upload response missing asset id")
+        ImmichClient(config).add_assets_to_album(album_id, [asset_id])
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Immich upload failed: {exc}") from exc
+    result = {"asset_id": asset_id, "album_id": album_id or None}
+    if memory_id is not None:
+        bound = _bind_memory_immich_asset(memory_id, ImmichAssetBindRequest(immich_asset_id=asset_id), user)
+        result["binding"] = bound
+    return result
+
+
 @router.get("/v1/immich/assets/{asset_id}/thumbnail")
 def immich_asset_thumbnail(asset_id: str, user: dict[str, Any] = Depends(require_login)) -> Response:
     require_permission("couple_memory_access", user)
     from app.immich_client import ImmichClient
 
+    config = _user_immich_config(_require_couple_user(user))
+    if config is None:
+        raise HTTPException(status_code=409, detail="请先连接 Immich")
     try:
-        content, content_type = ImmichClient().get_thumbnail(asset_id)
+        content, content_type = ImmichClient(config).get_thumbnail(asset_id)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return Response(content=content, media_type=content_type, headers={"Cache-Control": "private, max-age=3600"})
@@ -533,6 +698,12 @@ def _resolve_couple_space_id(user_id: int, requested_space_id: int | None) -> in
 def _require_couple_user(user: dict[str, Any]) -> int:
     if not _has_couple_access(user):
         raise HTTPException(status_code=403, detail="当前功能不可用。")
+    token_user_id = user.get("uid")
+    if token_user_id is not None:
+        try:
+            return int(token_user_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=401, detail="invalid user")
     user_id = _user_id_by_username(str(user.get("sub", "")))
     if not user_id:
         raise HTTPException(status_code=401, detail="invalid user")

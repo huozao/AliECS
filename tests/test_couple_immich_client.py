@@ -23,6 +23,15 @@ def load_immich_client():
 
 
 class ImmichClientTests(unittest.TestCase):
+    def test_add_assets_to_album_uses_idempotent_ids(self) -> None:
+        _, ImmichClient, ImmichConfig = load_immich_client()
+        response = Mock(); response.__enter__ = Mock(return_value=response); response.__exit__ = Mock(return_value=None); response.read.return_value = b""
+        with patch("app.immich_client.urllib.request.urlopen", return_value=response) as urlopen:
+            ImmichClient(ImmichConfig(True, "https://immich.example", "secret")).add_assets_to_album("album/1", ["a", "a", "b"])
+        request = urlopen.call_args.args[0]
+        self.assertEqual("PUT", request.get_method())
+        self.assertEqual("https://immich.example/api/albums/album%2F1/assets", request.full_url)
+        self.assertEqual({"ids": ["a", "b"]}, json.loads(request.data.decode()))
     def test_disabled_client_reports_disabled(self) -> None:
         _, ImmichClient, ImmichConfig = load_immich_client()
         client = ImmichClient(ImmichConfig(enabled=False, base_url="", api_key="", timeout_seconds=5))

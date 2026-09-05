@@ -25,8 +25,8 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 | `app/routers/sync.py` | `/v1/sync/*` 统一同步中心，查询层为 `app/sync_read.py`，控制层为 `app/sync_control.py`；`app/document_locator.py` 统一资产下载、副本幂等登记与 docid 修复，响应不返回外部文档 ID |
 | `versions.py` | 版本看板 |
 | `backups.py` | 企微结构备份看板、镜像清理策略看板 |
-| `clash_profile.py` | Clash 配置合成器（人类叫法：订阅合并 / 一个订阅选所有节点）。机场订阅源 CRUD + 合成配置下载；渲染逻辑在 `app/clash_profile/render.py`，自建节点走 env `CLASH_SELF_NODES_B64`。验证：`python -m unittest discover -s tests -p "test_clash_profile_render.py"` |
-| `couple.py` | Couple（相册已由 Immich/AdventureLog 接管，此处仅存量） |
+| `clash_profile.py` | Clash 配置合成器（人类叫法：订阅合并 / 一个订阅选所有节点）。机场订阅源 CRUD + 合成配置下载；渲染逻辑在 `app/clash_profile/render.py`，自建节点走 env `CLASH_SELF_NODES_B64`。`mobile` 目标会把启用订阅源的最新快照嵌成单文件 YAML；2026-09-05 已修复 provider 节点缩进导致的手机 YAML 解析错误。验证：`python -m unittest discover -s tests -p "test_clash_profile_render.py"` |
+| `couple.py` | Couple 私密情侣空间：回忆、地图、纪念日、愿望清单，以及按用户 Immich API key 的个人库选片/家庭相册归档；AdventureLog 保持独立入口 |
 
 输入：Postgres、runtime env、T+ worker 只读输出（`/app/tplus-output`）。
 验证：`python -m pytest tests`（CI 同一条）；相关单测 patch 目标=函数所在文件（已拆域）。

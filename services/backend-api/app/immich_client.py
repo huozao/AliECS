@@ -6,6 +6,8 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
+from datetime import datetime, timezone
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,9 @@ class ImmichClient:
             return False
         return True
 
+    def current_user(self) -> dict[str, object]:
+        return self._request_json("/api/auth/user")
+
     def get_asset(self, asset_id: str) -> ImmichAsset:
         payload = self._request_json(f"/api/assets/{urllib.parse.quote(asset_id, safe='')}")
         return self._asset_from_payload(payload, fallback_id=asset_id)
@@ -93,6 +98,46 @@ class ImmichClient:
     def get_thumbnail(self, asset_id: str) -> tuple[bytes, str]:
         return self._request_bytes(f"/api/assets/{urllib.parse.quote(asset_id, safe='')}/thumbnail?size=thumbnail")
 
+    def list_albums(self) -> list[dict[str, object]]:
+        payload = self._request_json("/api/albums")
+        return payload if isinstance(payload, list) else payload.get("items", [])
+
+    def add_assets_to_album(self, album_id: str, asset_ids: list[str]) -> None:
+        if not asset_ids:
+            return
+        self._request_json(
+            f"/api/albums/{urllib.parse.quote(album_id, safe='')}/assets",
+            method="PUT",
+            payload={"ids": list(dict.fromkeys(asset_ids))},
+        )
+
+    def upload_asset(self, filename: str, content_type: str, content: bytes) -> dict[str, object]:
+        boundary = f"----couple-immich-{uuid.uuid4().hex}"
+        safe_name = (filename or "upload").replace("\\", "_").replace('"', "_")
+        fields = {
+            "deviceAssetId": uuid.uuid4().hex,
+            "deviceId": "couple-memory",
+            "fileCreatedAt": datetime.now(timezone.utc).isoformat(),
+            "fileModifiedAt": datetime.now(timezone.utc).isoformat(),
+            "isFavorite": "false",
+        }
+        chunks: list[bytes] = []
+        for name, value in fields.items():
+            chunks.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n".encode())
+        chunks.append(
+            f'--{boundary}\r\nContent-Disposition: form-data; name="assetData"; filename="{safe_name}"\r\nContent-Type: {content_type}\r\n\r\n'.encode()
+        )
+        chunks.extend([content, f"\r\n--{boundary}--\r\n".encode()])
+        raw, _ = self._request(
+            "/api/assets",
+            method="POST",
+            payload=None,
+            accept="application/json",
+            raw_data=b"".join(chunks),
+            content_type=f"multipart/form-data; boundary={boundary}",
+        )
+        return json.loads(raw.decode("utf-8")) if raw else {}
+
     def _asset_from_payload(self, payload: dict, fallback_id: str | None = None) -> ImmichAsset:
         exif = payload.get("exifInfo") or {}
         return ImmichAsset(
@@ -118,6 +163,8 @@ class ImmichClient:
         method: str,
         payload: dict[str, object] | None,
         accept: str,
+        raw_data: bytes | None = None,
+        content_type: str | None = None,
     ) -> tuple[bytes, str]:
         if not self.config.enabled:
             raise ValueError("Immich integration disabled")
@@ -125,11 +172,13 @@ class ImmichClient:
             raise ValueError("IMMICH_BASE_URL is required")
         if not self.config.api_key:
             raise ValueError("IMMICH_API_KEY is required")
-        data = None
+        data = raw_data
         headers = {"x-api-key": self.config.api_key, "accept": accept}
         if payload is not None:
             data = json.dumps(payload).encode("utf-8")
-            headers["content-type"] = "application/json"
+            content_type = "application/json"
+        if content_type:
+            headers["content-type"] = content_type
         base_url = self.config.base_url.rstrip("/")
         request = urllib.request.Request(
             f"{base_url}{path}",
