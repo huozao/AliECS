@@ -105,6 +105,8 @@ class ClashProfileRenderTests(unittest.TestCase):
         )
         self.assertIn("机场香港", out)
         self.assertIn("机场日本", out)
+        proxies = out.split("proxies:\n", 1)[1].split("\n\nproxy-groups:", 1)[0]
+        self.assertNotIn("\n    - ", proxies)
 
     def test_enabled_providers_only(self) -> None:
         disabled = {**self.provider, "id": 8, "name": "机场乙", "enabled": False}
