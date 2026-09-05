@@ -72,7 +72,12 @@ PROFILE_MOBILE = "mobile"
 _PROVIDER_PROXY_SECTION = re.compile(
     r"^proxies:\s*\n(?P<body>.*?)(?=^\S|\Z)", re.MULTILINE | re.DOTALL
 )
-_TOP_LEVEL_PROXY = re.compile(r"^  - ", re.MULTILINE)
+# Airport exports are valid YAML but do not use a fixed indentation width:
+# mihomo commonly emits four spaces below ``proxies:``, while hand-written
+# fixtures and other providers use two.  The first list indentation is the
+# provider-item level; deeper list items (for example inside an option) must
+# not be mistaken for additional proxy entries.
+_PROXY_ITEM = re.compile(r"^(?P<indent>[ \t]+)-\s", re.MULTILINE)
 _NODE_NAME = re.compile(r"(?:^|[\s{,])name:\s*(?:['\"]([^'\"]+)['\"]|([^,\n}]+))")
 _NODE_SERVER = re.compile(r"(?:^|[\s{,])server:\s*(?:['\"]([^'\"]+)['\"]|([^,\n}]+))")
 
@@ -134,7 +139,16 @@ def _inline_provider_nodes(content: str) -> tuple[list[str], list[str], list[str
     if not match:
         raise ValueError("订阅快照缺少 proxies 段，无法生成手机配置")
     body = match.group("body")
-    starts = [m.start() for m in _TOP_LEVEL_PROXY.finditer(body)]
+    items = list(_PROXY_ITEM.finditer(body))
+    if items:
+        first_indent = len(items[0].group("indent").expandtabs(8))
+        starts = [
+            m.start()
+            for m in items
+            if len(m.group("indent").expandtabs(8)) == first_indent
+        ]
+    else:
+        starts = []
     if not starts:
         raise ValueError("订阅快照没有可用节点，无法生成手机配置")
     blocks: list[str] = []

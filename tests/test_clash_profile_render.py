@@ -93,6 +93,19 @@ class ClashProfileRenderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "没有可用快照"):
             self.render.render_profile([self.node], [self.provider], target="mobile", provider_contents={})
 
+    def test_mobile_target_accepts_four_space_provider_indentation(self) -> None:
+        # Real airport exports use four spaces below ``proxies:``; the parser
+        # must not assume the two-space indentation used by the fixture above.
+        content = self.provider_content.replace("\n  - ", "\n    - ")
+        out = self.render.render_profile(
+            [self.node],
+            [self.provider],
+            target="mobile",
+            provider_contents={self.provider["id"]: content},
+        )
+        self.assertIn("机场香港", out)
+        self.assertIn("机场日本", out)
+
     def test_enabled_providers_only(self) -> None:
         disabled = {**self.provider, "id": 8, "name": "机场乙", "enabled": False}
         out = self.render.render_profile([self.node], [self.provider, disabled])
