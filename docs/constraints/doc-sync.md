@@ -151,7 +151,7 @@ docker compose -f local/docker-compose.local.yml config
 - T+ 父件核对（2026-08-04）：`app/pipelines/tplus_parent_match.py`，每天全量同步后随 `run-loop` 跑一次，
   也可手动 `python -m app.main tplus-parent-match [--dry-run] [--no-notify]`。
   它按 `tplus_bom_records` 中 `missing_since IS NULL` 的记录，把父件名称核对回企微
-  「色粉使用记录表 / 标准型号0117」的「父件名称 / T+匹配状态 / T+核对时间 / T+停用」四列。
+  「色粉使用记录表 / 标准型号0117」的「父件名称 / 版本号 / T+匹配状态 / T+核对时间 / T+停用」五列。
   **2026-08-11 换源**：原为文档「标准型号0117」/ 表「标准型号规格&月统计」（doc 级 20106、sheet 20120），
   现为文档「色粉使用记录表」/ 表「标准型号0117」（doc 级 20671、sheet 20673）。
   **本仓库是公开仓库，任何企微 docid 都不要写进来**——需要时查 `external_sources.external_doc_id`。
@@ -173,7 +173,7 @@ docker compose -f local/docker-compose.local.yml config
   T+ 侧按编码去重只有 13 个停用父件，企微表同一父件编码可对应多行型号规格，核对按行计数。**父件编码是执行主键，失联时只标状态、绝不自动改写**；
   异常推 `TPLUS_PARENT_MATCH_CHAT_ID` 指定的飞书群（留空则只写表不推送）。
   2026-08-06 起同一管道还会**补建缺失行**：`tplus_bom_records` 里有、企微表没有的父件编码，
-  按「父件编码 / 父件名称 / T+匹配状态=一致 / T+核对时间」四列建行，**型号与 Lab/容差列一律留空**，
+  按「父件编码 / 父件名称 / 版本号 / T+匹配状态=一致 / T+核对时间」五列建行，**型号与 Lab/容差列一律留空**，
   人工按「型号为空」筛出待补标准的行。补建只新增、不改写已有行的编码。
   **人工删掉的行下一轮会被重新建出来**（已确认接受，无删除白名单）。
   同时核对时间改为只在该行内容变化时才写——全量后每轮重写整表既无信息量又吃接口配额。

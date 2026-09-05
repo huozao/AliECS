@@ -1,6 +1,6 @@
 """把 T+ 当前有效物料清单的父件名称核对回企微「色粉使用记录表 / 标准型号0117」，异常推飞书群。
 
-只写「父件名称 / T+匹配状态 / T+核对时间 / T+停用」四列。
+只写「父件名称 / 版本号 / T+匹配状态 / T+核对时间 / T+停用」五列。
 父件编码是这张表当物料清单执行标准时的主键，**失联时只标状态、绝不自动改编码**：
 名称是描述性字段，改错代价小；编码判错会顺着执行链扩散。
 
@@ -36,7 +36,8 @@ F_MATCH_STATUS = "T+匹配状态"
 F_CHECKED_AT = "T+核对时间"
 F_DISABLED = "T+停用"
 F_MODEL = "型号"
-MANAGED_FIELDS = (F_PARENT_NAME, F_MATCH_STATUS, F_CHECKED_AT, F_DISABLED)
+F_VERSION = "版本号"
+MANAGED_FIELDS = (F_PARENT_NAME, F_VERSION, F_MATCH_STATUS, F_CHECKED_AT, F_DISABLED)
 
 STATUS_OK = "一致"
 STATUS_RENAMED = "名称已更新"
@@ -163,10 +164,13 @@ def plan_updates(records: list[dict[str, Any]], bom: dict[str, tuple[str, str, b
         code = cell_text(values, F_PARENT_CODE)
         model = cell_text(values, F_MODEL)
         current_name = cell_text(values, F_PARENT_NAME)
+        current_version = cell_text(values, F_VERSION)
         current_status = cell_text(values, F_MATCH_STATUS)
         current_disabled = cell_text(values, F_DISABLED)
         # 编码没匹配上时不猜停用状态，保留原值——否则失联行会被写成「启用」，读起来像确认过。
         target_disabled = current_disabled
+        # 纯存货父件没有 BOM 版本；保留现有值，避免用空值覆盖人工维护内容。
+        target_version = current_version
 
         if not code:
             status, target_name = STATUS_NO_CODE, current_name
@@ -180,6 +184,8 @@ def plan_updates(records: list[dict[str, Any]], bom: dict[str, tuple[str, str, b
                 result.missing.append((code, model))
             else:
                 target_name = hit[0]
+                if hit[1]:
+                    target_version = hit[1]
                 # 停用不影响匹配判定：停用件仍在 T+ 里，编码有效，只是不该再投产。
                 target_disabled = DISABLED_YES if hit[2] else DISABLED_NO
                 if current_name and current_name != target_name:
@@ -192,6 +198,8 @@ def plan_updates(records: list[dict[str, Any]], bom: dict[str, tuple[str, str, b
         changed: dict[str, Any] = {}
         if target_name != current_name:
             changed[F_PARENT_NAME] = text_cell(target_name)
+        if target_version != current_version:
+            changed[F_VERSION] = text_cell(target_version)
         if status != current_status:
             changed[F_MATCH_STATUS] = text_cell(status)
         if target_disabled != current_disabled:
@@ -207,23 +215,26 @@ def plan_updates(records: list[dict[str, Any]], bom: dict[str, tuple[str, str, b
 
 
 def plan_creates(records: list[dict[str, Any]], bom: dict[str, tuple[str, str, bool]], checked_at: str) -> list[dict[str, Any]]:
-    """T+ 有、企微表没有的父件，补一行只带编码与名称的空白标准行。
+    """T+ 有、企微表没有的父件，补一行带编码、名称与 BOM 版本的空白标准行。
 
     「型号」及 Lab/容差列一律留空——人工按「型号为空」筛出待补标准的行。
     编码排序是为了批次稳定，便于失败时按批重跑。
     """
     existing = {cell_text(record.get("values") or {}, F_PARENT_CODE) for record in records}
     existing.discard("")
-    return [
-        {"values": {
+    creates = []
+    for code in sorted(set(bom) - existing):
+        values = {
             F_PARENT_CODE: text_cell(code),
             F_PARENT_NAME: text_cell(bom[code][0]),
             F_MATCH_STATUS: text_cell(STATUS_OK),
             F_CHECKED_AT: text_cell(checked_at),
             F_DISABLED: text_cell(DISABLED_YES if bom[code][2] else DISABLED_NO),
-        }}
-        for code in sorted(set(bom) - existing)
-    ]
+        }
+        if bom[code][1]:
+            values[F_VERSION] = text_cell(bom[code][1])
+        creates.append({"values": values})
+    return creates
 
 
 def build_alert(result: MatchResult) -> str:
@@ -253,7 +264,7 @@ def build_alert(result: MatchResult) -> str:
         if len(result.disabled) > 20:
             lines.append(f"  …另有 {len(result.disabled) - 20} 行")
     if result.created_rows:
-        lines.append(f"🆕 按 T+ 补建 {len(result.created_rows)} 行（仅编码与名称，标准待人工补）：")
+        lines.append(f"🆕 按 T+ 补建 {len(result.created_rows)} 行（编码、名称与版本号已带入，标准待人工补）：")
         for code in result.created_rows[:20]:
             lines.append(f"  {code}")
         if len(result.created_rows) > 20:
