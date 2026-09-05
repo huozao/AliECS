@@ -1063,9 +1063,9 @@ def _bind_memory_immich_asset(
     if not body.immich_asset_id and not body.immich_album_id:
         raise HTTPException(status_code=400, detail="immich_asset_id or immich_album_id is required")
 
-    from app.immich_client import ImmichClient, load_immich_config
+    from app.immich_client import ImmichClient
 
-    config = load_immich_config()
+    config = _user_immich_config(user_id)
     original_filename = body.original_filename
     taken_at = body.taken_at
     latitude = body.latitude
@@ -1283,10 +1283,29 @@ def map_memories(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, title, memory_date, place_name, latitude, longitude, cover_photo_url
-                FROM memories
-                WHERE couple_space_id = %s AND archived = false AND latitude IS NOT NULL AND longitude IS NOT NULL
-                ORDER BY memory_date DESC NULLS LAST, id DESC
+                SELECT m.id, m.title, m.memory_date, m.place_name,
+                       CASE WHEN m.latitude IS NOT NULL AND m.longitude IS NOT NULL
+                            THEN m.latitude ELSE asset.latitude END AS latitude,
+                       CASE WHEN m.latitude IS NOT NULL AND m.longitude IS NOT NULL
+                            THEN m.longitude ELSE asset.longitude END AS longitude,
+                       m.cover_photo_url,
+                       CASE WHEN m.latitude IS NOT NULL AND m.longitude IS NOT NULL
+                            THEN 'memory' ELSE 'immich_asset' END AS coordinate_source
+                FROM memories m
+                LEFT JOIN LATERAL (
+                    SELECT cma.latitude, cma.longitude
+                    FROM couple_memory_assets cma
+                    WHERE cma.memory_id = m.id
+                      AND cma.latitude IS NOT NULL AND cma.longitude IS NOT NULL
+                    ORDER BY cma.sort_order, cma.id
+                    LIMIT 1
+                ) asset ON true
+                WHERE m.couple_space_id = %s AND m.archived = false
+                  AND (CASE WHEN m.latitude IS NOT NULL AND m.longitude IS NOT NULL
+                            THEN m.latitude ELSE asset.latitude END) IS NOT NULL
+                  AND (CASE WHEN m.latitude IS NOT NULL AND m.longitude IS NOT NULL
+                            THEN m.longitude ELSE asset.longitude END) IS NOT NULL
+                ORDER BY m.memory_date DESC NULLS LAST, m.id DESC
                 """,
                 (space_id,),
             )
@@ -1310,6 +1329,7 @@ def map_memories(
                 "latitude": row[4],
                 "longitude": row[5],
                 "cover_photo_url": row[6],
+                "coordinate_source": row[7],
                 "tags": tags_map.get(row[0], []),
             }
             for row in rows

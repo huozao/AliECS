@@ -61,3 +61,12 @@ def test_detail_page_has_in_place_memory_editor_and_batch_media_picker():
     assert "data-cover-immich" in html
     assert "cover_photo_url" in html
     assert "绑定已选" in html
+
+
+def test_map_reuses_bound_immich_gps_when_memory_has_no_coordinates():
+    router = (ROOT / "services" / "backend-api" / "app" / "routers" / "couple.py").read_text(encoding="utf-8")
+
+    assert "THEN m.latitude ELSE asset.latitude" in router
+    assert "FROM couple_memory_assets cma" in router
+    assert '"coordinate_source": row[7]' in router
+    assert "config = _user_immich_config(user_id)" in router
