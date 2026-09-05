@@ -142,20 +142,20 @@ def _inline_provider_nodes(content: str) -> tuple[list[str], list[str], list[str
     items = list(_PROXY_ITEM.finditer(body))
     if items:
         first_indent = len(items[0].group("indent").expandtabs(8))
-        starts = [
-            m.start()
-            for m in items
-            if len(m.group("indent").expandtabs(8)) == first_indent
+        top_level_items = [
+            m for m in items if len(m.group("indent").expandtabs(8)) == first_indent
         ]
     else:
-        starts = []
-    if not starts:
+        top_level_items = []
+    if not top_level_items:
         raise ValueError("订阅快照没有可用节点，无法生成手机配置")
     blocks: list[str] = []
     names: list[str] = []
     servers: list[str] = []
-    for index, start in enumerate(starts):
-        block = body[start : starts[index + 1] if index + 1 < len(starts) else len(body)].rstrip()
+    for index, item in enumerate(top_level_items):
+        start = item.start()
+        next_start = top_level_items[index + 1].start() if index + 1 < len(top_level_items) else len(body)
+        block = body[start:next_start].rstrip()
         if re.search(PSEUDO_NODE_FILTER, block):
             continue
         name_match = _NODE_NAME.search(block)
@@ -168,7 +168,16 @@ def _inline_provider_nodes(content: str) -> tuple[list[str], list[str], list[str
             raise ValueError("订阅快照存在空 name/server 的节点，无法生成手机配置")
         if name in names:
             raise ValueError(f"订阅快照存在重复节点名：{name}")
-        blocks.append(block)
+        # Re-indent every provider item to the canonical two-space list level.
+        # Keeping the source indentation would produce an invalid mixed list
+        # when the self nodes use two spaces and the airport uses four.
+        source_indent = item.group("indent")
+        blocks.append(
+            "\n".join(
+                f"  {line[len(source_indent):]}" if line.startswith(source_indent) else line
+                for line in block.splitlines()
+            )
+        )
         names.append(name)
         servers.append(server)
     if not blocks:
