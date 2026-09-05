@@ -88,9 +88,26 @@ bridge 上出现不同渲染结果。
   `om_x100b668cda11f4a0c322ef1e3266394`。
 - 对同一条 2.0 卡片执行 PATCH：API 返回 `code=0`，读取结果 `updated=true`。
 - 两次 GET 的 `body.content` 都是「请升级至最新版本客户端，以查看内容」，没有出现卡片
-  正文。因此结构接受和 PATCH 接受均通过，但**当时**接收端渲染验收失败，不能据此部署切换。
-- ⚠️ 上述记录只代表早期接收端路径，不能推翻后续真实预览；当前以本节下方的
-  `preview7` 至 `preview10` 和正式部署记录为准，不要据此回退到 JSON 1.0。
+  正文。⚠️ 该结论后来确认是**取数方式错误**：当时没有带
+  `card_msg_content_type=user_card_content`，接口返回的是兼容展示结构，不是发送时的原始卡片，
+  不能据此判定客户端渲染失败。
+- 因此不要把这条历史 GET 结果当成低版本客户端证据，也不要据此回退到 JSON 1.0。
+
+### JSON 2.0 正式切换与 API 原始卡片验收（2026-09-05）
+
+- 用户确认生产飞书客户端为 **7.76**，手工收发回复正常。
+- `release-deploy.yml` run `33942500243`（business-cn）和 `33942655864`
+  （bridge-peer）均成功；backend-api、bridge 容器均 healthy。backend 当前镜像为
+  `backend-api:t-8dc4f32ca037`，business manifest 的 deployment 为
+  `224e6d24963c-33942500243-1`；bridge 当前运行镜像 digest 为
+  `sha256:7f17fd0543fd039f5c80e55de9d7e0d7bbf92fab237163eee2a0dd111b60bf0f`。
+- bridge 真实新消息 `om_x100b668d449d48acc2cfc5ec74c00e4`：发送 `code=0`，同一条卡片
+  PATCH 后读取 `updated=true`；带 `card_msg_content_type=user_card_content` 读取到原始卡片
+  `schema=2.0`，正文为 PATCH 后内容。
+- backend-api 真实新消息 `om_x100b668d5cd3d8a4ddab31c7f2af972`：发送 `code=0`；同样按
+  `user_card_content` 读取到原始 `schema=2.0`、header、body 和 markdown 元素。
+- 因而当前判据是：发送 API `code=0` + 原始卡片查询 `schema=2.0` + 同 schema PATCH
+  `updated=true`。不带 `user_card_content` 的 GET 只用于兼容展示，不用于判断卡片是否可见。
 
 ## 卡片能力与消息模型字段（新来源按这张表接入）
 
@@ -136,6 +153,8 @@ bridge 上出现不同渲染结果。
 - 该 run 的 GitHub runner 在 txecs 的 `docker compose` 重建 backend 瞬间取消了 SSH action；同一 run 上传的 release 已保留，随后在 txecs 现场用该 release 和同一 `deploy-role.sh` 完成部署。
 - txecs `/srv/business-cn/state/release-meta/current.json` 已记录 deployment `e363c0571cb4-33941286766-2`；backend 使用 `t-8dc4f32ca037`，容器 healthy，`/health/` 通过。后续 session 先核对这个 manifest 和容器 tag，不要因 Actions 总状态为 cancelled 而重复发布。
 - 收尾复核时发现另一条并行操作曾短暂把 `compose.env` 改回旧 backend tag `t-d12a5387870b`；已按 manifest 恢复 `t-8dc4f32ca037`，容器再次 healthy 且 15 秒观察未被覆盖。多 session 并行时，关闭前必须把 `compose.env`、容器 image 和 `current.json` 三者对账。
+- ⚠️ 上述 run `33941286766` 及其旧 deployment 记录是切换过程中的历史证据，不是当前版本权威。当前以 run
+  `33942500243` / `33942655864`、txecs 的 `current.json` 和容器实际 image digest 为准。
 
 `theme` 取值：`blue` `wathet` `turquoise` `green` `yellow` `orange` `red` `carmine`
 `violet` `purple` `indigo` `grey` `default`。
