@@ -214,18 +214,13 @@ class FeishuRenderTests(unittest.TestCase):
             images=[{"ref": "chart", "png_base64": PNG}],
         )
         card = feishu.build_card(notification, {"chart": "img_key_1"})
-        kinds = [element.get("tag") for element in card["body"]["elements"]]
+        kinds = [element.get("tag") for element in card["elements"]]
         # summary、开头、图、结尾、页脚
-        self.assertEqual(kinds[:4], ["markdown", "markdown", "img", "markdown"])
+        self.assertEqual(kinds[:4], ["div", "div", "img", "div"])
         self.assertEqual(card["header"]["template"], "red")
 
-    def test_card_declares_json_2_and_uses_no_1_0_only_tags(self) -> None:
-        """卡片 JSON 1.0 的 note / action / div.fields 在 2.0 里不存在。
-
-        照抄过来飞书会整张拒收，而 send 的降级是**退回纯文本**——于是「结构写错」
-        和「卡片发不出去」在观测面上长得一样，线上完全查不出来。判据放在结构上，
-        不放在「发送有没有报错」上。
-        """
+    def test_card_uses_json_1_0_compatible_components(self) -> None:
+        """当前客户端兼容性回归：bridge/backend 必须继续发 JSON 1.0。"""
         notification = make_notification(
             segments=[
                 {"kind": "fields", "fields": [{"name": "合约", "value": "AU2612"}]},
@@ -235,12 +230,12 @@ class FeishuRenderTests(unittest.TestCase):
             buttons=[{"text": "打开", "url": "https://hydwang.xyz/"}],
         )
         card = feishu.build_card(notification, {"chart": "k"})
-        self.assertEqual("2.0", card["schema"])
-        self.assertIn("elements", card["body"])
-        self.assertNotIn("elements", card)  # 1.0 把 elements 放在顶层
+        self.assertNotIn("schema", card)
+        self.assertIn("elements", card)
+        self.assertNotIn("body", card)
         dumped = json.dumps(card, ensure_ascii=False)
-        for dead_tag in ('"tag": "note"', '"tag": "action"', '"is_short"'):
-            self.assertNotIn(dead_tag, dumped)
+        for supported_tag in ('"tag": "note"', '"tag": "action"', '"is_short"'):
+            self.assertIn(supported_tag, dumped)
 
     def test_missing_image_key_leaves_a_visible_note(self) -> None:
         """图传失败不能让卡片凭空少一块，否则读的人不知道本该有图。"""
@@ -250,11 +245,12 @@ class FeishuRenderTests(unittest.TestCase):
         )
         card = feishu.build_card(notification, {})
         notes = [
-            element for element in card["body"]["elements"]
-            if element.get("tag") == "markdown"
-            and feishu.IMAGE_FAILED_MARK in element.get("content", "")
+            element
+            for element in card["elements"]
+            if element.get("tag") == "note" and feishu.IMAGE_FAILED_MARK in json.dumps(element, ensure_ascii=False)
         ]
         self.assertEqual(len(notes), 1)
+        self.assertIn(feishu.IMAGE_FAILED_MARK, json.dumps(notes[0], ensure_ascii=False))
 
     def test_fit_horizontal_image_carries_no_size(self) -> None:
         """2026-09-04 对生产飞书实测：fit_horizontal 与 size 互斥，带 size 整张卡片被拒
@@ -265,13 +261,9 @@ class FeishuRenderTests(unittest.TestCase):
             segments=[{"kind": "image", "image_ref": "chart"}],
             images=[{"ref": "chart", "caption": "价差走势", "png_base64": PNG}],
         )
-        image = [
-            element for element in feishu.build_card(notification, {"chart": "k"})["body"]["elements"]
-            if element.get("tag") == "img"
-        ][0]
-        self.assertEqual("fit_horizontal", image["scale_type"])
+        image = [element for element in feishu.build_card(notification, {"chart": "k"})["elements"] if element.get("tag") == "img"][0]
+        self.assertEqual("fit_horizontal", image["mode"])
         self.assertNotIn("size", image)
-        self.assertEqual("价差走势", image["title"]["content"])
 
     def test_explicit_theme_overrides_the_level_color(self) -> None:
         """成功、例行通报这类语义级别说不出来，得让生产者自己指定颜色。"""
@@ -296,21 +288,19 @@ class FeishuRenderTests(unittest.TestCase):
         notification = make_notification(
             buttons=[{"text": "立即领取免费体验名额", "url": "https://hydwang.xyz/", "style": "primary"}]
         )
-        button = feishu.build_card(notification, {})["body"]["elements"][-2]
-        self.assertEqual("button", button["tag"])
-        self.assertEqual("primary", button["type"])
-        self.assertEqual("fill", button["width"])
-        # 2.0 的跳转走 behaviors，不是 1.0 的顶层 url 字段
-        self.assertEqual([{"type": "open_url", "default_url": "https://hydwang.xyz/"}], button["behaviors"])
+        action = feishu.build_card(notification, {})["elements"][-2]
+        self.assertEqual("action", action["tag"])
+        self.assertEqual("primary", action["actions"][0]["type"])
+        self.assertEqual("https://hydwang.xyz/", action["actions"][0]["url"])
 
     def test_multiple_buttons_are_laid_out_side_by_side(self) -> None:
         notification = make_notification(
             link={"text": "查看详情", "url": "https://hydwang.xyz/sync/"},
             buttons=[{"text": "重跑", "url": "https://hydwang.xyz/run", "style": "primary"}],
         )
-        row = feishu.build_card(notification, {})["body"]["elements"][-2]
-        self.assertEqual("column_set", row["tag"])
-        buttons = [column["elements"][0] for column in row["columns"]]
+        action = feishu.build_card(notification, {})["elements"][-2]
+        self.assertEqual("action", action["tag"])
+        buttons = action["actions"]
         # link 折算成第一个按钮，buttons 接在后面——顺序是 all_buttons 的唯一口径
         self.assertEqual(["查看详情", "重跑"], [button["text"]["content"] for button in buttons])
         self.assertEqual(["default", "primary"], [button["type"] for button in buttons])
@@ -324,11 +314,9 @@ class FeishuRenderTests(unittest.TestCase):
                 }
             ]
         )
-        rows = [
-            element for element in feishu.build_card(notification, {})["body"]["elements"]
-            if element.get("tag") == "column_set"
-        ]
-        self.assertEqual([2, 1], [len(row["columns"]) for row in rows])
+        rows = [element for element in feishu.build_card(notification, {})["elements"] if element.get("tag") == "div"]
+        fields = [row for row in rows if "fields" in row]
+        self.assertEqual([3], [len(row["fields"]) for row in fields])
 
     def test_atx_heading_is_converted_to_bold(self) -> None:
         self.assertEqual(feishu._lark_md("## 详情"), "**详情**")

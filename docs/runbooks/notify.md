@@ -77,9 +77,10 @@ doc-sync-worker ── notify_client.enqueue() ───────────
 （`feishu_upload_image` / `_lark_md`），那份在飞书链路上已经跑了几个月，
 富文本、图片、文件都验证过。
 
-⚠️ **「卡片结构也移植自 bridge 的 `build_feishu_card`」这句自 2026-09-04 起不再成立**：
-卡片已从 JSON 1.0 重写为 2.0（见下一节），与 bridge 那份不再同构。bridge 自己仍是 1.0，
-两边现在是两套结构，改一边不会同步另一边。
+⚠️ **「卡片结构也移植自 bridge 的 `build_feishu_card`」这句曾在 2026-09-04 被改成 2.0，
+但 2026-09-05 的生产实测证明会误导**：API 接受 2.0 请求，却把实际消息渲染成
+「请升级至最新版本客户端，以查看内容」。因此两边已恢复为同一套、在当前客户端可见的
+JSON 1.0 结构；2.0 暂不算生产支持，除非先完成客户端能力探测和真消息肉眼验收。
 
 ## 卡片能力与消息模型字段（新来源按这张表接入）
 
@@ -94,9 +95,9 @@ doc-sync-worker ── notify_client.enqueue() ───────────
 | `tags` | ≤3 个 | 标题右侧彩色标签 | 标题下一行的 `` `行内代码` `` |
 | `summary` | str | 正文首段（markdown） | 第二行 |
 | `segments[].text` | str | markdown 段；`preformatted=true` 走纯文本段 | 原样一行 |
-| `segments[].fields` | ≤40 | **两列并排**（`column_set`） | `**名**：值` 逐行 |
+| `segments[].fields` | ≤40 | 卡片字段两列（1.0 `div.fields`） | `**名**：值` 逐行 |
 | `segments[].image` | ≤12 张 | 卡片内嵌图，`caption` 成图题 | 另发独立图片消息 |
-| `buttons` | ≤5 | 1 个占满宽度，多个横排 | 每个一行 markdown 链接 |
+| `buttons` | ≤5 | 1.0 `action` 按钮组 | 每个一行 markdown 链接 |
 | `link` | 兼容字段 | 折算成第一个按钮 | 同上 |
 
 `theme` 取值：`blue` `wathet` `turquoise` `green` `yellow` `orange` `red` `carmine`
@@ -113,17 +114,19 @@ doc-sync-worker ── notify_client.enqueue() ───────────
 | `text` / `primary_text` / `danger_text` | 无边框纯文字 |
 | `laser` | 渐变强调 |
 
-### 三条会让整张卡片被拒的硬约束
+### 当前 JSON 1.0 卡片的投递约束
 
 被拒的后果是 `feishu.send` **静默降级成纯文本**，群里只会看到卡片变成了一段字，
 不报错。所以这三条都在 `Notification` 入口就校验，不等投递：
 
 1. `theme` / `tags[].color` / `buttons[].style` 必须在白名单内。
 2. `tags` 最多 3 个，第 4 个是**拒绝**不是截断。
-3. 图片用 `scale_type: fit_horizontal` 时**不能带 `size`**——2026-09-04 实测，
-   带任何 size 值（含官方文档列出的 `stretch` / `large` / …）都会被拒：
-   `ErrCode 10002; ErrPath: ROOT -> body -> elements -> [N](tag: img); ErrMsg: img size is not allowed`。
-   不带才过；`crop_center` / `crop_top` 则允许带 size。文档没写这条互斥。
+3. 图片使用 1.0 的 `mode: fit_horizontal`，不要添加未在当前客户端验证过的 2.0
+   字段；结构变更必须同时做 API 接收检查和真客户端肉眼验收。
+
+⚠️ **过时记录（不要照抄）**：2026-09-04 曾把上述图片约束写成 JSON 2.0 的
+`scale_type` / `body.elements`，并以 HTTP 200 作为成功判据；生产客户端实际显示升级提示，
+所以该写法已回退。若重新启用 2.0，必须先单独建立兼容性验证记录。
 
 ### 做不到的（别答应业务）
 
@@ -139,8 +142,7 @@ doc-sync-worker ── notify_client.enqueue() ───────────
 
 1. **零噪音结构校验**：在卡片末尾追加一个必错哨兵元素再 POST。飞书只报第一个错误，
    所以报错路径指向哨兵 = 前面全部合法，而整张卡片仍被拒、群里不留消息。
-   拿它可以批量试枚举值，也可以拿生产 `notify_outbox` 里的**真实 payload** 全量回归
-   （2026-09-04 用 11 条不同 (source, event) 的真样本跑过，11/11 通过）。
+   拿它可以批量试枚举值，也可以拿生产 `notify_outbox` 里的**真实 payload** 全量回归。
 2. **发一条真卡片**肉眼看排版。合成样本全绿不代表真样本能过。
 
 ## 排障：消息没收到

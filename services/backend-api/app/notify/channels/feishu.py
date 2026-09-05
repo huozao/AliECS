@@ -160,126 +160,140 @@ def _lark_md(text: str) -> str:
 
 LEVEL_TEMPLATES = {"info": "blue", "warn": "yellow", "error": "red", "fatal": "red"}
 
-# 页脚和「图片发送失败」这类小字。JSON 2.0 没有 note 组件（1.0 有），替代写法是
-# markdown + notation 字号 + <font color> ——markdown 组件本身没有 text_color 字段。
-_NOTATION = "notation"
-
 IMAGE_FAILED_MARK = "🖼️ 图片发送失败"
+SECTION_COLORS = {
+    "blue": "blue",
+    "green": "green",
+    "orange": "orange",
+    "red": "red",
+    "violet": "purple",
+    "grey": "grey",
+}
 
 
-def _notation(content: str) -> dict[str, Any]:
-    return {"tag": "markdown", "content": f"<font color='grey'>{content}</font>", "text_size": _NOTATION}
-
-
-def _fields_columns(fields: list[Any]) -> list[dict[str, Any]]:
-    """键值对两列排。
-
-    JSON 1.0 的 `div.fields` + `is_short` 在 2.0 里没有对应物，等价效果要自己用
-    column_set 搭：每行两列、等宽（flex_mode=bisect）。奇数个时最后一行只有一列。
-    """
-    rows: list[dict[str, Any]] = []
-    for start in range(0, len(fields), 2):
-        rows.append(
+def _section_heading(segment: Any) -> list[dict[str, Any]]:
+    """日报指标区块的标题，保持 JSON 1.0 客户端兼容。"""
+    color = SECTION_COLORS.get(segment.section_color, "blue")
+    heading = " ".join(
+        part for part in (segment.section_icon.strip(), segment.section_title.strip()) if part
+    )
+    elements = [
+        {
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": f"<font color='{color}'>●</font>  **{heading}**",
+            },
+        }
+    ]
+    if segment.section_subtitle.strip():
+        elements.append(
             {
-                "tag": "column_set",
-                "flex_mode": "bisect",
-                "horizontal_spacing": "8px",
-                "columns": [
-                    {
-                        "tag": "column",
-                        "width": "weighted",
-                        "weight": 1,
-                        "elements": [{"tag": "markdown", "content": f"**{field.name}**\n{field.value}"}],
-                    }
-                    for field in fields[start : start + 2]
-                ],
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": f"<font color='grey'>{segment.section_subtitle.strip()}</font>",
+                },
             }
         )
-    return rows
-
-
-def _button(text: str, url: str, style: str, *, width: str) -> dict[str, Any]:
-    """2.0 的按钮是 body 里的一等组件，不再包在 `action` 容器里（2.0 没有 action）。
-
-    跳转动作走 behaviors 而不是 1.0 的顶层 `url` 字段。
-    """
-    return {
-        "tag": "button",
-        "text": {"tag": "plain_text", "content": text},
-        "type": style,
-        "width": width,
-        "behaviors": [{"type": "open_url", "default_url": url}],
-    }
+    return elements
 
 
 def build_card(notification: Notification, image_keys: dict[str, str]) -> dict[str, Any]:
     """把段落渲染成一张交互卡片，文字与图按原顺序交错——一条消息而不是几个气泡。
 
-    2026-09-04 从卡片 JSON 1.0 升到 2.0。⚠️ 1.0 那版的三处写法在 2.0 里不存在，
-    照抄会让整张卡片被拒（然后 send 静默降级成纯文本，事后看不出来）：
-    `note` 组件、`action` 按钮容器、`div.fields` 两列布局。对应替代见上面三个辅助函数。
+    当前生产客户端对 JSON 2.0 卡片会接受请求却渲染成「请升级至最新版本客户端」，
+    所以这里保留已经在实际会话中验证过的 JSON 1.0 结构。模型层仍可保留副标题、标签
+    和按钮等字段，但 payload 必须使用客户端兼容的 1.0 组件。
     """
     elements: list[dict[str, Any]] = []
     if notification.summary.strip():
-        elements.append({"tag": "markdown", "content": _lark_md(notification.summary.strip())})
+        elements.append(
+            {"tag": "div", "text": {"tag": "lark_md", "content": _lark_md(notification.summary.strip())}}
+        )
     for segment in notification.segments:
         if segment.kind == "text":
             # preformatted 段走 plain_text 组件：排版里的 *、|、# 交给 markdown 会被吃掉。
-            if segment.preformatted:
-                elements.append(
-                    {"tag": "div", "text": {"tag": "plain_text", "content": segment.text.strip()}}
-                )
-            else:
-                elements.append({"tag": "markdown", "content": _lark_md(segment.text.strip())})
+            tag = "plain_text" if segment.preformatted else "lark_md"
+            content = segment.text.strip() if segment.preformatted else _lark_md(segment.text.strip())
+            elements.append({"tag": "div", "text": {"tag": tag, "content": content}})
         elif segment.kind == "fields":
-            elements.extend(_fields_columns(segment.fields))
+            elements.append(
+                {
+                    "tag": "div",
+                    "fields": [
+                        {
+                            "is_short": True,
+                            "text": {"tag": "lark_md", "content": f"**{field.name}**\n{field.value}"},
+                        }
+                        for field in segment.fields
+                    ],
+                }
+            )
+        elif segment.kind == "section":
+            if elements:
+                elements.append(
+                    {
+                        "tag": "div",
+                        "text": {"tag": "lark_md", "content": "<font color='grey'>────────</font>"},
+                    }
+                )
+            elements.extend(_section_heading(segment))
+            elements.append(
+                {
+                    "tag": "div",
+                    "fields": [
+                        {
+                            "is_short": True,
+                            "text": {"tag": "lark_md", "content": f"**{field.name}**\n{field.value}"},
+                        }
+                        for field in segment.fields
+                    ],
+                }
+            )
         elif segment.kind == "image":
             image_key = image_keys.get(segment.image_ref)
             if not image_key:
                 # 这张图没传上去：留一行说明，别让卡片里凭空少一块。
-                elements.append(_notation(IMAGE_FAILED_MARK))
+                elements.append(
+                    {"tag": "note", "elements": [{"tag": "plain_text", "content": IMAGE_FAILED_MARK}]}
+                )
                 continue
-            caption = next(
-                (image.caption for image in notification.images if image.ref == segment.image_ref), ""
+            elements.append(
+                {
+                    "tag": "img",
+                    "img_key": image_key,
+                    "alt": {"tag": "plain_text", "content": "图片"},
+                    "mode": "fit_horizontal",
+                    "preview": True,
+                }
             )
-            # ⚠️ 不要加 `size`。2026-09-04 对生产飞书实测：`scale_type: fit_horizontal`
-            # 与 `size` 互斥，带任何 size 值（含文档列出的 stretch/large/…）整张卡片
-            # 都会被拒：`ErrCode 10002 … (tag: img); ErrMsg: img size is not allowed`。
-            # 不带 size 才过；crop_center / crop_top 则允许带 size。文档只列了 size 的
-            # 枚举，没写这条互斥关系。
-            element: dict[str, Any] = {
-                "tag": "img",
-                "img_key": image_key,
-                "alt": {"tag": "plain_text", "content": caption or "图片"},
-                "scale_type": "fit_horizontal",
-                "preview": True,
-            }
-            if caption:
-                element["title"] = {"tag": "plain_text", "content": caption}
-            elements.append(element)
 
     buttons = notification.all_buttons()
-    if len(buttons) == 1:
-        elements.append(_button(buttons[0].text, buttons[0].url, buttons[0].style, width="fill"))
-    elif buttons:
-        # 多个按钮横排。2.0 没有 action 容器，横排要靠 column_set；flow 让窄屏自动换行。
+    if buttons:
         elements.append(
             {
-                "tag": "column_set",
-                "flex_mode": "flow",
-                "horizontal_spacing": "8px",
-                "columns": [
+                "tag": "action",
+                "actions": [
                     {
-                        "tag": "column",
-                        "width": "auto",
-                        "elements": [_button(button.text, button.url, button.style, width="default")],
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": button.text},
+                        "url": button.url,
+                        "type": button.style,
                     }
                     for button in buttons
                 ],
             }
         )
 
-    elements.append(_notation(f"{notification.source} · {notification.event}"))
+    elements.append(
+        {
+            "tag": "note",
+            "elements": [
+                {"tag": "plain_text", "content": f"{notification.source} · {notification.event}"}
+            ],
+        }
+    )
 
     header: dict[str, Any] = {
         "title": {"tag": "plain_text", "content": notification.display_title()},
@@ -297,10 +311,9 @@ def build_card(notification: Notification, image_keys: dict[str, str]) -> dict[s
             for tag in notification.tags
         ]
     return {
-        "schema": "2.0",
-        "config": {"width_mode": "fill", "update_multi": True},
+        "config": {"wide_screen_mode": True},
         "header": header,
-        "body": {"direction": "vertical", "elements": elements},
+        "elements": elements,
     }
 
 

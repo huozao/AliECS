@@ -2688,9 +2688,9 @@ def test_deliver_feishu_text_card_sends_card_with_footer(monkeypatch):
     assert len(cards) == 1
     mid, card = cards[0]
     assert mid == "om_1"
-    assert [e["tag"] for e in card["body"]["elements"]] == ["markdown", "markdown"]
-    assert card["body"]["elements"][0]["content"] == "纯文字回复"
-    assert card["body"]["elements"][1]["content"] == "<font color='grey'>设备: webdock2(主) | 耗时: 9s</font>"
+    assert [e["tag"] for e in card["elements"]] == ["div", "note"]
+    assert card["elements"][0]["text"]["content"] == "纯文字回复"
+    assert card["elements"][1]["elements"][0]["content"] == "设备: webdock2(主) | 耗时: 9s"
 
 
 def test_deliver_feishu_text_card_skips_non_feishu(monkeypatch):
@@ -2756,9 +2756,9 @@ def test_deliver_feishu_media_sends_ordered_card_and_returns_no_reply(monkeypatc
     assert len(cards) == 1
     mid, card = cards[0]
     assert mid == "om_1"
-    assert [e["tag"] for e in card["body"]["elements"]] == ["markdown", "img", "markdown", "img"]
-    assert card["body"]["elements"][1]["img_key"] == "key:http://h/media/img1"
-    assert card["body"]["elements"][3]["img_key"] == "key:http://h/media/img2"
+    assert [e["tag"] for e in card["elements"]] == ["div", "img", "div", "img"]
+    assert card["elements"][1]["img_key"] == "key:http://h/media/img1"
+    assert card["elements"][3]["img_key"] == "key:http://h/media/img2"
 
 
 def test_deliver_feishu_media_image_only_sends_card(monkeypatch):
@@ -2770,7 +2770,7 @@ def test_deliver_feishu_media_image_only_sends_card(monkeypatch):
     out = bridge.deliver_feishu_media("MEDIA: http://h/media/x", details)
 
     assert out == bridge.NO_REPLY
-    assert [e["tag"] for e in cards[0][1]["body"]["elements"]] == ["img"]
+    assert [e["tag"] for e in cards[0][1]["elements"]] == ["img"]
 
 
 def test_deliver_feishu_media_partial_failure_keeps_notice_in_card(monkeypatch):
@@ -2788,10 +2788,10 @@ def test_deliver_feishu_media_partial_failure_keeps_notice_in_card(monkeypatch):
     out = bridge.deliver_feishu_media(reply, details)
 
     assert out == bridge.NO_REPLY
-    els = cards[0][1]["body"]["elements"]
-    assert [e["tag"] for e in els] == ["markdown", "img", "markdown"]
-    assert "🖼️ 图片发送失败，请重试" in els[2]["content"]
-    assert "http://h/media/bad" not in els[2]["content"]
+    els = cards[0][1]["elements"]
+    assert [e["tag"] for e in els] == ["div", "img", "div"]
+    assert "🖼️ 图片发送失败，请重试" in els[2]["text"]["content"]
+    assert "http://h/media/bad" not in els[2]["text"]["content"]
 
 
 def test_deliver_feishu_media_all_images_fail_falls_back_to_notice(monkeypatch):
@@ -3191,27 +3191,27 @@ def test_build_feishu_card_interleaves_text_and_images():
     card = bridge.build_feishu_card(
         [("text", "说明"), ("image", "img_key_1"), ("text", "结论")]
     )
-    els = card["body"]["elements"]
-    assert [e["tag"] for e in els] == ["markdown", "img", "markdown"]
-    assert els[0]["content"] == "说明"
+    els = card["elements"]
+    assert [e["tag"] for e in els] == ["div", "img", "div"]
+    assert els[0]["text"]["content"] == "说明"
     assert els[1]["img_key"] == "img_key_1"
-    assert els[2]["content"] == "结论"
+    assert els[2]["text"]["content"] == "结论"
     # fit_horizontal 与 size 互斥，带 size 整张卡片会被飞书拒收（2026-09-04 生产实测）
-    assert els[1]["scale_type"] == "fit_horizontal"
+    assert els[1]["mode"] == "fit_horizontal"
     assert "size" not in els[1]
 
 
 def test_build_feishu_card_skips_empty_text():
     bridge = load_bridge()
     card = bridge.build_feishu_card([("text", "  "), ("image", "k")])
-    assert [e["tag"] for e in card["body"]["elements"]] == ["img"]
+    assert [e["tag"] for e in card["elements"]] == ["img"]
 
 
 def test_build_feishu_card_converts_headings_to_bold():
     bridge = load_bridge()
     card = bridge.build_feishu_card([("text", "## 当前时间\n你在 Vernon"), ("image", "k")])
     # Feishu lark_md does not render ATX headings; they must become bold.
-    content = card["body"]["elements"][0]["content"]
+    content = card["elements"][0]["text"]["content"]
     assert "## 当前时间" not in content
     assert "**当前时间**" in content
     assert "你在 Vernon" in content
@@ -3220,17 +3220,15 @@ def test_build_feishu_card_converts_headings_to_bold():
 def test_build_feishu_card_appends_footer_note():
     bridge = load_bridge()
     card = bridge.build_feishu_card([("text", "正文"), ("image", "k")], footer="设备: webdock1(主) | 耗时: 12s")
-    els = card["body"]["elements"]
-    # 2.0 没有 note 组件，灰色小字靠 markdown + notation 字号 + <font color> 复现
-    assert [e["tag"] for e in els] == ["markdown", "img", "markdown"]
-    assert els[2]["text_size"] == "notation"
-    assert els[2]["content"] == "<font color='grey'>设备: webdock1(主) | 耗时: 12s</font>"
+    els = card["elements"]
+    assert [e["tag"] for e in els] == ["div", "img", "note"]
+    assert els[2]["elements"][0]["content"] == "设备: webdock1(主) | 耗时: 12s"
 
 
 def test_build_feishu_card_no_footer_when_empty():
     bridge = load_bridge()
     card = bridge.build_feishu_card([("text", "正文")], footer="  ")
-    assert [e["tag"] for e in card["body"]["elements"]] == ["markdown"]
+    assert [e["tag"] for e in card["elements"]] == ["div"]
 
 
 def test_format_card_footer_full_info():
@@ -3362,11 +3360,11 @@ def test_placeholder_rotation_tips_from_env_multiline(monkeypatch):
 def test_build_feishu_card_marks_update_multi():
     bridge = load_bridge()
     card = bridge.build_feishu_card([("text", "hi")], footer="")
-    # update_multi 是 feishu_patch_card 原地更新占位卡的前提，升 2.0 时不能丢
+    # update_multi 是 feishu_patch_card 原地更新占位卡的前提，兼容卡片格式不能丢
     assert card["config"]["update_multi"] is True
-    # 1.0 的 wide_screen_mode 在 2.0 里叫 width_mode
-    assert card["config"]["width_mode"] == "fill"
-    assert card["schema"] == "2.0"
+    assert card["config"]["wide_screen_mode"] is True
+    assert "schema" not in card
+    assert "body" not in card
 
 
 def test_send_interactive_message_returns_created_id(monkeypatch):
@@ -3483,7 +3481,7 @@ def test_send_processing_card_sends_and_returns_id(monkeypatch):
     out = bridge.send_processing_card({"metadata": {"channel": "feishu", "message_id": "om_user"}}, "正在处理")
     assert out == "om_ph"
     assert seen["mid"] == "om_user"
-    assert seen["card"]["body"]["elements"][0]["content"].find("正在处理") >= 0
+    assert seen["card"]["elements"][0]["text"]["content"].find("正在处理") >= 0
 
 
 def _feishu_body(text, message_id="om_user"):
