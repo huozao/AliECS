@@ -74,13 +74,23 @@ doc-sync-worker ── notify_client.enqueue() ───────────
 | 交互回调（点赞/确认） | ❌ 中枢没有入站链路 | ❌ | ❌ |
 
 飞书那套上传移植自 `deploy/openclaw-bridge/openclaw_bridge.py`
-（`feishu_upload_image` / `build_feishu_card`）。两条生产路径现在都统一使用
+（`feishu_upload_image` / `build_feishu_card`）。代码目标是让两条发送路径统一使用
 JSON 2.0；卡片结构、图片字段和 Markdown 语义必须保持一致，避免同一条通知在中枢和
-bridge 上出现不同渲染结果。
+bridge 上出现不同渲染结果。生产切换必须等客户端能力验收通过后再做。
 
-⚠️ **过时记录（2026-09-05）**：曾因当时的生产客户端显示「请升级至最新版本客户端」，
-把两边回退为 JSON 1.0。该结论已被本次 2.0 迁移取代；今后的生产门槛是客户端支持
-7.20+、API 接受、真实消息肉眼可见，以及同 schema 的 PATCH 更新全部通过。
+⚠️ **迁移中的结论（2026-09-05）**：代码已完成 2.0 构造，但现场真实客户端仍显示
+「请升级至最新版本客户端」。因此生产运行态暂时保持已验证的 JSON 1.0；切换门槛是
+客户端支持 7.20+、API 接受、真实消息肉眼可见，以及同 schema 的 PATCH 更新全部通过。
+
+### JSON 2.0 现场验证记录（2026-09-05）
+
+- 未部署代码用 bridge 生产凭据向通用告警群发送 2.0 卡片：API 返回 `code=0`，消息 ID
+  `om_x100b668cda11f4a0c322ef1e3266394`。
+- 对同一条 2.0 卡片执行 PATCH：API 返回 `code=0`，读取结果 `updated=true`。
+- 两次 GET 的 `body.content` 都是「请升级至最新版本客户端，以查看内容」，没有出现卡片
+  正文。因此结构接受和 PATCH 接受均通过，但当前接收端渲染验收失败，不能部署切换。
+- 生产已恢复一致的 1.0 bridge/backend 镜像；等客户端升级后，必须重新发送新卡片并肉眼验收，
+  不能把本次 API `200` 当作完成判据。
 
 ## 卡片能力与消息模型字段（新来源按这张表接入）
 
@@ -116,7 +126,7 @@ bridge 上出现不同渲染结果。
 
 真实客户端验证过的预览链：`preview4`（两列）、`preview5`（三等宽失败）、
 `preview7`（JSON 2.0 加权列）、`preview10`（当前紧凑字号版本）。后续调整先发真实卡片
-肉眼验收，再部署；不要回退到 JSON 1.0，也不要把三列改成等宽 `div.fields`。
+肉眼验收，再部署；在验收通过前保持生产 1.0，不要把三列改成等宽 `div.fields`。
 
 `theme` 取值：`blue` `wathet` `turquoise` `green` `yellow` `orange` `red` `carmine`
 `violet` `purple` `indigo` `grey` `default`。
