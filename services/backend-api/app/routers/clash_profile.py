@@ -14,12 +14,8 @@ mihomo 自行拉取，因此没有 HTTP 客户端、没有快照表"——该写
 
 from __future__ import annotations
 
-import base64
-import binascii
-import json
-import os
 from contextlib import closing
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
@@ -27,7 +23,7 @@ from pydantic import BaseModel
 
 from app.clash_profile import store
 from app.clash_profile.fetch import fetch_snapshot
-from app.clash_profile.render import provider_key, render_profile
+from app.clash_profile.render import load_self_nodes, provider_key, render_profile
 from app.core import _conn, require_admin
 
 
@@ -48,38 +44,10 @@ def _row_to_dict(row: tuple) -> dict[str, Any]:
 
 
 def _load_self_nodes() -> list[dict[str, Any]]:
-    """从 CLASH_SELF_NODES_B64 读自建节点定义。
-
-    ⚠️ 值是 base64 而不是裸 JSON，这一点不能"简化"回去。runtime env 会被
-    `deploy/ecs/deploy.sh` 以 `set -a; source <file>` 载入，bash 的引号移除会把
-    `[{"name":"a"}]` 吃成 `[{name:a}]`（2026-08-11 实测），json.loads 随后报错。
-    整条链路是 bash source → heredoc 展开 → dotenv → compose 插值四层，每层的引号
-    语义都不一样；base64 的字符集穿这四层都不需要任何转义。
-    """
-    raw = os.getenv("CLASH_SELF_NODES_B64", "").strip()
-    if not raw:
-        raise HTTPException(status_code=500, detail="CLASH_SELF_NODES_B64 未配置，无法生成配置")
     try:
-        decoded = base64.b64decode(raw, validate=True).decode("utf-8")
-    except (binascii.Error, ValueError) as exc:
-        raise HTTPException(
-            status_code=500, detail=f"CLASH_SELF_NODES_B64 不是合法 base64/UTF-8：{exc}"
-        ) from exc
-    try:
-        nodes = json.loads(decoded)
-    except json.JSONDecodeError as exc:
-        raise HTTPException(
-            status_code=500, detail=f"CLASH_SELF_NODES_B64 解码后不是合法 JSON：{exc}"
-        ) from exc
-    if not isinstance(nodes, list) or not nodes:
-        raise HTTPException(status_code=500, detail="CLASH_SELF_NODES_B64 解码后必须是非空数组")
-    for node in nodes:
-        if not isinstance(node, dict) or "name" not in node or "server" not in node:
-            raise HTTPException(
-                status_code=500,
-                detail="CLASH_SELF_NODES_B64 的每个元素都必须是含 name 与 server 的对象",
-            )
-    return nodes
+        return load_self_nodes()
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 def _rows() -> list[dict[str, Any]]:
@@ -89,9 +57,17 @@ def _rows() -> list[dict[str, Any]]:
             return [_row_to_dict(row) for row in cur.fetchall()]
 
 
-def _profile_text() -> str:
+def _profile_text(target: Literal["desktop", "webdock", "mobile"] = "desktop") -> str:
     try:
-        return render_profile(_load_self_nodes(), _rows())
+        providers = _rows()
+        contents = None
+        if target == "mobile":
+            contents = {
+                provider["id"]: store.read_content(provider["id"])
+                for provider in providers
+                if provider["enabled"]
+            }
+        return render_profile(_load_self_nodes(), providers, target=target, provider_contents=contents)
     except ValueError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -149,16 +125,28 @@ def delete_provider(provider_id: int, _: dict = Depends(require_admin)) -> dict[
 
 
 @router.get("/preview", response_class=PlainTextResponse)
-def preview_profile(_: dict = Depends(require_admin)) -> PlainTextResponse:
-    return PlainTextResponse(_profile_text(), media_type="text/plain; charset=utf-8")
+def preview_profile(
+    target: Literal["desktop", "webdock", "mobile"] = "desktop",
+    _: dict = Depends(require_admin),
+) -> PlainTextResponse:
+    return PlainTextResponse(_profile_text(target), media_type="text/plain; charset=utf-8")
 
 
 @router.get("/download", response_class=PlainTextResponse)
-def download_profile(_: dict = Depends(require_admin)) -> PlainTextResponse:
+def download_profile(
+    target: Literal["desktop", "webdock", "mobile"] = "desktop",
+    _: dict = Depends(require_admin),
+) -> PlainTextResponse:
     return PlainTextResponse(
-        _profile_text(),
+        _profile_text(target),
         media_type="text/yaml; charset=utf-8",
-        headers={"Content-Disposition": 'attachment; filename="clash-profile.yaml"'},
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="clash-profile-{target}.yaml"'
+                if target != "desktop"
+                else 'attachment; filename="clash-profile.yaml"'
+            )
+        },
     )
 
 
