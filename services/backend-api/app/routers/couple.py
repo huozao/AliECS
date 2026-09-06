@@ -30,6 +30,15 @@ from app.logging_utils import log_event
 
 router = APIRouter()
 
+_MEMORY_EFFECTIVE_DATE_SQL = """COALESCE(
+    m.memory_date,
+    (SELECT MIN(photo_date) FROM (
+        SELECT taken_at::date AS photo_date FROM couple_memory_assets WHERE memory_id = m.id AND taken_at IS NOT NULL
+        UNION ALL
+        SELECT taken_at::date AS photo_date FROM photos WHERE memory_id = m.id AND taken_at IS NOT NULL
+    ) photo_dates)
+)"""
+
 class MemoryUpsertRequest(BaseModel):
     couple_space_id: int | None = None
     title: str
@@ -68,6 +77,11 @@ class AnniversaryUpsertRequest(BaseModel):
     date: str
     repeat_type: str = "yearly"
     description: str | None = None
+    event_type: str = "anniversary"
+    calendar_type: str = "solar"
+    lunar_month: int | None = None
+    lunar_day: int | None = None
+    lunar_leap_month: bool = False
 
 
 class BucketItemUpsertRequest(BaseModel):
@@ -827,6 +841,11 @@ def _anniversary_payload(row: tuple[Any, ...], today: date | None = None) -> dic
         "date": str(row[2]),
         "repeat_type": row[3],
         "description": row[4],
+        "event_type": row[5] if len(row) > 5 else "anniversary",
+        "calendar_type": row[6] if len(row) > 6 else "solar",
+        "lunar_month": row[7] if len(row) > 7 else None,
+        "lunar_day": row[8] if len(row) > 8 else None,
+        "lunar_leap_month": row[9] if len(row) > 9 else False,
         "next_occurrence": str(occurrence),
         "days_remaining": (occurrence - today).days,
     }
@@ -876,10 +895,10 @@ def list_memories(
     start = _parse_date_or_none(from_date)
     end = _parse_date_or_none(to_date)
     if start:
-        where.append("m.memory_date >= %s")
+        where.append(f"{_MEMORY_EFFECTIVE_DATE_SQL} >= %s")
         params.append(start)
     if end:
-        where.append("m.memory_date <= %s")
+        where.append(f"{_MEMORY_EFFECTIVE_DATE_SQL} <= %s")
         params.append(end)
     if q and q.strip():
         where.append("(m.title ILIKE %s OR COALESCE(m.content, '') ILIKE %s)")
@@ -893,13 +912,13 @@ def list_memories(
             total = cur.fetchone()[0]
             cur.execute(
                 f"""
-                SELECT id, couple_space_id, title, content, memory_date, place_name, latitude, longitude,
+                SELECT id, couple_space_id, title, content, {_MEMORY_EFFECTIVE_DATE_SQL} AS memory_date, place_name, latitude, longitude,
                        cover_photo_url, visibility, created_by, created_at, updated_at, archived,
                        COALESCE((SELECT COUNT(*) FROM photos p WHERE p.memory_id = m.id), 0)
                        + COALESCE((SELECT COUNT(*) FROM couple_memory_assets cma WHERE cma.memory_id = m.id), 0) AS photo_count
                 FROM memories m
                 WHERE {where_sql}
-                ORDER BY memory_date DESC NULLS LAST, id DESC
+                ORDER BY {_MEMORY_EFFECTIVE_DATE_SQL} DESC NULLS LAST, id DESC
                 LIMIT %s OFFSET %s
                 """,
                 [*params, page_size, offset],
@@ -1010,12 +1029,24 @@ def get_memory(memory_id: int, user: dict[str, Any] = Depends(require_login)) ->
                 raise HTTPException(status_code=404, detail="not found")
             cur.execute("SELECT tag FROM memory_tags WHERE memory_id = %s ORDER BY id", (memory_id,))
             tags = [r[0] for r in cur.fetchall()]
+            cur.execute(
+                """
+                SELECT MIN(photo_date) FROM (
+                    SELECT taken_at::date AS photo_date FROM couple_memory_assets WHERE memory_id = %s AND taken_at IS NOT NULL
+                    UNION ALL
+                    SELECT taken_at::date AS photo_date FROM photos WHERE memory_id = %s AND taken_at IS NOT NULL
+                ) dates
+                """,
+                (memory_id, memory_id),
+            )
+            photo_date = cur.fetchone()[0]
     return {
         "id": row[0],
         "couple_space_id": row[1],
         "title": row[2],
         "content": row[3],
         "memory_date": str(row[4]) if row[4] else None,
+        "memory_date_source": "photo" if photo_date and row[4] == photo_date else "memory",
         "place_name": row[5],
         "latitude": row[6],
         "longitude": row[7],
@@ -1155,6 +1186,13 @@ def _bind_memory_immich_asset(
                 ),
             )
             row = cur.fetchone()
+            if taken_at:
+                derived_date = _parse_date_or_none(str(taken_at)[:10])
+                if derived_date:
+                    cur.execute(
+                        "UPDATE memories SET memory_date = COALESCE(memory_date, %s), updated_at = NOW() WHERE id = %s",
+                        (derived_date, memory_id),
+                    )
         conn.commit()
     return _immich_asset_payload(row)
 
@@ -1317,8 +1355,8 @@ def map_memories(
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """
-                SELECT m.id, m.title, m.content, m.memory_date, m.place_name,
+                f"""
+                SELECT m.id, m.title, m.content, {_MEMORY_EFFECTIVE_DATE_SQL} AS memory_date, m.place_name,
                        CASE WHEN m.latitude IS NOT NULL AND m.longitude IS NOT NULL
                             THEN m.latitude ELSE COALESCE(asset.latitude, local_geo.latitude) END AS latitude,
                        CASE WHEN m.latitude IS NOT NULL AND m.longitude IS NOT NULL
@@ -1368,7 +1406,7 @@ def map_memories(
                             THEN m.latitude ELSE COALESCE(asset.latitude, local_geo.latitude) END) IS NOT NULL
                   AND (CASE WHEN m.latitude IS NOT NULL AND m.longitude IS NOT NULL
                             THEN m.longitude ELSE COALESCE(asset.longitude, local_geo.longitude) END) IS NOT NULL
-                ORDER BY m.memory_date DESC NULLS LAST, m.id DESC
+                ORDER BY {_MEMORY_EFFECTIVE_DATE_SQL} DESC NULLS LAST, m.id DESC
                 """,
                 (space_id,),
             )
@@ -1416,11 +1454,11 @@ def couple_timeline(
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """
-                SELECT id, title, content, memory_date, place_name, cover_photo_url
-                FROM memories
-                WHERE couple_space_id = %s AND archived = false
-                ORDER BY memory_date DESC NULLS LAST, id DESC
+                f"""
+                SELECT id, title, content, {_MEMORY_EFFECTIVE_DATE_SQL} AS memory_date, place_name, cover_photo_url
+                FROM memories m
+                WHERE m.couple_space_id = %s AND m.archived = false
+                ORDER BY {_MEMORY_EFFECTIVE_DATE_SQL} DESC NULLS LAST, id DESC
                 LIMIT %s
                 """,
                 (space_id, limit),
@@ -1433,7 +1471,7 @@ def couple_timeline(
                 })
             cur.execute(
                 """
-                SELECT id, title, date, repeat_type, description
+                SELECT id, title, date, repeat_type, description, event_type, calendar_type, lunar_month, lunar_day, lunar_leap_month
                 FROM anniversaries
                 WHERE couple_space_id = %s
                 """,
@@ -1764,7 +1802,7 @@ def get_couple_space(
                 counts[key] = cur.fetchone()[0]
             cur.execute(
                 """
-                SELECT id, title, date, repeat_type, description
+                SELECT id, title, date, repeat_type, description, event_type, calendar_type, lunar_month, lunar_day, lunar_leap_month
                 FROM anniversaries
                 WHERE couple_space_id = %s
                 """,
@@ -1872,7 +1910,7 @@ def list_anniversaries(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, title, date, repeat_type, description
+                SELECT id, title, date, repeat_type, description, event_type, calendar_type, lunar_month, lunar_day, lunar_leap_month
                 FROM anniversaries
                 WHERE couple_space_id = %s
                 ORDER BY date ASC, id ASC
@@ -1898,8 +1936,12 @@ def next_anniversary(
 def create_anniversary(body: AnniversaryUpsertRequest, user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
     user_id = _require_couple_user(user)
     space_id = _resolve_couple_space_id(user_id, body.couple_space_id)
-    if body.repeat_type not in {"none", "yearly", "monthly"}:
+    if body.repeat_type not in {"none", "yearly", "monthly"} or body.event_type not in {"anniversary", "birthday"} or body.calendar_type not in {"solar", "lunar"}:
         raise HTTPException(status_code=400, detail="invalid repeat_type")
+    if body.calendar_type == "lunar" and not (1 <= (body.lunar_month or 0) <= 12 and 1 <= (body.lunar_day or 0) <= 30):
+        raise HTTPException(status_code=400, detail="invalid lunar date")
+    if body.calendar_type == "lunar" and not (1 <= (body.lunar_month or 0) <= 12 and 1 <= (body.lunar_day or 0) <= 30):
+        raise HTTPException(status_code=400, detail="invalid lunar date")
     title = body.title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="title is required")
@@ -1907,11 +1949,11 @@ def create_anniversary(body: AnniversaryUpsertRequest, user: dict[str, Any] = De
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO anniversaries(couple_space_id, title, date, repeat_type, description)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO anniversaries(couple_space_id, title, date, repeat_type, description, event_type, calendar_type, lunar_month, lunar_day, lunar_leap_month)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
-                (space_id, title, _parse_date_or_none(body.date), body.repeat_type, body.description),
+                (space_id, title, _parse_date_or_none(body.date), body.repeat_type, body.description, body.event_type, body.calendar_type, body.lunar_month, body.lunar_day, body.lunar_leap_month),
             )
             new_id = cur.fetchone()[0]
         conn.commit()
@@ -1926,17 +1968,17 @@ def update_anniversary(
 ) -> dict[str, str]:
     user_id = _require_couple_user(user)
     space_id = _resolve_couple_space_id(user_id, body.couple_space_id)
-    if body.repeat_type not in {"none", "yearly", "monthly"}:
+    if body.repeat_type not in {"none", "yearly", "monthly"} or body.event_type not in {"anniversary", "birthday"} or body.calendar_type not in {"solar", "lunar"}:
         raise HTTPException(status_code=400, detail="invalid repeat_type")
     with closing(_conn()) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE anniversaries
-                SET title = %s, date = %s, repeat_type = %s, description = %s, updated_at = NOW()
+                SET title = %s, date = %s, repeat_type = %s, description = %s, event_type = %s, calendar_type = %s, lunar_month = %s, lunar_day = %s, lunar_leap_month = %s, updated_at = NOW()
                 WHERE id = %s AND couple_space_id = %s
                 """,
-                (body.title.strip(), _parse_date_or_none(body.date), body.repeat_type, body.description, anniversary_id, space_id),
+                (body.title.strip(), _parse_date_or_none(body.date), body.repeat_type, body.description, body.event_type, body.calendar_type, body.lunar_month, body.lunar_day, body.lunar_leap_month, anniversary_id, space_id),
             )
             if cur.rowcount == 0:
                 raise HTTPException(status_code=404, detail="not found")

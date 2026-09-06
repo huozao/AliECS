@@ -13,9 +13,9 @@
     .topbar h1{margin:0 0 6px;font-size:30px}.top-actions,.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.btn,button{border:0;border-radius:999px;padding:9px 13px;background:#e9dfd0;color:var(--text);text-decoration:none;font-weight:700;cursor:pointer}button.primary,.btn.primary{background:var(--primary);color:white}button.danger{background:#f1d4d1;color:var(--danger)}
     .card{background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px;padding:16px}.grid{display:grid;gap:14px}.kpis{grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin-bottom:14px}.kpis .card:first-child{background:linear-gradient(135deg,#8c5f6a,#68424e);color:#fff;border-color:transparent}.kpis .card:first-child .label{color:#f7e8eb}.modules{grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-bottom:14px}.modules .card{transition:transform .18s ease,box-shadow .18s ease}.modules .card:hover{transform:translateY(-2px);box-shadow:0 14px 30px rgba(93,71,52,.14)}.two{grid-template-columns:repeat(2,minmax(0,1fr))}.three{grid-template-columns:repeat(3,minmax(0,1fr))}
     @media(max-width:860px){.two,.three{grid-template-columns:1fr}.topbar h1{font-size:24px}}.label{font-size:13px;color:var(--muted)}.value{font-size:28px;font-weight:850;margin-top:5px}.section{margin-top:14px}.section h2{margin:0 0 10px;font-size:20px}input,select,textarea{width:100%;border:1px solid var(--line);border-radius:12px;padding:10px 11px;background:white;color:var(--text);font-size:14px}label{display:block;margin:7px 0 5px;color:var(--muted);font-size:13px}
-    .memory-card h3{margin:0 0 5px}.memory-card p{line-height:1.65}.pill{display:inline-block;border-radius:999px;padding:3px 8px;background:#f0e6dc;color:#6f5d50;font-size:12px;margin:2px}.photo-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}.photo{display:block;border-radius:12px;overflow:hidden;background:#eee;border:1px solid var(--line);text-decoration:none;color:inherit}.photo img{width:100%;aspect-ratio:4/3;object-fit:cover;display:block}.photo div{padding:8px}
-    #miniMap{height:260px;border:1px solid var(--line);border-radius:14px;overflow:hidden}.timeline-group{border-left:3px solid #d8c2cb;padding-left:10px;margin:8px 0}.bucket-board{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.bucket-col{border:1px solid var(--line);border-radius:14px;padding:10px;background:#fff}.bucket-item{border:1px solid var(--line);border-radius:12px;padding:10px;margin-top:8px;background:#fffdfa}
-    @media(max-width:760px){.bucket-board{grid-template-columns:1fr}}
+    .memory-card h3{margin:0 0 5px}.memory-card p{line-height:1.65}.pill{display:inline-block;border-radius:999px;padding:3px 8px;background:#f0e6dc;color:#6f5d50;font-size:12px;margin:2px}.photo-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}.photo{display:block;border-radius:12px;overflow:hidden;background:#eee;border:1px solid var(--line);text-decoration:none;color:inherit}.photo img{width:100%;aspect-ratio:4/3;object-fit:cover;display:block}.photo div{padding:8px}.settings-panel{margin-bottom:14px}.settings-panel>h2{margin:0 0 10px;font-size:20px}.embedded-picker{box-shadow:none;border:0;padding:0;margin-top:14px}.home-workspace{align-items:start}.home-workspace>article{grid-column:1/-1}.map-preview{order:-1}.timeline-strip{display:flex;gap:16px;overflow-x:auto;padding:18px 8px 12px;scroll-snap-type:x proximity}.timeline-strip .timeline-group{flex:0 0 250px;position:relative;border-left:0;border-top:3px solid #d8c2cb;padding:14px 4px 4px;margin:0;scroll-snap-align:start}.timeline-strip .timeline-group::before{content:"";position:absolute;top:-9px;left:10px;width:12px;height:12px;border-radius:50%;background:var(--primary);box-shadow:0 0 0 4px #f4e8ea}.timeline-strip .timeline-group>div{line-height:1.6;margin-top:8px}.timeline-strip::-webkit-scrollbar{height:8px}.timeline-strip::-webkit-scrollbar-thumb{background:#d8c2cb;border-radius:99px}
+    #miniMap{height:300px;border:1px solid var(--line);border-radius:14px;overflow:hidden}.timeline-group{border-left:3px solid #d8c2cb;padding-left:10px;margin:8px 0}.bucket-board{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.bucket-col{border:1px solid var(--line);border-radius:14px;padding:10px;background:#fff}.bucket-item{border:1px solid var(--line);border-radius:12px;padding:10px;margin-top:8px;background:#fffdfa}.grid.two.section{align-items:start}.grid.two.section>article{align-self:start}dialog{border:1px solid var(--line);border-radius:18px;background:var(--card);color:var(--text);box-shadow:0 24px 80px rgba(54,35,22,.28)}dialog::backdrop{background:rgba(43,30,21,.42)}
+    @media(max-width:760px){.bucket-board{grid-template-columns:1fr}.timeline-strip{display:block;padding:10px 8px}.timeline-strip .timeline-group{border-top:0;border-left:3px solid #d8c2cb;padding:4px 0 12px 12px;margin:0 0 8px}.timeline-strip .timeline-group::before{top:4px;left:-9px}}
   </style>
 </head>
 <body>
@@ -32,6 +32,7 @@
         <a class="btn" href="/memories/">回忆</a>
         <a class="btn" href="/map/">地图</a>
         <a class="btn" href="/admin/">Admin</a>
+        <button id="settingsBtn" class="btn" type="button">设置</button>
         <button id="topHeart" class="btn" type="button">💗</button>
       </nav>
     </header>
@@ -43,6 +44,8 @@
       <article class="card"><div class="label">愿望 / 纪念日</div><div id="planCount" class="value">-</div></article>
     </section>
 
+    <section id="settingsPanel" class="card settings-panel hidden">
+      <div class="row"><h2>空间设置</h2><button id="closeSettingsBtn" type="button">收起</button></div>
     <section class="card">
       <div class="row"><strong>Immich</strong><span id="immichStatus" class="small">检查中...</span></div>
       <form id="immichConnectForm" class="row" style="margin-top:10px">
@@ -54,19 +57,29 @@
       <div id="immichAlbumHint" class="small" style="margin-top:6px"></div>
     </section>
 
+    <section class="card">
+      <div class="row"><strong>关系设置</strong><span id="relationshipHint" class="small">恋爱天数从开始日期计算</span></div>
+      <form id="relationshipForm" class="row" style="margin-top:10px;justify-content:flex-start">
+        <label style="margin:0">开始日期 <input id="relationshipStartDate" type="date" style="width:180px" /></label>
+        <button class="primary" type="submit">保存开始日期</button>
+      </form>
+    </section>
+    </section>
+
     <section class="grid modules">
       <a class="card" href="/memories/"><strong>回忆列表</strong><div class="small">筛选、分页、进入详情。</div></a>
       <a class="card" href="/map/"><strong>地图足迹</strong><div class="small">在 App 内查看精选回忆坐标。</div></a>
-      <a class="card" href="#timeline"><strong>时间线</strong><div class="small">按月份回看。</div></a>
-      <a class="card" href="#gallery"><strong>相册</strong><div class="small">直传照片与已绑定照片网格。</div></a>
-      <a class="card" href="#anniversaries"><strong>纪念日</strong><div class="small">倒计时和 CRUD。</div></a>
-      <a class="card" href="#wishlist"><strong>愿望清单</strong><div class="small">want / planned / done。</div></a>
+      <a class="card" href="#timeline" data-reveal="timeline"><strong>时间线</strong><div class="small">横向浏览关系进程。</div></a>
+      <a class="card" href="/memories/"><strong>照片管理</strong><div class="small">进入回忆详情统一添加和编辑照片。</div></a>
+      <a class="card" href="#anniversaries" data-reveal="anniversaries"><strong>纪念日 / 生日</strong><div class="small">公历、农历与倒计时。</div></a>
+      <a class="card" href="#wishlist" data-reveal="wishlist"><strong>愿望清单</strong><div class="small">点击展开管理。</div></a>
     </section>
 
-    <section class="grid two section">
-      <article class="card">
-        <h2>快速发布回忆</h2>
-        <form id="memoryForm" class="grid two">
+    <section class="grid two section home-workspace">
+      <article id="publishCard" class="card">
+        <div class="row"><button id="publishToggle" class="btn" type="button" aria-expanded="false"><h2 style="margin:0">快速发布回忆</h2></button><span class="small">点击展开文字与照片选择</span></div>
+        <div id="publishCardBody" class="hidden">
+        <form id="memoryForm" class="grid two" style="margin-top:12px">
           <div><label>标题</label><input id="mTitle" required placeholder="第一次看海" /></div>
           <div><label>日期</label><input id="mDate" type="date" /></div>
           <div><label>地点</label><input id="mPlace" placeholder="杭州西湖" /></div>
@@ -74,11 +87,12 @@
           <div><label>纬度</label><input id="mLat" type="number" step="0.000001" placeholder="30.2741" /></div>
           <div><label>经度</label><input id="mLng" type="number" step="0.000001" placeholder="120.1551" /></div>
           <div style="grid-column:1/-1"><label>内容</label><textarea id="mContent" rows="4" placeholder="写下这段回忆..."></textarea></div>
-          <div style="grid-column:1/-1"><label>照片</label><input id="mPhoto" type="file" accept="image/*,video/*" /><div class="small" style="margin-top:6px">也可以在下方 Immich 选片后发布；个人库照片会自动进入家庭相册。</div></div>
+          <div style="grid-column:1/-1"><label>照片（可拍照或从本地选择）</label><input id="mPhoto" type="file" accept="image/*,video/*" capture="environment" multiple /><div class="row" style="justify-content:flex-start;margin-top:6px"><button id="openPublishPickerBtn" type="button">从 Immich 选择照片</button><span class="small">本地照片会上传到 Immich 并自动加入家庭相册；Immich 选片后直接随本回忆发布。</span></div></div>
           <div class="row" style="grid-column:1/-1"><button class="primary" type="submit">发布回忆</button><span id="publishHint" class="small"></span></div>
         </form>
+        </div>
       </article>
-      <article class="card">
+      <article class="card map-preview">
         <h2>地图预览</h2>
         <div id="miniMap"></div>
         <p id="mapHint" class="small"></p>
@@ -90,12 +104,12 @@
       <div id="recentMemories" class="grid three"></div>
     </section>
 
-    <section id="timeline" class="section card">
-      <h2>时间线</h2>
+    <section id="timeline" class="section card hidden">
+      <div class="row"><h2>时间线</h2><button type="button" data-add-target="publishCard">新增回忆</button></div>
       <div id="timelineList"></div>
     </section>
 
-    <section id="gallery" class="section card">
+    <section id="gallery" class="section card hidden">
       <div class="row" style="justify-content:space-between"><h2>相册</h2><button id="refreshGalleryBtn" type="button">刷新</button></div>
       <div id="galleryGrid" class="photo-grid"></div>
     </section>
@@ -123,11 +137,16 @@
       <div id="immichPickerGrid" class="photo-grid" style="margin-top:12px"></div>
     </section>
 
-    <section id="anniversaries" class="section card">
-      <h2>纪念日</h2>
-      <form id="anniversaryForm" class="grid three">
-        <div><label>标题</label><input id="aTitle" required placeholder="恋爱纪念日" /></div>
-        <div><label>日期</label><input id="aDate" type="date" required /></div>
+    <section id="anniversaries" class="section card hidden">
+      <div class="row"><h2>纪念日 / 生日</h2><button id="anniversaryAddBtn" type="button">新增</button></div>
+      <form id="anniversaryForm" class="grid three hidden">
+        <div><label>类型</label><select id="aType"><option value="anniversary">纪念日</option><option value="birthday">生日</option></select></div>
+        <div><label>标题</label><input id="aTitle" required placeholder="恋爱纪念日 / TA的生日" /></div>
+        <div><label>公历日期（农历请填对应日期）</label><input id="aDate" type="date" required /></div>
+        <div><label>历法</label><select id="aCalendar"><option value="solar">公历</option><option value="lunar">农历</option></select></div>
+        <div><label>农历月份</label><input id="aLunarMonth" type="number" min="1" max="12" placeholder="1-12" disabled /></div>
+        <div><label>农历日期</label><input id="aLunarDay" type="number" min="1" max="30" placeholder="1-30" disabled /></div>
+        <div><label><input id="aLunarLeap" type="checkbox" disabled style="width:auto" /> 闰月</label></div>
         <div><label>重复</label><select id="aRepeat"><option value="yearly">每年</option><option value="monthly">每月</option><option value="none">不重复</option></select></div>
         <div style="grid-column:1/-1"><label>说明</label><input id="aDesc" placeholder="可选" /></div>
         <div class="row" style="grid-column:1/-1"><button class="primary" type="submit">新增纪念日</button><span id="anniversaryHint" class="small"></span></div>
@@ -135,9 +154,9 @@
       <div id="anniversaryList" class="grid three" style="margin-top:12px"></div>
     </section>
 
-    <section id="wishlist" class="section card">
-      <h2>愿望清单</h2>
-      <form id="bucketForm" class="grid three">
+    <section id="wishlist" class="section card hidden">
+      <div class="row"><h2>愿望清单</h2><button id="bucketAddBtn" type="button">新增</button></div>
+      <form id="bucketForm" class="grid three hidden">
         <div><label>愿望</label><input id="bTitle" required placeholder="一起看极光" /></div>
         <div><label>状态</label><select id="bStatus"><option value="want">想做</option><option value="planned">计划中</option><option value="done">已完成</option></select></div>
         <div><label>目标日期</label><input id="bTarget" type="date" /></div>
@@ -169,6 +188,7 @@
       <div id="coupleSpacesList" class="grid three" style="margin-top:14px"></div>
     </section>
   </main>
+  <dialog id="cardEditor"><form method="dialog" id="cardEditorForm" class="card" style="min-width:min(520px,90vw)"><div class="row"><h2 id="cardEditorTitle" style="margin:0">编辑</h2><button value="cancel" type="submit">关闭</button></div><div id="cardEditorFields" class="grid" style="margin-top:12px"></div><div class="row" style="justify-content:flex-start;margin-top:14px"><button id="cardEditorSave" class="primary" value="default" type="submit">保存</button><span id="cardEditorHint" class="small"></span></div></form></dialog>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="/common/user-badge.js"></script>
@@ -221,6 +241,7 @@
       const s = state.space || {};
       $('spaceTitle').textContent = s.name || '两个人的记忆地图';
       $('spaceMeta').textContent = `${s.members?.map(m=>m.display_name).join('、') || 'Couple Memory'} · ${s.start_date || '未设置开始日期'}`;
+      $('relationshipStartDate').value = s.start_date || '';
       $('daysTogether').textContent = s.days_together == null ? '未设置' : `${s.days_together} 天`;
       $('nextAnniversary').textContent = s.next_anniversary ? `还有 ${s.next_anniversary.days_remaining} 天` : '未设置';
       $('memoryCount').textContent = `${s.counts?.memories || 0} / ${s.counts?.photos || 0}`;
@@ -237,14 +258,21 @@
     function renderTimeline(){
       const labels={memory:'回忆',anniversary:'纪念日',wish_completed:'愿望完成'};
       const groups={};state.timeline.forEach(e=>{const key=(e.date||'未设置日期').slice(0,7);(groups[key] ||= []).push(e);});
-      $('timelineList').innerHTML = Object.entries(groups).slice(0,12).map(([month, items]) => `<div class="timeline-group"><strong>${esc(month)}</strong>${items.map(e=>`<div><span class="pill">${labels[e.type]||'事件'}</span> ${e.memory_id?`<a href="/memories/detail.html?id=${e.memory_id}">${esc(e.title)}</a>`:`<strong>${esc(e.title)}</strong>`} <span class="small">${esc(e.place_name||'')}</span>${e.days_remaining!=null?` <span class="small">· 还有 ${e.days_remaining} 天</span>`:''}</div>`).join('')}</div>`).join('') || '<div class="muted">暂无时间线数据。</div>';
+      const cards=Object.entries(groups).slice(0,12).map(([month, items]) => `<div class="timeline-group"><strong>${esc(month)}</strong>${items.map(e=>`<div><span class="pill">${labels[e.type]||'事件'}</span> ${e.memory_id?`<a href="/memories/detail.html?id=${e.memory_id}">${esc(e.title)}</a>`:`<strong>${esc(e.title)}</strong>`} <span class="small">${esc(e.place_name||'')}</span>${e.days_remaining!=null?` <span class="small">· 还有 ${e.days_remaining} 天</span>`:''}</div>`).join('')}</div>`).join('');
+      $('timelineList').innerHTML = cards ? `<div class="timeline-strip">${cards}</div>` : '<div class="muted">暂无时间线数据。</div>';
+    }
+    function miniMapTiles(url, options){
+      const Tile=L.TileLayer.extend({createTile(coords,done){const tile=document.createElement('img');let attempt=0;const load=()=>{tile.onload=()=>done(null,tile);tile.onerror=()=>{if(attempt<2){attempt+=1;setTimeout(load,350*attempt);}else done(new Error('tile'),tile);};const src=this.getTileUrl(coords);tile.src=attempt?`${src}${src.includes('?')?'&':'?'}retry=${attempt}`:src;};load();return tile;}});
+      return new Tile(url,{...options,keepBuffer:3,updateWhenIdle:false});
     }
     function renderMiniMap(){
       if (!state.map.length) {$('mapHint').textContent='暂无带坐标的回忆点。';return;}
       $('mapHint').textContent='';
       if (!miniMap) {
         miniMap = L.map('miniMap', {scrollWheelZoom:false}).setView([30.27,120.15],5);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap'}).addTo(miniMap);
+        const base=miniMapTiles('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap'});
+        const fallback=miniMapTiles('https://{s}.tile.openstreetmap.de/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap'});
+        let active='base';base.on('tileerror',()=>{if(active==='base'){active='fallback';miniMap.removeLayer(base);fallback.addTo(miniMap);}});fallback.on('tileerror',()=>{if(active==='fallback'){active='esri';miniMap.removeLayer(fallback);miniMapTiles('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'© Esri'}).addTo(miniMap);}});base.addTo(miniMap);setTimeout(()=>miniMap.invalidateSize(),300);
         markerLayer = L.layerGroup().addTo(miniMap);
       }
       markerLayer.clearLayers();
@@ -342,47 +370,52 @@
       renderImmichAlbumOptions();
     }
     function renderAnniversaries(){
-      $('anniversaryList').innerHTML = state.anniversaries.map(a => `<article class="card"><h3>${esc(a.title)}</h3><div class="small">${esc(a.date)} · ${esc(a.repeat_type)} · 还有 ${a.days_remaining} 天</div><p>${esc(a.description || '')}</p><div class="row"><button data-anniv-edit="${a.id}">编辑</button><button class="danger" data-anniv-del="${a.id}">删除</button></div></article>`).join('') || '<div class="muted">暂无纪念日。</div>';
+      $('anniversaryList').innerHTML = state.anniversaries.map(a => `<article class="card"><h3>${a.event_type==='birthday'?'🎂 ':''}${esc(a.title)}</h3><div class="small">${a.calendar_type==='lunar'?'农历':'公历'} · ${esc(a.date)} · ${esc(a.repeat_type)} · 还有 ${a.days_remaining} 天</div><p>${esc(a.description || '')}</p><div class="row"><button data-anniv-edit="${a.id}">编辑</button><button class="danger" data-anniv-del="${a.id}">删除</button></div></article>`).join('') || '<div class="muted">暂无纪念日。</div>';
     }
     function renderBucket(){
       const labels = {want:'想做', planned:'计划中', done:'已完成'};
-      $('bucketBoard').innerHTML = ['want','planned','done'].map(status => `<section class="bucket-col"><strong>${labels[status]}</strong>${state.bucket.filter(b=>b.status===status).map(b => `<div class="bucket-item"><strong>${esc(b.title)}</strong><div class="small">${esc(b.target_date || '')}${b.completed_memory_title ? ` · ${esc(b.completed_memory_title)}` : ''}</div><p>${esc(b.description || '')}</p><div class="row"><button data-bucket-status="${b.id}:want">想做</button><button data-bucket-status="${b.id}:planned">计划</button><button data-bucket-status="${b.id}:done">完成</button>${status==='done'&&!b.completed_memory_id?`<button data-bucket-memory="${b.id}">生成回忆</button>`:''}<button class="danger" data-bucket-del="${b.id}">删除</button></div></div>`).join('') || '<div class="small">暂无</div>'}</section>`).join('');
+      $('bucketBoard').innerHTML = ['want','planned','done'].map(status => `<section class="bucket-col"><strong>${labels[status]}</strong>${state.bucket.filter(b=>b.status===status).map(b => `<div class="bucket-item"><strong>${esc(b.title)}</strong><div class="small">${esc(b.target_date || '')}${b.completed_memory_title ? ` · ${esc(b.completed_memory_title)}` : ''}</div><p>${esc(b.description || '')}</p><div class="row"><button data-bucket-edit="${b.id}">编辑</button><button data-bucket-status="${b.id}:want">想做</button><button data-bucket-status="${b.id}:planned">计划</button><button data-bucket-status="${b.id}:done">完成</button>${status==='done'&&!b.completed_memory_id?`<button data-bucket-memory="${b.id}">生成回忆</button>`:''}<button class="danger" data-bucket-del="${b.id}">删除</button></div></div>`).join('') || '<div class="small">暂无</div>'}</section>`).join('');
     }
     async function createMemoryFromBucket(id){const item=state.bucket.find(x=>x.id===id);if(!item)return;const title=prompt('回忆标题',item.title);if(title===null)return;const content=prompt('写下这段回忆',item.description||'');if(content===null)return;const created=await api('/v1/memories',{method:'POST',body:JSON.stringify({title:title.trim()||item.title,content:content.trim()||null,memory_date:item.target_date||null,visibility:'private',tags:['愿望完成']})});await api(`/v1/bucket-items/${id}`,{method:'PUT',body:JSON.stringify({title:item.title,description:item.description,status:'done',target_date:item.target_date,completed_memory_id:created.id})});await loadAll();}
     async function submitMemory(ev){
       ev.preventDefault();
-      const selectedFile = $('mPhoto').files[0];
-      if (selectedFile && !state.immich?.connected) { $('publishHint').textContent='请先连接 Immich，直传照片才会进入家庭相册。'; return; }
+      const selectedFiles = [...$('mPhoto').files];
+      if (selectedFiles.length && !state.immich?.connected) { $('publishHint').textContent='请先连接 Immich，照片才能自动进入家庭相册。'; return; }
       $('publishHint').textContent='发布中...';
-      const body = {title:$('mTitle').value.trim(),content:$('mContent').value.trim()||null,memory_date:$('mDate').value||null,place_name:$('mPlace').value.trim()||null,latitude:numberOrNull('mLat'),longitude:numberOrNull('mLng'),visibility:'private',tags:($('mTags').value||'').split(',').map(x=>x.trim()).filter(Boolean)};
-      const created = await api('/v1/memories', {method:'POST', body:JSON.stringify(body)});
       const selectedIds=[...state.immichSelected];
+      const manualDate=$('mDate').value||null;
+      const inferredDate=manualDate||state.immichAssets.filter(a=>selectedIds.includes(a.asset_id)&&a.taken_at).map(a=>String(a.taken_at).slice(0,10)).sort()[0]||null;
+      const body = {title:$('mTitle').value.trim(),content:$('mContent').value.trim()||null,memory_date:inferredDate,place_name:$('mPlace').value.trim()||null,latitude:numberOrNull('mLat'),longitude:numberOrNull('mLng'),visibility:'private',tags:($('mTags').value||'').split(',').map(x=>x.trim()).filter(Boolean)};
+      const created = await api('/v1/memories', {method:'POST', body:JSON.stringify(body)});
       if(selectedIds.length){
         await api('/v1/immich/albums/assets',{method:'POST',body:JSON.stringify({asset_ids:selectedIds})});
         await api(`/v1/memories/${created.id}/immich-assets`,{method:'POST',body:JSON.stringify({asset_ids:selectedIds})});
         selectedIds.forEach((assetId)=>state.immichSelected.delete(assetId));
       }
-      const file = selectedFile;
-      if (file) {if(!state.immich?.connected) throw new Error('请先连接 Immich，直传照片才会进入家庭相册。'); const fd = new FormData(); fd.append('file', file); await api(`/v1/immich/upload?memory_id=${created.id}`, {method:'POST', body:fd});}
-      ev.target.reset(); $('publishHint').textContent='已发布。'; await loadAll();
+      for (const file of selectedFiles) { const fd = new FormData(); fd.append('file', file); await api(`/v1/immich/upload?memory_id=${created.id}`, {method:'POST', body:fd}); }
+      ev.target.reset(); $('publishHint').textContent=inferredDate&&!manualDate?'已发布，日期取自照片拍摄日期。':'已发布。'; await loadAll();
     }
     async function submitAnniversary(ev){
       ev.preventDefault(); $('anniversaryHint').textContent='保存中...';
-      await api('/v1/anniversaries',{method:'POST',body:JSON.stringify({title:$('aTitle').value.trim(),date:$('aDate').value,repeat_type:$('aRepeat').value,description:$('aDesc').value.trim()||null})});
+      const calendar=$('aCalendar').value, dateValue=$('aDate').value, lunarMonth=Number($('aLunarMonth').value)||null, lunarDay=Number($('aLunarDay').value)||null;
+      if(calendar==='lunar'){const check=checkLunarSolar(dateValue,lunarMonth,lunarDay,$('aLunarLeap').checked);if(!check.ok){$('anniversaryHint').textContent=check.message;return;}}
+      await api('/v1/anniversaries',{method:'POST',body:JSON.stringify({title:$('aTitle').value.trim(),date:dateValue,repeat_type:$('aRepeat').value,description:$('aDesc').value.trim()||null,event_type:$('aType').value,calendar_type:calendar,lunar_month:lunarMonth,lunar_day:lunarDay,lunar_leap_month:$('aLunarLeap').checked})});
       ev.target.reset(); $('anniversaryHint').textContent='已保存。'; await loadAll();
+    }
+    function checkLunarSolar(dateValue, month, day, leap){
+      if(!dateValue||!month||!day)return {ok:false,message:'农历生日必须同时填写公历对应日期、农历月和农历日。'};
+      try{const parts=new Intl.DateTimeFormat('zh-CN-u-ca-chinese',{month:'long',day:'numeric'}).formatToParts(new Date(`${dateValue}T00:00:00`));const lunarMonthText=parts.find(x=>x.type==='month')?.value||'';const lunarDay=Number(parts.find(x=>x.type==='day')?.value||0);const map={'正月':1,'一月':1,'二月':2,'三月':3,'四月':4,'五月':5,'六月':6,'七月':7,'八月':8,'九月':9,'十月':10,'十一月':11,'十二月':12};const actualMonth=map[lunarMonthText.replace(/^闰/,'')];const actualLeap=lunarMonthText.startsWith('闰');if(actualMonth!==month||lunarDay!==day||actualLeap!==leap)return {ok:false,message:`公历 ${dateValue} 对应的是${actualLeap?'闰':''}${lunarMonthText.replace(/^闰/,'')}第 ${lunarDay} 天，与填写的农历不一致。`};return {ok:true};}catch{return {ok:false,message:'无法校验公历与农历，请检查日期格式。'};}
     }
     async function submitBucket(ev){
       ev.preventDefault(); $('bucketHint').textContent='保存中...';
       await api('/v1/bucket-items',{method:'POST',body:JSON.stringify({title:$('bTitle').value.trim(),description:$('bDesc').value.trim()||null,status:$('bStatus').value,target_date:$('bTarget').value||null})});
       ev.target.reset(); $('bucketHint').textContent='已保存。'; await loadAll();
     }
+    let editorState={kind:null,id:null,item:null};
+    function openCardEditor(kind,item=null){editorState={kind,id:item?.id||null,item};const isA=kind==='anniversary';$('cardEditorTitle').textContent=`${item?'编辑':'新增'}${isA?'纪念日 / 生日':'愿望'}`;$('cardEditorFields').innerHTML=isA?`<div><label>类型</label><select id="ceType"><option value="anniversary">纪念日</option><option value="birthday">生日</option></select></div><div><label>标题</label><input id="ceTitle" required></div><div><label>公历日期（农历请填对应日期）</label><input id="ceDate" type="date" required></div><div><label>历法</label><select id="ceCalendar"><option value="solar">公历</option><option value="lunar">农历</option></select></div><div class="grid two"><div><label>农历月份</label><input id="ceLunarMonth" type="number" min="1" max="12" disabled></div><div><label>农历日期</label><input id="ceLunarDay" type="number" min="1" max="30" disabled></div></div><label><input id="ceLunarLeap" type="checkbox" disabled style="width:auto"> 闰月</label><div><label>重复</label><select id="ceRepeat"><option value="yearly">每年</option><option value="monthly">每月</option><option value="none">不重复</option></select></div><div><label>说明</label><input id="ceDesc"></div>`:`<div><label>愿望</label><input id="ceTitle" required></div><div><label>状态</label><select id="ceStatus"><option value="want">想做</option><option value="planned">计划中</option><option value="done">已完成</option></select></div><div><label>目标日期</label><input id="ceDate" type="date"></div><div><label>说明</label><input id="ceDesc">`;if(item){$('ceTitle').value=item.title||'';$('ceDate').value=item.date||item.target_date||'';$('ceDesc').value=item.description||'';if(isA){$('ceType').value=item.event_type||'anniversary';$('ceCalendar').value=item.calendar_type||'solar';$('ceLunarMonth').value=item.lunar_month||'';$('ceLunarDay').value=item.lunar_day||'';$('ceLunarLeap').checked=!!item.lunar_leap_month;$('ceRepeat').value=item.repeat_type||'yearly';}else $('ceStatus').value=item.status||'want';}if(isA){$('ceCalendar').onchange=()=>{const lunar=$('ceCalendar').value==='lunar';['ceLunarMonth','ceLunarDay','ceLunarLeap'].forEach(id=>$(id).disabled=!lunar);};$('ceCalendar').onchange();}$('cardEditor').showModal();}
+    $('cardEditorForm').onsubmit=async(e)=>{if(e.submitter?.value==='cancel')return;e.preventDefault();const isA=editorState.kind==='anniversary';try{if(isA){const calendar=$('ceCalendar').value,lunarMonth=Number($('ceLunarMonth').value)||null,lunarDay=Number($('ceLunarDay').value)||null;if(calendar==='lunar'){const check=checkLunarSolar($('ceDate').value,lunarMonth,lunarDay,$('ceLunarLeap').checked);if(!check.ok){$('cardEditorHint').textContent=check.message;return;}}const payload={title:$('ceTitle').value.trim(),date:$('ceDate').value,repeat_type:$('ceRepeat').value,description:$('ceDesc').value.trim()||null,event_type:$('ceType').value,calendar_type:calendar,lunar_month:lunarMonth,lunar_day:lunarDay,lunar_leap_month:$('ceLunarLeap').checked};await api(editorState.id?`/v1/anniversaries/${editorState.id}`:'/v1/anniversaries',{method:editorState.id?'PUT':'POST',body:JSON.stringify(payload)});}else{const payload={title:$('ceTitle').value.trim(),description:$('ceDesc').value.trim()||null,status:$('ceStatus').value,target_date:$('ceDate').value||null,completed_memory_id:editorState.item?.completed_memory_id||null};await api(editorState.id?`/v1/bucket-items/${editorState.id}`:'/v1/bucket-items',{method:editorState.id?'PUT':'POST',body:JSON.stringify(payload)});}$('cardEditor').close();await loadAll();}catch(err){$('cardEditorHint').textContent=err.message;}};
     async function editAnniversary(id){
-      const item = state.anniversaries.find(x=>x.id===id); if(!item) return;
-      const title = prompt('标题', item.title); if(title === null) return;
-      const date = prompt('日期 YYYY-MM-DD', item.date); if(date === null) return;
-      const repeat_type = prompt('repeat_type: none/yearly/monthly', item.repeat_type); if(repeat_type === null) return;
-      const description = prompt('说明', item.description || ''); if(description === null) return;
-      await api(`/v1/anniversaries/${id}`,{method:'PUT',body:JSON.stringify({title,date,repeat_type,description:description||null})}); await loadAll();
+      const item = state.anniversaries.find(x=>x.id===id); if(item) openCardEditor('anniversary',item);
     }
     async function updateBucketStatus(id,status){
       const item = state.bucket.find(x=>x.id===id); if(!item) return;
@@ -405,6 +438,7 @@
       if (t.dataset?.annivDel && confirm('删除这个纪念日？')) {await api(`/v1/anniversaries/${t.dataset.annivDel}`,{method:'DELETE'}); await loadAll();}
       if (t.dataset?.annivEdit) await editAnniversary(Number(t.dataset.annivEdit));
       if (t.dataset?.bucketDel && confirm('删除这个愿望？')) {await api(`/v1/bucket-items/${t.dataset.bucketDel}`,{method:'DELETE'}); await loadAll();}
+      if (t.dataset?.bucketEdit) {const item=state.bucket.find(x=>x.id===Number(t.dataset.bucketEdit));if(item)openCardEditor('bucket',item);}
       if (t.dataset?.bucketStatus) {const [id,status]=t.dataset.bucketStatus.split(':'); await updateBucketStatus(Number(id),status);}
       if (t.dataset?.bucketMemory) await createMemoryFromBucket(Number(t.dataset.bucketMemory));
       if (t.dataset?.removeMember) {const [sid,uid]=t.dataset.removeMember.split(':'); await removeCoupleMember(Number(sid),Number(uid));}
@@ -413,9 +447,21 @@
       const route = await checkAccess(); if(!route){location.replace('/');return;}
       await window.AliECSAuth.renderUserBadge('userChip','用户：'); $('userChip').classList.remove('hidden');
       $('booting').classList.add('hidden'); $('protectedApp').classList.remove('hidden');
+      $('publishCardBody').appendChild($('immichPicker'));
+      $('immichPicker').classList.add('embedded-picker');
+      $('settingsPanel').appendChild($('adminCoupleSection'));
+      $('aCalendar').onchange = () => { const lunar=$('aCalendar').value==='lunar'; ['aLunarMonth','aLunarDay','aLunarLeap'].forEach(id=>$(id).disabled=!lunar); };
+      document.querySelectorAll('[data-reveal]').forEach(card=>card.addEventListener('click',(event)=>{event.preventDefault();const target=$(card.dataset.reveal);if(!target)return;target.classList.remove('hidden');target.scrollIntoView({behavior:'smooth',block:'start'});}));
+      $('anniversaryAddBtn').onclick=()=>openCardEditor('anniversary');
+      $('bucketAddBtn').onclick=()=>openCardEditor('bucket');
+      document.querySelectorAll('[data-add-target]').forEach(btn=>btn.onclick=()=>{const target=$(btn.dataset.addTarget);if(!target)return;target.classList.remove('hidden');target.scrollIntoView({behavior:'smooth',block:'start'});if(target=== $('publishCard')){$('publishCardBody').classList.remove('hidden');$('publishToggle').setAttribute('aria-expanded','true');}});
       const preselectedMemoryId = new URLSearchParams(location.search).get('memory_id');
       if(preselectedMemoryId) $('immichMemoryId').value = preselectedMemoryId;
       $('topHeart').onclick = () => location.assign(route);
+      $('publishToggle').onclick = () => { const collapsed=$('publishCardBody').classList.toggle('hidden'); const open=!collapsed; $('publishToggle').setAttribute('aria-expanded',String(open)); if(open) $('immichPickerHint').textContent=''; };
+      $('openPublishPickerBtn').onclick = () => { $('publishCardBody').classList.remove('hidden'); $('publishToggle').setAttribute('aria-expanded','true'); $('immichPicker').classList.remove('hidden'); $('immichPickerHint').textContent='请选择照片后返回上方点击“发布回忆”。'; };
+      $('settingsBtn').onclick = () => { $('settingsPanel').classList.toggle('hidden'); if(!$('settingsPanel').classList.contains('hidden')) $('settingsPanel').scrollIntoView({behavior:'smooth',block:'start'}); };
+      $('closeSettingsBtn').onclick = () => $('settingsPanel').classList.add('hidden');
       $('memoryForm').onsubmit = (e) => submitMemory(e).catch(err => $('publishHint').textContent = err.message);
       $('anniversaryForm').onsubmit = (e) => submitAnniversary(e).catch(err => $('anniversaryHint').textContent = err.message);
       $('bucketForm').onsubmit = (e) => submitBucket(e).catch(err => $('bucketHint').textContent = err.message);
@@ -425,6 +471,7 @@
       $('immichPrevBtn').onclick = () => loadImmichPicker(state.immichPage - 1).catch(err => $('immichPickerHint').textContent=err.message);
       $('immichNextBtn').onclick = () => loadImmichPicker(state.immichNextPage).catch(err => $('immichPickerHint').textContent=err.message);
       $('addImmichSelectedBtn').onclick = () => addImmichSelected().catch(err => $('immichPickerHint').textContent=err.message);
+      $('relationshipForm').onsubmit = async (e) => { e.preventDefault(); const startDate=$('relationshipStartDate').value; if(!startDate){$('relationshipHint').textContent='请选择开始日期。';return;} $('relationshipHint').textContent='保存中...'; try { await api('/v1/couple/space',{method:'PATCH',body:JSON.stringify({start_date:startDate})}); $('relationshipHint').textContent='已保存，恋爱天数已更新。'; await loadAll(); } catch(err) { $('relationshipHint').textContent=err.message; } };
       $('immichConnectForm').onsubmit = async (e) => { e.preventDefault(); const key=$('immichApiKey').value.trim(); if(!key){$('immichConnectHint').textContent='请输入 API key。';return;} $('immichConnectHint').textContent='验证中...'; try { await api('/v1/immich/connection',{method:'POST',body:JSON.stringify({api_key:key})}); $('immichApiKey').value=''; $('immichConnectHint').textContent='已连接。'; resetImmichPickerState(); await loadAll(); } catch(err) { $('immichConnectHint').textContent=err.message; } };
       $('immichDisconnectBtn').onclick = async () => { if(!confirm('断开当前 Immich 连接？已绑定的回忆不会删除。')) return; await api('/v1/immich/connection',{method:'DELETE'}); $('immichConnectHint').textContent='已断开。'; resetImmichPickerState(); await loadAll(); };
       await loadAll().catch((e)=>console.error(e));
