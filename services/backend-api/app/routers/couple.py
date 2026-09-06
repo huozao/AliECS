@@ -226,6 +226,24 @@ def _webdock_photo_key(original_storage_url: str | None) -> str | None:
     return key or None
 
 
+def _oss_photo_request(key: str) -> tuple[bytes, str]:
+    """Read an OSS object with a short-lived signed GET request."""
+    from app.oss_client import OssClient, config_from_env
+
+    client = OssClient(config_from_env())
+    headers = client._signed_headers("GET", key)
+    request = urllib.request.Request(client.object_url(key), headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=client.config.timeout_seconds) as response:
+            return response.read(), response.headers.get("content-type", "application/octet-stream")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise HTTPException(status_code=404, detail="photo not found") from exc
+        raise HTTPException(status_code=502, detail=f"OSS photo storage returned {exc.code}") from exc
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        raise HTTPException(status_code=502, detail="OSS photo storage unavailable") from exc
+
+
 class PhotoStorage:
     driver = "local"
 
@@ -862,7 +880,8 @@ def list_memories(
                 f"""
                 SELECT id, couple_space_id, title, content, memory_date, place_name, latitude, longitude,
                        cover_photo_url, visibility, created_by, created_at, updated_at, archived,
-                       COALESCE((SELECT COUNT(*) FROM photos p WHERE p.memory_id = m.id), 0) AS photo_count
+                       COALESCE((SELECT COUNT(*) FROM photos p WHERE p.memory_id = m.id), 0)
+                       + COALESCE((SELECT COUNT(*) FROM couple_memory_assets cma WHERE cma.memory_id = m.id), 0) AS photo_count
                 FROM memories m
                 WHERE {where_sql}
                 ORDER BY memory_date DESC NULLS LAST, id DESC
@@ -962,7 +981,8 @@ def get_memory(memory_id: int, user: dict[str, Any] = Depends(require_login)) ->
                 """
                 SELECT m.id, m.couple_space_id, m.title, m.content, m.memory_date, m.place_name, m.latitude, m.longitude,
                        m.cover_photo_url, m.visibility, m.created_by, m.created_at, m.updated_at, m.archived,
-                       COALESCE((SELECT COUNT(*) FROM photos p WHERE p.memory_id = m.id), 0) AS photo_count
+                       COALESCE((SELECT COUNT(*) FROM photos p WHERE p.memory_id = m.id), 0)
+                       + COALESCE((SELECT COUNT(*) FROM couple_memory_assets cma WHERE cma.memory_id = m.id), 0) AS photo_count
                 FROM memories m
                 JOIN couple_members cm ON cm.couple_space_id = m.couple_space_id
                 WHERE m.id = %s AND cm.user_id = %s
@@ -1071,7 +1091,7 @@ def _bind_memory_immich_asset(
     latitude = body.latitude
     longitude = body.longitude
 
-    if config.enabled and body.immich_asset_id:
+    if config and config.enabled and body.immich_asset_id:
         asset = ImmichClient(config).get_asset(body.immich_asset_id)
         original_filename = original_filename or asset.original_filename
         taken_at = taken_at or asset.taken_at
@@ -1283,14 +1303,20 @@ def map_memories(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT m.id, m.title, m.memory_date, m.place_name,
+                SELECT m.id, m.title, m.content, m.memory_date, m.place_name,
                        CASE WHEN m.latitude IS NOT NULL AND m.longitude IS NOT NULL
-                            THEN m.latitude ELSE asset.latitude END AS latitude,
+                            THEN m.latitude ELSE COALESCE(asset.latitude, local_geo.latitude) END AS latitude,
                        CASE WHEN m.latitude IS NOT NULL AND m.longitude IS NOT NULL
-                            THEN m.longitude ELSE asset.longitude END AS longitude,
+                            THEN m.longitude ELSE COALESCE(asset.longitude, local_geo.longitude) END AS longitude,
                        m.cover_photo_url,
                        CASE WHEN m.latitude IS NOT NULL AND m.longitude IS NOT NULL
-                            THEN 'memory' ELSE 'immich_asset' END AS coordinate_source
+                            THEN 'memory' WHEN asset.latitude IS NOT NULL
+                            THEN 'immich_asset' ELSE 'local_exif' END AS coordinate_source,
+                       COALESCE(local_preview.thumbnail_url, local_preview.display_url,
+                                CASE WHEN immich_preview.immich_asset_id IS NOT NULL
+                                     THEN '/api/v1/immich/assets/' || immich_preview.immich_asset_id || '/thumbnail' END) AS preview_url,
+                       COALESCE((SELECT COUNT(*) FROM photos p_count WHERE p_count.memory_id = m.id), 0)
+                         + COALESCE((SELECT COUNT(*) FROM couple_memory_assets a_count WHERE a_count.memory_id = m.id), 0) AS photo_count
                 FROM memories m
                 LEFT JOIN LATERAL (
                     SELECT cma.latitude, cma.longitude
@@ -1300,11 +1326,33 @@ def map_memories(
                     ORDER BY cma.sort_order, cma.id
                     LIMIT 1
                 ) asset ON true
+                LEFT JOIN LATERAL (
+                    SELECT p.latitude, p.longitude
+                    FROM photos p
+                    WHERE p.memory_id = m.id
+                      AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL
+                    ORDER BY COALESCE(p.taken_at, p.created_at), p.id
+                    LIMIT 1
+                ) local_geo ON true
+                LEFT JOIN LATERAL (
+                    SELECT p.thumbnail_url, p.display_url
+                    FROM photos p
+                    WHERE p.memory_id = m.id
+                    ORDER BY COALESCE(p.taken_at, p.created_at), p.id
+                    LIMIT 1
+                ) local_preview ON true
+                LEFT JOIN LATERAL (
+                    SELECT cma.immich_asset_id
+                    FROM couple_memory_assets cma
+                    WHERE cma.memory_id = m.id AND cma.immich_asset_id IS NOT NULL
+                    ORDER BY cma.sort_order, cma.id
+                    LIMIT 1
+                ) immich_preview ON true
                 WHERE m.couple_space_id = %s AND m.archived = false
                   AND (CASE WHEN m.latitude IS NOT NULL AND m.longitude IS NOT NULL
-                            THEN m.latitude ELSE asset.latitude END) IS NOT NULL
+                            THEN m.latitude ELSE COALESCE(asset.latitude, local_geo.latitude) END) IS NOT NULL
                   AND (CASE WHEN m.latitude IS NOT NULL AND m.longitude IS NOT NULL
-                            THEN m.longitude ELSE asset.longitude END) IS NOT NULL
+                            THEN m.longitude ELSE COALESCE(asset.longitude, local_geo.longitude) END) IS NOT NULL
                 ORDER BY m.memory_date DESC NULLS LAST, m.id DESC
                 """,
                 (space_id,),
@@ -1324,12 +1372,15 @@ def map_memories(
             {
                 "id": row[0],
                 "title": row[1],
-                "memory_date": str(row[2]) if row[2] else None,
-                "place_name": row[3],
-                "latitude": row[4],
-                "longitude": row[5],
-                "cover_photo_url": row[6],
-                "coordinate_source": row[7],
+                "content": row[2],
+                "memory_date": str(row[3]) if row[3] else None,
+                "place_name": row[4],
+                "latitude": row[5],
+                "longitude": row[6],
+                "cover_photo_url": row[7],
+                "coordinate_source": row[8],
+                "preview_url": row[9],
+                "photo_count": row[10],
                 "tags": tags_map.get(row[0], []),
             }
             for row in rows
@@ -2095,6 +2146,117 @@ def revoke_share_link(token: str, user: dict[str, Any] = Depends(require_login))
     return {"status": "ok"}
 
 
+def _share_is_active(cur: Any, token: str) -> tuple[int, int]:
+    """Validate a share token and return (memory_id, couple_space_id).
+
+    Media is served through token-scoped routes so that the anonymous share
+    page never has to expose an authenticated Couple or Immich URL.
+    """
+    cur.execute(
+        """
+        SELECT m.id, m.couple_space_id, m.visibility, sl.expires_at, sl.revoked_at
+        FROM share_links sl
+        JOIN memories m ON m.id = sl.memory_id
+        WHERE sl.token = %s
+        LIMIT 1
+        """,
+        (token,),
+    )
+    row = cur.fetchone()
+    if not row or row[2] != "shareable" or row[4] is not None:
+        raise HTTPException(status_code=404, detail="not found")
+    if row[3] is not None:
+        now = datetime.now(row[3].tzinfo) if row[3].tzinfo else datetime.now()
+        if row[3] <= now:
+            raise HTTPException(status_code=404, detail="not found")
+    return int(row[0]), int(row[1])
+
+
+@router.get("/v1/share/{token}/photos/{photo_id}")
+def get_shared_photo(token: str, photo_id: int) -> Response:
+    """Serve a local/webdock photo only when it belongs to this share."""
+    _check_share_rate(token)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            memory_id, _space_id = _share_is_active(cur, token)
+            cur.execute(
+                """
+                SELECT original_storage_url, storage_driver
+                FROM photos
+                WHERE id = %s AND memory_id = %s
+                LIMIT 1
+                """,
+                (photo_id, memory_id),
+            )
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="not found")
+    storage_url, driver = row
+    if driver == "local":
+        base = Path(os.getenv("LOCAL_UPLOAD_DIR", "/app/uploads")).resolve()
+        target = Path(str(storage_url)).resolve()
+        if base not in target.parents or not target.is_file():
+            raise HTTPException(status_code=404, detail="not found")
+        content = target.read_bytes()
+    elif driver == "webdock":
+        key = _webdock_photo_key(storage_url)
+        if not key:
+            raise HTTPException(status_code=404, detail="not found")
+        content = _webdock_photo_request("GET", key)
+    elif driver == "oss":
+        key = str(storage_url or "").split(":", 1)[1] if str(storage_url or "").startswith("oss:") else ""
+        if not key:
+            raise HTTPException(status_code=404, detail="not found")
+        content, content_type = _oss_photo_request(key)
+        return Response(content=content, media_type=content_type.split(";", 1)[0], headers={"Cache-Control": "private, max-age=300"})
+    else:
+        raise HTTPException(status_code=404, detail="not found")
+    return Response(content=content, media_type=_detect_image_mime(content) or "application/octet-stream", headers={"Cache-Control": "private, max-age=300"})
+
+
+@router.get("/v1/share/{token}/immich-assets/{asset_id}/thumbnail")
+def get_shared_immich_thumbnail(token: str, asset_id: str) -> Response:
+    """Proxy a bound Immich thumbnail without requiring SSO on the share page."""
+    _check_share_rate(token)
+    with closing(_conn()) as conn:
+        with conn.cursor() as cur:
+            memory_id, space_id = _share_is_active(cur, token)
+            cur.execute(
+                """
+                SELECT cma.selected_by
+                FROM couple_memory_assets cma
+                WHERE cma.memory_id = %s AND cma.couple_space_id = %s
+                  AND cma.provider = 'immich' AND cma.immich_asset_id = %s
+                LIMIT 1
+                """,
+                (memory_id, space_id, asset_id),
+            )
+            binding = cur.fetchone()
+            if not binding:
+                raise HTTPException(status_code=404, detail="not found")
+            cur.execute("SELECT user_id FROM couple_members WHERE couple_space_id = %s ORDER BY id", (space_id,))
+            member_ids = [int(row[0]) for row in cur.fetchall()]
+    candidate_ids = []
+    if binding[0] is not None:
+        candidate_ids.append(int(binding[0]))
+    candidate_ids.extend(member_ids)
+    from app.immich_client import ImmichClient
+
+    last_error: Exception | None = None
+    for user_id in dict.fromkeys(candidate_ids):
+        try:
+            config = _user_immich_config(user_id)
+            if config is None:
+                continue
+            content, content_type = ImmichClient(config).get_thumbnail(asset_id)
+            return Response(content=content, media_type=content_type.split(";", 1)[0], headers={"Cache-Control": "private, max-age=300"})
+        except Exception as exc:  # try the other member's key before failing
+            last_error = exc
+    if isinstance(last_error, HTTPException):
+        raise last_error
+    raise HTTPException(status_code=404, detail="thumbnail unavailable") from last_error
+
+
 @router.get("/v1/share/{token}")
 def get_shared_memory(token: str) -> dict[str, Any]:
     _check_share_rate(token)
@@ -2142,6 +2304,20 @@ def get_shared_memory(token: str) -> dict[str, Any]:
             immich_assets = cur.fetchall()
             cur.execute("SELECT tag FROM memory_tags WHERE memory_id = %s ORDER BY id", (row[0],))
             tags = [r[0] for r in cur.fetchall()]
+    share_cover_url = row[7]
+    if share_cover_url:
+        # Rewrite stored authenticated/public URLs into the token-scoped
+        # endpoint used by anonymous share pages.
+        marker = "/api/v1/immich/assets/"
+        if marker in str(share_cover_url):
+            asset_part = str(share_cover_url).split(marker, 1)[1].split("/", 1)[0]
+            if asset_part:
+                share_cover_url = f"/api/v1/share/{urllib.parse.quote(token, safe='')}/immich-assets/{urllib.parse.quote(asset_part, safe='')}/thumbnail"
+        else:
+            for photo in photos:
+                if share_cover_url in {photo[1], photo[2]}:
+                    share_cover_url = f"/api/v1/share/{urllib.parse.quote(token, safe='')}/photos/{photo[0]}"
+                    break
     return {
         "memory": {
             "id": row[0],
@@ -2151,20 +2327,31 @@ def get_shared_memory(token: str) -> dict[str, Any]:
             "place_name": row[4],
             "latitude": row[5],
             "longitude": row[6],
-            "cover_photo_url": row[7],
+            "cover_photo_url": share_cover_url,
             "tags": tags,
         },
         "photos": [
             {
                 "id": p[0],
-                "display_url": p[1],
-                "thumbnail_url": p[2],
+                "display_url": f"/api/v1/share/{urllib.parse.quote(token, safe='')}/photos/{p[0]}",
+                "thumbnail_url": f"/api/v1/share/{urllib.parse.quote(token, safe='')}/photos/{p[0]}",
                 "original_filename": p[3],
                 "taken_at": str(p[4]) if p[4] else None,
             }
             for p in photos
         ],
-        "immich_assets": [_immich_asset_payload(r) for r in immich_assets],
+        "immich_assets": [
+            {
+                "immich_asset_id": r[4],
+                "original_filename": r[6],
+                "taken_at": str(r[7]) if r[7] else None,
+                "latitude": r[8],
+                "longitude": r[9],
+                "thumbnail_url": f"/api/v1/share/{urllib.parse.quote(token, safe='')}/immich-assets/{urllib.parse.quote(str(r[4]), safe='')}/thumbnail" if r[4] else None,
+                "display_url": f"/api/v1/share/{urllib.parse.quote(token, safe='')}/immich-assets/{urllib.parse.quote(str(r[4]), safe='')}/thumbnail" if r[4] else None,
+            }
+            for r in immich_assets
+        ],
     }
 
 

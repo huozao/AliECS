@@ -61,12 +61,30 @@ def test_detail_page_has_in_place_memory_editor_and_batch_media_picker():
     assert "data-cover-immich" in html
     assert "cover_photo_url" in html
     assert "绑定已选" in html
+    assert 'value="all">全部照片（默认）' in html
+    assert "renderPickerAlbumOptions" in html
+
+
+def test_couple_dashboard_immich_picker_supports_all_user_albums():
+    html = (ROOT / "services" / "public-web" / "couple" / "index.html").read_text(encoding="utf-8")
+
+    assert 'value="all">全部照片（默认）' in html
+    assert 'value="personal">个人库（全部）' in html
+    assert "renderImmichAlbumOptions" in html
+    assert "source.startsWith('album:')" in html
+    assert "await api('/v1/immich/albums')" in html
 
 
 def test_map_reuses_bound_immich_gps_when_memory_has_no_coordinates():
     router = (ROOT / "services" / "backend-api" / "app" / "routers" / "couple.py").read_text(encoding="utf-8")
 
-    assert "THEN m.latitude ELSE asset.latitude" in router
+    assert "THEN m.latitude ELSE COALESCE(asset.latitude, local_geo.latitude)" in router
     assert "FROM couple_memory_assets cma" in router
-    assert '"coordinate_source": row[7]' in router
+    assert '"coordinate_source": row[8]' in router
     assert "config = _user_immich_config(user_id)" in router
+
+
+def test_memory_photo_count_includes_immich_bindings():
+    router = (ROOT / "services" / "backend-api" / "app" / "routers" / "couple.py").read_text(encoding="utf-8")
+
+    assert "SELECT COUNT(*) FROM couple_memory_assets cma WHERE cma.memory_id = m.id" in router

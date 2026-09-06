@@ -102,15 +102,16 @@
 
     <section id="immichPicker" class="section card">
       <h2>从 Immich 选片</h2>
-      <p class="small">浏览当前用户的个人库；选中的照片会加入 Couple 家庭相册，也可以同时绑定到指定回忆。</p>
+      <p class="small">默认浏览当前用户的全部照片，也可以切换到任意 Immich 相册；选中的照片会加入 Couple 家庭相册，也可以同时绑定到指定回忆。</p>
       <div class="row">
         <select id="immichSource" style="max-width:230px">
-          <option value="personal">个人库</option>
+          <option value="all">全部照片（默认）</option>
+          <option value="personal">个人库（全部）</option>
           <option value="family">家庭相册</option>
         </select>
         <input id="immichQuery" placeholder="按文件名或内容搜索" style="max-width:260px" />
         <input id="immichMemoryId" type="number" min="1" placeholder="可选：回忆 ID" style="max-width:150px" />
-        <button id="loadImmichPickerBtn" type="button">加载个人库</button>
+        <button id="loadImmichPickerBtn" type="button">加载照片</button>
         <button id="addImmichSelectedBtn" class="primary" type="button">加入家庭相册并绑定</button>
         <span id="immichPickerHint" class="small"></span>
       </div>
@@ -288,30 +289,43 @@
       document.querySelectorAll('[data-immich-asset]').forEach((el)=>{el.onchange=()=>{if(el.checked)state.immichSelected.add(el.dataset.immichAsset);else state.immichSelected.delete(el.dataset.immichAsset);$('immichPickerHint').textContent=`已选择 ${state.immichSelected.size} 张，可用于发布回忆。`;};});
       hydrateImmichThumbnails();
     }
+    function albumId(album){return String(album?.id || album?.albumId || '').trim();}
+    function albumName(album){return album?.albumName || album?.name || album?.title || `相册 ${albumId(album)}`;}
+    function albumCount(album){const n=album?.assetCount ?? album?.asset_count;return Number.isFinite(Number(n)) ? Number(n) : null;}
+    function renderImmichAlbumOptions(){
+      const select=$('immichSource'); if(!select)return;
+      const current=select.value || 'all';
+      const familyId=String(state.immich?.family_album_id || '').trim();
+      const base=[['all','全部照片（默认）'],['personal','个人库（全部）'],['family',familyId?'家庭相册':'家庭相册（未配置）']];
+      const albumOptions=state.immichAlbums.map(album=>{const id=albumId(album);if(!id||id===familyId)return null;const count=albumCount(album);return [`album:${id}`,`${albumName(album)}${count==null?'':`（${count} 张）`}`];}).filter(Boolean);
+      select.innerHTML=[...base,...albumOptions].map(([value,label])=>`<option value="${esc(value)}">${esc(label)}</option>`).join('');
+      if([...select.options].some(option=>option.value===current))select.value=current;else select.value='all';
+    }
     async function loadImmichAlbums(){
-      if(state.immichAlbums.length) return;
-      const data = await api('/v1/immich/albums');
-      state.immichAlbums = data.items || [];
-      const familyId = data.family_album_id || state.immich?.family_album_id;
-      if(familyId && state.immich) state.immich.family_album_id = familyId;
-      const family = state.immichAlbums.find(a => a.id === familyId);
-      if(family) $('immichSource').querySelector('[value="family"]').textContent = `家庭相册（${family.assetCount || 0} 张）`;
+      if(!state.immichAlbums.length){
+        const data = await api('/v1/immich/albums');
+        state.immichAlbums = data.items || [];
+        const familyId = data.family_album_id || state.immich?.family_album_id;
+        if(familyId && state.immich) state.immich.family_album_id = familyId;
+      }
+      renderImmichAlbumOptions();
     }
     async function loadImmichPicker(page=1){
       if(!state.immich?.connected){$('immichPickerHint').textContent='请先连接 Immich。';return;}
       $('immichPickerHint').textContent='加载中...';
       await loadImmichAlbums();
-      const q=$('immichQuery').value.trim(); const source=$('immichSource').value; const albumId=source==='family'?(state.immich?.family_album_id||''):'';
-      if(source==='family' && !albumId){$('immichPickerHint').textContent='尚未配置家庭相册。';return;}
+      const q=$('immichQuery').value.trim(); const source=$('immichSource').value; const selectedAlbumId=source==='family'?(state.immich?.family_album_id||''):source.startsWith('album:')?source.slice(6):'';
+      if(source==='family' && !selectedAlbumId){$('immichPickerHint').textContent='尚未配置家庭相册。';return;}
       const params = new URLSearchParams({page:String(Math.max(1, page))});
       if(q) params.set('query', q);
-      if(albumId) params.set('album_id', albumId);
+      if(selectedAlbumId) params.set('album_id', selectedAlbumId);
       const data=await api(`/v1/immich/assets?${params.toString()}`);
       state.immichAssets=data.items||[]; state.immichPage=data.page||page; state.immichNextPage=data.next_page||null;
       renderImmichPicker();
       $('immichPrevBtn').disabled = state.immichPage <= 1;
       $('immichNextBtn').disabled = !state.immichNextPage;
-      $('immichPageHint').textContent = `${source==='family'?'家庭相册':'个人库'} · 第 ${state.immichPage} 页${data.total ? ` · 本页 ${state.immichAssets.length} 张` : ''}`;
+      const label=$('immichSource').selectedOptions[0]?.textContent || '全部照片';
+      $('immichPageHint').textContent = `${label} · 第 ${state.immichPage} 页${data.total ? ` · 本页 ${state.immichAssets.length} 张` : ''}`;
       $('immichPickerHint').textContent=`已加载 ${state.immichAssets.length} 张。`;
     }
     async function addImmichSelected(){
