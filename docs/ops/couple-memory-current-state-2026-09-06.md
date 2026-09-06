@@ -26,3 +26,11 @@
 - 线上确认优先使用静态文件/单容器热补丁；确认后再走正式镜像部署。
 - 热补丁成功后必须把改动回灌 Git，否则 compose 重建会丢失。
 - 数据库字段变更必须使用幂等迁移；本次农历字段迁移为 `0054_couple_lunar_anniversaries.sql`。
+
+## 本次正式发布证据
+
+- Couple 实现提交：`6686dec feat(couple): complete memory workspace interactions`。
+- GitHub Actions 发布运行：`34023327057`，目标为 `business-cn`，构建、TCR 镜像同步和部署作业均成功。
+- 发布后 `business-cn-backend-api-1` 健康检查通过；`public-web` 与 backend 均完成滚动重启。
+- 发布后公网探针：`/couple/`、`/memories/`、`/map/` 均返回 HTTP 200。
+- 后续若继续改动 Couple，仍按“热更新确认 → 记录结果 → 正式镜像部署”的顺序；只改文档时无需重新发布业务容器。
