@@ -132,6 +132,9 @@ class ImmichClient:
     def get_thumbnail(self, asset_id: str) -> tuple[bytes, str]:
         return self._request_bytes(f"/api/assets/{urllib.parse.quote(asset_id, safe='')}/thumbnail?size=thumbnail")
 
+    def get_original(self, asset_id: str) -> tuple[bytes, str]:
+        return self._request_bytes(f"/api/assets/{urllib.parse.quote(asset_id, safe='')}/original")
+
     def list_albums(self) -> list[dict[str, object]]:
         payload = self._request_json("/api/albums")
         return payload if isinstance(payload, list) else payload.get("items", [])

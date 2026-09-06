@@ -678,6 +678,21 @@ def immich_asset_thumbnail(asset_id: str, user: dict[str, Any] = Depends(require
     return Response(content=content, media_type=content_type, headers={"Cache-Control": "private, max-age=3600"})
 
 
+@router.get("/v1/immich/assets/{asset_id}/original")
+def immich_asset_original(asset_id: str, user: dict[str, Any] = Depends(require_login)) -> Response:
+    require_permission("couple_memory_access", user)
+    from app.immich_client import ImmichClient
+
+    config = _user_immich_config(_require_couple_user(user))
+    if config is None:
+        raise HTTPException(status_code=409, detail="请先连接 Immich")
+    try:
+        content, content_type = ImmichClient(config).get_original(asset_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return Response(content=content, media_type=content_type, headers={"Cache-Control": "private, max-age=3600"})
+
+
 def _user_id_by_username(username: str) -> int | None:
     with closing(_conn()) as conn:
         with conn.cursor() as cur:

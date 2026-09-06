@@ -88,3 +88,4 @@ def test_memory_photo_count_includes_immich_bindings():
     router = (ROOT / "services" / "backend-api" / "app" / "routers" / "couple.py").read_text(encoding="utf-8")
 
     assert "SELECT COUNT(*) FROM couple_memory_assets cma WHERE cma.memory_id = m.id" in router
+    assert 'get("/v1/immich/assets/{asset_id}/original")' in router
