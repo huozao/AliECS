@@ -1,11 +1,12 @@
 # public-web
 
-Static public pages for AliECS. The homepage shows business feature entries and auth controls. `/formula/` is the system formula page for BOM query, manual BOM sync, workbook download, and formula cost calculation. `/health/` renders ops status, reconciliation details, and external host checks.
+Static public pages for AliECS. The homepage shows business feature entries and auth controls. `/formula/` is the system formula page for BOM query, manual BOM sync, workbook download, and formula cost calculation. `/health/` renders ops status, reconciliation details, and external host checks. `/market/` is the read-only gold cross-market dashboard shell; production data is supplied later by `/api/v1/market/snapshot` and is never read directly from browser-visible files.
 
 ## Runtime Inputs
 
 - Browser local storage auth token keys: `aliecs_auth_token`, `portal_token`, `admin_token`.
 - Backend API at `/api` in production or `http://localhost:8000` when served on local port `8080`.
+- Market dashboard at `/market/`; it reads the authenticated, read-only `/api/v1/market/snapshot` contract. The backend reads the server-side `MARKET_SNAPSHOT_FILE` publication, never browser-visible raw tick files.
 - Feature list from `GET /v1/features?include_all=true`.
 - Ops status from `GET /v1/ops/status`, host refresh from `GET /v1/ops/hosts/{host_name}/refresh`, and reconciliation detail/actions for `/health/`.
 - Recipe query from `POST /v1/recipes/query`, cost calculation from `POST /v1/recipes/cost`, and downloads from `GET /v1/recipes/download/{file_id}`.

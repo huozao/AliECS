@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>黄金跨市场看板</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d141b;
+      --panel: #151f29;
+      --panel-2: #1b2834;
+      --line: #2b3b4a;
+      --text: #e7eef5;
+      --muted: #91a1af;
+      --ok: #61d59a;
+      --warn: #ffd166;
+      --bad: #ff8980;
+      --blue: #79b8ff;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: radial-gradient(circle at top left, #1d2b38 0, var(--bg) 42%); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+    main { max-width: 1500px; margin: auto; padding: 20px 22px 48px; }
+    header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+    h1 { margin: 0; font-size: 24px; letter-spacing: .01em; }
+    .subtitle { margin-top: 4px; color: var(--muted); }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    button, .button { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; background: var(--panel-2); color: var(--text); cursor: pointer; text-decoration: none; }
+    button:hover, .button:hover { border-color: var(--blue); }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .card { background: rgba(21, 31, 41, .94); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+    .label { color: var(--muted); font-size: 12px; }
+    .value { margin-top: 4px; font-size: 19px; font-variant-numeric: tabular-nums; }
+    .status-line { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; color: var(--muted); }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+    .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+    .notice { display: none; border: 1px solid var(--line); border-radius: 9px; padding: 11px 13px; margin-bottom: 12px; color: var(--muted); background: rgba(21, 31, 41, .82); }
+    .notice.show { display: block; }
+    .notice.bad { color: var(--bad); border-color: #6f3b3b; }
+    .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: rgba(21, 31, 41, .94); }
+    table { width: 100%; min-width: 980px; border-collapse: collapse; }
+    th, td { padding: 10px 11px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    th:first-child, td:first-child { text-align: left; }
+    th { color: var(--muted); font-weight: 500; }
+    tr:last-child td { border-bottom: 0; }
+    .symbol { color: var(--blue); font-weight: 650; }
+    .source { display: inline-flex; gap: 4px; align-items: center; padding: 2px 6px; border-radius: 999px; font-size: 12px; }
+    .source.ok { background: rgba(97, 213, 154, .12); color: var(--ok); }
+    .source.warn { background: rgba(255, 209, 102, .12); color: var(--warn); }
+    .source.bad { background: rgba(255, 137, 128, .12); color: var(--bad); }
+    .muted { color: var(--muted); }
+    .ok-text { color: var(--ok); } .warn-text { color: var(--warn); } .bad-text { color: var(--bad); }
+    footer { margin-top: 12px; color: var(--muted); font-size: 12px; }
+    @media (max-width: 820px) { main { padding: 14px 10px 32px; } header { display: block; } .actions { justify-content: flex-start; margin-top: 12px; } .grid { grid-template-columns: repeat(2, minmax(130px, 1fr)); } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>黄金跨市场实时看板</h1>
+        <div class="subtitle">只读展示｜MT5 逐笔源与 Dukascopy 历史源按 1 秒桶对齐</div>
+      </div>
+      <div class="actions">
+        <button id="login" type="button">SSO 登录</button>
+        <button id="refresh" type="button">立即刷新</button>
+        <a class="button" href="/">返回主站</a>
+      </div>
+    </header>
+
+    <section class="grid" aria-label="看板摘要">
+      <div class="card"><div class="label">数据状态</div><div class="value" id="overall">—</div></div>
+      <div class="card"><div class="label">最新源时刻</div><div class="value" id="source-time">—</div></div>
+      <div class="card"><div class="label">合约数</div><div class="value" id="contract-count">—</div></div>
+      <div class="card"><div class="label">不一致桶</div><div class="value" id="mismatch-count">—</div></div>
+    </section>
+
+    <p id="status-line" class="status-line"><span id="status-dot" class="dot"></span><span id="status-text">正在读取数据…</span></p>
+    <div id="notice" class="notice"></div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>合约</th><th>源状态</th><th>源时刻</th><th>采集时刻</th>
+            <th>AU 成交价</th><th>国际折算价</th><th>价差</th>
+            <th>MT5 XAUUSD</th><th>USDCNH</th><th>对账状态</th>
+          </tr>
+        </thead>
+        <tbody id="rows"><tr><td colspan="10" class="muted">暂无快照</td></tr></tbody>
+      </table>
+    </div>
+    <footer>数据只读；页面不直接读取 Parquet、MT5 终端或 Dukascopy 文件。源时刻与服务器接收时刻分开保留。</footer>
+  </main>
+
+  <script src="/common/user-badge.js"></script>
+  <script>
+    // 生产接入契约：同源只读接口，不在浏览器暴露采集凭据。
+    const SNAPSHOT_API = "/api/v1/market/snapshot";
+    const state = { timer: null, loading: false };
+
+    const $ = (id) => document.getElementById(id);
+    const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[char]));
+    const number = (value, digits = 3) => value == null || value === "" ? "—" : Number(value).toFixed(digits);
+    const instant = (value) => {
+      if (!value) return "—";
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? esc(value) : date.toLocaleString("zh-CN", { hour12: false });
+    };
+    const statusClass = (status) => {
+      const normalized = String(status || "").toLowerCase();
+      if (["ok", "healthy", "matched", "ready"].includes(normalized)) return "ok";
+      if (["stale", "partial", "missing_dukascopy", "missing_mt5", "unknown"].includes(normalized)) return "warn";
+      return "bad";
+    };
+    const statusText = (status) => ({
+      ok: "正常", healthy: "正常", matched: "一致", ready: "就绪",
+      stale: "过期", partial: "部分缺失", missing_dukascopy: "缺 Dukascopy", missing_mt5: "缺 MT5",
+    }[String(status || "").toLowerCase()] || status || "未知");
+
+    function setNotice(message, bad = false) {
+      const el = $("notice");
+      el.textContent = message || "";
+      el.className = `notice${message ? " show" : ""}${bad ? " bad" : ""}`;
+    }
+
+    function login() {
+      const returnTo = `${location.pathname}${location.search}`;
+      location.href = `/api/v1/auth/oidc/login?rd=${encodeURIComponent(returnTo)}`;
+    }
+
+    function render(data) {
+      const rows = Array.isArray(data.rows) ? data.rows : [];
+      const summary = data.comparison || {};
+      const status = String(data.status || (rows.length ? "ok" : "empty")).toLowerCase();
+      const cls = statusClass(status);
+      $("overall").textContent = statusText(status);
+      $("overall").className = `value ${cls}-text`;
+      $("source-time").textContent = instant(data.source_timestamp || data.updated_at);
+      $("contract-count").textContent = String(data.contract_count ?? rows.length);
+      $("mismatch-count").textContent = String(summary.mismatch_buckets ?? "—");
+      $("status-dot").className = `dot ${cls}`;
+      $("status-text").textContent = data.message || `最近刷新：${instant(data.ingested_at)}`;
+      setNotice(data.warning || (rows.length ? "" : "当前没有可展示的快照。采集器离线或尚未完成首次发布。"), Boolean(data.error));
+      $("rows").innerHTML = rows.length ? rows.map((row) => {
+        const source = String(row.source_status || row.status || "unknown").toLowerCase();
+        const compare = String(row.comparison_status || row.reconciliation_status || "unknown").toLowerCase();
+        const sourceClass = statusClass(source);
+        const compareClass = statusClass(compare);
+        return `<tr>
+          <td class="symbol">${esc(row.au_symbol || row.symbol || "—")}</td>
+          <td><span class="source ${sourceClass}">${esc(statusText(source))}</span></td>
+          <td>${instant(row.source_timestamp || row.recorded_at)}</td>
+          <td>${instant(row.ingested_at || row.received_at)}</td>
+          <td>${number(row.au_price_cny_per_g || row.au_trade_price, 2)}</td>
+          <td>${number(row.international_cny_per_g, 2)}</td>
+          <td>${number(row.spread_cny_per_g, 3)}</td>
+          <td>${number(row.xauusd_usd_per_oz || row.xauusd, 2)}</td>
+          <td>${number(row.usdcnh, 5)}</td>
+          <td><span class="source ${compareClass}">${esc(statusText(compare))}</span></td>
+        </tr>`;
+      }).join("") : '<tr><td colspan="10" class="muted">暂无快照</td></tr>';
+    }
+
+    async function refresh() {
+      if (state.loading) return;
+      state.loading = true;
+      try {
+        const headers = {};
+        const token = window.AliECSAuth && window.AliECSAuth.getToken();
+        if (token) headers.Authorization = `Bearer ${token}`;
+        const response = await fetch(`${SNAPSHOT_API}?limit=200`, { headers, cache: "no-store" });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          if (response.status === 401) throw new Error("需要登录后查看行情看板，请点击右上角 SSO 登录。");
+          throw new Error(payload.detail || `接口返回 HTTP ${response.status}`);
+        }
+        render(payload);
+      } catch (error) {
+        $("overall").textContent = "不可用";
+        $("overall").className = "value bad-text";
+        $("status-dot").className = "dot bad";
+        $("status-text").textContent = "读取失败";
+        setNotice(error.message || String(error), true);
+      } finally {
+        state.loading = false;
+      }
+    }
+
+    $("login").addEventListener("click", login);
+    $("refresh").addEventListener("click", refresh);
+    refresh();
+    state.timer = window.setInterval(refresh, 1000);
+  </script>
+</body>
+</html>
