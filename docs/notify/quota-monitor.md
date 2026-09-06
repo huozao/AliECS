@@ -37,27 +37,42 @@ Content-Type: application/json
   "event": "quota.daily_report",
   "level": "info",
   "title": "AI 额度日报",
-  "subtitle": "WebDock2 · 2026-09-06 08:00 (Asia/Singapore)",
-  "theme": "blue",
+  "subtitle": "统计截至 2026年9月7日 08:00 (CST)",
   "tags": [{"text": "Codex", "color": "blue"}, {"text": "Claude", "color": "violet"}],
-  "summary": "两个平台均已完成采集。",
+  "summary": "",
   "segments": [
-    {"kind": "fields", "fields": [
-      {"name": "Codex 5h", "value": "剩余 82% · 01:42 后重置"},
-      {"name": "Claude 7d", "value": "剩余 64% · 周一 09:00 重置"}
-    ]},
-    {"kind": "image", "image_ref": "codex-latest"},
-    {"kind": "image", "image_ref": "claude-latest"}
+    {"kind": "section", "section_title": "Codex", "section_icon": "🤖", "section_color": "blue",
+     "section_subtitle": "07:58 采集", "fields": [
+       {"name": "5 小时", "value": "**100%** 剩余 · 等待周额度重置"},
+       {"name": "周额度", "value": "<font color='red'>**0%**</font> 剩余 · 9/7 10:24（约 2小时26分钟后）"},
+       {"name": "Credits", "value": "441"}
+     ]},
+    {"kind": "section", "section_title": "Claude", "section_icon": "🟣", "section_color": "violet",
+     "section_subtitle": "07:58 采集", "fields": [
+       {"name": "5 小时", "value": "**100%** 剩余 · 会话未开始"},
+       {"name": "周额度", "value": "<font color='green'>**75%**</font> 剩余 · 9/12 18:00（约 5天10小时后）"}
+     ]},
+    {"kind": "image", "image_ref": "screen-0"},
+    {"kind": "image", "image_ref": "screen-1"}
   ],
   "images": [
-    {"ref": "codex-latest", "caption": "Codex 页面截图", "png_base64": "<PNG base64>"},
-    {"ref": "claude-latest", "caption": "Claude 页面截图", "png_base64": "<PNG base64>"}
+    {"ref": "screen-0", "caption": "Codex 页面截图", "png_base64": "<PNG base64>"},
+    {"ref": "screen-1", "caption": "Claude 页面截图", "png_base64": "<PNG base64>"}
   ],
-  "link": {"text": "查看历史截图", "url": "https://hydwang.xyz/console/quota/"},
-  "dedup_key": "quota:daily_report:2026-09-06:morning",
-  "occurred_at": "2026-09-06T00:00:00Z"
+  "link": {"text": "查看额度历史", "url": "https://hydwang.xyz/console/quota/"},
+  "dedup_key": "quota:daily_report:2026-09-07:morning",
+  "occurred_at": "2026-09-07T00:00:00Z"
 }
 ```
+
+⚠️ **明细一律走 `segments`，`summary` 只留概述或留空。** 飞书 channel 的 `build_card` 会把
+`summary` 和 `segments` **依次**渲染成卡片元素，同一段文字既传 `summary` 又传一个 `text`
+segment 时，卡片里会原样出现两遍（2026-09-07 实测的日报重复就是这个原因）。
+
+⚠️ **卡片里的时间必须是 quota-monitor 归一化过的绝对时间。** 页面上的 `Resets …` 按采集
+容器的时区渲染（生产是 UTC），把原始字符串塞进卡片等于让读的人在 CST 里再猜一次时区。
+quota-monitor 侧把它换算成 `reset_at_iso` / `weekly_reset_at_iso` 后再渲染成中文文案，
+中枢和卡片都不做时间解析。
 
 重置事件使用稳定的自然主键，确保同一窗口只通知一次：
 
