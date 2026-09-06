@@ -41,3 +41,4 @@ volumes:
   uploads:
   wecom_group_media:
   wecom_kf_materials:
+  market_snapshot:
