@@ -486,6 +486,17 @@ ssh txecs "sudo docker logs business-cn-backend-api-1 2>&1 | grep 'request valid
 「心跳缺席」（把 `notify_outbox` 里 aliecs-traffic 的最新一行时间改旧，或停设备侧 timer 满
 30 小时），确认它真的报出来，再把结果补进上表。**在那之前不要认为这条反向看护是可用的。**
 
+### 2026-09-06 日报漏发复盘
+
+2026-09-06 00:07（CST）设备 timer 正常运行，但日报在进入 `notify_outbox` 前被
+backend-api 返回 HTTP 422：`body.segments[0].fields[0]` 收到的是数组
+`["出方向", "**2.78 GB**"]`，而 `NotifyField` 契约要求对象
+`{"name": "出方向", "value": "**2.78 GB**"}`。这是 JSON 2.0 `section` 生产者与中枢
+模型的 schema 不一致，不是 Feishu 客户端兼容性问题。由于 422 被正确判定为 payload 永久
+非法，设备不会写 pending；补发时要重建原 dedup key，并同时检查 `notify_outbox` 和
+`notify_deliveries.status=sent`。以后修改卡片 schema，必须在设备脚本测试之外执行一次
+backend-api `Notification.model_validate()`，再做真实投递验证。
+
 ### 上线时踩到的三个「只有真实调用才会显形」的问题
 
 1. **`doc-sync` 的既有路由 `event_pattern` 是 `sync_alert`，不是 `*`。** 心跳告警的 event 是
