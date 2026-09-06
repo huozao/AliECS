@@ -337,6 +337,10 @@
       if(Number.isInteger(memoryId)&&memoryId>0) ids.forEach((assetId)=>state.immichSelected.delete(assetId));
       $('immichPickerHint').textContent=`已处理 ${ids.length} 张。`; await loadAll();
     }
+    function resetImmichPickerState(){
+      state.immichAlbums=[]; state.immichAssets=[]; state.immichPage=1; state.immichNextPage=null; state.immichSelected.clear();
+      renderImmichAlbumOptions();
+    }
     function renderAnniversaries(){
       $('anniversaryList').innerHTML = state.anniversaries.map(a => `<article class="card"><h3>${esc(a.title)}</h3><div class="small">${esc(a.date)} · ${esc(a.repeat_type)} · 还有 ${a.days_remaining} 天</div><p>${esc(a.description || '')}</p><div class="row"><button data-anniv-edit="${a.id}">编辑</button><button class="danger" data-anniv-del="${a.id}">删除</button></div></article>`).join('') || '<div class="muted">暂无纪念日。</div>';
     }
@@ -421,8 +425,8 @@
       $('immichPrevBtn').onclick = () => loadImmichPicker(state.immichPage - 1).catch(err => $('immichPickerHint').textContent=err.message);
       $('immichNextBtn').onclick = () => loadImmichPicker(state.immichNextPage).catch(err => $('immichPickerHint').textContent=err.message);
       $('addImmichSelectedBtn').onclick = () => addImmichSelected().catch(err => $('immichPickerHint').textContent=err.message);
-      $('immichConnectForm').onsubmit = async (e) => { e.preventDefault(); const key=$('immichApiKey').value.trim(); if(!key){$('immichConnectHint').textContent='请输入 API key。';return;} $('immichConnectHint').textContent='验证中...'; try { await api('/v1/immich/connection',{method:'POST',body:JSON.stringify({api_key:key})}); $('immichApiKey').value=''; $('immichConnectHint').textContent='已连接。'; await loadAll(); } catch(err) { $('immichConnectHint').textContent=err.message; } };
-      $('immichDisconnectBtn').onclick = async () => { if(!confirm('断开当前 Immich 连接？已绑定的回忆不会删除。')) return; await api('/v1/immich/connection',{method:'DELETE'}); $('immichConnectHint').textContent='已断开。'; await loadAll(); };
+      $('immichConnectForm').onsubmit = async (e) => { e.preventDefault(); const key=$('immichApiKey').value.trim(); if(!key){$('immichConnectHint').textContent='请输入 API key。';return;} $('immichConnectHint').textContent='验证中...'; try { await api('/v1/immich/connection',{method:'POST',body:JSON.stringify({api_key:key})}); $('immichApiKey').value=''; $('immichConnectHint').textContent='已连接。'; resetImmichPickerState(); await loadAll(); } catch(err) { $('immichConnectHint').textContent=err.message; } };
+      $('immichDisconnectBtn').onclick = async () => { if(!confirm('断开当前 Immich 连接？已绑定的回忆不会删除。')) return; await api('/v1/immich/connection',{method:'DELETE'}); $('immichConnectHint').textContent='已断开。'; resetImmichPickerState(); await loadAll(); };
       await loadAll().catch((e)=>console.error(e));
       await initAdminCouple().catch((e)=>console.error(e));
     });
