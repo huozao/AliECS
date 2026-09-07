@@ -557,6 +557,13 @@ VALUES ('my-device', '*', 'warn', 'feishu',
 
 改完路由不需要重启：`matching_routes` 每次投递都读表。
 
+已接入来源的跨服务契约（事件名、dedup_key 规则、触发口径）各有一份，改那条通道前先读：
+
+| 来源 | 契约 |
+|---|---|
+| `quota-monitor` | [`docs/notify/quota-monitor.md`](../notify/quota-monitor.md) |
+| `feishu-obsidian` | [`docs/notify/feishu-obsidian.md`](../notify/feishu-obsidian.md) |
+
 消息本身能填哪些字段、飞书能渲染成什么样、哪些写法会让卡片被拒——见
 〈卡片能力与消息模型字段〉。新来源不需要了解飞书卡片 JSON，只填那张表里的字段。
 
