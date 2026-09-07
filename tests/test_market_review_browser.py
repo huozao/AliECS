@@ -13,7 +13,10 @@ ROOT=Path(__file__).resolve().parents[1]
 class MarketReviewBrowserTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        from playwright.sync_api import sync_playwright
+        try:
+            from playwright.sync_api import sync_playwright
+        except ModuleNotFoundError as exc:
+            raise unittest.SkipTest("playwright is not installed in this CI job") from exc
         handler=functools.partial(http.server.SimpleHTTPRequestHandler,directory=str(ROOT/'services/public-web'))
         cls.http=http.server.ThreadingHTTPServer(('127.0.0.1',0),handler)
         threading.Thread(target=cls.http.serve_forever,daemon=True).start()
