@@ -29,6 +29,7 @@ class MarketSnapshotContractTests(unittest.TestCase):
                 result = self.module.market_snapshot(limit=200, _={})
         self.assertEqual(result["status"], "empty")
         self.assertEqual(result["rows"], [])
+        self.assertFalse(result["comparison"]["available"])
         self.assertNotIn("path", result)
 
     def test_reader_whitelists_private_row_fields_and_honors_limit(self) -> None:
@@ -61,6 +62,7 @@ class MarketSnapshotContractTests(unittest.TestCase):
             self.assertTrue(response["ok"])
             saved = json.loads(path.read_text(encoding="utf-8"))
             self.assertNotIn("secret", saved["rows"][0])
+            self.assertFalse(saved["comparison"]["available"])
 
     def test_ingest_is_disabled_without_server_token(self) -> None:
         from fastapi import HTTPException
