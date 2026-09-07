@@ -102,7 +102,7 @@ class OidcLoginTests(unittest.TestCase):
         self.assertEqual(len(mod._pending_states), 1)
         self.assertEqual(next(iter(mod._pending_states.values()))[2], "/")
 
-    def test_login_keeps_relative_rd_and_rejects_absolute(self):
+    def test_login_keeps_relative_rd_allows_market_origin_and_rejects_other_absolute(self):
         mod = load_oidc()
         with patch.dict(os.environ, OIDC_ENV, clear=False):
             with patch.object(mod, "_http_get_json", return_value=DISCOVERY):
@@ -110,7 +110,18 @@ class OidcLoginTests(unittest.TestCase):
                 mod.oidc_login(rd="/formula/?a=1")
                 (entry,) = mod._pending_states.values()
                 self.assertEqual(entry[2], "/formula/?a=1")
-                for bad in ("https://evil.com/", "//evil.com", "/a\\b", "javascript:alert(1)"):
+                mod._pending_states.clear()
+                mod.oidc_login(rd="https://market.hydwang.xyz/?tab=spread", handoff_challenge="a" * 43)
+                (entry,) = mod._pending_states.values()
+                self.assertEqual(entry[2], "https://market.hydwang.xyz/?tab=spread")
+                for bad in (
+                    "https://evil.com/",
+                    "https://market.hydwang.xyz.evil.com/",
+                    "https://user:pass@market.hydwang.xyz/",
+                    "//evil.com",
+                    "/a\\b",
+                    "javascript:alert(1)",
+                ):
                     mod._pending_states.clear()
                     mod.oidc_login(rd=bad)
                     (entry,) = mod._pending_states.values()
@@ -145,6 +156,29 @@ class OidcLoginTests(unittest.TestCase):
         self.assertEqual(bind_params, ("sub-123", "alice"))
         audit.assert_called_once_with("alice", "auth.oidc.login")
 
+    def test_callback_handoffs_only_bound_short_code_to_market_subdomain(self):
+        mod = load_oidc()
+        cursor = FakeCursor([ALICE])
+        conn = FakeConn(cursor)
+        mod._pending_states["market-state"] = (
+            "verifier-market",
+            time.time(),
+            "https://market.hydwang.xyz/?tab=spread",
+            "a" * 43,
+        )
+        with patch.dict(os.environ, OIDC_ENV, clear=False):
+            with patch.object(mod, "_http_get_json", side_effect=[DISCOVERY, USERINFO]):
+                with patch.object(mod, "_http_post_form", return_value={"access_token": "at-market"}):
+                    with patch.object(mod, "_conn", return_value=conn):
+                        with patch.object(mod, "_audit"):
+                            with patch.object(mod, "_user_roles_permissions", return_value=([], [])):
+                                with patch.object(mod.HandoffStore, "issue", return_value="one-time-code"):
+                                    response = mod.oidc_callback(code="code-market", state="market-state")
+        body = response.body.decode("utf-8")
+        self.assertIn("market.hydwang.xyz/?tab=spread#handoff_code=one-time-code", body)
+        self.assertNotIn("#aliecs_auth_token=", body)
+        self.assertIn("location.replace(\"https://market.hydwang.xyz/?tab=spread", body)
+
     def test_callback_unknown_user_403(self):
         mod = load_oidc()
         cursor = FakeCursor([None, None])
@@ -161,3 +195,12 @@ class OidcLoginTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_market_login_requires_browser_binding():
+    mod = load_oidc()
+    with patch.dict(os.environ, OIDC_ENV, clear=False):
+        with patch.object(mod, "_http_get_json", return_value=DISCOVERY):
+            with __import__("pytest").raises(HTTPException) as error:
+                mod.oidc_login(rd="https://market.hydwang.xyz/")
+    assert error.value.status_code == 400

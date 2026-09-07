@@ -30,6 +30,7 @@ _ROW_FIELDS = {
     "fallback_reason",
 }
 _COMPARISON_FIELDS = {
+    "available",
     "bucket_seconds",
     "compared_buckets",
     "mismatch_buckets",
@@ -73,6 +74,7 @@ def _empty_snapshot() -> dict[str, Any]:
         "contract_count": 0,
         "rows": [],
         "comparison": {
+            "available": False,
             "bucket_seconds": 1,
             "compared_buckets": 0,
             "mismatch_buckets": 0,
@@ -170,6 +172,63 @@ async def ingest_market_snapshot(
     content_length = request.headers.get("content-length")
     if content_length and content_length.isdigit() and int(content_length) > _MAX_INGEST_BYTES:
         raise HTTPException(status_code=413, detail="market snapshot payload is too large")
+    if len(json.dumps(body, ensure_ascii=False).encode("utf-8")) > _MAX_INGEST_BYTES:
+        raise HTTPException(status_code=413, detail="market snapshot payload is too large")
+    if body.get("schema_version") == market_review.SCHEMA:
+        return market_review.ingest(body)
     payload = _normalize_ingest_payload(body)
     _write_snapshot_atomic(payload, _snapshot_path())
     return {"ok": True, "contract_count": payload["contract_count"], "ingested_at": payload["ingested_at"]}
+
+# Versioned review endpoints keep legacy /snapshot untouched.
+from app import market_review
+from app.core import require_permission
+
+
+def _review_reader(user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
+    return require_permission('market.read', user)
+
+
+@router.get('/v1/market/latest')
+def market_latest(_: dict = Depends(_review_reader)):
+    return market_review.latest() or _empty_snapshot()
+
+
+@router.get('/v1/market/series')
+def market_series(symbol: str = Query(min_length=1,max_length=100), start: str | None = None,
+                  end: str | None = None, bucket_ms: int = 1000, after: str | None = None,
+                  run_id: str | None = Query(default=None, max_length=200),
+                  _: dict = Depends(_review_reader)):
+    return market_review.series(symbol,start,end,bucket_ms,after,run_id)
+
+
+@router.get('/v1/market/events')
+def market_events(run_id: str = Query(min_length=1,max_length=200),
+                  after_sequence: int = Query(0,ge=0), limit: int = Query(500,ge=1,le=2000),
+                  _: dict = Depends(_review_reader)):
+    return market_review.events_page(run_id,after_sequence,limit)
+
+
+@router.get('/v1/market/positions/{position_id}')
+def market_position(position_id: str, run_id: str = Query(min_length=1,max_length=200),
+                    _: dict = Depends(_review_reader)):
+    return market_review.position_view(position_id,run_id)
+
+
+@router.get('/v1/market/comparison')
+def market_comparison(symbol: str = Query(min_length=1,max_length=100), start: str | None = None,
+                      end: str | None = None, run_id: str | None = Query(default=None, max_length=200),
+                      _: dict = Depends(_review_reader)):
+    return market_review.comparison(symbol,start,end,run_id)
+
+
+@router.get('/v1/market/annotations')
+def market_annotations(position_id: str, run_id: str, after_id: int = Query(0,ge=0),
+                       _: dict = Depends(_review_reader)):
+    return market_review.annotations(position_id,run_id,after_id)
+
+
+@router.post('/v1/market/annotations')
+def market_annotate(body: dict, user: dict = Depends(_review_reader)):
+    require_permission('market.annotate',user)
+    return market_review.annotate(body,user)

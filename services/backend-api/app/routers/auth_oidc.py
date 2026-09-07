@@ -15,7 +15,10 @@ import uuid
 from contextlib import closing
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
+
+from app.auth_handoff import HandoffStore, MARKET_ORIGIN, valid_challenge
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.core import _audit, _conn, _encode_token, _token_ttl_seconds, _user_roles_permissions
@@ -25,7 +28,7 @@ router = APIRouter()
 _STATE_TTL_SECONDS = 600
 # state -> (code_verifier, created_at, return_to)。进程内存态：现网单 uvicorn worker 成立；
 # 若将来扩多 worker/多实例，必须改成 DB/共享存储，否则回调会随机 400。
-_pending_states: dict[str, tuple[str, float, str]] = {}
+_pending_states: dict[str, tuple[str, float, str, str]] = {}
 _discovery_cache: dict[str, dict[str, Any]] = {}
 
 
@@ -71,21 +74,39 @@ def _prune_states(now: float) -> None:
 
 
 def _sanitize_return_to(rd: str) -> str:
-    """只接受本站相对路径（防开放跳转）；其余一律回首页。"""
+    """接受本站相对路径及已登记的 HTTPS 站点地址（防开放跳转）。"""
     if rd.startswith("/") and not rd.startswith("//") and "\\" not in rd:
+        return rd
+    parsed = urllib.parse.urlsplit(rd)
+    allowed_origins = {
+        "https://hydwang.xyz",
+        "https://market.hydwang.xyz",
+    }
+    origin = f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+    if (
+        origin in allowed_origins
+        and not parsed.username
+        and not parsed.password
+        and parsed.path.startswith("/")
+        and "\\" not in rd
+    ):
         return rd
     return "/"
 
 
 @router.get("/v1/auth/oidc/login")
-def oidc_login(rd: str = "") -> RedirectResponse:
+def oidc_login(rd: str = "", handoff_challenge: str = "") -> RedirectResponse:
     if not _oidc_enabled():
         raise HTTPException(status_code=404, detail="oidc disabled")
     now = time.time()
     _prune_states(now)
     state = secrets.token_urlsafe(32)
     verifier = secrets.token_urlsafe(48)
-    _pending_states[state] = (verifier, now, _sanitize_return_to(rd))
+    return_to = _sanitize_return_to(rd)
+    if return_to.startswith(MARKET_ORIGIN + "/"):
+        if not valid_challenge(handoff_challenge):
+            raise HTTPException(status_code=400, detail="market login requires browser binding")
+    _pending_states[state] = (verifier, now, return_to, handoff_challenge)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
     params = {
         "response_type": "code",
@@ -174,8 +195,21 @@ def oidc_callback(code: str = "", state: str = "") -> HTMLResponse:
     _audit(row[1], "auth.oidc.login")
     token_js = json.dumps(_encode_token(payload))
     # rd 是用户可控输入且内联进 <script>，转义 <> 防 </script> 逃逸。
+    return_to = _sanitize_return_to(entry[2] if len(entry) > 2 else "/")
+    if return_to.startswith(MARKET_ORIGIN + "/"):
+        challenge = entry[3] if len(entry) > 3 else ""
+        if not valid_challenge(challenge):
+            raise HTTPException(status_code=400, detail="missing browser binding")
+        handoff_code = HandoffStore(_conn).issue(
+            token=_encode_token(payload), challenge=challenge, origin=MARKET_ORIGIN,
+        )
+        parsed_return_to = urllib.parse.urlsplit(return_to)
+        return_to = urllib.parse.urlunsplit((
+            parsed_return_to.scheme, parsed_return_to.netloc, parsed_return_to.path,
+            parsed_return_to.query, "handoff_code=" + handoff_code,
+        ))
     return_js = (
-        json.dumps(_sanitize_return_to(entry[2] if len(entry) > 2 else "/"))
+        json.dumps(return_to)
         .replace("<", "\\u003c")
         .replace(">", "\\u003e")
     )
@@ -185,4 +219,23 @@ def oidc_callback(code: str = "", state: str = "") -> HTMLResponse:
         '["aliecs_auth_token","portal_token","admin_token"].forEach(function(key){localStorage.setItem(key,token);});'
         "location.replace(" + return_js + ");</script>登录成功，正在跳转……"
     )
-    return HTMLResponse(html)
+    return HTMLResponse(html, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+
+
+class HandoffRequest(BaseModel):
+    code: str = Field(min_length=43, max_length=43)
+    verifier: str = Field(min_length=43, max_length=128)
+
+
+@router.post("/v1/auth/oidc/handoff")
+def oidc_handoff(body: HandoffRequest, request: Request):
+    from fastapi.responses import JSONResponse
+
+    if not _oidc_enabled():
+        raise HTTPException(status_code=404, detail="oidc disabled")
+    token = HandoffStore(_conn).consume(
+        code=body.code, verifier=body.verifier, origin=request.headers.get("origin", ""),
+    )
+    if token is None:
+        raise HTTPException(status_code=400, detail="invalid or expired login handoff")
+    return JSONResponse({"token": token}, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})

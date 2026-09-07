@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>黄金跨市场看板</title>
+  <title>V6 黄金错单观察台</title>
+  <link rel="stylesheet" href="/market/market.css?v=20260907">
   <style>
     :root {
       color-scheme: dark;
@@ -25,6 +26,7 @@
     h1 { margin: 0; font-size: 24px; letter-spacing: .01em; }
     .subtitle { margin-top: 4px; color: var(--muted); }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .user-badge { align-self: center; color: var(--muted); font-size: 13px; white-space: nowrap; }
     button, .button { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; background: var(--panel-2); color: var(--text); cursor: pointer; text-decoration: none; }
     button:hover, .button:hover { border-color: var(--blue); }
     .grid { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
@@ -58,16 +60,45 @@
   <main>
     <header>
       <div>
-        <h1>黄金跨市场实时看板</h1>
-        <div class="subtitle">只读展示｜MT5 逐笔源与 Dukascopy 历史源按 1 秒桶对齐</div>
+        <h1>V6 黄金错单观察台</h1>
+        <div class="subtitle">I_INTERNATIONAL_BASIS_TERM_CURVE｜国际折算基差期限曲线模型：比较目标价格与其他合约基差拟合的合理中心</div>
       </div>
       <div class="actions">
+        <span id="userBadge" class="user-badge hidden"></span>
         <button id="login" type="button">SSO 登录</button>
+        <button id="logout" class="hidden" type="button">退出登录</button>
         <button id="refresh" type="button">立即刷新</button>
-        <a class="button" href="/">返回主站</a>
+        <a class="button" href="https://hydwang.xyz/">返回主站</a>
       </div>
     </header>
 
+    <div id="demo-banner" class="alert hidden">合成演示｜不是真实行情、账户或研究结果</div>
+    <div id="review-status" class="review-strip">正在等待已授权的市场数据…</div>
+    <div id="source-health" class="review-strip muted"></div>
+    <section id="unresolved" class="alert" aria-live="polite">未解决敞口：尚未核对</section>
+    <section class="toolbar">
+      <label>合约 <select id="contract"></select></label>
+      <label>交易日 <input id="trading-day" type="date"></label>
+      <label>窗口 <select id="window"><option value="900">15 分钟</option><option value="3600">1 小时</option><option value="day">指定交易日</option></select></label>
+      <label>坐标 <select id="coordinate"><option value="price">绝对价格（元/克）</option><option value="spread">价差＝国内－国际（元/克）</option><option value="deviation">模型偏离＝国内－中心（元/克）</option></select></label>
+      <label>账本 <select id="ledger"><option value="both">双账对照</option><option value="model">模型账</option><option value="account">账户账</option></select></label>
+      <button id="follow">暂停跟随</button><button id="history-load">读取历史窗口</button><button id="history-more" class="hidden">下一页历史</button>
+    </section>
+    <p class="muted">暂停仅停止页面跟随；后台采集与交易继续。时间统一显示 UTC+08:00｜北京时间。选择交易日包含前一自然日夜盘窗口。</p>
+    <section class="chart-card"><h2>目标合约 · 秒内高低价与模型价格带</h2><div id="axis-note" class="muted"></div><div id="main-chart" class="chart"></div>
+      <p class="legend">◇ 预挂单　○ 纸面成交　▲ 账户成交　H｜对冲　C｜平仓；标记只代表对应事件，不保证成交。蓝色填充为当时模型价格带。</p>
+      <div id="selection" aria-live="polite">点击毛刺或事件，固定当时证据</div><div id="spikes" class="event-buttons"></div>
+    </section>
+    <section class="chart-card"><h2>同时间其他合约联动</h2><div id="linked-chart" class="chart linked"></div><div id="linked-legend" class="muted"></div></section>
+    <section class="split">
+      <div class="card"><h2>事件时间线</h2><div id="events" class="event-list"></div><button id="events-more" class="hidden">继续读取事件</button><div id="event-gaps" class="muted"></div></div>
+      <div class="card"><h2>当时对冲候选</h2><p class="muted">顺序来自 V6 决策快照；“最优”指当时成本判据，不表示未来收益最大。拒绝候选完整保留。</p><div id="decision-label"></div><div class="table-wrap"><table id="candidates"><thead><tr><th>排名</th><th>合约</th><th>合格 / 选中</th><th>理由</th><th>预期成本（元/一手配对）</th><th>理论价（元/克）</th><th>滑点（元/克）</th><th>报价年龄（秒）</th><th>指令 / 成交</th></tr></thead><tbody></tbody></table></div></div>
+    </section>
+    <section class="card"><h2>所选持仓 · 两腿与收益计算</h2><div id="position-detail">选择事件后读取账户回报；未知收益显示“—”，不补成 0。</div></section>
+    <section class="split">
+      <div class="card"><h2>原始逐笔 / 盘口证据</h2><div id="evidence-summary">点击图表或事件查看有界证据窗口</div><div class="table-wrap"><table id="raw-evidence"><thead><tr><th>源时刻</th><th>成交（元/克）</th><th>买一（元/克）</th><th>卖一（元/克）</th><th>来源 / 证据编号</th></tr></thead><tbody></tbody></table></div><details><summary>完整事件字段与引用</summary><pre id="raw-event"></pre></details></div>
+      <div class="card"><h2>指定品种与窗口双源对账</h2><div id="comparison">尚未运行对账，不能解释为 0 个不一致</div><h2>人工判断与修订历史</h2><form id="annotation-form"><label>判断 <select id="verdict"><option value="uncertain">存疑</option><option value="confirmed">确认毛刺</option><option value="excluded">排除（必须说明证据）</option></select></label><label>理由 <textarea id="reason" required maxlength="4000" rows="3"></textarea></label><button type="submit">追加标注</button></form><div id="annotation-status" aria-live="polite"></div><div id="annotations"></div></div>
+    </section>
     <section class="grid" aria-label="看板摘要">
       <div class="card"><div class="label">数据状态</div><div class="value" id="overall">—</div></div>
       <div class="card"><div class="label">最新源时刻</div><div class="value" id="source-time">—</div></div>
@@ -90,7 +121,7 @@
         <tbody id="rows"><tr><td colspan="10" class="muted">暂无快照</td></tr></tbody>
       </table>
     </div>
-    <footer>数据只读；页面不直接读取 Parquet、MT5 终端或 Dukascopy 文件。源时刻与服务器接收时刻分开保留。</footer>
+    <footer>数据只读；页面不直接读取 Parquet、MT5 终端或 Dukascopy 文件。源时刻与服务器接收时刻分开保留。 <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView Lightweight Charts™ 5.0.8</a> · <a href="/market/vendor/LICENSE">Apache 2.0 许可证</a></footer>
   </main>
 
   <script src="/common/user-badge.js"></script>
@@ -126,9 +157,40 @@
       el.className = `notice${message ? " show" : ""}${bad ? " bad" : ""}`;
     }
 
-    function login() {
-      const returnTo = `${location.pathname}${location.search}`;
-      location.href = `/api/v1/auth/oidc/login?rd=${encodeURIComponent(returnTo)}`;
+    async function login() {
+      const bytes = crypto.getRandomValues(new Uint8Array(32));
+      const b64 = bytes => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      const verifier = b64(bytes);
+      sessionStorage.setItem("market_handoff_verifier", verifier);
+      const challenge = b64(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
+      const returnTo = `${location.origin}${location.pathname}${location.search}`;
+      location.href = `https://hydwang.xyz/api/v1/auth/oidc/login?rd=${encodeURIComponent(returnTo)}&handoff_challenge=${challenge}`;
+    }
+    async function absorbLoginHandoff() {
+      const params = new URLSearchParams(location.hash.slice(1));
+      const code = params.get("handoff_code");
+      if (!location.hash) return;
+      history.replaceState(null, "", `${location.pathname}${location.search}`);
+      if (!code) return; // Reusable token fragments are never accepted.
+      const verifier = sessionStorage.getItem("market_handoff_verifier");
+      sessionStorage.removeItem("market_handoff_verifier");
+      if (!verifier) throw new Error("登录交接缺少本浏览器绑定，请重新登录。");
+      const response = await fetch("/api/v1/auth/oidc/handoff", {method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({code,verifier}), cache:"no-store"});
+      if (!response.ok) throw new Error("登录交接已失效，请重新登录。");
+      const body = await response.json();
+      localStorage.setItem("aliecs_auth_token", body.token);
+    }
+    async function syncUserState() {
+      const token = window.AliECSAuth && window.AliECSAuth.getToken();
+      const me = window.AliECSAuth && await window.AliECSAuth.renderUserBadge("userBadge", "当前登录：");
+      $("login").classList.toggle("hidden", Boolean(me));
+      $("logout").classList.toggle("hidden", !token);
+    }
+    function logout() {
+      ["aliecs_auth_token", "portal_token", "admin_token"].forEach(key => localStorage.removeItem(key));
+      window.MarketReview?.clear();
+      setNotice("已清除本页面登录凭据。主站统一登录会话仍可能有效；全站退出请在主站账户页操作。");
+      syncUserState();
     }
 
     function render(data) {
@@ -140,7 +202,7 @@
       $("overall").className = `value ${cls}-text`;
       $("source-time").textContent = instant(data.source_timestamp || data.updated_at);
       $("contract-count").textContent = String(data.contract_count ?? rows.length);
-      $("mismatch-count").textContent = String(summary.mismatch_buckets ?? "—");
+      $("mismatch-count").textContent = summary.available === false ? "—" : String(summary.mismatch_buckets ?? "—");
       $("status-dot").className = `dot ${cls}`;
       $("status-text").textContent = data.message || `最近刷新：${instant(data.ingested_at)}`;
       setNotice(data.warning || (rows.length ? "" : "当前没有可展示的快照。采集器离线或尚未完成首次发布。"), Boolean(data.error));
@@ -154,10 +216,10 @@
           <td><span class="source ${sourceClass}">${esc(statusText(source))}</span></td>
           <td>${instant(row.source_timestamp || row.recorded_at)}</td>
           <td>${instant(row.ingested_at || row.received_at)}</td>
-          <td>${number(row.au_price_cny_per_g || row.au_trade_price, 2)}</td>
+          <td>${number(row.au_price_cny_per_g ?? row.au_trade_price, 2)}</td>
           <td>${number(row.international_cny_per_g, 2)}</td>
           <td>${number(row.spread_cny_per_g, 3)}</td>
-          <td>${number(row.xauusd_usd_per_oz || row.xauusd, 2)}</td>
+          <td>${number(row.xauusd_usd_per_oz ?? row.xauusd, 2)}</td>
           <td>${number(row.usdcnh, 5)}</td>
           <td><span class="source ${compareClass}">${esc(statusText(compare))}</span></td>
         </tr>`;
@@ -190,9 +252,11 @@
     }
 
     $("login").addEventListener("click", login);
-    $("refresh").addEventListener("click", refresh);
-    refresh();
-    state.timer = window.setInterval(refresh, 1000);
+    $("refresh").addEventListener("click", () => window.MarketReview.refresh());
+    $("logout").addEventListener("click", logout);
+
   </script>
+  <script src="/market/vendor/lightweight-charts-5.0.8.js"></script>
+  <script src="/market/market.js?v=20260907"></script>
 </body>
 </html>
