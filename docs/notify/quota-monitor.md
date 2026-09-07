@@ -37,21 +37,20 @@ Content-Type: application/json
   "event": "quota.daily_report",
   "level": "info",
   "title": "AI 额度日报",
-  "subtitle": "统计截至 2026年9月7日 08:00 (CST)",
+  "subtitle": "统计截至 2026年9月7日 13:00 (SGT)",
   "tags": [{"text": "Codex", "color": "blue"}, {"text": "Claude", "color": "violet"}],
   "summary": "",
   "segments": [
-    {"kind": "section", "section_title": "Codex", "section_icon": "🤖", "section_color": "blue",
-     "section_subtitle": "07:58 采集", "fields": [
-       {"name": "5 小时", "value": "**100%** 剩余 · 等待周额度重置"},
-       {"name": "周额度", "value": "<font color='red'>**0%**</font> 剩余 · 9/7 10:24（约 2小时26分钟后）"},
-       {"name": "Credits", "value": "441"}
-     ]},
-    {"kind": "section", "section_title": "Claude", "section_icon": "🟣", "section_color": "violet",
-     "section_subtitle": "07:58 采集", "fields": [
-       {"name": "5 小时", "value": "**100%** 剩余 · 会话未开始"},
-       {"name": "周额度", "value": "<font color='green'>**75%**</font> 剩余 · 9/12 18:00（约 5天10小时后）"}
-     ]},
+    {"kind": "text", "text": "**🤖 Codex**　<font color='grey'>12:08 采集 · Credits 0</font>"},
+    {"kind": "fields", "fields": [
+      {"name": "5 小时", "value": "**100%**\n<font color='grey'>额度充足</font>"},
+      {"name": "周额度", "value": "<font color='green'>**85%**</font>\n<font color='grey'>9/14 10:33 · 6天22小时后</font>"}
+    ]},
+    {"kind": "text", "text": "**🟣 Claude**　<font color='grey'>12:08 采集</font>"},
+    {"kind": "fields", "fields": [
+      {"name": "5 小时", "value": "**89%**\n<font color='grey'>16:40 · 4小时22分后</font>"},
+      {"name": "周额度", "value": "<font color='green'>**64%**</font>\n<font color='grey'>9/12 18:00 · 5天5小时后</font>"}
+    ]},
     {"kind": "image", "image_ref": "screen-0"},
     {"kind": "image", "image_ref": "screen-1"}
   ],
@@ -64,6 +63,11 @@ Content-Type: application/json
   "occurred_at": "2026-09-07T00:00:00Z"
 }
 ```
+
+⚠️ **`section` 的三列不适合值会折行的指标。** `_section_element` 把指标名和指标值各拼成
+一个 markdown 块，两列靠「行数相同」对齐；只要有一个值在窄屏折行，两列就整体错开
+（2026-09-07 实测额度卡片里「Credits」对到了上一行的值上）。aliecs 流量日报没踩到是因为
+它的值短到不折行。值可能折行时改用 `fields`——每格是独立 column，折行只让那一格变高。
 
 ⚠️ **明细一律走 `segments`，`summary` 只留概述或留空。** 飞书 channel 的 `build_card` 会把
 `summary` 和 `segments` **依次**渲染成卡片元素，同一段文字既传 `summary` 又传一个 `text`
