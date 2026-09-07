@@ -41,10 +41,16 @@ def level_at_least(level: str, minimum: str) -> bool:
 
 
 class NotifyField(BaseModel):
-    """一行「名：值」。各 channel 自己决定渲染成表格、列表还是纯文本。"""
+    """一行「名：值」，外加可选的 ``note``。各 channel 自己决定怎么渲染。
+
+    ``note`` 是这一项的补充说明，渲染时用**更小的字号**。值本身要在窄屏一行放下时，
+    把次要信息（重置时刻、倒计时、口径备注）挪到 note，不要塞进 value——飞书 markdown
+    不支持行内字号，同一个 markdown 元素里的字只能一样大。
+    """
 
     name: str = Field(max_length=64)
     value: str = Field(max_length=512)
+    note: str = Field(default="", max_length=256)
 
 
 class NotifyImage(BaseModel):
@@ -233,6 +239,7 @@ class Notification(BaseModel):
             for field in segment.fields:
                 digest.update(field.name.encode())
                 digest.update(field.value.encode())
+                digest.update(field.note.encode())
         # 同一内容在不同时刻发生仍是两条通知，所以把时间也算进去；
         # 真正需要「重发不重复」的生产者必须自己给 dedup_key。
         digest.update(str(self.occurred_at).encode())
@@ -326,7 +333,10 @@ class Notification(BaseModel):
                         lines.append(heading)
                     if segment.section_subtitle.strip():
                         lines.append(segment.section_subtitle.strip())
-                lines.extend(f"{field.name}：{field.value}" for field in segment.fields)
+                lines.extend(
+                    f"{field.name}：{field.value}" + (f"（{field.note}）" if field.note else "")
+                    for field in segment.fields
+                )
             elif segment.kind == "image":
                 caption = next(
                     (image.caption for image in self.images if image.ref == segment.image_ref),
