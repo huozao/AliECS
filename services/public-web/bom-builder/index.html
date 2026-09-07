@@ -278,9 +278,11 @@
       const run=debounce(async()=>{const q=input.value.trim();if(!q){box.classList.add('hidden');return}
         if(!token()){message('请先登录（SSO）。');return}
         try{const data=await api(`/v1/tplus/inventories?q=${encodeURIComponent(q)}&limit=20&scope=${scope}`);if(input.value.trim()!==q)return;renderDropdown(box,data.items||[],q,onPick,{allowCreate});}
-        catch(e){box.innerHTML=`<div class="dd-item" style="color:var(--danger)">搜索失败：${esc(e.message)}（改动关键词重试）</div>`;box.classList.remove('hidden');}},250);
-      input.addEventListener('input',run);
-      input.addEventListener('focus',()=>{if(input.value.trim())run();});}
+        catch(e){box.innerHTML=`<div class="dd-item" style="color:var(--danger)">搜索失败：${esc(e.message)}（改动关键词重试）</div>`;box.classList.remove('hidden');}},150);
+      // 立刻给出"搜索中"占位，不等 debounce：否则敲完键到结果出来的这段时间里下拉毫无反应，看起来像卡住。
+      const onInput=()=>{if(input.value.trim()){box.innerHTML='<div class="dd-item muted">搜索中…</div>';box.classList.remove('hidden');}else{box.classList.add('hidden');}run();};
+      input.addEventListener('input',onInput);
+      input.addEventListener('focus',onInput);}
 
     // ---------- 建议编码与查重（辅助功能：接口失败不阻塞录入） ----------
     const dupState={parentCode:false,customCode:false};

@@ -38,7 +38,7 @@ def sync_inventory(
             settings=runtime_settings,
             timestamp=timestamp,
             annotate_missing_disabled=True,
-            extra_payload={"SelectFields": "ID,Code,Name,InventoryClass.Code,InventoryClass.Name,BaseUnitCode,BaseUnitName,Disabled"},
+            extra_payload={"SelectFields": "ID,Code,Name,Specification,InventoryClass.Code,InventoryClass.Name,BaseUnitCode,BaseUnitName,Disabled"},
         )
     logger.info("Inventory sync finished: rows=%s", len(rows))
     return rows
