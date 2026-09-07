@@ -124,6 +124,98 @@ def _inventory_column(df, *names: str) -> str:
     return ""
 
 
+# 存货档案与现存量都是每天全量同步换新文件，同一份文件反复解析没有意义：
+# 按 (路径, mtime, 大小) 缓存解析结果，搜索下拉的每次按键就不再吃一次 Excel 解析。
+_EXCEL_INDEX_CACHE: dict[str, tuple[tuple[Any, ...], Any]] = {}
+
+
+def _file_stamp(path) -> tuple[Any, ...]:
+    stat = path.stat()
+    return (str(path), stat.st_mtime_ns, stat.st_size)
+
+
+def _cached_index(cache_key: str, path, build):
+    stamp = _file_stamp(path)
+    cached = _EXCEL_INDEX_CACHE.get(cache_key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    index = build(path)
+    _EXCEL_INDEX_CACHE[cache_key] = (stamp, index)
+    return index
+
+
+def _build_inventory_index(path) -> list[dict[str, Any]]:
+    """把存货档案 Excel 压成搜索用的轻量行：只留下拉要的字段，并预先算好小写搜索键。"""
+    import pandas as pd
+
+    df = pd.read_excel(path, dtype=str).fillna("")
+    code_col = _inventory_column(df, "Code", "InventoryCode", "存货编码")
+    name_col = _inventory_column(df, "Name", "InventoryName", "存货名称")
+    unit_col = _inventory_column(df, "BaseUnitName", "Unit.Name", "UnitName", "计量单位", "单位")
+    unit_code_col = _inventory_column(df, "BaseUnitCode", "Unit.Code", "UnitCode", "计量单位编码")
+    class_code_col = _inventory_column(df, "InventoryClass.Code", "InventoryClassCode", "存货分类编码")
+    class_name_col = _inventory_column(df, "InventoryClass.Name", "InventoryClassName", "存货分类")
+    spec_col = _inventory_column(df, "Specification", "规格型号")
+    disabled_col = _inventory_column(df, "Disabled", "停用")
+    if not code_col or not name_col or not unit_col:
+        raise HTTPException(status_code=409, detail="存货档案缺少编码、名称或计量单位字段")
+
+    def cell(row, column: str) -> str:
+        return str(row[column]).strip() if column else ""
+
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for _, row in df.iterrows():
+        code = cell(row, code_col)
+        unit_name = cell(row, unit_col)
+        if not code or not unit_name or code in seen:
+            continue
+        seen.add(code)
+        name = cell(row, name_col)
+        specification = cell(row, spec_col)
+        rows.append(
+            {
+                "code": code,
+                "name": name,
+                "specification": specification,
+                "unit_name": unit_name,
+                "unit_code": cell(row, unit_code_col),
+                "inventory_class_code": cell(row, class_code_col),
+                "inventory_class_name": cell(row, class_name_col),
+                "source": "tplus",
+                "_disabled": cell(row, disabled_col).lower() in {"1", "true", "yes", "是"},
+                "_search": f"{code}\n{name}\n{specification}".lower(),
+            }
+        )
+    return rows
+
+
+def _build_stock_index(path) -> list[tuple[str, str, float, float]]:
+    """现存量 Excel 压成 (存货编码, 仓库编码, 现存量, 可用量)；仓库范围来自配置，不进缓存键。"""
+    import pandas as pd
+
+    stock = pd.read_excel(path, dtype=str).fillna("")
+    required = {"InventoryCode", "WarehouseCode"}
+    if not required.issubset(set(stock.columns)):
+        raise HTTPException(status_code=409, detail="原材料库存缺少存货或仓库字段")
+    rows: list[tuple[str, str, float, float]] = []
+    for _, item in stock.iterrows():
+        code = str(item.get("InventoryCode") or "").strip()
+        if not code:
+            continue
+        existing_qty = pd.to_numeric(item.get("ExistingQuantity"), errors="coerce")
+        available_qty = pd.to_numeric(item.get("AvailableQuantity"), errors="coerce")
+        rows.append(
+            (
+                code,
+                str(item.get("WarehouseCode") or "").strip(),
+                0.0 if pd.isna(existing_qty) else float(existing_qty),
+                0.0 if pd.isna(available_qty) else float(available_qty),
+            )
+        )
+    return rows
+
+
 def _chanjet_open_token() -> str:
     token_file = os.getenv("CHANJET_OPEN_TOKEN_FILE", "").strip()
     if token_file:
@@ -212,64 +304,28 @@ def tplus_inventory_choices(
     if path is None:
         raise HTTPException(status_code=404, detail="存货档案尚未同步")
 
-    import pandas as pd
-
-    df = pd.read_excel(path, dtype=str).fillna("")
-    code_col = _inventory_column(df, "Code", "InventoryCode", "存货编码")
-    name_col = _inventory_column(df, "Name", "InventoryName", "存货名称")
-    unit_col = _inventory_column(df, "BaseUnitName", "Unit.Name", "UnitName", "计量单位", "单位")
-    unit_code_col = _inventory_column(df, "BaseUnitCode", "Unit.Code", "UnitCode", "计量单位编码")
-    class_code_col = _inventory_column(df, "InventoryClass.Code", "InventoryClassCode", "存货分类编码")
-    class_name_col = _inventory_column(df, "InventoryClass.Name", "InventoryClassName", "存货分类")
-    spec_col = _inventory_column(df, "Specification", "规格型号")
-    disabled_col = _inventory_column(df, "Disabled", "停用")
-    if not code_col or not name_col or not unit_col:
-        raise HTTPException(status_code=409, detail="存货档案缺少编码、名称或计量单位字段")
-    if disabled_col and include_disabled is not True:
-        disabled = df[disabled_col].astype(str).str.strip().str.lower()
-        df = df[~disabled.isin({"1", "true", "yes", "是"})]
+    rows = _cached_index("inventory", path, _build_inventory_index)
+    if include_disabled is not True:
+        rows = [row for row in rows if not row["_disabled"]]
     stock_by_code: dict[str, dict[str, Any]] = {}
     if scope == "material":
         stock_path = _latest_tplus_export_file("current_stock")
         if stock_path is None:
             raise HTTPException(status_code=404, detail="原材料库存尚未同步")
-        stock = pd.read_excel(stock_path, dtype=str).fillna("")
-        required = {"InventoryCode", "WarehouseCode"}
-        if not required.issubset(set(stock.columns)):
-            raise HTTPException(status_code=409, detail="原材料库存缺少存货或仓库字段")
         raw_warehouses, _ = _inventory_scope_config()
-        stock = stock[stock["WarehouseCode"].astype(str).str.strip().isin(raw_warehouses)]
-        for _, item in stock.iterrows():
-            code = str(item.get("InventoryCode") or "").strip()
-            if not code:
+        for code, warehouse, existing_qty, available_qty in _cached_index("current_stock", stock_path, _build_stock_index):
+            if warehouse not in raw_warehouses:
                 continue
             current = stock_by_code.setdefault(code, {"existing_quantity": 0.0, "available_quantity": 0.0})
-            existing_qty = pd.to_numeric(item.get("ExistingQuantity"), errors="coerce")
-            available_qty = pd.to_numeric(item.get("AvailableQuantity"), errors="coerce")
-            current["existing_quantity"] += 0.0 if pd.isna(existing_qty) else float(existing_qty)
-            current["available_quantity"] += 0.0 if pd.isna(available_qty) else float(available_qty)
-        df = df[df[code_col].astype(str).str.strip().isin(stock_by_code)]
+            current["existing_quantity"] += existing_qty
+            current["available_quantity"] += available_qty
+        rows = [row for row in rows if row["code"] in stock_by_code]
     keyword = q.strip().lower()
     if keyword:
-        mask = df[code_col].str.lower().str.contains(keyword, regex=False) | df[name_col].str.lower().str.contains(keyword, regex=False)
-        if spec_col:
-            mask |= df[spec_col].str.lower().str.contains(keyword, regex=False)
-        df = df[mask]
-    df = df.drop_duplicates(subset=[code_col]).head(limit)
+        rows = [row for row in rows if keyword in row["_search"]]
     items = [
-        {
-            "code": str(row[code_col]).strip(),
-            "name": str(row[name_col]).strip(),
-            "specification": str(row[spec_col]).strip() if spec_col else "",
-            "unit_name": str(row[unit_col]).strip(),
-            "unit_code": str(row[unit_code_col]).strip() if unit_code_col else "",
-            "inventory_class_code": str(row[class_code_col]).strip() if class_code_col else "",
-            "inventory_class_name": str(row[class_name_col]).strip() if class_name_col else "",
-            "source": "tplus",
-            **stock_by_code.get(str(row[code_col]).strip(), {}),
-        }
-        for _, row in df.iterrows()
-        if str(row[code_col]).strip() and str(row[unit_col]).strip()
+        {key: value for key, value in row.items() if not key.startswith("_")} | stock_by_code.get(row["code"], {})
+        for row in rows[:limit]
     ]
     stat = path.stat()
     return {

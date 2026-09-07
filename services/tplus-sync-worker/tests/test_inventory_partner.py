@@ -88,6 +88,16 @@ class InventoryPartnerSyncTests(unittest.TestCase):
             self.assertTrue(enabled_raw.exists())
             self.assertTrue(disabled_raw.exists())
 
+    def test_sync_inventory_selects_specification_field(self):
+        """T+ 只回 SelectFields 里点名的字段；漏掉 Specification 时导出的规格型号列会整列为空。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            client = FakeDisabledSplitClient()
+
+            sync_inventory(settings=self._settings(tmp), client=client, timestamp="20260604_010000")
+
+            select_fields = client.calls[0][1]["param"]["SelectFields"].split(",")
+            self.assertIn("Specification", select_fields)
+
     def test_sync_partner_pages_and_saves_raw_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = FakeQueryPageClient()

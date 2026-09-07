@@ -58,6 +58,7 @@ class TPlusBomPickerTests(unittest.TestCase):
         _write_stock(directory)
         self.old_scope = self.main._inventory_scope_config
         self.main._inventory_scope_config = lambda: ({"001", "012"}, {"001"})
+        self.main._EXCEL_INDEX_CACHE.clear()
 
     def tearDown(self) -> None:
         self.main._inventory_scope_config = self.old_scope
@@ -81,6 +82,42 @@ class TPlusBomPickerTests(unittest.TestCase):
         self.assertEqual(["515"], [item["code"] for item in result["items"]])
         self.assertEqual(10.0, result["items"][0]["available_quantity"])
         self.assertEqual(13.0, result["items"][0]["existing_quantity"])
+
+    def test_specification_matches_keyword_and_is_returned(self):
+        result = self.main.tplus_inventory_choices(q="25kg", limit=20, scope="all", user=self._user())
+        self.assertEqual(["515"], [item["code"] for item in result["items"]])
+        self.assertEqual("25kg", result["items"][0]["specification"])
+
+    def test_repeated_search_reuses_parsed_index(self):
+        """搜索下拉每次按键都打这个接口，同一份档案不该被反复解析。"""
+        import pandas
+
+        first = self.main.tplus_inventory_choices(q="515", limit=20, scope="all", user=self._user())
+        original = pandas.read_excel
+        calls: list[int] = []
+
+        def counting_read_excel(*args, **kwargs):
+            calls.append(1)
+            return original(*args, **kwargs)
+
+        pandas.read_excel = counting_read_excel
+        try:
+            second = self.main.tplus_inventory_choices(q="515", limit=20, scope="all", user=self._user())
+        finally:
+            pandas.read_excel = original
+        self.assertEqual([], calls)
+        self.assertEqual(first["items"], second["items"])
+
+    def test_new_export_file_invalidates_cached_index(self):
+        self.main.tplus_inventory_choices(q="515", limit=20, scope="all", user=self._user())
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["Code", "Name", "Specification", "BaseUnitCode", "BaseUnitName", "Disabled"])
+        ws.append(["777", "新到原料", "50kg", "1", "kg", "False"])
+        wb.save(Path(self.tmp.name) / "inventory_20260712_010830.xlsx")
+
+        result = self.main.tplus_inventory_choices(q="50kg", limit=20, scope="all", user=self._user())
+        self.assertEqual(["777"], [item["code"] for item in result["items"]])
 
     def test_disabled_rows_hidden_by_default(self):
         result = self.main.tplus_inventory_choices(q="06000088", limit=20, scope="all", user=self._user())
