@@ -828,3 +828,30 @@ class CrossServiceContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_field_note_renders_smaller_and_survives_every_channel():
+    """note 用更小字号单独成元素；纯文本和企微兜底都不能把它丢掉。"""
+    # ⚠️ 不能在函数里做延迟 import：同目录的 worker 测试会把 sys.modules['app'] 换成
+    # doc-sync-worker 的同名包，之后 `from app.notify...` 直接 ModuleNotFoundError
+    # （模块顶部那段注释说的就是这件事，2026-09-07 我在这条用例上又踩了一次）。
+    note = Notification(
+        source="quota-monitor",
+        event="quota.daily_report",
+        title="AI 额度日报",
+        segments=[{
+            "kind": "fields",
+            "fields": [
+                {"name": "5h", "value": "94%", "note": "重置 18:17 · 4h 59min"},
+                {"name": "周额度", "value": "84%", "note": "重置 9/14 10:33 · 6d 21h"},
+            ],
+        }],
+    )
+    card = feishu.build_card(note, {})
+    column_set = next(e for e in card["body"]["elements"] if e.get("tag") == "column_set")
+    for column in column_set["columns"]:
+        sizes = [element["text_size"] for element in column["elements"]]
+        assert sizes == ["normal", "notation"], sizes
+    # 白名单式渲染最容易在这里静默丢字段：两条兜底路径都要能看到 note
+    assert "4h 59min" in note.plain_text()
+    assert "4h 59min" in wecom.render_markdown(note)
