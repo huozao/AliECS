@@ -25,7 +25,7 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 | `app/routers/sync.py` | `/v1/sync/*` 统一同步中心，查询层为 `app/sync_read.py`，控制层为 `app/sync_control.py`；`app/document_locator.py` 统一资产下载、副本幂等登记与 docid 修复，响应不返回外部文档 ID |
 | `versions.py` | 版本看板 |
 | `backups.py` | 企微结构备份看板、镜像清理策略看板 |
-| `clash_profile.py` | Clash 配置合成器（人类叫法：订阅合并 / 一个订阅选所有节点）。机场订阅源 CRUD + 合成配置下载；渲染逻辑在 `app/clash_profile/render.py`，自建节点走 env `CLASH_SELF_NODES_B64`。`mobile` 目标会把启用订阅源的最新快照嵌成单文件 YAML；2026-09-05 已修复 provider 节点缩进导致的手机 YAML 解析错误。验证：`python -m unittest discover -s tests -p "test_clash_profile_render.py"` |
+| `clash_profile.py` | Clash 配置合成器（人类叫法：订阅合并 / 一个订阅选所有节点）。机场订阅源 CRUD + 合成配置下载；渲染逻辑在 `app/clash_profile/render.py`，自建节点走 env `CLASH_SELF_NODES_B64`。`mobile` 目标会把启用订阅源的最新快照嵌成单文件 YAML；2026-09-05 已修复 provider 节点缩进导致的手机 YAML 解析错误。2026-09-08 加 `Codex-Win`/`Codex-WSL` 两个组与 `codex-in` listener（7899，仅 desktop），让两处 codex 各自选节点，接线与判据见 `infra/roles/devbox/clash/README.md`〈三点七〉。验证：`python -m unittest discover -s tests -p "test_clash_profile_render.py"` |
 | `couple.py` | Couple 私密情侣空间：回忆、地图、纪念日、愿望清单，以及按用户 Immich API key 的个人库选片/家庭相册归档；AdventureLog 保持独立入口 |
 | `market_snapshot.py` | V6 市场审阅：只读增量行情、交易事件、双账仓位、历史游标和人工标注；数据表与迁移见 `db/migrations/0055_market_review.sql`、`0056_auth_browser_handoff.sql`、`0057_market_review_indexes.sql` |
 
