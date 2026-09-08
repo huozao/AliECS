@@ -410,7 +410,7 @@ class ClashProfileRenderTests(unittest.TestCase):
         desktop = self.render.render_profile([self.node], [self.provider])
         listeners = _section(desktop, "listeners")
         self.assertEqual(len(listeners), 1)
-        self.assertEqual(listeners[0]["port"], 7899)
+        self.assertEqual(listeners[0]["port"], 7900)
         self.assertEqual(listeners[0]["listen"], "0.0.0.0")
 
         webdock = self.render.render_profile([self.node], [self.provider], target="webdock")
@@ -420,6 +420,49 @@ class ClashProfileRenderTests(unittest.TestCase):
             provider_contents={7: self.provider_content},
         )
         self.assertIsNone(_section(mobile, "listeners"))
+
+    def test_codex_listener_avoids_verge_reserved_ports(self) -> None:
+        """listener 不能落在 Verge 覆写层写死的三个端口上。
+
+        Verge 的 config.yaml 里有 mixed-port 7897 / socks-port 7898 / port 7899，
+        当前只注入了第一个（/configs 里另两个是 0）。哪次 Verge 把 HTTP 端口启用，
+        7899 就会和这个 listener 抢端口——2026-09-08 一度就选的 7899。
+        """
+        out = self.render.render_profile([self.node], [self.provider])
+        port = _section(out, "listeners")[0]["port"]
+        self.assertNotIn(port, (7897, 7898, 7899))
+
+    def test_tun_is_disabled_for_desktop_but_kept_for_mobile(self) -> None:
+        """devbox 的 TUN 由 Verge 开关控制且长期关闭，产物跟着声明 false；
+        手机客户端要靠 TUN 接管流量，必须保持 true。"""
+        desktop = self.render.render_profile([self.node], [self.provider])
+        self.assertIn("\ntun:\n  enable: false\n", desktop)
+        mobile = self.render.render_profile(
+            [self.node], [self.provider], target="mobile",
+            provider_contents={7: self.provider_content},
+        )
+        self.assertIn("\ntun:\n  enable: true\n", mobile)
+        webdock = self.render.render_profile([self.node], [self.provider], target="webdock")
+        self.assertNotIn("\ntun:\n", webdock)
+
+    def test_allow_lan_matches_runtime_on_every_target(self) -> None:
+        """allow-lan 三个目标都是 true，WebDock 额外绑 Docker bridge。
+
+        devbox 上这个值由 Verge 覆写层决定、profile 改不动，写 true 是为了正本
+        不与运行态矛盾；WSL 侧 codex 连宿主机 listener 正是靠它。
+        """
+        for target, kwargs in (
+            ("desktop", {}),
+            ("webdock", {}),
+            ("mobile", {"provider_contents": {7: self.provider_content}}),
+        ):
+            out = self.render.render_profile(
+                [self.node], [self.provider], target=target, **kwargs
+            )
+            self.assertIn("allow-lan: true", out, f"{target} 的 allow-lan 不是 true")
+            self.assertNotIn("allow-lan: false", out)
+        webdock = self.render.render_profile([self.node], [self.provider], target="webdock")
+        self.assertIn("bind-address: 172.17.0.1", webdock)
 
     def test_codex_listener_name_matches_the_rule_that_selects_it(self) -> None:
         """判据落在连接处：listener 的 name 和规则里的 IN-NAME 必须是同一个字符串。
