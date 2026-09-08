@@ -54,7 +54,11 @@ GROUP_CODEX_WSL = "Codex-WSL"
 # listen 绑 0.0.0.0 而不是回环：WSL 是 NAT 网段，网关地址每次重启会变，绑不住。
 # 暴露面与既有 mixed-port 一致（运行态 allow-lan=true、bind=*）。
 LISTENER_CODEX_NAME = "codex-in"
-LISTENER_CODEX_PORT = 7899
+# ⚠️ 不能用 7897 / 7898 / 7899。Verge 的覆写层 config.yaml 里写死了这三个
+# （mixed-port / socks-port / port），当前只注入了 mixed-port，另两个 /configs 里是 0；
+# 但只要哪次 Verge 把 HTTP 端口启用，7899 就会和这个 listener 抢端口。
+# 2026-09-08 一度选了 7899，发现后改到 7900。
+LISTENER_CODEX_PORT = 7900
 
 # 机场把套餐信息塞成"节点"放在订阅里（剩余流量、距离下次重置、套餐到期），它们在
 # 面板上是给人看的提示，不是可用出口。
@@ -134,17 +138,28 @@ def _base_text(target: str) -> str:
     if target not in (PROFILE_DESKTOP, PROFILE_WEBDOCK, PROFILE_MOBILE):
         raise ValueError(f"不支持的 Clash 配置目标：{target}")
     base = TEMPLATE_BASE.read_text(encoding="utf-8").rstrip("\n")
-    if target in (PROFILE_DESKTOP, PROFILE_MOBILE):
+    marker = "\ntun:\n"
+    if marker not in base:
+        raise ValueError("template_base.yaml 缺少 tun 段，无法按目标裁剪")
+    head, tun_block = base.split(marker, 1)
+
+    # 手机客户端要靠 TUN 才能接管流量，保持 enable: true。
+    if target == PROFILE_MOBILE:
         return base
+
+    # devbox 的 TUN 由 Verge 的 `enable_tun_mode` 控制，实测长期是 false，profile 里
+    # 写 true 只会让正本和运行态互相矛盾（2026-09-08 查明）。产物跟着声明 false：
+    # 桌面侧靠系统代理，本来就不依赖 TUN。真要开 TUN 得同时改这里和 Verge 开关，
+    # 并复核 DNS 段——dns-hijack 一生效，nameserver-policy 那批 `#组名` 绑定才上岗。
+    if target == PROFILE_DESKTOP:
+        return head + marker + tun_block.replace("enable: true", "enable: false", 1)
 
     # WebDock exposes the proxy to its Docker bridge. TUN is intentionally not
     # enabled there: Chrome is explicitly configured with the mixed-port proxy,
     # while enabling TUN would also route unrelated host traffic.
-    base = base.replace("allow-lan: false\n", "allow-lan: true\nbind-address: 172.17.0.1\n", 1)
-    marker = "\ntun:\n"
-    if marker not in base:
-        raise ValueError("template_base.yaml 缺少 tun 段，无法生成 WebDock 配置")
-    return base.split(marker, 1)[0].rstrip("\n")
+    return head.replace(
+        "allow-lan: true\n", "allow-lan: true\nbind-address: 172.17.0.1\n", 1
+    ).rstrip("\n")
 
 
 def _inline_provider_nodes(content: str) -> tuple[list[str], list[str], list[str]]:
