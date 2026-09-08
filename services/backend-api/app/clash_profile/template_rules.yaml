@@ -7,6 +7,30 @@
   - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
   - IP-CIDR,100.64.0.0/10,DIRECT,no-resolve
 
+  # --- codex 专用出口（2026-09-08 上线）--------------------------------------
+  #
+  # 目的：让 devbox 上的两处 codex 各自选节点，与 AI服务 组（网页 ChatGPT / Claude）
+  # 的出口解耦。两条入口互不重叠：
+  #   - Windows 桌面的 codex 是原生进程（%LOCALAPPDATA%\OpenAI\Codex\bin\codex.exe，
+  #     npm 的 codex.cmd 只是 node launcher，真正发请求的是它），find-process-mode:
+  #     strict 能拿到进程名，所以直接 PROCESS-NAME，不占端口；
+  #   - WSL 里的 codex 走 NAT 连宿主机，mihomo 侧拿不到它的进程名，只能按入站入口
+  #     区分——render.py 给 desktop 产物生成的 listener `codex-in`（7899）。
+  #
+  # ⚠️ 必须排在所有域名规则之前，否则 openai.com 先命中 AI服务，这组规则等于没写。
+  # 代价是 codex 的**全部**流量改道，所以自带 CN 例外，否则 npm/pip/git 拉国内源
+  # 也会出境。GEOSITE 是主力：fake-ip 下域名连接拿到的是 198.18.x，GEOIP 那条只
+  # 对裸 IP 连接有意义，两条都留着。
+  #
+  # ⚠️ 规则引用的 Codex-Win / Codex-WSL 两个组在 webdock/mobile 产物上永不命中，
+  # 但 render.py 仍然会生成它们：组缺失会让 mihomo 整份配置加载失败。
+  - AND,((IN-NAME,codex-in),(GEOSITE,CN)),DIRECT
+  - AND,((IN-NAME,codex-in),(GEOIP,CN,no-resolve)),DIRECT
+  - IN-NAME,codex-in,Codex-WSL
+  - AND,((PROCESS-NAME,codex.exe),(GEOSITE,CN)),DIRECT
+  - AND,((PROCESS-NAME,codex.exe),(GEOIP,CN,no-resolve)),DIRECT
+  - PROCESS-NAME,codex.exe,Codex-Win
+
   # --- Windows 系统更新 / 分发（原在 devbox 的 profile 扩展里，2026-09-02 并入）------
   #
   # 订阅规则表里没有任何 windowsupdate 条目，DOMAIN-KEYWORD,microsoft 也匹配不到
