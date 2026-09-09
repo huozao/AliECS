@@ -186,7 +186,13 @@ from app.core import require_permission
 
 
 def _review_reader(user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
-    return require_permission('market.read', user)
+    require_permission('market.read', user)
+    # Login tokens carry uid/sub; retain compatibility with legacy id/username
+    # sessions. Only server-authenticated identity may own reads/annotations.
+    identity = user.get('uid', user.get('id'))
+    if type(identity) is not int or identity <= 0:
+        raise HTTPException(401, 'invalid authenticated user identity')
+    return dict(user, id=identity, username=user.get('username') or user.get('sub'))
 
 
 @router.get('/v1/market/latest')
@@ -207,6 +213,19 @@ def market_events(run_id: str = Query(min_length=1,max_length=200),
                   after_sequence: int = Query(0,ge=0), limit: int = Query(500,ge=1,le=2000),
                   _: dict = Depends(_review_reader)):
     return market_review.events_page(run_id,after_sequence,limit)
+
+
+@router.get('/v1/market/alerts')
+def market_alerts(run_id: str = Query(min_length=1,max_length=200),
+                  after_sequence: int = Query(0,ge=0), limit: int = Query(200,ge=1,le=500),
+                  user: dict = Depends(_review_reader)):
+    return market_review.alert_state(run_id, int(user['id']), after_sequence, limit)
+
+
+@router.post('/v1/market/alerts/{event_id}/read')
+def market_alert_read(event_id: str, run_id: str = Query(min_length=1,max_length=200),
+                      user: dict = Depends(_review_reader)):
+    return market_review.mark_alert_read(run_id, event_id, int(user['id']))
 
 
 @router.get('/v1/market/positions/{position_id}')
