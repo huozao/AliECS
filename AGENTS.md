@@ -54,7 +54,7 @@ AliECS 是以 AI 客户端协作为主要开发方式的 Docker 化 Web/API 项�
 
 ## 文档闭环
 
-代码或配置验证通过后必须回查路径、符号、配置键、API、部署、回滚、备份和专项 runbook。PR 必须记录 `Nav-Impact: updated`，或同时记录 `Nav-Impact: none` 与 `Nav-Impact-Reason: <依据>`；最后从工作区顶层 `AGENTS.md` 重新进入并复验一条“功能 → 代码 → 验证命令 → 运行位置”链路。
+代码或配置验证通过后必须回查路径、符号、配置键、API、部署、回滚、备份和专项 runbook。PR 必须记录 `Nav-Impact: updated`，或同时记录 `Nav-Impact: none` 与 `Nav-Impact-Reason: <依据>`——⚠️ **判据落在 PR body 上，不是 commit message**（`ci.yml` 的「PR 导航影响记录」读的是`github.event.pull_request.body`）。commit 里带了、body 里没带，CI 一样红。而且**补进 body 之后 rerun 是没用的**：rerun 重放的是原事件载荷，里面还是旧 body；要么建 PR 前就写好，要么补完再推一个 commit 触发 `synchronize`（2026-09-09 实测）；最后从工作区顶层 `AGENTS.md` 重新进入并复验一条“功能 → 代码 → 验证命令 → 运行位置”链路。
 
 **⚠️ 这条记录必须写在 PR 正文里，写在 commit message 里不算。** `ci.yml` 的「PR 导航影响记录」步骤读的是 `github.event.pull_request.body`，本地 `check_nav_impact.py --range` 过了不代表 CI 会过（2026-08-16 PR#320 就是这样红的）。两处都写最稳。
 

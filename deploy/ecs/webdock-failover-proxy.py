@@ -121,8 +121,22 @@ def parse_config(env: Mapping[str, str] | None = None) -> ProxyConfig:
 
 
 def is_retryable_webdock_503(status: int, body: bytes) -> bool:
+    """Whether this 503 means "this box's browser is unusable" — i.e. worth the standby.
+
+    Judged on the structured ``error_code``, not on the human sentence. The
+    sentence used to be the only handle, and it was a single hard-coded string:
+    WebDock said "Chrome not running or CDP attach failed" for every start
+    failure, including ones where Chrome was up and CDP was answering. When
+    WebDock started naming the actual failing step (2026-09-09), that wording
+    stopped covering the goto-timeout case — and a failover judged on wording
+    fails SILENTLY: the proxy simply never switches, and nothing logs a reason.
+
+    The string match stays as a fallback because the proxy and WebDock are
+    deployed separately and this one may face an older WebDock.
+    """
     if status != 503:
         return False
+    error_code = ""
     try:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
@@ -131,8 +145,11 @@ def is_retryable_webdock_503(status: int, body: bytes) -> bool:
         detail = payload.get("detail") if isinstance(payload, dict) else None
         if isinstance(detail, dict):
             text = str(detail.get("message", ""))
+            error_code = str(detail.get("error_code", ""))
         else:
             text = str(detail or "")
+    if error_code == "BROWSER_NOT_STARTED":
+        return True
     return "Chrome not running or CDP attach failed" in text or "CDP attach failed" in text
 
 

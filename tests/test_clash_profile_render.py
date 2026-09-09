@@ -377,6 +377,133 @@ class ClashProfileRenderTests(unittest.TestCase):
         for real in ("【1x】香港 01", "【1x】美国 06", "self-a"):
             self.assertIsNone(re.search(pattern, real), f"正常节点被误伤：{real}")
 
+    def test_codex_groups_exist_on_every_target(self) -> None:
+        """两个 codex 组必须在所有 target 都存在，否则 mihomo 整份配置加载失败。
+
+        规则表是静态模板，IN-NAME / PROCESS-NAME 两组规则在 webdock 和 mobile 产物里
+        同样存在（只是永不命中）。组缺失不是「少一个选项」，是加载失败——与
+        Dukascopy 组同一个坑。
+        """
+        for target, kwargs in (
+            ("desktop", {}),
+            ("webdock", {}),
+            ("mobile", {"provider_contents": {7: self.provider_content}}),
+        ):
+            out = self.render.render_profile(
+                [self.node], [self.provider], target=target, **kwargs
+            )
+            names = [g["name"] for g in _section(out, "proxy-groups")]
+            self.assertIn("Codex-Win", names, f"{target} 缺 Codex-Win")
+            self.assertIn("Codex-WSL", names, f"{target} 缺 Codex-WSL")
+
+    def test_codex_groups_default_to_self_node(self) -> None:
+        """默认落点是自建节点，与 AI服务 一致：上线当天行为不变，要分开时再手动切。"""
+        out = self.render.render_profile([self.node], [self.provider])
+        groups = _section(out, "proxy-groups")
+        for name in ("Codex-Win", "Codex-WSL"):
+            group = next(g for g in groups if g["name"] == name)
+            self.assertEqual(group["proxies"][0], "self-a")
+            self.assertEqual(group["use"], ["airport7"])
+
+    def test_codex_listener_only_on_desktop(self) -> None:
+        """listener 只给 desktop：WebDock 上没有 codex，手机配置更不该多开监听端口。"""
+        desktop = self.render.render_profile([self.node], [self.provider])
+        listeners = _section(desktop, "listeners")
+        self.assertEqual(len(listeners), 1)
+        self.assertEqual(listeners[0]["port"], 7900)
+        self.assertEqual(listeners[0]["listen"], "0.0.0.0")
+
+        webdock = self.render.render_profile([self.node], [self.provider], target="webdock")
+        self.assertIsNone(_section(webdock, "listeners"))
+        mobile = self.render.render_profile(
+            [self.node], [self.provider], target="mobile",
+            provider_contents={7: self.provider_content},
+        )
+        self.assertIsNone(_section(mobile, "listeners"))
+
+    def test_codex_listener_avoids_verge_reserved_ports(self) -> None:
+        """listener 不能落在 Verge 覆写层写死的三个端口上。
+
+        Verge 的 config.yaml 里有 mixed-port 7897 / socks-port 7898 / port 7899，
+        当前只注入了第一个（/configs 里另两个是 0）。哪次 Verge 把 HTTP 端口启用，
+        7899 就会和这个 listener 抢端口——2026-09-08 一度就选的 7899。
+        """
+        out = self.render.render_profile([self.node], [self.provider])
+        port = _section(out, "listeners")[0]["port"]
+        self.assertNotIn(port, (7897, 7898, 7899))
+
+    def test_tun_is_disabled_for_desktop_but_kept_for_mobile(self) -> None:
+        """devbox 的 TUN 由 Verge 开关控制且长期关闭，产物跟着声明 false；
+        手机客户端要靠 TUN 接管流量，必须保持 true。"""
+        desktop = self.render.render_profile([self.node], [self.provider])
+        self.assertIn("\ntun:\n  enable: false\n", desktop)
+        mobile = self.render.render_profile(
+            [self.node], [self.provider], target="mobile",
+            provider_contents={7: self.provider_content},
+        )
+        self.assertIn("\ntun:\n  enable: true\n", mobile)
+        webdock = self.render.render_profile([self.node], [self.provider], target="webdock")
+        self.assertNotIn("\ntun:\n", webdock)
+
+    def test_allow_lan_matches_runtime_on_every_target(self) -> None:
+        """allow-lan 三个目标都是 true，WebDock 额外绑 Docker bridge。
+
+        devbox 上这个值由 Verge 覆写层决定、profile 改不动，写 true 是为了正本
+        不与运行态矛盾；WSL 侧 codex 连宿主机 listener 正是靠它。
+        """
+        for target, kwargs in (
+            ("desktop", {}),
+            ("webdock", {}),
+            ("mobile", {"provider_contents": {7: self.provider_content}}),
+        ):
+            out = self.render.render_profile(
+                [self.node], [self.provider], target=target, **kwargs
+            )
+            self.assertIn("allow-lan: true", out, f"{target} 的 allow-lan 不是 true")
+            self.assertNotIn("allow-lan: false", out)
+        webdock = self.render.render_profile([self.node], [self.provider], target="webdock")
+        self.assertIn("bind-address: 172.17.0.1", webdock)
+
+    def test_codex_listener_name_matches_the_rule_that_selects_it(self) -> None:
+        """判据落在连接处：listener 的 name 和规则里的 IN-NAME 必须是同一个字符串。
+
+        两边任意一侧改名都不会报错——mihomo 照常启动，规则只是永不命中，症状是
+        「codex 还是走 AI服务 的出口」，从配置上看不出哪里错。同理，规则指向的组名
+        也必须真的存在于 proxy-groups 里。
+        """
+        out = self.render.render_profile([self.node], [self.provider])
+        listener_name = _section(out, "listeners")[0]["name"]
+        lines = out.splitlines()
+        self.assertIn(f"  - IN-NAME,{listener_name},Codex-WSL", lines)
+        self.assertIn(f"  - AND,((IN-NAME,{listener_name}),(GEOSITE,CN)),DIRECT", lines)
+        group_names = [g["name"] for g in _section(out, "proxy-groups")]
+        self.assertIn("Codex-WSL", group_names)
+        self.assertIn("Codex-Win", group_names)
+
+    def test_codex_rules_precede_every_domain_rule(self) -> None:
+        """codex 规则排在域名规则之前，否则 openai.com 先命中 AI服务，等于没写。
+
+        这条测的是**顺序**，不是存在性：把这几条规则挪到 AI 段之后，配置照样合法、
+        mihomo 照常启动，codex 却仍旧走 AI服务 的出口。
+        """
+        lines = self.render.render_profile([self.node], [self.provider]).splitlines()
+        codex_last = max(
+            i for i, line in enumerate(lines)
+            if "IN-NAME,codex-in" in line or "PROCESS-NAME,codex.exe" in line
+        )
+        first_domain = min(
+            i for i, line in enumerate(lines)
+            if line.startswith("  - DOMAIN")
+        )
+        self.assertLess(codex_last, first_domain)
+
+    def test_codex_lane_keeps_cn_traffic_direct(self) -> None:
+        """codex 是全流量改道，CN 例外不能少，否则 npm/pip/git 拉国内源也出境。"""
+        lines = self.render.render_profile([self.node], [self.provider]).splitlines()
+        for inbound in ("(IN-NAME,codex-in)", "(PROCESS-NAME,codex.exe)"):
+            self.assertIn(f"  - AND,({inbound},(GEOSITE,CN)),DIRECT", lines)
+            self.assertIn(f"  - AND,({inbound},(GEOIP,CN,no-resolve)),DIRECT", lines)
+
     def test_empty_self_nodes_raises(self) -> None:
         with self.assertRaises(ValueError):
             self.render.render_profile([], [self.provider])

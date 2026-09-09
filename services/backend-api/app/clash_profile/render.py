@@ -41,6 +41,24 @@ GROUP_AI = "AI服务"
 GROUP_DUKASCOPY = "Dukascopy"
 GROUP_GITHUB = "GitHub"
 GROUP_DIRECT = "全球直连"
+# codex 的两条出口。分两个组是因为两处 codex 要各自选节点：Windows 桌面那份和
+# WSL 里那份跑在同一台机器上，但出口 IP 需要能分别调。
+GROUP_CODEX_WIN = "Codex-Win"
+GROUP_CODEX_WSL = "Codex-WSL"
+
+# WSL 里的 codex 走 NAT 连到宿主机，mihomo 侧看不到它的进程名（find-process-mode
+# 对 NAT 过来的连接无效），所以只能按**入站入口**区分：给 desktop 产物多开一个
+# 监听端口，规则里用 IN-NAME 认这个入口。Windows 桌面那份是原生进程，用
+# PROCESS-NAME 就够，不占端口。
+#
+# listen 绑 0.0.0.0 而不是回环：WSL 是 NAT 网段，网关地址每次重启会变，绑不住。
+# 暴露面与既有 mixed-port 一致（运行态 allow-lan=true、bind=*）。
+LISTENER_CODEX_NAME = "codex-in"
+# ⚠️ 不能用 7897 / 7898 / 7899。Verge 的覆写层 config.yaml 里写死了这三个
+# （mixed-port / socks-port / port），当前只注入了 mixed-port，另两个 /configs 里是 0；
+# 但只要哪次 Verge 把 HTTP 端口启用，7899 就会和这个 listener 抢端口。
+# 2026-09-08 一度选了 7899，发现后改到 7900。
+LISTENER_CODEX_PORT = 7900
 
 # 机场把套餐信息塞成"节点"放在订阅里（剩余流量、距离下次重置、套餐到期），它们在
 # 面板上是给人看的提示，不是可用出口。
@@ -120,17 +138,28 @@ def _base_text(target: str) -> str:
     if target not in (PROFILE_DESKTOP, PROFILE_WEBDOCK, PROFILE_MOBILE):
         raise ValueError(f"不支持的 Clash 配置目标：{target}")
     base = TEMPLATE_BASE.read_text(encoding="utf-8").rstrip("\n")
-    if target in (PROFILE_DESKTOP, PROFILE_MOBILE):
+    marker = "\ntun:\n"
+    if marker not in base:
+        raise ValueError("template_base.yaml 缺少 tun 段，无法按目标裁剪")
+    head, tun_block = base.split(marker, 1)
+
+    # 手机客户端要靠 TUN 才能接管流量，保持 enable: true。
+    if target == PROFILE_MOBILE:
         return base
+
+    # devbox 的 TUN 由 Verge 的 `enable_tun_mode` 控制，实测长期是 false，profile 里
+    # 写 true 只会让正本和运行态互相矛盾（2026-09-08 查明）。产物跟着声明 false：
+    # 桌面侧靠系统代理，本来就不依赖 TUN。真要开 TUN 得同时改这里和 Verge 开关，
+    # 并复核 DNS 段——dns-hijack 一生效，nameserver-policy 那批 `#组名` 绑定才上岗。
+    if target == PROFILE_DESKTOP:
+        return head + marker + tun_block.replace("enable: true", "enable: false", 1)
 
     # WebDock exposes the proxy to its Docker bridge. TUN is intentionally not
     # enabled there: Chrome is explicitly configured with the mixed-port proxy,
     # while enabling TUN would also route unrelated host traffic.
-    base = base.replace("allow-lan: false\n", "allow-lan: true\nbind-address: 172.17.0.1\n", 1)
-    marker = "\ntun:\n"
-    if marker not in base:
-        raise ValueError("template_base.yaml 缺少 tun 段，无法生成 WebDock 配置")
-    return base.split(marker, 1)[0].rstrip("\n")
+    return head.replace(
+        "allow-lan: true\n", "allow-lan: true\nbind-address: 172.17.0.1\n", 1
+    ).rstrip("\n")
 
 
 def _inline_provider_nodes(content: str) -> tuple[list[str], list[str], list[str]]:
@@ -339,6 +368,23 @@ def render_profile(
         github_group["use"] = keys
     groups.append(github_group)
 
+    # codex 专用出口。两个组结构相同、默认落点相同（自建节点），差别只在使用者：
+    # Codex-Win 由 PROCESS-NAME 命中，Codex-WSL 由 IN-NAME 命中。默认与 AI服务 同
+    # 节点，所以刚上线时行为与改造前一致；要分开出口 IP 时在面板上切其中一个即可。
+    #
+    # ⚠️ 两个组在**所有** target 都要生成。规则表是静态模板，IN-NAME/PROCESS-NAME
+    # 两组规则恒存在，webdock/mobile 上虽然永不命中，但组缺失会让 mihomo 整份配置
+    # 加载失败——与 Dukascopy 组同一个坑。
+    for codex_group_name in (GROUP_CODEX_WIN, GROUP_CODEX_WSL):
+        codex_group: dict[str, Any] = {
+            "name": codex_group_name,
+            "type": "select",
+            "proxies": [*all_names],
+        }
+        if keys and target != PROFILE_MOBILE:
+            codex_group["use"] = keys
+        groups.append(codex_group)
+
     # 明确的直连组。Windows Update / svchost 一类规则指向它而不是内置 DIRECT，
     # 目的是留一个面板开关：这些流量平时直连（走代理会被调度到境外 CDN 白烧流量），
     # 真需要时不用改配置就能临时切回代理。
@@ -346,6 +392,16 @@ def render_profile(
 
     parts.append("proxy-groups: " + _dump(groups))
     parts.append("")
+
+    # 只有 desktop 需要这个入口：WebDock 上没有 codex，手机配置更不该多开监听。
+    if target == PROFILE_DESKTOP:
+        parts.append("listeners: " + _dump([{
+            "name": LISTENER_CODEX_NAME,
+            "type": "mixed",
+            "port": LISTENER_CODEX_PORT,
+            "listen": "0.0.0.0",
+        }]))
+        parts.append("")
 
     parts.append("rules:")
     parts.append("  # 节点服务器地址直连，避免 TUN/代理回环（由节点定义推导，勿手写）")

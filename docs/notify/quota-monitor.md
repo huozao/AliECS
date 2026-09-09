@@ -37,27 +37,46 @@ Content-Type: application/json
   "event": "quota.daily_report",
   "level": "info",
   "title": "AI 额度日报",
-  "subtitle": "WebDock2 · 2026-09-06 08:00 (Asia/Singapore)",
-  "theme": "blue",
+  "subtitle": "统计截至 2026年9月7日 13:00 (SGT)",
   "tags": [{"text": "Codex", "color": "blue"}, {"text": "Claude", "color": "violet"}],
-  "summary": "两个平台均已完成采集。",
+  "summary": "",
   "segments": [
+    {"kind": "text", "text": "**🤖 Codex**　<font color='grey'>12:08 采集 · Credits 0</font>"},
     {"kind": "fields", "fields": [
-      {"name": "Codex 5h", "value": "剩余 82% · 01:42 后重置"},
-      {"name": "Claude 7d", "value": "剩余 64% · 周一 09:00 重置"}
+      {"name": "5 小时", "value": "**100%**\n<font color='grey'>额度充足</font>"},
+      {"name": "周额度", "value": "<font color='green'>**85%**</font>\n<font color='grey'>9/14 10:33 · 6天22小时后</font>"}
     ]},
-    {"kind": "image", "image_ref": "codex-latest"},
-    {"kind": "image", "image_ref": "claude-latest"}
+    {"kind": "text", "text": "**🟣 Claude**　<font color='grey'>12:08 采集</font>"},
+    {"kind": "fields", "fields": [
+      {"name": "5 小时", "value": "**89%**\n<font color='grey'>16:40 · 4小时22分后</font>"},
+      {"name": "周额度", "value": "<font color='green'>**64%**</font>\n<font color='grey'>9/12 18:00 · 5天5小时后</font>"}
+    ]},
+    {"kind": "image", "image_ref": "screen-0"},
+    {"kind": "image", "image_ref": "screen-1"}
   ],
   "images": [
-    {"ref": "codex-latest", "caption": "Codex 页面截图", "png_base64": "<PNG base64>"},
-    {"ref": "claude-latest", "caption": "Claude 页面截图", "png_base64": "<PNG base64>"}
+    {"ref": "screen-0", "caption": "Codex 页面截图", "png_base64": "<PNG base64>"},
+    {"ref": "screen-1", "caption": "Claude 页面截图", "png_base64": "<PNG base64>"}
   ],
-  "link": {"text": "查看历史截图", "url": "https://hydwang.xyz/console/quota/"},
-  "dedup_key": "quota:daily_report:2026-09-06:morning",
-  "occurred_at": "2026-09-06T00:00:00Z"
+  "link": {"text": "查看额度历史", "url": "https://hydwang.xyz/console/quota/"},
+  "dedup_key": "quota:daily_report:2026-09-07:morning",
+  "occurred_at": "2026-09-07T00:00:00Z"
 }
 ```
+
+⚠️ **`section` 的三列不适合值会折行的指标。** `_section_element` 把指标名和指标值各拼成
+一个 markdown 块，两列靠「行数相同」对齐；只要有一个值在窄屏折行，两列就整体错开
+（2026-09-07 实测额度卡片里「Credits」对到了上一行的值上）。aliecs 流量日报没踩到是因为
+它的值短到不折行。值可能折行时改用 `fields`——每格是独立 column，折行只让那一格变高。
+
+⚠️ **明细一律走 `segments`，`summary` 只留概述或留空。** 飞书 channel 的 `build_card` 会把
+`summary` 和 `segments` **依次**渲染成卡片元素，同一段文字既传 `summary` 又传一个 `text`
+segment 时，卡片里会原样出现两遍（2026-09-07 实测的日报重复就是这个原因）。
+
+⚠️ **卡片里的时间必须是 quota-monitor 归一化过的绝对时间。** 页面上的 `Resets …` 按采集
+容器的时区渲染（生产是 UTC），把原始字符串塞进卡片等于让读的人在 CST 里再猜一次时区。
+quota-monitor 侧把它换算成 `reset_at_iso` / `weekly_reset_at_iso` 后再渲染成中文文案，
+中枢和卡片都不做时间解析。
 
 重置事件使用稳定的自然主键，确保同一窗口只通知一次：
 

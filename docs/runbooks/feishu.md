@@ -102,7 +102,9 @@ ssh webdock2 "wsl -d Ubuntu-24.04-WebDock -- docker ps"  # WebDock 容器状态
   - 其余错误码**一律不重投**：`GENERATION_FAILED` 来自 ChatGPT 自己的服务端（换台机器同样失败），`RESPONSE_TIMEOUT`/`REQUEST_CANCELLED` 那一轮已经发进 ChatGPT 了，重投等于问两遍。
   - ⚠️ 代价是**备机是另一个 Chrome、另一条会话**，重投会在那边新开对话，上下文不延续。之所以可接受：产生这个错误的上传竞态几乎只发生在 `/新对话` 那一轮。
   - 前提是 bridge 能定址备机（`webdock_jobs_url("standby") != webdock_jobs_url("primary")`，即前面挂着 failover-proxy）。不满足时不重投，避免"重试"其实落回同一台。
-  - ⚠️ 不要指望 failover-proxy 替你做这件事：它只在**连不上主机**或主机返回 **503 且含 `Chrome not running or CDP attach failed`** 时才切备机。业务失败（HTTP 500 + 结构化错误码）在它眼里是"主机好好的，只是这次没干成"，而且异步 job 模式下失败出现在轮询响应里，proxy 根本看不见。
+  - ⚠️ 不要指望 failover-proxy 替你做这件事：它只在**连不上主机**或主机返回 **503 且判定为浏览器不可用**时才切备机。业务失败（HTTP 500 + 结构化错误码）在它眼里是"主机好好的，只是这次没干成"，而且异步 job 模式下失败出现在轮询响应里，proxy 根本看不见。
+    ⚠️ **"503 且含 `Chrome not running or CDP attach failed`"这个写法自 2026-09-09 起确认会误导**：当天 WebDock 把那句硬编码文案改成按真实失败步骤分类（CDP 连不上 / 已 attach 但页面没加载 / 其它），而 proxy 当时是按**那一个字符串**匹配的——文案一改，goto 超时那类就不再命中，**failover 会静默不切且不打任何日志**。判据已改成看结构化的 `error_code == BROWSER_NOT_STARTED`，旧字符串作为兼容保留（proxy 与 WebDock 分开发版，可能面对旧版）。这也顺带让 `Browser attach did not produce a page` 这类以前漏掉的 503 开始切备机。见 `deploy/ecs/webdock-failover-proxy.py:is_retryable_webdock_503`。
+  - 失败卡片自 2026-09-09 起多三样：**设备名**（以前只有成功路径写 `webdock_footer`，失败卡片反而没有设备）、**尝试链**（跨机重投时两次失败都列出来，`webdock2:UPLOAD_FAILED → webdock1:BROWSER_NOT_STARTED`；只试过一台就不加这行）、**页面截图**（WebDock 把 `screenshot.png` 经既有 media store 发布成短时 URL，bridge 以 `MEDIA:` 标记附到卡片，走的是回复图片那条既有通道）。
 - job 运行期间飞书占位卡轮播不会停止：基础文案/提示文案继续轮换并附 `已等待 Ns`；只有终局答案或诊断卡 patch 时才停止。这样“页面仍在处理”和“结果已完成/失败”在用户侧可见。
 - **WebDock 生命周期阶段与轮播提示是同一张卡、同一个 patch 源**。阶段文案由 `set_placeholder_status` 写进轮播状态，顶替基础占位文案坐第一格，提示文案照常轮换：用户既看得到「ChatGPT 页面正在处理」，也看得到「/新对话」「勿重复提问」和等待秒数。⚠️ 阶段回调**不能**自己调 `feishu_patch_card`——非轮播 patch 会触发终局保护掐停轮播，而第一个 phase（`queued`）在提交那一刻就到，等于占位卡刚发出去提示就全灭（08-12 `#301` 引入，08-14 修）。只有这条消息没有轮播（轮播关闭或提示文案为空）时才退回自己 patch。
 

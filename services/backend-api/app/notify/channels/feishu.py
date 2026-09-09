@@ -234,13 +234,21 @@ def _fields_columns(fields: list[Any]) -> list[dict[str, Any]]:
                         "tag": "column",
                         "width": "weighted",
                         "weight": 1,
+                        # note 单独成一个 element 才能用更小的字号：飞书 markdown 不支持
+                        # 行内字号，同一个 markdown 元素里的字只能一样大。窄屏下把倒计时
+                        # 这类补充信息放小一号，正是它一行放不下的那点宽度。
                         "elements": [
                             {
                                 "tag": "markdown",
                                 "content": f"**{field.name}**\n{field.value}",
                                 "text_size": "normal",
                             }
-                        ],
+                        ]
+                        + (
+                            [{"tag": "markdown", "content": field.note, "text_size": _NOTATION}]
+                            if field.note
+                            else []
+                        ),
                     }
                     for field in fields[start : start + 2]
                 ],
