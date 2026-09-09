@@ -281,11 +281,10 @@ th,td{white-space:nowrap}
 input.ex{color:#9ca3af}
 input.ex:focus{color:var(--text)}
 
-/* ===== v15 移动端：阶段步进录入 + 结果卡（<=760px 生效） ===== */
+/* ===== v16：全平台统一阶段步进录入 + 结果卡 ===== */
 #mApp{display:none}
-@media(max-width:760px){
  #desktopMain{display:none !important}
- #mApp{display:block;max-width:640px;margin:0 auto;padding:10px 12px 92px}
+ #mApp{display:block;max-width:860px;margin:0 auto;padding:16px 20px 104px}
  header .header h1{font-size:16px}
  .m-tabs{display:flex;gap:8px;margin:6px 0 12px}
  .m-tab{flex:1;padding:11px;border-radius:12px;background:#eef2f7;color:#475569;font-weight:800;border:1px solid var(--line)}
@@ -319,11 +318,13 @@ input.ex:focus{color:var(--text)}
  .rv-tbl tr.cur .rv-name{color:#1d4ed8;font-weight:800;font-size:12px}
  .rv-tbl tr.cur .rv-num{color:#1e40af;font-weight:800;font-size:12px}
  .m-card{background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:14px;margin-bottom:12px}
+ .m-report-card{padding:12px 14px}.m-report-card summary{cursor:pointer;font-size:14px;font-weight:800;color:#111827}.m-report-card[open] summary{margin-bottom:12px}
  .m-card-h{font-size:14px;font-weight:800;margin-bottom:10px}
  .m-field{margin-bottom:12px}.m-field:last-child{margin-bottom:0}
  .m-field label{display:block;font-size:12px;font-weight:700;color:#374151;margin-bottom:5px}
  #mBody input,#mBody select,.m-input{width:100%;height:48px;padding:0 12px;border:1px solid var(--line2);border-radius:12px;font:inherit;font-size:16px;background:#fff;color:var(--text)}
  .m-grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}.m-grid2 .m-field{margin-bottom:0}
+ #mBody .m-report-grid .m-field:last-child{grid-column:1/-1}
  .m-note{margin-top:10px;font-size:12px;color:#64748b;background:#f8fafc;border:1px dashed var(--line2);border-radius:10px;padding:8px 10px}
  .m-scard-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
  .m-del{padding:6px 12px;height:auto}
@@ -360,7 +361,6 @@ input.ex:focus{color:var(--text)}
  .m-abtn.ghost{background:#eef2ff;color:#3730a3;flex:0 0 80px}
  .m-menu{position:fixed;right:14px;bottom:70px;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:8px;display:flex;flex-direction:column;gap:6px;z-index:31}
  .m-menu button{height:42px;padding:0 18px;border-radius:10px;background:#f8fafc;color:#334155;font-weight:700;white-space:nowrap}
-}
 /* 历史记录面板（桌面/手机通用） */
 .hist-panel{position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:100;display:flex;align-items:center;justify-content:center;padding:16px}
 .hist-box{background:#fff;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.3);width:100%;max-width:560px;max-height:82vh;display:flex;flex-direction:column;overflow:hidden}
@@ -604,7 +604,7 @@ document.addEventListener('mouseup',e=>{const t=e.target;if(t&&t.tagName==='INPU
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.section').forEach(x=>x.classList.remove('active'));b.classList.add('active');$(b.dataset.tab).classList.add('active')});['lowTemp','lowTime','highTemp','highTime'].forEach(x=>$(x).onchange=calc);$('addSample').onclick=addSample;$('addFiller').onclick=addFiller;$('calc').onclick=calc;$('reset').onclick=()=>{initState();renderSamples();renderFillers();calc();mStep=0;mSync()};$('csv').onclick=exportCSV;$('pdf').onclick=printReport;if($('rptDate')&&!$('rptDate').value)$('rptDate').value=new Date().toISOString().slice(0,10);$('copy').onclick=async()=>{let t=report();histSaveCurrent(false);try{await navigator.clipboard.writeText(t);alert('报告文本已复制')}catch(e){alert(t)}};document.addEventListener('click',e=>{if(!e.target.closest('#sampleTable .rowhead,#compare th,#compare td,#process th,#process td'))hideTip()})}
 document.addEventListener('DOMContentLoaded',()=>{initState();renderSamples();renderFillers();bind();calc();mInit();initHist()});
 
-/* ===== v15 移动端：阶段步进录入 + 结果卡 ===== */
+/* ===== v16 全平台统一阶段步进录入 + 结果卡 ===== */
 const mMQ=window.matchMedia('(max-width:760px)');
 let mTab='entry',mStep=0;
 const M_STEPS=[
@@ -618,8 +618,11 @@ const M_STEPS=[
 function mFilled(key){return samples.filter(s=>Number.isFinite(n(s[key]))).length}
 function mCondHTML(){const rows=[['lowTemp','低温 / ℃'],['lowTime','低温时间 / h'],['highTemp','高温 / ℃'],['highTime','高温时间 / h']];return '<div class="m-card"><div class="m-card-h">统一测试条件</div><div class="m-grid2">'+rows.map(([id,l])=>'<div class="m-field"><label>'+l+'</label><input class="m-input" inputmode="decimal" data-gk="'+id+'" value="'+esc($(id)?$(id).value:'')+'"></div>').join('')+'</div><div class="m-note">同批样品共用这组低温/高温分段条件，无需逐样品选择。</div></div>'}
 function mBindCond(){document.querySelectorAll('#mBody [data-gk]').forEach(el=>el.onchange=()=>{const t=$(el.dataset.gk);if(t)t.value=el.value;calc();mRenderDots();if(mTab==='result')mRenderResult()})}
-function mSetupHTML(){return samples.map((s,i)=>'<div class="m-card m-scard"><div class="m-scard-h"><span class="badge">样品 '+(i+1)+'</span><button class="small danger m-del" data-sid="'+s.sid+'">删</button></div><div class="m-field"><label>名称</label>'+inp(s,'name')+'</div><div class="m-grid2"><div class="m-field"><label>角色</label>'+sel(s,'role',roleOpts(s))+'</div><div class="m-field"><label>材料类型</label>'+sel(s,'type',typeOpts(s))+'</div></div><div class="m-field"><label>主要填料</label>'+sel(s,'filler',fillerOpts(s))+'</div><div class="m-field"><label>自动计算模式</label>'+sel(s,'mode',modeOpts(s))+'</div></div>').join('')+'<button class="m-add" id="mAddSample">+ 增加样品</button>'}
-function mBindSetup(){document.querySelectorAll('#mBody input[data-sid],#mBody select[data-sid]').forEach(el=>el.onchange=e=>{const sid=e.target.dataset.sid,key=e.target.dataset.key;if(!sid||!key)return;const val=e.target.type==='checkbox'?e.target.checked:(e.target.type==='number'?(e.target.value===''?'':Number(e.target.value)):e.target.value);updateSample(sid,key,val)});document.querySelectorAll('#mBody .m-del').forEach(b=>b.onclick=()=>removeSample(b.dataset.sid));const add=$('mAddSample');if(add)add.onclick=addSample}
+function mReportField(key,label,type='text',placeholder=''){const el=$(key),value=el?el.value:'';return '<div class="m-field"><label>'+label+'</label><input class="m-input" data-report-key="'+key+'" type="'+type+'" placeholder="'+esc(placeholder)+'" value="'+esc(value)+'"></div>'}
+function mReportMetaHTML(){return '<details class="m-card m-report-card"><summary>报告信息（PDF 可选）</summary><div class="m-grid2 m-report-grid">'+mReportField('rptTitle','报告标题','text','分段灰分 / 填料半定量分析报告')+mReportField('rptNo','报告编号','text','如 ASH-2026-001')+mReportField('rptClient','委托/送样单位','text','选填')+mReportField('rptProject','样品来源/项目','text','选填')+mReportField('rptOperator','检测员','text','选填')+mReportField('rptReviewer','审核','text','选填')+mReportField('rptDate','检测/报告日期','date')+mReportField('rptRemark','备注','text','选填，如仪器型号、方法标准等')+'</div></details>'}
+function mBindReportMeta(){document.querySelectorAll('#mBody [data-report-key]').forEach(el=>{const sync=()=>{const target=$(el.dataset.reportKey);if(target)target.value=el.value};el.oninput=sync;el.onchange=sync})}
+function mSetupHTML(){return mReportMetaHTML()+samples.map((s,i)=>'<div class="m-card m-scard"><div class="m-scard-h"><span class="badge">样品 '+(i+1)+'</span><button class="small danger m-del" data-sid="'+s.sid+'">删</button></div><div class="m-field"><label>名称</label>'+inp(s,'name')+'</div><div class="m-grid2"><div class="m-field"><label>角色</label>'+sel(s,'role',roleOpts(s))+'</div><div class="m-field"><label>材料类型</label>'+sel(s,'type',typeOpts(s))+'</div></div><div class="m-field"><label>主要填料</label>'+sel(s,'filler',fillerOpts(s))+'</div><div class="m-field"><label>自动计算模式</label>'+sel(s,'mode',modeOpts(s))+'</div></div>').join('')+'<button class="m-add" id="mAddSample">+ 增加样品</button>'}
+function mBindSetup(){document.querySelectorAll('#mBody input[data-sid],#mBody select[data-sid]').forEach(el=>el.onchange=e=>{const sid=e.target.dataset.sid,key=e.target.dataset.key;if(!sid||!key)return;const val=e.target.type==='checkbox'?e.target.checked:(e.target.type==='number'?(e.target.value===''?'':Number(e.target.value)):e.target.value);updateSample(sid,key,val)});mBindReportMeta();document.querySelectorAll('#mBody .m-del').forEach(b=>b.onclick=()=>removeSample(b.dataset.sid));const add=$('mAddSample');if(add)add.onclick=addSample}
 function mWeighHTML(key){const list=[...samples].sort((a,b)=>roleOrder(a.role)-roleOrder(b.role));return '<div class="m-wgrid">'+list.map(s=>'<div class="m-card m-wcard" data-sid="'+s.sid+'"><div class="m-wtop"><span class="m-wname">'+esc(s.name)+'</span><span class="m-wrole">'+roleLabel(s.role)+'</span></div><div class="m-inwrap">'+inp(s,key,'number','inputmode="decimal" step="0.0001"')+'<span class="m-unit">g</span></div></div>').join('')+'</div>'+mReviewHTML(key)}
 function mReviewHTML(curKey){const list=[...samples].sort((a,b)=>roleOrder(a.role)-roleOrder(b.role));const g=globalCond();
  const D=list.map(s=>{const w0=n(s.w0),w1=n(s.w1),wl=n(s.wlow),wh=n(s.whigh),m0=w1-w0,mLow=wl-w0,mHigh=wh-w0;return {w0,w1,wlow:wl,whigh:wh,m0,mLow,mHigh,lowPct:(m0>0?mLow/m0*100:NaN),highPct:(m0>0?mHigh/m0*100:NaN)}});
