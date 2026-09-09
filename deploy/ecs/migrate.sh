@@ -67,6 +67,26 @@ done
 
 run_psql_file() {
   local sql_file="$1"
+  # Opt-in for new self-contained BEGIN/COMMIT migrations. A host-side timeout
+  # only kills the Docker client: psql may still be running in the container.
+  # Let PostgreSQL cancel statements and psql disconnect/roll back instead.
+  if grep -Fxq -- '-- migration: atomic' "$sql_file"; then
+    if [[ ! "$PSQL_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+      echo "[迁移] 原子迁移的 PSQL_TIMEOUT_SECONDS 必须为正整数" >&2
+      return 1
+    fi
+    local statement_ms=$((PSQL_TIMEOUT_SECONDS * 1000))
+    local lock_ms=$((PSQL_TIMEOUT_SECONDS < 5 ? statement_ms : 5000))
+    if PGPASSWORD="$POSTGRES_PASSWORD" \
+      PGOPTIONS="-c statement_timeout=$statement_ms -c lock_timeout=$lock_ms" \
+      PGCONNECT_TIMEOUT="$PSQL_TIMEOUT_SECONDS" \
+      docker exec -i -e PGPASSWORD -e PGOPTIONS -e PGCONNECT_TIMEOUT "$POSTGRES_CONTAINER_NAME" \
+        psql -X -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 < "$sql_file"; then
+      return 0
+    fi
+    echo "[迁移] 原子迁移失败；停止部署，核对数据库事务与登记状态后再重跑" >&2
+    return 1
+  fi
   local retries=5
   local delay=2
   for ((attempt=1; attempt<=retries; attempt++)); do

@@ -27,7 +27,7 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 | `backups.py` | 企微结构备份看板、镜像清理策略看板 |
 | `clash_profile.py` | Clash 配置合成器（人类叫法：订阅合并 / 一个订阅选所有节点）。机场订阅源 CRUD + 合成配置下载；渲染逻辑在 `app/clash_profile/render.py`，自建节点走 env `CLASH_SELF_NODES_B64`。`mobile` 目标会把启用订阅源的最新快照嵌成单文件 YAML；2026-09-05 已修复 provider 节点缩进导致的手机 YAML 解析错误。验证：`python -m unittest discover -s tests -p "test_clash_profile_render.py"` |
 | `couple.py` | Couple 私密情侣空间：回忆、地图、纪念日、愿望清单，以及按用户 Immich API key 的个人库选片/家庭相册归档；AdventureLog 保持独立入口 |
-| `market_snapshot.py` | V6 市场审阅：只读增量行情、交易事件、双账仓位、历史游标和人工标注；数据表与迁移见 `db/migrations/0055_market_review.sql`、`0056_auth_browser_handoff.sql`、`0057_market_review_indexes.sql` |
+| `market_snapshot.py` | V6 市场审阅：只读增量行情、交易事件、双账仓位、历史游标和人工标注；基础迁移 `0055`–`0057`；用户已读、观察投影和事件缺序投影分别见 `db/migrations/0058_market_review_alert_reads.sql`、`0059_market_review_observations.sql`、`0060_market_review_event_gaps.sql`。后两项的原子执行、备份与回读见 `docs/runbooks/deploy.md` 的 V6 迁移节 |
 
 输入：Postgres、runtime env、T+ worker 只读输出（`/app/tplus-output`）。
 验证：`python -m pytest tests`（CI 同一条）；相关单测 patch 目标=函数所在文件（已拆域）。
@@ -73,6 +73,7 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 
 公网首页（纯 nginx 静态）：功能卡片、登录、formula 入口、工具分区（灰分计算器）。
 `services/public-web/market/index.html` 与 `market/market.js` 是 V6 市场人工审阅页；页面只读交易证据，读取 `/v1/market/latest|series|events|positions|annotations`，历史请求使用运行编号和复合游标，标注独立写入。验证：市场 API/认证测试、Chromium 浏览器 smoke、`node --check services/public-web/market/market.js`。
+`market/observation.js` 与 `observation.css` 提供观察时刻图层。提醒经 `/v1/market/alerts` 读取用户已读状态；首次事件响应的最高事件序号划定历史/新增边界，历史未读保留但不触发实时卡片标红。验证：`tests/test_market_review_browser.py` 的历史未读、新增成交和分页回归，以及 `tests/test_market_review_e2e.py` 的本地合成跨仓链路。
 `services/public-web/sync/index.html` 对应 `/sync/` 管理员统一同步中心，按 T+ ERP、企微 A、企微 B、飞书与「系统任务」分类展示资产，统一提供下载、复制、docid 修复、调度、立即运行、时间线、步骤详情与告警。2026-08-20 起**按文档展示**（同步粒度本就是整簿），原「作业总览」区块已并入「同步资产」：表级作业按 `doc_source_id` 聚合到文档行，表级明细只在该文档有 failed/partial 或未解决告警时自动展开；不挂任何文档的作业进「系统任务」。判据见 `docs/constraints/doc-sync.md`。`/exports/` 相对 301 到 `/sync/?view=assets`，`/tplus-sync/` 相对 301 到 `/sync/?group=tplus`。
 `formula/index.html` 是系统配方页（查询 → 版本对比 → 成本核算），纯前端渲染 + `compare-core.js`（对比矩阵/行序/列序/视图开关）
 + `cost-core.js`（利润口径）。「查询方式」可切**按配方**或**按子件反查**（两段式：候选罗列 → 勾选确认 → 反查）。

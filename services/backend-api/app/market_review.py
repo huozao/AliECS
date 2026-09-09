@@ -14,6 +14,8 @@ from app.core import _conn
 
 SCHEMA = 'market-review.v1'
 SERIES_PAGE_SIZE = 5000
+GAP_PAGE_SIZE = 2000
+TARGET_FILL_CODE = 'TARGET_FILL_CONFIRMED'
 
 
 def utc(value: str) -> datetime:
@@ -41,6 +43,17 @@ def sequence_gaps(sequences: list[int]) -> list[list[int]]:
             result.append([previous + 1, value - 1])
         previous = value
     return result
+
+
+def _gap_summary(cur, run_id: str) -> dict:
+    cur.execute('SELECT start_sequence,end_sequence FROM market_review_event_gaps WHERE run_id=%s ORDER BY start_sequence LIMIT %s',
+                (run_id, GAP_PAGE_SIZE + 1))
+    gaps = cur.fetchall()
+    cur.execute('SELECT max_sequence FROM market_review_event_watermarks WHERE run_id=%s', (run_id,))
+    watermark = cur.fetchone()
+    return {'missing_sequence_ranges': [list(row) for row in gaps[:GAP_PAGE_SIZE]],
+            'missing_sequence_ranges_truncated': len(gaps) > GAP_PAGE_SIZE,
+            'event_sequence_high_watermark': watermark[0] if watermark else 0}
 
 
 def project_position(events: list[dict]) -> dict:
@@ -114,6 +127,15 @@ def validate_snapshot(body: dict) -> dict:
     for field in ('quotes', 'bands', 'events'):
         if not isinstance(body.get(field), list) or len(body[field]) > 2000:
             raise HTTPException(422, f'invalid {field}')
+    for field in ('quotes', 'bands'):
+        for item in body[field]:
+            if not isinstance(item, dict):
+                raise HTTPException(422, f'invalid {field} observation')
+            # Unknown source time is valid, malformed timestamps are not. An
+            # invalid JSON timestamp must not poison later SQL window queries.
+            for key in ('source_time', 'captured_at', 'observed_at'):
+                if item.get(key) is not None:
+                    utc(item[key])
     for event in body['events']:
         required = ('event_id','run_id','sequence','trading_day','model_version','world_id','position_id','order_id','trade_id','event_type','occurred_at','recorded_at','payload')
         if not isinstance(event, dict) or any(k not in event for k in required):
@@ -161,6 +183,8 @@ def ingest(body: dict) -> dict:
             existing, received = cur.fetchone()
             if existing != body:
                 raise HTTPException(409, 'snapshot identity conflicts with immutable evidence')
+            # Migration 0059 projects observations with an INSERT trigger in
+            # this same transaction, including writes from older backend builds.
         touched = set()
         for event in events:
             cur.execute('INSERT INTO market_review_events(event_id,run_id,sequence,position_id,occurred_at,body) VALUES(%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING',
@@ -179,11 +203,9 @@ def ingest(body: dict) -> dict:
             view = project_position(history)
             cur.execute('INSERT INTO market_review_positions(run_id,position_id,body,unresolved) VALUES(%s,%s,%s,%s) ON CONFLICT(run_id,position_id) DO UPDATE SET body=EXCLUDED.body,unresolved=EXCLUDED.unresolved,updated_at=clock_timestamp()',
                         (body['run_id'], position, Jsonb(view),view['unresolved']))
-        # LAG reports ranges, never materializes potentially enormous missing ID lists.
-        cur.execute('SELECT previous+1, sequence-1 FROM (SELECT sequence,lag(sequence,1,0) OVER(ORDER BY sequence) previous FROM market_review_events WHERE run_id=%s) s WHERE sequence>previous+1 LIMIT 2000', (body['run_id'],))
-        gaps = [list(row) for row in cur.fetchall()]
+        gaps = _gap_summary(cur, body['run_id'])
     return {'ok': True, 'run_id': body['run_id'], 'sequence': body['sequence'], 'received_at': received.isoformat(),
-            'ack_event_ids': [e['event_id'] for e in events], 'missing_sequence_ranges': gaps}
+            'ack_event_ids': [e['event_id'] for e in events], **gaps}
 
 
 def latest() -> dict | None:
@@ -195,21 +217,14 @@ def latest() -> dict | None:
         if not row:
             return None
         result = dict(row[0]); result['received_at'] = row[1].isoformat()
-        # Incremental packets carry only changed buckets. Retain the most recent
-        # observation for each contract, without expanding the entire history.
-        cur.execute('SELECT body FROM market_review_snapshots WHERE run_id=%s ORDER BY published_at DESC,sequence DESC LIMIT 200', (result['run_id'],))
-        packets = [r[0] for r in cur.fetchall()]
+        # Select each contract independently: a quiet contract must not disappear
+        # after 200 updates of a busy one. Source time cannot regress; independent
+        # international/model refreshes at the same source time remain visible.
         for field in ('quotes', 'bands'):
-            by_contract = {}
-            for packet in packets:
-                for item in packet.get(field, []):
-                    contract = item.get('contract')
-                    old = by_contract.get(contract)
-                    item_time = utc(item['source_time']) if item.get('source_time') else datetime.min.replace(tzinfo=timezone.utc)
-                    old_time = utc(old['source_time']) if old and old.get('source_time') else datetime.min.replace(tzinfo=timezone.utc)
-                    if old is None or item_time > old_time:
-                        by_contract[contract] = item
-            result[field] = list(by_contract.values())
+            cur.execute("""SELECT body,sequence FROM market_review_current_observations
+                WHERE run_id=%s AND field=%s ORDER BY contract""", (result['run_id'], field))
+            result[field] = [dict(item, observed_at=item.get('observed_at') or item.get('captured_at') or item.get('source_time'),
+                                  snapshot_sequence=seq, run_id=result['run_id']) for item, seq in cur.fetchall()]
         cur.execute('SELECT body FROM market_review_positions WHERE unresolved ORDER BY updated_at DESC LIMIT 201')
         unresolved = [r[0] for r in cur.fetchall()]
         result['unresolved_positions'] = unresolved[:200]
@@ -222,10 +237,66 @@ def events_page(run_id: str, after: int, limit: int) -> dict:
         cur.execute('SELECT body FROM market_review_events WHERE run_id=%s AND sequence>%s ORDER BY sequence LIMIT %s', (run_id, after, limit+1))
         rows = [r[0] for r in cur.fetchall()]
         page = rows[:limit]
-        cur.execute('SELECT previous+1,sequence-1 FROM (SELECT sequence,lag(sequence,1,0) OVER(ORDER BY sequence) previous FROM market_review_events WHERE run_id=%s) s WHERE sequence>previous+1 LIMIT 2000', (run_id,))
-        gaps = [list(r) for r in cur.fetchall()]
+        gaps = _gap_summary(cur, run_id)
     return {'events': page, 'run_id': run_id, 'next_sequence': page[-1]['sequence'] if page else after,
-            'has_more': len(rows)>limit, 'missing_sequence_ranges': gaps}
+            'has_more': len(rows)>limit, **gaps}
+
+
+def alert_state(run_id: str, user_id: int, after_sequence: int = 0, limit: int = 200) -> dict:
+    """Return target-fill reminders and this user's read state.
+
+    The event stream remains the source of truth.  This table only stores a
+    per-user acknowledgement and therefore cannot mark a position closed or
+    remove an unresolved exposure.
+    """
+    if not isinstance(user_id, int) or user_id <= 0:
+        raise HTTPException(422, 'invalid user identity')
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT e.body, (r.event_id IS NOT NULL)
+               FROM market_review_events e
+               LEFT JOIN market_review_event_reads r
+                 ON r.event_id=e.event_id AND r.user_id=%s
+              WHERE e.run_id=%s AND e.sequence>%s
+                AND split_part(e.body->>'event_type','｜',1)=%s
+              ORDER BY e.sequence LIMIT %s""",
+            (user_id, run_id, after_sequence, TARGET_FILL_CODE, limit + 1),
+        )
+        rows = cur.fetchall()
+    page = rows[:limit]
+    return {
+        'run_id': run_id,
+        'alerts': [row[0] for row in page],
+        'read_event_ids': [row[0]['event_id'] for row in page if row[1]],
+        'has_more': len(rows) > limit,
+        'next_sequence': page[-1][0]['sequence'] if page else after_sequence,
+    }
+
+
+def mark_alert_read(run_id: str, event_id: str, user_id: int) -> dict:
+    if not isinstance(user_id, int) or user_id <= 0:
+        raise HTTPException(422, 'invalid user identity')
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM market_review_events WHERE run_id=%s AND event_id=%s AND split_part(body->>'event_type','｜',1)=%s",
+            (run_id, event_id, TARGET_FILL_CODE),
+        )
+        if cur.fetchone() is None:
+            raise HTTPException(404, 'target fill alert not found')
+        cur.execute(
+            """INSERT INTO market_review_event_reads(user_id,run_id,event_id)
+               VALUES(%s,%s,%s) ON CONFLICT(user_id,event_id) DO NOTHING
+               RETURNING read_at""",
+            (user_id, run_id, event_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            cur.execute(
+                "SELECT read_at FROM market_review_event_reads WHERE user_id=%s AND event_id=%s",
+                (user_id, event_id),
+            )
+            row = cur.fetchone()
+    return {'ok': True, 'run_id': run_id, 'event_id': event_id, 'read_at': row[0].isoformat()}
 
 
 def position_view(position_id: str, run_id: str) -> dict:
@@ -239,13 +310,24 @@ def position_view(position_id: str, run_id: str) -> dict:
 
 def series(symbol: str, start: str | None, end: str | None, bucket_ms: int, after: str | None = None, run_id: str | None = None) -> dict:
     left,right = window(start,end,bucket_ms)
-    clauses = ['published_at >= %s', 'published_at < %s']
+    clauses = ['observed_at >= %s', 'observed_at < %s']
     params: list = [left, right]
     if run_id:
         clauses.append('run_id=%s')
         params.append(run_id)
     if after:
-        if after.startswith('v1.'):
+        if after.startswith('v2.'):
+            try:
+                stamp, cursor_run, seq, field, ordinal = json.loads(base64.urlsafe_b64decode(after[3:] + '=' * (-len(after[3:]) % 4)))
+                if not isinstance(cursor_run, str) or type(seq) is not int or field not in ('quotes', 'bands') or type(ordinal) is not int or ordinal < 1:
+                    raise ValueError('invalid cursor fields')
+                if run_id and cursor_run != run_id:
+                    raise ValueError('cursor belongs to another run')
+                clauses.append('(observed_at,run_id,sequence,field,ordinal) > (%s,%s,%s,%s,%s)')
+                params.extend([utc(stamp), cursor_run, seq, field, ordinal])
+            except (ValueError, TypeError, UnicodeError) as exc:
+                raise HTTPException(422, 'invalid series cursor') from exc
+        elif after.startswith('v1.'):
             try:
                 stamp, cursor_run, seq = json.loads(base64.urlsafe_b64decode(after[3:] + '=' * (-len(after[3:]) % 4)))
                 if not isinstance(cursor_run, str) or type(seq) is not int:
@@ -257,27 +339,30 @@ def series(symbol: str, start: str | None, end: str | None, bucket_ms: int, afte
         else:
             clauses.append('published_at > %s')
             params.append(utc(after))
-    # Bounded page indexed by publication time. Quotes retain their own source times.
+    if symbol != '*':
+        clauses.append('contract=%s')
+        params.append(symbol)
+    # Page by observation identity, not domestic source seconds or publication.
+    # Late uploads remain queryable at their actual observation time. SQL limits
+    # returned observation rows even when a packet contains many contracts.
     with _conn() as conn, conn.cursor() as cur:
-        cur.execute('SELECT body FROM market_review_snapshots WHERE ' + ' AND '.join(clauses) + ' ORDER BY published_at,run_id,sequence LIMIT %s', (*params, SERIES_PAGE_SIZE + 1))
-        rows = [r[0] for r in cur.fetchall()]
+        cur.execute("""SELECT body,run_id,sequence,field,ordinal,observed_at
+            FROM market_review_observations WHERE """ + ' AND '.join(clauses) +
+            ' ORDER BY observed_at,run_id,sequence,field,ordinal LIMIT %s', (*params, SERIES_PAGE_SIZE + 1))
+        rows = cur.fetchall()
     page = rows[:SERIES_PAGE_SIZE]
-    fields = {'quotes': {}, 'bands': {}}
-    for snapshot in page:
-        for field in fields:
-            for item in snapshot[field]:
-                if item.get('contract') == symbol:
-                    bucket = item.get('ohlc', {}).get('bucket_start') or item['source_time']
-                    key = (snapshot['run_id'], symbol, utc(bucket).replace(microsecond=0))
-                    fields[field][key] = dict(item, run_id=snapshot['run_id'])
+    fields = {'quotes': [], 'bands': []}
+    for item, row_run, seq, field, ordinal, observed_at in page:
+        fields[field].append(dict(item, run_id=row_run, snapshot_sequence=seq,
+                                  observed_at=observed_at.isoformat()))
     cursor = after
     if page:
         last = page[-1]
-        cursor = 'v1.' + base64.urlsafe_b64encode(json.dumps([last['published_at'], last['run_id'], last['sequence']]).encode()).decode().rstrip('=')
+        cursor = 'v2.' + base64.urlsafe_b64encode(json.dumps([last[5].isoformat(), last[1], last[2], last[3], last[4]]).encode()).decode().rstrip('=')
     return {'symbol':symbol,'start':left.isoformat(),'end':right.isoformat(),'bucket_ms':bucket_ms,
-            'quotes':list(fields['quotes'].values()),'bands':list(fields['bands'].values()),'has_more':len(rows)>SERIES_PAGE_SIZE,
+            'quotes':fields['quotes'],'bands':fields['bands'],'has_more':len(rows)>SERIES_PAGE_SIZE,
             'next_after':cursor,
-            'aggregation': 'source_ohlc_preserved'}
+            'aggregation': 'source_ohlc_preserved', 'time_basis': 'observed_at'}
 
 
 def comparison(symbol: str, start: str | None, end: str | None, run_id: str | None = None) -> dict:

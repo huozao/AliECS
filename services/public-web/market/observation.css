@@ -1,0 +1,19 @@
+/* Observation labels share the chart height; source prices never become fixed rows. */
+.alert-center.history-only{border-color:var(--line);background:var(--panel);color:var(--muted)}
+.mini-with-tags{display:grid;grid-template-columns:minmax(0,1fr) 76px;gap:4px}
+.market-card .mini-chart{height:150px;margin:0;min-width:0}
+.five-price,.market-card .five-price{position:relative;display:block;min-width:0;margin:0}
+.five-price span{position:absolute;right:0;transform:translateY(-50%);height:17px;line-height:17px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.five-price span i{position:absolute;right:100%;top:50%;height:1px;background:currentColor;transform-origin:right center;opacity:.6}
+.market-card .last{font-size:14px}.market-card h3{overflow-wrap:anywhere}
+.focus-grid>div,.chart-with-tags>div{min-width:0}
+#time-cursor{width:100%;padding:0}#main-price-tags{align-self:start}
+.market-card .five-price .current{font-size:14px}.market-card .five-price span{font-size:12px}
+#candidates details pre{white-space:pre-wrap;max-width:350px}
+header>div:first-child{min-width:0}#alert-center button{overflow-wrap:anywhere;max-width:100%}
+.market-card.source-stale .last{color:#91a1af}.market-card.source-stale .order-history{color:#ffd166}
+/* The chart library uses its own layout table; business-table minimum widths
+   and cell padding must not push compact canvases outside their containers. */
+.mini-chart table,.international-chart table,.chart table,.volume-chart table{min-width:0!important}
+.mini-chart td,.international-chart td,.chart td,.volume-chart td{padding:0!important;border:0!important}
+@media(max-width:600px){.market-overview{grid-template-columns:minmax(0,1fr)}.mini-with-tags{grid-template-columns:minmax(0,1fr) 82px}.market-card .mini-chart{height:150px}.international-strip{min-width:0}}
