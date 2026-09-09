@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import pathlib
 import sqlite3
 import stat
@@ -287,3 +288,45 @@ class ForwardOnceBoundaryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_failover_judges_on_error_code_not_on_the_sentence():
+    """The message is a human sentence and it changed on 2026-09-09, when WebDock
+    started naming the step that actually failed instead of blaming CDP for every
+    start failure. A failover keyed on wording does not error when the wording
+    moves — it just stops switching, silently."""
+    proxy = load_proxy_module()
+    body = json.dumps(
+        {
+            "detail": {
+                "ok": False,
+                "error_code": "BROWSER_NOT_STARTED",
+                "message": (
+                    "Chrome is attached but the initial page load failed: "
+                    "Page.goto: Timeout 30000ms exceeded."
+                ),
+            }
+        }
+    ).encode()
+    assert proxy.is_retryable_webdock_503(503, body) is True
+
+
+def test_failover_still_recognises_the_old_wording():
+    """Proxy and WebDock deploy separately, so this one has to keep working
+    against a WebDock that still emits the pre-2026-09-09 sentence."""
+    proxy = load_proxy_module()
+    body = json.dumps(
+        {"detail": {"message": "Chrome not running or CDP attach failed: boom"}}
+    ).encode()
+    assert proxy.is_retryable_webdock_503(503, body) is True
+
+
+def test_business_failures_still_stay_on_the_primary():
+    """A structured business failure means the box is fine and this turn just did
+    not work; re-sending it elsewhere would ask ChatGPT the same thing twice."""
+    proxy = load_proxy_module()
+    body = json.dumps(
+        {"detail": {"error_code": "GENERATION_FAILED", "message": "ChatGPT said no"}}
+    ).encode()
+    assert proxy.is_retryable_webdock_503(503, body) is False
+    assert proxy.is_retryable_webdock_503(500, body) is False
