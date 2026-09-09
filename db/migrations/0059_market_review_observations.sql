@@ -97,13 +97,51 @@ WHERE a.item->>'contract' IS NOT NULL
 ON CONFLICT DO NOTHING;
 
 DO $$
-DECLARE observation market_review_observations;
+DECLARE
+    observation market_review_observations;
+    winner market_review_observations;
 BEGIN
+    -- Replay the same per-key sequence/ordinal order in memory. Updating the
+    -- same current row for every historical observation is the measured
+    -- bottleneck (824036 rows exceeded 900s in rehearsal).
+    -- Persist only the final accepted observation for each independent key.
     FOR observation IN SELECT * FROM market_review_observations
-        ORDER BY run_id,sequence,field,ordinal
+        ORDER BY run_id,field,contract,sequence,ordinal
     LOOP
-        PERFORM market_review_advance_observation(observation);
+        IF winner.run_id IS NOT NULL AND
+           (winner.run_id,winner.field,winner.contract) IS DISTINCT FROM
+           (observation.run_id,observation.field,observation.contract) THEN
+            PERFORM market_review_advance_observation(winner);
+            winner := NULL;
+        END IF;
+        IF winner.run_id IS NULL THEN
+            -- A rerun starts from the already accepted current observation,
+            -- exactly as the original row-by-row upsert did.
+            SELECT o.* INTO winner FROM market_review_current_observations c
+            JOIN market_review_observations o USING (run_id,sequence,field,ordinal)
+            WHERE c.run_id=observation.run_id AND c.field=observation.field
+              AND c.contract=observation.contract;
+            IF NOT FOUND THEN
+                winner := observation;
+                CONTINUE;
+            END IF;
+        END IF;
+        IF COALESCE(observation.source_time,'-infinity'::timestamptz)
+                >= COALESCE(winner.source_time,'-infinity'::timestamptz)
+           AND COALESCE(observation.observed_at,'-infinity'::timestamptz)
+                >= COALESCE(winner.observed_at,'-infinity'::timestamptz)
+           AND (COALESCE(observation.source_time,'-infinity'::timestamptz),
+                COALESCE(observation.observed_at,'-infinity'::timestamptz),
+                observation.sequence,observation.ordinal)
+             > (COALESCE(winner.source_time,'-infinity'::timestamptz),
+                COALESCE(winner.observed_at,'-infinity'::timestamptz),
+                winner.sequence,winner.ordinal) THEN
+            winner := observation;
+        END IF;
     END LOOP;
+    IF winner.run_id IS NOT NULL THEN
+        PERFORM market_review_advance_observation(winner);
+    END IF;
 END;
 $$;
 COMMIT;

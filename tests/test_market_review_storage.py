@@ -95,6 +95,25 @@ def test_0059_psql_bad_legacy_timestamp_rolls_back_then_retries(psql_schema):
         assert conn.execute("SELECT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='market_review_snapshots'::regclass AND tgname='market_review_snapshot_projection')").fetchone()[0]
 
 
+def test_0059_large_backfill_finishes_without_rewriting_current_for_every_row(psql_schema):
+    schema, connect, container, user, database = psql_schema
+    with connect() as conn:
+        conn.execute("""INSERT INTO market_review_snapshots(run_id,sequence,published_at,body)
+            SELECT 'bulk',n,stamp,jsonb_build_object('quotes',jsonb_build_array(
+                jsonb_build_object('contract','A','source_time',stamp,'last_price',n)), 'bands','[]'::jsonb)
+            FROM (SELECT n,'2026-09-07T00:00:00Z'::timestamptz + n * interval '1 second' AS stamp
+                  FROM generate_series(1,50000) n) samples""")
+    result = _run_psql(container, user, database,
+        _migration_sql('0059_market_review_observations.sql', schema),
+        pgoptions='-c statement_timeout=5000 -c lock_timeout=1000')
+    assert result.returncode == 0, result.stderr
+    with connect() as conn:
+        assert conn.execute('SELECT count(*) FROM market_review_snapshots').fetchone()[0] == 50000
+        assert conn.execute('SELECT count(*) FROM market_review_observations').fetchone()[0] == 50000
+        assert conn.execute('SELECT sequence,body FROM market_review_current_observations').fetchone() == (
+            50000, {'contract': 'A', 'source_time': '2026-09-07T13:53:20+00:00', 'last_price': 50000})
+
+
 def test_0059_psql_lock_timeout_rolls_back_without_derived_objects(psql_schema):
     schema, connect, container, user, database = psql_schema
     with connect() as blocker:
@@ -599,6 +618,57 @@ def test_current_observation_rejects_new_source_with_older_observation_including
     assert mod.latest()['quotes'][0]['last_price'] == 961
     rows = mod.series('A', '2026-09-07T01:00:00Z', '2026-09-07T01:04:00Z', 1000, run_id='r')['quotes']
     assert len(rows) == 2
+
+
+def test_grouped_backfill_matches_incremental_projection_with_null_and_crossed_clocks(service):
+    import random
+    from datetime import datetime, timedelta, timezone
+    from psycopg.types.json import Jsonb
+    _, connect = service
+    randomizer = random.Random(509)
+    origin = datetime(2026, 9, 7, tzinfo=timezone.utc)
+    def stamp():
+        offset = randomizer.choice([None, 0, 1, 2, 3, 4, 5])
+        return None if offset is None else (origin + timedelta(seconds=offset)).isoformat()
+    with connect() as conn:
+        for run in ('first', 'second'):
+            for sequence in range(1, 41):
+                body = {field: [{'contract': contract, 'source_time': stamp(),
+                    'observed_at': stamp(), 'marker': [run, sequence, field, ordinal]}
+                    for ordinal, contract in enumerate(contracts)]
+                    for field, contracts in [('quotes', ['A', 'B', 'A']), ('bands', ['A', 'C'])]}
+                conn.execute('INSERT INTO market_review_snapshots(run_id,sequence,published_at,body) VALUES(%s,%s,%s,%s)',
+                    (run, sequence, origin, Jsonb(body)))
+        query = 'SELECT run_id,field,contract,sequence,ordinal,body FROM market_review_current_observations ORDER BY run_id,field,contract'
+        # The unchanged online trigger is an independent implementation of the
+        # acceptance rule, exercised before the grouped migration runs.
+        expected = conn.execute(query).fetchall()
+        assert len(expected) == 8
+        assert conn.execute('SELECT count(*) FROM market_review_observations').fetchone()[0] == 400
+        conn.execute('DELETE FROM market_review_current_observations')
+        migration = (ROOT / 'db/migrations/0059_market_review_observations.sql').read_text()
+        conn.execute(migration)
+        assert conn.execute(query).fetchall() == expected
+        conn.execute(migration)
+        assert conn.execute(query).fetchall() == expected
+        assert conn.execute('SELECT count(*) FROM market_review_observations').fetchone()[0] == 400
+
+
+def test_backfill_rerun_preserves_current_from_out_of_order_crossed_clocks(service):
+    from psycopg.types.json import Jsonb
+    _, connect = service
+    with connect() as conn:
+        for sequence, source, observed in [(2, 2, 1), (1, 1, 2)]:
+            body = {'quotes': [{'contract': 'A',
+                'source_time': f'2026-09-07T00:00:0{source}Z',
+                'observed_at': f'2026-09-07T00:00:0{observed}Z'}], 'bands': []}
+            conn.execute('INSERT INTO market_review_snapshots(run_id,sequence,published_at,body) VALUES(%s,%s,%s,%s)',
+                ('out-of-order', sequence, '2026-09-07T00:00:05Z', Jsonb(body)))
+        query = 'SELECT sequence FROM market_review_current_observations'
+        assert conn.execute(query).fetchall() == [(2,)]
+        conn.execute((ROOT / 'db/migrations/0059_market_review_observations.sql').read_text())
+        assert conn.execute(query).fetchall() == [(2,)]
+        assert conn.execute('SELECT count(*) FROM market_review_observations').fetchone()[0] == 2
 
 
 def test_projection_migration_backfills_legacy_packets_once_without_losing_raw_evidence(service):
