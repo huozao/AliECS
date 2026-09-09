@@ -3922,6 +3922,8 @@ def diagnostic_message(
     debug_dir: str | None = None,
     elapsed_seconds: float | None = None,
     details: dict[str, Any] | None = None,
+    device: str | None = None,
+    attempts: list[dict[str, Any]] | None = None,
 ) -> str:
     """The card shown when a turn fails.
 
@@ -3944,15 +3946,43 @@ def diagnostic_message(
     if debug_dir:
         forensics.append(f"快照 {debug_dir}")
     info = (details or {}).get("webdock_footer") or {}
-    device = str(info.get("device") or "").strip()
-    if device:
-        forensics.append(f"设备 {device}")
+    # webdock_footer is only written on the success path, so on a failure the
+    # device has to come from the error body instead — otherwise the one line that
+    # says WHICH box failed is missing from exactly the cards that need it.
+    device_name = (device or str(info.get("device") or "")).strip()
+    if device_name:
+        forensics.append(f"设备 {device_name}")
     request_id = str((details or {}).get("request_id") or "").strip()
     if request_id:
         forensics.append(f"请求 {request_id[:8]}")
     forensics.append(datetime.now(timezone(timedelta(hours=8))).strftime("%m-%d %H:%M:%S"))
     lines.append(" ｜ ".join(forensics))
+    # A turn re-sent to the standby produces two distinct failures. Reporting only
+    # the last one hides that the primary failed first — and the primary's error
+    # code is usually the one that explains the outage.
+    if attempts and len(attempts) > 1:
+        chain = " → ".join(
+            f"{a.get('device') or a.get('route') or '?'}:{a.get('error_code') or '?'}"
+            for a in attempts
+        )
+        lines.append(f"尝试链：{chain}")
     return "\n".join(lines)
+
+
+def with_debug_screenshot(reply: str, error_detail: dict[str, Any]) -> str:
+    """Append WebDock's failure screenshot as a ``MEDIA:`` marker.
+
+    WebDock has always written a screenshot for a failed turn, but it stayed on
+    the device and the card could only ever carry the snapshot *path* — so every
+    report needed someone to SSH in before they could see what the page looked
+    like. WebDock now also publishes it through its existing media store; adding
+    the marker here means the ordinary card path picks it up, with no second
+    delivery mechanism to keep working.
+    """
+    url = str((error_detail or {}).get("debug_screenshot_url") or "").strip()
+    if not url:
+        return reply
+    return f"{reply}\nMEDIA: {url}"
 
 
 def parse_http_error_detail(exc: urllib.error.HTTPError) -> dict[str, Any]:
@@ -4063,8 +4093,34 @@ def _can_retry_on_standby(state: dict[str, Any], route: str, remaining: float) -
     return webdock_jobs_url("standby") != webdock_jobs_url("primary")
 
 
-def _raise_job_error(url: str, state: dict[str, Any]) -> None:
+def _describe_attempt(route: str, device: str, state: dict[str, Any]) -> dict[str, Any]:
     detail = state.get("error") if isinstance(state.get("error"), dict) else {}
+    return {
+        "route": route or "",
+        "device": device or "",
+        "error_code": str(detail.get("error_code") or "") or "UNKNOWN_ERROR",
+    }
+
+
+def _raise_job_error(
+    url: str,
+    state: dict[str, Any],
+    *,
+    attempts: list[dict[str, Any]] | None = None,
+    device: str = "",
+    route: str = "",
+) -> None:
+    detail = state.get("error") if isinstance(state.get("error"), dict) else {}
+    detail = dict(detail)
+    # The success path fills webdock_footer with the device; the failure path never
+    # did, which is why failure cards carried no device at all. Put it in the error
+    # body so the same card can name the box without a second lookup.
+    if device and not detail.get("device"):
+        detail["device"] = device
+    if route and not detail.get("route"):
+        detail["route"] = route
+    if attempts and len(attempts) > 1:
+        detail["attempts"] = attempts
     error_code = str(detail.get("error_code") or "UNKNOWN_ERROR")
     if error_code in {"BUSY", "LANE_BUSY", "JOB_QUEUE_FULL"}:
         status = 429
@@ -4182,6 +4238,12 @@ def _async_webdock(
     poll_url = webdock_jobs_url(route) + "/" + urllib.parse.quote(job_id, safe="")
     state = submitted
     retried_on_standby = False
+    # Every device this turn was tried on, in order. Without it a cross-device
+    # failure collapses into one line about the LAST box: on 2026-09-09 webdock2
+    # failed with UPLOAD_FAILED, the turn was re-sent to webdock1, and the card
+    # reported only webdock1's BROWSER_NOT_STARTED — so the report started by
+    # investigating the machine that had merely inherited the problem.
+    attempts: list[dict[str, Any]] = []
     while True:
         progress = state.get("progress")
         if progress_callback is not None and isinstance(progress, dict):
@@ -4219,6 +4281,7 @@ def _async_webdock(
                 footer,
             )
         if status in {"failed", "cancelled"}:
+            attempts.append(_describe_attempt(route, device, state))
             if not retried_on_standby and _can_retry_on_standby(
                 state, route, deadline - time.monotonic()
             ):
@@ -4234,7 +4297,7 @@ def _async_webdock(
                 poll_url = webdock_jobs_url(route) + "/" + urllib.parse.quote(job_id, safe="")
                 state = submitted
                 continue
-            _raise_job_error(poll_url, state)
+            _raise_job_error(poll_url, state, attempts=attempts, device=device, route=route)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError(f"WebDock job {job_id} exceeded {webdock_timeout()}s")
@@ -4405,6 +4468,7 @@ def build_reply(body: dict[str, Any]) -> str:
                 debug_dir=str(error_detail.get("debug_dir") or "") or None,
                 elapsed_seconds=elapsed,
                 details=details,
+                device=str(error_detail.get("device") or "") or None,
             )
         elif exc.code in {401, 403}:
             reply = diagnostic_message(
@@ -4418,6 +4482,7 @@ def build_reply(body: dict[str, Any]) -> str:
             # forensics line — HTTPError bodies cannot be read twice.
             error_detail = parse_http_error_detail(exc)
             message = str(error_detail.get("message") or error_detail.get("error_code") or exc)
+            attempts = error_detail.get("attempts")
             reply = diagnostic_message(
                 f"bridge -> WebDock 已联通；WebDock 返回 HTTP {exc.code}: {message}",
                 "WebDock API",
@@ -4425,7 +4490,11 @@ def build_reply(body: dict[str, Any]) -> str:
                 debug_dir=str(error_detail.get("debug_dir") or "") or None,
                 elapsed_seconds=elapsed,
                 details=details,
+                device=str(error_detail.get("device") or "") or None,
+                attempts=attempts if isinstance(attempts, list) else None,
             )
+            reply = with_debug_screenshot(reply, error_detail)
+        reply = deliver_feishu_media(reply, write_details)
         reply = finalize_placeholder(reply, write_details)
         trace_chain_result(details, started, http_code=exc.code)
         append_feishu_session_console_records_async(details, reply, "失败")
