@@ -72,7 +72,8 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 ## services/public-web
 
 公网首页（纯 nginx 静态）：功能卡片、登录、formula 入口、工具分区（灰分计算器）。
-`services/public-web/market/index.html` 与 `market/market.js` 是 V6 市场人工审阅页；页面只读交易证据，读取 `/v1/market/latest|series|events|positions|annotations`，历史请求使用运行编号和复合游标，标注独立写入。验证：市场 API/认证测试、Chromium 浏览器 smoke、`node --check services/public-web/market/market.js`。
+`services/public-web/market/index.html` 与 `market/market.js` 是保留的 V6 旧市场人工审阅页；页面只读交易证据，读取 `/v1/market/latest|series|events|positions|annotations`，历史请求使用运行编号和复合游标，标注独立写入。验证：市场 API/认证测试、Chromium 浏览器 smoke、`node --check services/public-web/market/market.js`。
+`market/realtime/index.html` + `realtime.js` 是轻量实时页，只读 `/v1/market/realtime` 的 15 分钟增量窗口，展示多合约曲线、I 价格带、有效挂单、对冲候选和数据时刻；`market/today/index.html` 与 `market/history/index.html` 通过 `review-detail.js` 首屏只读事件索引，选择一笔后才读详情并画目标/对冲曲线。三页公用 `page-common.js` 处理 OIDC 浏览器绑定交接、token 过期和 403｜无权限。详情响应只含图表所需价格/I 价格带字段、最多 200 条生命周期和账本摘要；原始观测证据留在数据库。验收、生产版本 SHA-256、负载证据和剩余浏览器验收见 `docs/superpowers/plans/2026-09-10-market-three-page-acceptance.md`。
 `market/observation.js` 与 `observation.css` 提供观察时刻图层。提醒经 `/v1/market/alerts` 读取用户已读状态；首次事件响应的最高事件序号划定历史/新增边界，历史未读保留但不触发实时卡片标红。验证：`tests/test_market_review_browser.py` 的历史未读、新增成交和分页回归，以及 `tests/test_market_review_e2e.py` 的本地合成跨仓链路。
 `services/public-web/sync/index.html` 对应 `/sync/` 管理员统一同步中心，按 T+ ERP、企微 A、企微 B、飞书与「系统任务」分类展示资产，统一提供下载、复制、docid 修复、调度、立即运行、时间线、步骤详情与告警。2026-08-20 起**按文档展示**（同步粒度本就是整簿），原「作业总览」区块已并入「同步资产」：表级作业按 `doc_source_id` 聚合到文档行，表级明细只在该文档有 failed/partial 或未解决告警时自动展开；不挂任何文档的作业进「系统任务」。判据见 `docs/constraints/doc-sync.md`。`/exports/` 相对 301 到 `/sync/?view=assets`，`/tplus-sync/` 相对 301 到 `/sync/?group=tplus`。
 `formula/index.html` 是系统配方页（查询 → 版本对比 → 成本核算），纯前端渲染 + `compare-core.js`（对比矩阵/行序/列序/视图开关）

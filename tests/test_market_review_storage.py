@@ -282,6 +282,58 @@ def snapshot(sequence, contract='A', run='r', at='2026-09-07T01:00:00Z'):
                 bands=[dict(contract=contract, source_time=at, center=961)], events=[])
 
 
+def test_isolated_snapshot_projection_cost_evidence(service):
+    """Report comparable trigger/JSON write costs without touching production."""
+    import json
+    mod, connect = service
+    count, packets = 40, 20
+
+    def body(sequence, run):
+        value = snapshot(sequence, run=run, at=f'2026-09-07T00:00:{sequence:02d}Z')
+        value['quotes'] = [dict(contract=f'Q{ordinal}', source_time=value['published_at'],
+                                observed_at=value['published_at'], last_price=960 + ordinal)
+                           for ordinal in range(count)]
+        value['bands'] = [dict(contract=f'B{ordinal}', source_time=value['published_at'],
+                               observed_at=value['published_at'], center=960 + ordinal)
+                          for ordinal in range(count)]
+        return value
+
+    projected = [body(sequence, 'projection') for sequence in range(1, packets + 1)]
+    wire_bytes = len(json.dumps(projected[0], separators=(',', ':')).encode())
+    elapsed = []
+    for value in projected:
+        started = time.monotonic()
+        assert mod.ingest(value)['ok']
+        elapsed.append((time.monotonic() - started) * 1000)
+    with connect() as conn:
+        observed = conn.execute('SELECT count(*) FROM market_review_observations').fetchone()[0]
+        current = conn.execute('SELECT count(*) FROM market_review_current_observations').fetchone()[0]
+        plan = conn.execute(
+            "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "
+            "INSERT INTO market_review_snapshots(run_id,sequence,published_at,body) "
+            "VALUES('plan',1,clock_timestamp(),'{\"quotes\":[],\"bands\":[]}'::jsonb)"
+        ).fetchone()[0][0]
+        conn.execute('DROP TRIGGER market_review_snapshot_projection ON market_review_snapshots')
+    base_elapsed = []
+    for value in (body(sequence, 'without-projection') for sequence in range(1, packets + 1)):
+        started = time.monotonic()
+        assert mod.ingest(value)['ok']
+        base_elapsed.append((time.monotonic() - started) * 1000)
+    assert observed == packets * count * 2
+    assert current == count * 2
+    assert plan['Execution Time'] >= 0
+    ordered = sorted(elapsed)
+    base_ordered = sorted(base_elapsed)
+    print('isolated_snapshot_projection: packets=%d json_bytes=%d observations=%d current=%d '
+          'with_trigger_ms_p50=%.3f with_trigger_ms_p95=%.3f with_trigger_ms_max=%.3f '
+          'without_trigger_ms_p50=%.3f without_trigger_ms_p95=%.3f plan_ms=%.3f' % (
+              packets, wire_bytes, observed, current, ordered[len(ordered) // 2],
+              ordered[min(len(ordered) - 1, int(len(ordered) * .95))], max(ordered),
+              base_ordered[len(base_ordered) // 2],
+              base_ordered[min(len(base_ordered) - 1, int(len(base_ordered) * .95))],
+              plan['Execution Time']))
+
+
 def test_latest_keeps_contracts_from_distinct_incremental_packets(service):
     mod, _ = service
     mod.ingest(snapshot(1, 'A'))

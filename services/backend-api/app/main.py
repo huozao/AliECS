@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import logging
 import time
+import urllib.parse
 import uuid
 
 from fastapi import FastAPI, Request
@@ -57,6 +59,24 @@ app.include_router(couple_router)
 app.include_router(system_config_router)
 app.include_router(wecom_assistant_router)
 app.include_router(sync_router)
+
+
+class _AccessPathOnlyFilter(logging.Filter):
+    """Keep Uvicorn access logs useful without retaining auth query secrets."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+            sanitized = urllib.parse.urlsplit(args[2]).path
+            record.args = (*args[:2], sanitized, *args[3:])
+        return True
+
+
+@app.on_event("startup")
+def _sanitize_uvicorn_access_log() -> None:
+    logger = logging.getLogger("uvicorn.access")
+    if not any(isinstance(item, _AccessPathOnlyFilter) for item in logger.filters):
+        logger.addFilter(_AccessPathOnlyFilter())
 
 def _cors_origins() -> list[str]:
     defaults = [

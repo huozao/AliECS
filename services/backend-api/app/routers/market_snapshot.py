@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import hmac
 import json
+import logging
 import os
 import tempfile
+import threading
+import time
 import zlib
 from pathlib import Path
 from typing import Any
 
+import psycopg
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 
 from app.core import require_login
@@ -39,6 +45,12 @@ _COMPARISON_FIELDS = {
     "dukascopy_only_buckets",
 }
 _MAX_INGEST_BYTES = 2 * 1024 * 1024
+_MARKET_INGEST_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="market-ingest")
+# The permit covers the full synchronous transaction, not merely queueing it.
+# Keeping this separate from Starlette's default worker pool leaves that pool
+# available for the synchronous OIDC callback/login routes.
+_MARKET_INGEST_CAPACITY = threading.BoundedSemaphore(value=1)
+_ingest_logger = logging.getLogger("aliecs.market_ingest")
 
 
 def _snapshot_path() -> Path:
@@ -106,6 +118,52 @@ def _ingest_token() -> str:
     return os.getenv("MARKET_SNAPSHOT_INGEST_TOKEN", "").strip()
 
 
+def _run_market_ingest(work: Any, kind: str) -> dict[str, Any]:
+    """Run one market write and release capacity only after it has completed."""
+
+    started = time.monotonic()
+    try:
+        result = work()
+        _ingest_logger.info("market ingest committed kind=%s elapsed_ms=%d", kind,
+                            round((time.monotonic() - started) * 1000))
+        return result
+    except Exception:
+        _ingest_logger.exception("market ingest failed kind=%s elapsed_ms=%d", kind,
+                                 round((time.monotonic() - started) * 1000))
+        raise
+    finally:
+        _MARKET_INGEST_CAPACITY.release()
+
+
+async def _submit_market_ingest(work: Any, kind: str) -> dict[str, Any]:
+    """Bound a synchronous market write without blocking the ASGI event loop.
+
+    A disconnected client may cancel its await, but the started operation retains
+    its permit until its transaction commits or rolls back. Publishers then retry
+    the existing idempotent payload rather than racing another write.
+    """
+
+    if not _MARKET_INGEST_CAPACITY.acquire(blocking=False):
+        raise HTTPException(status_code=503, detail="market ingest is busy; retry shortly",
+                            headers={"Retry-After": "1"})
+    try:
+        future = asyncio.get_running_loop().run_in_executor(
+            _MARKET_INGEST_EXECUTOR, _run_market_ingest, work, kind,
+        )
+    except Exception:
+        _MARKET_INGEST_CAPACITY.release()
+        raise
+    try:
+        try:
+            return await asyncio.shield(future)
+        except (psycopg.errors.LockNotAvailable, psycopg.errors.QueryCanceled) as exc:
+            raise HTTPException(status_code=503,
+                                detail="market ingest timed out; retry shortly",
+                                headers={"Retry-After": "1"}) from exc
+    except asyncio.CancelledError:
+        # Do not release the permit here: the executor finally block owns it.
+        _ingest_logger.info("market ingest client cancelled kind=%s; transaction continues", kind)
+        raise
 async def _read_ingest_wire(request: Request) -> bytes:
     content_length = request.headers.get("content-length")
     if content_length and content_length.isdigit() and int(content_length) > _MAX_INGEST_BYTES:
@@ -226,10 +284,16 @@ async def ingest_market_snapshot(
         raise HTTPException(status_code=401, detail="invalid market snapshot ingest token")
     body = await _decode_ingest_body(request)
     if body.get("schema_version") == market_review.SCHEMA:
-        return market_review.ingest(body)
+        return await _submit_market_ingest(lambda: market_review.ingest(body), "review")
     payload = _normalize_ingest_payload(body)
-    _write_snapshot_atomic(payload, _snapshot_path())
-    return {"ok": True, "contract_count": payload["contract_count"], "ingested_at": payload["ingested_at"]}
+    path = _snapshot_path()
+
+    def write_legacy_snapshot() -> dict[str, Any]:
+        _write_snapshot_atomic(payload, path)
+        return {"ok": True, "contract_count": payload["contract_count"],
+                "ingested_at": payload["ingested_at"]}
+
+    return await _submit_market_ingest(write_legacy_snapshot, "snapshot")
 
 # Versioned review endpoints keep legacy /snapshot untouched.
 from app import market_review
@@ -249,6 +313,39 @@ def _review_reader(user: dict[str, Any] = Depends(require_login)) -> dict[str, A
 @router.get('/v1/market/latest')
 def market_latest(_: dict = Depends(_review_reader)):
     return market_review.latest() or _empty_snapshot()
+
+
+@router.get('/v1/market/realtime')
+def market_realtime(after: str | None = Query(default=None, max_length=2000),
+                    _: dict = Depends(_review_reader)):
+    return market_review.realtime_view(after=after)
+
+
+@router.get('/v1/market/events/index')
+def market_event_index(
+    run_id: str | None = Query(default=None, min_length=1, max_length=200),
+    after: str | None = Query(default=None, max_length=2000),
+    limit: int = Query(50, ge=1, le=200),
+    scope: str = Query('run', pattern='^(run|today|history)$'),
+    date_from: str | None = Query(default=None, pattern=r'^\d{4}-\d{2}-\d{2}$'),
+    date_to: str | None = Query(default=None, pattern=r'^\d{4}-\d{2}-\d{2}$'),
+    symbol: str | None = Query(default=None, max_length=100),
+    status: str | None = Query(default=None, max_length=100),
+    _: dict = Depends(_review_reader),
+):
+    # `run_id` keeps the existing observation desk contract. Split pages use
+    # trading-day scopes and therefore intentionally do not need /latest.
+    if scope == 'run' and not run_id:
+        raise HTTPException(422, 'run_id is required when scope=run')
+    return market_review.event_index(run_id=run_id, after=after, limit=limit,
+                                     scope=scope, date_from=date_from, date_to=date_to,
+                                     symbol=symbol, status=status)
+
+
+@router.get('/v1/market/events/{event_id}/detail')
+def market_event_detail(event_id: str,
+                        _: dict = Depends(_review_reader)):
+    return market_review.event_detail(event_id)
 
 
 @router.get('/v1/market/series')

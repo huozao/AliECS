@@ -58,6 +58,31 @@ class MarketFrontendTests(unittest.TestCase):
         self.assertIn("不直接暴露给浏览器", self.spec)
         self.assertIn("DNS-only", self.spec)
 
+    def test_three_page_split_has_bounded_entrypoints(self) -> None:
+        realtime = (ROOT / "services/public-web/market/realtime/index.html").read_text(encoding="utf-8")
+        script = (ROOT / "services/public-web/market/realtime.js").read_text(encoding="utf-8")
+        today = (ROOT / "services/public-web/market/today/index.html").read_text(encoding="utf-8")
+        history = (ROOT / "services/public-web/market/history/index.html").read_text(encoding="utf-8")
+        detail = (ROOT / "services/public-web/market/review-detail.js").read_text(encoding="utf-8")
+        common = (ROOT / "services/public-web/market/page-common.js").read_text(encoding="utf-8")
+        self.assertIn("/api/v1/market/realtime", script)
+        self.assertIn("window_minutes", script)
+        self.assertIn("Authorization", common)
+        self.assertIn("clearToken", common)
+        self.assertIn("retryAfterMs", common)
+        self.assertIn("timeout: 8000", common)
+        self.assertIn("absorbLoginHandoff", common)
+        self.assertIn("setTimeout", script)
+        self.assertNotIn("setInterval", script)
+        self.assertIn("/api/v1/market/events/index", detail)
+        self.assertIn("/detail", detail)
+        self.assertIn("scope", detail)
+        self.assertNotIn("/market/latest", detail)
+        for page in (realtime, today, history):
+            self.assertIn("/market/realtime/", page)
+            self.assertIn("/market/today/", page)
+            self.assertIn("/market/history/", page)
+
 
 if __name__ == "__main__":
     unittest.main()
