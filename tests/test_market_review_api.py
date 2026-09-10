@@ -83,3 +83,59 @@ class MarketReviewTests(unittest.TestCase):
         app.dependency_overrides[self.router.require_login] = lambda: {'id': 4, 'permissions': ['market.read']}
         self.assertEqual(client.get('/v1/market/series?symbol=X&start=bad').status_code, 422)
         self.assertEqual(client.get('/v1/market/events?run_id=r&limit=2001').status_code, 422)
+        with patch.object(self.service, 'event_index', return_value={'items': []}) as index:
+            self.assertEqual(client.get('/v1/market/events/index?scope=history&symbol=SHFE.au2612&limit=50').status_code, 200)
+            self.assertEqual(index.call_args.kwargs['scope'], 'history')
+            self.assertEqual(index.call_args.kwargs['symbol'], 'SHFE.au2612')
+
+    def test_event_index_rejects_unknown_scope(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        app = FastAPI(); app.include_router(self.router.router)
+        app.dependency_overrides[self.router.require_login] = lambda: {'id': 4, 'permissions': ['market.read']}
+        self.assertEqual(TestClient(app).get('/v1/market/events/index?scope=all').status_code, 422)
+
+    def test_event_detail_omits_stored_position_events_but_keeps_lifecycle(self):
+        event = {'event_id': 'e1', 'run_id': 'run', 'sequence': 1, 'position_id': 'p1',
+                 'event_type': 'TARGET_FILL_CONFIRMED', 'occurred_at': '2026-09-10T01:00:00Z',
+                 'payload': {'symbol': 'SHFE.au2612'}}
+        stored_position = {
+            'model': {'net_profit_cny': 12}, 'account': {'actual_net_cny': 8},
+            'unresolved': False, 'reasons': [], 'events': [event] * 500,
+            'decisions': [{'payload': {'candidates': list(range(500))}}],
+        }
+        observation = {'last_price': 960, 'center': 959.5, 'lower': 958,
+                       'upper': 961, 'raw_snapshot': 'x' * 10000}
+
+        class Cursor:
+            def __init__(self): self.last = ''
+            def execute(self, sql, _params=None): self.last = sql
+            def fetchone(self):
+                if 'market_review_events WHERE event_id' in self.last: return event, 'run', 'p1'
+                if 'market_review_positions' in self.last: return (stored_position,)
+                raise AssertionError(self.last)
+            def fetchall(self):
+                if 'market_review_events WHERE run_id' in self.last: return [(event,)]
+                if 'market_review_observations' in self.last:
+                    return [('SHFE.au2612', 'quotes', observation, type('At', (), {'isoformat': lambda self: '2026-09-10T01:00:00+00:00'})())]
+                raise AssertionError(self.last)
+            def __enter__(self): return self
+            def __exit__(self, *_args): return False
+
+        class Connection:
+            def cursor(self): return Cursor()
+            def __enter__(self): return self
+            def __exit__(self, *_args): return False
+
+        with patch.object(self.service, '_conn', return_value=Connection()):
+            result = self.service.event_detail('e1')
+
+        self.assertEqual(result['position']['model']['net_profit_cny'], 12)
+        self.assertEqual(result['position']['account']['actual_net_cny'], 8)
+        self.assertNotIn('events', result['position'])
+        self.assertNotIn('decisions', result['position'])
+        self.assertEqual(result['lifecycle'], [event])
+        self.assertEqual(result['series']['target']['quotes'], [{
+            'observed_at': '2026-09-10T01:00:00+00:00', 'last_price': 960,
+            'center': 959.5, 'lower': 958, 'upper': 961,
+        }])

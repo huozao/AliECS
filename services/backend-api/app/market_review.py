@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import base64
 import json
+import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
@@ -11,12 +12,17 @@ from typing import Any
 from fastapi import HTTPException
 from psycopg.types.json import Jsonb
 from app.core import _conn
+from app.logging_utils import configure_logging, log_event
 
 SCHEMA = 'market-review.v1'
 SERIES_PAGE_SIZE = 5000
 REALTIME_MAX_MINUTES = 15
 GAP_PAGE_SIZE = 2000
 TARGET_FILL_CODE = 'TARGET_FILL_CONFIRMED'
+MARKET_INGEST_LOCK_TIMEOUT_MS = 3000
+MARKET_INGEST_STATEMENT_TIMEOUT_MS = 15000
+_ingest_logger = configure_logging('aliecs.market_review_ingest')
+_DETAIL_CHART_FIELDS = ('last_price', 'center', 'lower', 'upper', 'fair_price')
 
 
 def utc(value: str) -> datetime:
@@ -163,14 +169,25 @@ def validate_snapshot(body: dict) -> dict:
 
 
 def ingest(body: dict) -> dict:
+    started = time.monotonic()
     body = validate_snapshot(body)
+    validated_at = time.monotonic()
     event_only = body.pop('event_only', False)
     if not isinstance(event_only, bool):
         raise HTTPException(422, 'event_only must be boolean')
     events = body.pop('events')
+    connected_at = time.monotonic()
     with _conn() as conn, conn.cursor() as cur:
+        opened_at = time.monotonic()
+        # These apply only to this market write transaction. They bound a slow
+        # INSERT/trigger or advisory-lock wait below the upstream timeout while
+        # preserving rollback and the publisher's immutable retry contract.
+        cur.execute(f"SET LOCAL lock_timeout = '{MARKET_INGEST_LOCK_TIMEOUT_MS}ms'")
+        cur.execute(f"SET LOCAL statement_timeout = '{MARKET_INGEST_STATEMENT_TIMEOUT_MS}ms'")
+        budget_set_at = time.monotonic()
         # One run is an ordered stream. Lock serializes retries and projection updates.
         cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))', ('market:' + body['run_id'],))
+        locked_at = time.monotonic()
         if event_only:
             # Snapshot and event sequences are independent streams. Event-only
             # retries must not claim a snapshot primary key or erase the latest
@@ -186,6 +203,7 @@ def ingest(body: dict) -> dict:
                 raise HTTPException(409, 'snapshot identity conflicts with immutable evidence')
             # Migration 0059 projects observations with an INSERT trigger in
             # this same transaction, including writes from older backend builds.
+        snapshot_at = time.monotonic()
         touched = set()
         for event in events:
             cur.execute('INSERT INTO market_review_events(event_id,run_id,sequence,position_id,occurred_at,body) VALUES(%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING',
@@ -204,7 +222,24 @@ def ingest(body: dict) -> dict:
             view = project_position(history)
             cur.execute('INSERT INTO market_review_positions(run_id,position_id,body,unresolved) VALUES(%s,%s,%s,%s) ON CONFLICT(run_id,position_id) DO UPDATE SET body=EXCLUDED.body,unresolved=EXCLUDED.unresolved,updated_at=clock_timestamp()',
                         (body['run_id'], position, Jsonb(view),view['unresolved']))
+        positions_at = time.monotonic()
         gaps = _gap_summary(cur, body['run_id'])
+        gaps_at = time.monotonic()
+        conn.commit()
+    committed_at = time.monotonic()
+    log_event(
+        _ingest_logger, 'market ingest committed', run_id=body['run_id'], sequence=body['sequence'],
+        quote_count=len(body['quotes']), band_count=len(body['bands']), event_count=len(events),
+        validate_ms=round((validated_at - started) * 1000, 2),
+        connect_ms=round((opened_at - connected_at) * 1000, 2),
+        budget_ms=round((budget_set_at - opened_at) * 1000, 2),
+        advisory_lock_ms=round((locked_at - budget_set_at) * 1000, 2),
+        snapshot_trigger_ms=round((snapshot_at - locked_at) * 1000, 2),
+        event_position_ms=round((positions_at - snapshot_at) * 1000, 2),
+        gap_ms=round((gaps_at - positions_at) * 1000, 2),
+        commit_ms=round((committed_at - gaps_at) * 1000, 2),
+        total_ms=round((committed_at - started) * 1000, 2),
+    )
     return {'ok': True, 'run_id': body['run_id'], 'sequence': body['sequence'], 'received_at': received.isoformat(),
             'ack_event_ids': [e['event_id'] for e in events], **gaps}
 
@@ -233,19 +268,49 @@ def latest() -> dict | None:
         return result
 
 
-def realtime_view() -> dict:
+def _cursor_encode(value: dict) -> str:
+    return base64.urlsafe_b64encode(json.dumps(value, separators=(',', ':')).encode()).decode().rstrip('=')
+
+
+def _cursor_decode(value: str | None) -> dict | None:
+    if not value:
+        return None
+    try:
+        raw = value + '=' * (-len(value) % 4)
+        decoded = json.loads(base64.urlsafe_b64decode(raw).decode())
+        return decoded if isinstance(decoded, dict) else None
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        raise HTTPException(422, 'invalid market cursor')
+
+
+def realtime_view(after: str | None = None) -> dict:
     """Return the deliberately small payload used by the live page."""
     snapshot = latest() or {'quotes': [], 'bands': [], 'run_id': None}
     right = datetime.now(timezone.utc); left = right - timedelta(minutes=REALTIME_MAX_MINUTES)
+    cursor = _cursor_decode(after)
+    reset = bool(cursor and (cursor.get('run_id') != snapshot.get('run_id') or cursor.get('version') != 1))
+    if reset:
+        cursor = None
     with _conn() as conn, conn.cursor() as cur:
-        cur.execute("""SELECT contract,field,body,observed_at FROM market_review_observations
-                       WHERE observed_at >= %s ORDER BY observed_at DESC LIMIT 2000""", (left,))
+        predicates = ['observed_at >= %s']
+        args: list[Any] = [left]
+        if snapshot.get('run_id'):
+            predicates.append('run_id=%s'); args.append(snapshot['run_id'])
+        if cursor:
+            predicates.append('(observed_at,sequence,ordinal) > (%s,%s,%s)')
+            args.extend([utc(cursor['observed_at']), int(cursor['sequence']), int(cursor['ordinal'])])
+        cur.execute("""SELECT contract,field,body,observed_at,sequence,ordinal FROM market_review_observations
+                       WHERE """ + ' AND '.join(predicates) +
+                    ' ORDER BY observed_at,sequence,ordinal LIMIT 2001', args)
         points = cur.fetchall()
     series = {}
-    for contract, field, body, observed_at in reversed(points):
+    page = points[:2000]
+    for contract, field, body, observed_at, _, _ in page:
         series.setdefault(contract, {'quotes': [], 'bands': []})[field].append(
             dict(body, observed_at=observed_at.isoformat()))
+    last = page[-1] if page else None
     return {
+        'server_time': right.isoformat(), 'window_start': left.isoformat(), 'window_end': right.isoformat(),
         'window_minutes': REALTIME_MAX_MINUTES,
         'quotes': snapshot.get('quotes', []),
         'bands': snapshot.get('bands', []),
@@ -256,26 +321,87 @@ def realtime_view() -> dict:
         'hedge_ranking': snapshot.get('hedge_ranking', []),
         'series': series,
         'run_id': snapshot.get('run_id'),
+        'freshness': {'published_at': snapshot.get('published_at'), 'received_at': snapshot.get('received_at')},
+        'next_cursor': _cursor_encode({'version': 1, 'run_id': snapshot.get('run_id'), 'observed_at': last[3].isoformat(), 'sequence': last[4], 'ordinal': last[5]}) if last else None,
+        'truncated': len(points) > len(page), 'reset': reset,
         'updated_at': snapshot.get('received_at') or snapshot.get('published_at'),
     }
 
 
-def event_index(run_id: str, after: int = 0, limit: int = 50) -> dict:
-    """Compact event index; detail payloads are intentionally omitted."""
+def event_index(run_id: str | None = None, after: str | int | None = None, limit: int = 50,
+                scope: str = 'run', date_from: str | None = None, date_to: str | None = None,
+                symbol: str | None = None, status: str | None = None) -> dict:
+    """Compact, position-deduplicated index. Event bodies stay server-side."""
     limit = max(1, min(int(limit), 200))
+    # Pre-split callers used numeric `after`; keep that public contract while
+    # new today/history callers use a filter-bound opaque cursor.
+    if scope == 'run' and isinstance(after, str) and after.isdecimal():
+        after = int(after)
+    cursor = _cursor_decode(after) if isinstance(after, str) else None
     with _conn() as conn, conn.cursor() as cur:
-        cur.execute("""SELECT body->>'event_id', sequence, body->>'occurred_at',
-                            body->>'event_type', body->>'position_id', body->'payload'->>'symbol'
-                       FROM market_review_events
-                      WHERE run_id=%s AND sequence>%s
-                      ORDER BY sequence LIMIT %s""", (run_id, after, limit + 1))
+        effective_day = None
+        if scope in ('today', 'history'):
+            cur.execute("SELECT max(NULLIF(body->>'trading_day','')) FROM market_review_events")
+            effective_day = cur.fetchone()[0]
+        clauses, params = [], []
+        if scope == 'run':
+            clauses.append('e.run_id=%s'); params.append(run_id)
+            if isinstance(after, int):
+                clauses.append('e.sequence>%s'); params.append(after)
+        elif effective_day is None:
+            return {'items': [], 'events': [], 'next_cursor': None, 'has_more': False,
+                    'effective_trading_day': None, 'scope': scope}
+        elif scope == 'today':
+            clauses.append("e.body->>'trading_day'=%s"); params.append(effective_day)
+        else:
+            clauses.append("e.body->>'trading_day'<>%s"); params.append(effective_day)
+        if date_from:
+            clauses.append("e.body->>'trading_day'>=%s"); params.append(date_from)
+        if date_to:
+            clauses.append("e.body->>'trading_day'<=%s"); params.append(date_to)
+        if symbol:
+            clauses.append("COALESCE(e.body->'payload'->>'symbol', e.body->'payload'->>'target_symbol')=%s"); params.append(symbol)
+        if status:
+            clauses.append("COALESCE(e.body->'payload'->>'status', e.body->>'event_type')=%s"); params.append(status)
+        where = ' AND '.join(clauses) or 'TRUE'
+        # An index row represents one trigger/position. Target fills win; when
+        # absent, the first lifecycle fact remains reviewable rather than lost.
+        query = f"""WITH filtered AS (
+            SELECT e.*, COALESCE(NULLIF(e.position_id,''), e.event_id) AS review_key,
+                   e.body->>'trading_day' AS trading_day,
+                   COALESCE(e.body->'payload'->>'symbol', e.body->'payload'->>'target_symbol') AS symbol,
+                   COALESCE(e.body->'payload'->>'status', e.body->>'event_type') AS status
+              FROM market_review_events e WHERE {where}
+        ), anchors AS (
+            SELECT DISTINCT ON (review_key) event_id,run_id,sequence,position_id,occurred_at,body,trading_day,symbol,status
+              FROM filtered
+             ORDER BY review_key,
+                CASE WHEN split_part(body->>'event_type','｜',1)=%s THEN 0 ELSE 1 END,
+                occurred_at,event_id
+        ) SELECT event_id,run_id,sequence,position_id,occurred_at,body->>'event_type',trading_day,symbol,status
+              FROM anchors"""
+        params.append(TARGET_FILL_CODE)
+        if cursor:
+            if cursor.get('scope') != scope or cursor.get('filters') != [date_from, date_to, symbol, status, run_id]:
+                raise HTTPException(422, 'cursor does not match selected filters')
+            query += ' WHERE (trading_day,occurred_at,event_id) < (%s,%s,%s)'
+            params.extend([cursor['trading_day'], utc(cursor['occurred_at']), cursor['event_id']])
+        query += ' ORDER BY trading_day DESC NULLS LAST, occurred_at DESC, event_id DESC LIMIT %s'
+        params.append(limit + 1)
+        cur.execute(query, params)
         rows = cur.fetchall()
     page = rows[:limit]
-    return {'run_id': run_id, 'events': [
-        {'event_id': r[0], 'sequence': r[1], 'occurred_at': r[2],
-         'event_type': r[3], 'position_id': r[4], 'symbol': r[5]}
-        for r in page
-    ], 'next_sequence': page[-1][1] if page else after, 'has_more': len(rows) > limit}
+    items = [{'event_id': r[0], 'run_id': r[1], 'sequence': r[2], 'position_id': r[3],
+              'occurred_at': r[4].isoformat(), 'event_type': r[5], 'trading_day': r[6],
+              'symbol': r[7], 'status': r[8]} for r in page]
+    tail = items[-1] if items else None
+    next_cursor = _cursor_encode({'scope': scope, 'filters': [date_from, date_to, symbol, status, run_id],
+                                  'trading_day': tail['trading_day'], 'occurred_at': tail['occurred_at'],
+                                  'event_id': tail['event_id']}) if tail and len(rows) > limit else None
+    return {'items': items, 'events': items, 'run_id': run_id,
+            'next_sequence': items[-1]['sequence'] if scope == 'run' and items else (after if isinstance(after, int) else 0),
+            'next_cursor': next_cursor,
+            'has_more': len(rows) > limit, 'effective_trading_day': effective_day, 'scope': scope}
 
 
 def event_detail(event_id: str) -> dict:
@@ -286,11 +412,44 @@ def event_detail(event_id: str) -> dict:
             raise HTTPException(404, 'event not found')
         body, run_id, position_id = row
         position = None
+        lifecycle: list[dict] = [body]
         if position_id:
             cur.execute('SELECT body FROM market_review_positions WHERE run_id=%s AND position_id=%s', (run_id, position_id))
             found = cur.fetchone()
             position = found[0] if found else None
-    return {'event': body, 'position': position, 'run_id': run_id, 'position_id': position_id}
+            cur.execute('SELECT body FROM market_review_events WHERE run_id=%s AND position_id=%s ORDER BY sequence LIMIT 201', (run_id, position_id))
+            lifecycle = [row[0] for row in cur.fetchall()]
+        occurred = utc(body['occurred_at'])
+        symbols = {str(e.get('payload', {}).get(key)) for e in lifecycle for key in ('symbol', 'target_symbol', 'hedge_symbol') if e.get('payload', {}).get(key)}
+        series: dict[str, dict[str, list[dict]]] = {}
+        if symbols:
+            cur.execute("""SELECT contract,field,body,observed_at FROM market_review_observations
+                           WHERE run_id=%s AND contract=ANY(%s) AND observed_at BETWEEN %s AND %s
+                           ORDER BY observed_at,sequence,ordinal LIMIT 2001""",
+                        (run_id, list(symbols), occurred-timedelta(minutes=5), occurred+timedelta(minutes=5)))
+            rows = cur.fetchall()
+            for contract, field, evidence, observed_at in rows[:2000]:
+                # Detail charts need a timestamp, traded price and I-band
+                # coordinates.  The full observation JSON can include raw
+                # source arrays and stays in immutable database evidence.
+                point = {'observed_at': observed_at.isoformat()}
+                point.update({key: evidence[key] for key in _DETAIL_CHART_FIELDS if key in evidence})
+                series.setdefault(contract, {'quotes': [], 'bands': []})[field].append(point)
+    # `market_review_positions.body` is the writer-side projection.  It keeps
+    # full event/decision evidence so future writes can recompute a position,
+    # but a selected review already has its own bounded lifecycle below.  Do
+    # not serialize that duplicate, potentially large evidence graph again.
+    if position:
+        position = {key: copy.deepcopy(position[key]) for key in ('model', 'account', 'unresolved', 'reasons') if key in position}
+    role_series = {'target': {'quotes': [], 'bands': []}, 'hedge': {'quotes': [], 'bands': []}}
+    target = body.get('payload', {}).get('target_symbol') or body.get('payload', {}).get('symbol')
+    hedge = body.get('payload', {}).get('hedge_symbol')
+    if target in series: role_series['target'] = series[target]
+    if hedge in series: role_series['hedge'] = series[hedge]
+    return {'event': body, 'position': position, 'run_id': run_id, 'position_id': position_id,
+            'lifecycle': lifecycle[:200], 'lifecycle_has_more': len(lifecycle) > 200,
+            'window': {'start': (occurred-timedelta(minutes=5)).isoformat(), 'end': (occurred+timedelta(minutes=5)).isoformat(), 'max_points': 2000},
+            'series': role_series, 'series_truncated': len(rows) > 2000 if symbols else False}
 
 
 def events_page(run_id: str, after: int, limit: int) -> dict:

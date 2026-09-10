@@ -73,6 +73,7 @@ class MarketReviewBrowserTests(unittest.TestCase):
         self.assertEqual(page.evaluate('MarketReview.state.chartData[0].low'),-2)
         self.assertIn('p2',page.locator('#unresolved').inner_text())
         self.assertFalse(page.evaluate('MarketReview.state.follow'))
+        page.wait_for_function('window.MarketReview && !MarketReview.state.loading && !MarketReview.state.seriesLoading')
         before=len(requests)
         page.evaluate('MarketReview.refresh()')
         self.assertGreater(len(requests),before)
