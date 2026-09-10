@@ -6,6 +6,7 @@ import hmac
 import json
 import os
 import tempfile
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -105,6 +106,61 @@ def _ingest_token() -> str:
     return os.getenv("MARKET_SNAPSHOT_INGEST_TOKEN", "").strip()
 
 
+async def _read_ingest_wire(request: Request) -> bytes:
+    content_length = request.headers.get("content-length")
+    if content_length and content_length.isdigit() and int(content_length) > _MAX_INGEST_BYTES:
+        raise HTTPException(status_code=413, detail="market snapshot payload is too large")
+    wire = bytearray()
+    async for chunk in request.stream():
+        if len(wire) + len(chunk) > _MAX_INGEST_BYTES:
+            raise HTTPException(status_code=413, detail="market snapshot payload is too large")
+        wire.extend(chunk)
+    return bytes(wire)
+
+
+def _gunzip_ingest_wire(wire: bytes) -> bytes:
+    inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    output = bytearray()
+    pending = wire
+    try:
+        while pending:
+            chunk = inflater.decompress(pending, _MAX_INGEST_BYTES + 1 - len(output))
+            output.extend(chunk)
+            if len(output) > _MAX_INGEST_BYTES:
+                raise HTTPException(status_code=413, detail="market snapshot payload is too large")
+            if inflater.unused_data:
+                raise HTTPException(status_code=400, detail="market snapshot gzip has trailing data")
+            pending = inflater.unconsumed_tail
+        if not inflater.eof:
+            raise HTTPException(status_code=400, detail="market snapshot gzip is malformed or truncated")
+        output.extend(inflater.flush(_MAX_INGEST_BYTES + 1 - len(output)))
+    except zlib.error as exc:
+        raise HTTPException(status_code=400, detail="market snapshot gzip is malformed or truncated") from exc
+    if len(output) > _MAX_INGEST_BYTES:
+        raise HTTPException(status_code=413, detail="market snapshot payload is too large")
+    if inflater.unused_data:
+        raise HTTPException(status_code=400, detail="market snapshot gzip has trailing data")
+    return bytes(output)
+
+
+async def _decode_ingest_body(request: Request) -> dict[str, Any]:
+    wire = await _read_ingest_wire(request)
+    encoding = request.headers.get("content-encoding", "identity").strip().lower() or "identity"
+    if encoding == "gzip":
+        raw = _gunzip_ingest_wire(wire)
+    elif encoding == "identity":
+        raw = wire
+    else:
+        raise HTTPException(status_code=415, detail="unsupported market snapshot content encoding")
+    try:
+        body = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="market snapshot body is not valid JSON") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=422, detail="market snapshot body must be a JSON object")
+    return body
+
+
 def _normalize_ingest_payload(body: Any) -> dict[str, Any]:
     if not isinstance(body, dict) or body.get("schema_version") != 1:
         raise HTTPException(status_code=422, detail="market snapshot schema is invalid")
@@ -158,7 +214,6 @@ def market_snapshot(
 @router.post("/v1/internal/market/snapshot")
 async def ingest_market_snapshot(
     request: Request,
-    body: dict[str, Any],
     x_market_snapshot_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     """接收采集器发布的聚合快照；不接受浏览器用户令牌。"""
@@ -169,11 +224,7 @@ async def ingest_market_snapshot(
         raise HTTPException(status_code=503, detail="market snapshot ingest is disabled")
     if not hmac.compare_digest(supplied, expected):
         raise HTTPException(status_code=401, detail="invalid market snapshot ingest token")
-    content_length = request.headers.get("content-length")
-    if content_length and content_length.isdigit() and int(content_length) > _MAX_INGEST_BYTES:
-        raise HTTPException(status_code=413, detail="market snapshot payload is too large")
-    if len(json.dumps(body, ensure_ascii=False).encode("utf-8")) > _MAX_INGEST_BYTES:
-        raise HTTPException(status_code=413, detail="market snapshot payload is too large")
+    body = await _decode_ingest_body(request)
     if body.get("schema_version") == market_review.SCHEMA:
         return market_review.ingest(body)
     payload = _normalize_ingest_payload(body)

@@ -201,20 +201,41 @@
         while(lo<hi) {const mid=(lo+hi)>>1;if(seconds(rows[mid].time)<=time) lo=mid+1;else hi=mid;}
         return rows[lo-1];
       };
-      let historySignature=null;
-      rows.forEach(row=>{
-        const entries=row.quote?.order_history || [];
-        const signature=`${entries.length}|${stamp(entries.at(-1) || {})}`;
-        const histories=[...(signature===historySignature ? [] : entries),{observed_at:row.time,orders:row.quote?.orders || []}];
-        historySignature=signature;
-        histories.filter(item=>seconds(stamp(item))<=seconds(row.time) && seconds(stamp(item))>=seconds(rows[0]?.time)).forEach(entry=>{
-          const time=seconds(stamp(entry));
-          const raw=order(entry,side).price;
-          const originalRow=originalAt(time);
-          const originalBase=coordinate==="price" ? 0 : originalRow ? base(originalRow) : null;
-          history.set(time,finite(raw)&&finite(originalBase)?{time,value:Number(raw)-Number(originalBase)}:{time});
+      const point=(entry,time)=>{
+        const raw=order(entry,side).price;
+        const originalRow=originalAt(time);
+        const originalBase=coordinate==="price" ? 0 : originalRow ? base(originalRow) : null;
+        history.set(time,finite(raw)&&finite(originalBase)?{time,value:Number(raw)-Number(originalBase)}:{time});
+      };
+      if(rows.some(row=>row.quote?.order_history_mode==="delta")) {
+        let expected=null,needsAnchor=true;
+        const signature=entry=>JSON.stringify((entry?.orders || []).find(item=>item.side===side) || null);
+        rows.forEach((row,index)=>{
+          const rowTime=seconds(row.time),quote=row.quote || {},entries=quote.order_history || [];
+          if(needsAnchor || index===0) {
+            point({orders:quote.orders || []},rowTime);
+            expected=signature(quote);needsAnchor=false;
+          }
+          if(index>0 && quote.order_history_truncated) {
+            history.set(rowTime,{time:rowTime});expected=signature(quote);needsAnchor=true;return;
+          }
+          entries.filter(entry=>seconds(stamp(entry))<=rowTime && seconds(stamp(entry))>=seconds(rows[0]?.time)).forEach(entry=>{
+            const time=seconds(stamp(entry));point(entry,time);expected=signature(entry);
+          });
+          if(expected!==signature(quote)) {
+            history.set(rowTime,{time:rowTime});expected=signature(quote);needsAnchor=true;
+          }
         });
-      });
+      } else {
+        let historySignature=null;
+        rows.forEach(row=>{
+          const entries=row.quote?.order_history || [];
+          const signature=`${entries.length}|${stamp(entries.at(-1) || {})}`;
+          const histories=[...(signature===historySignature ? [] : entries),{observed_at:row.time,orders:row.quote?.orders || []}];
+          historySignature=signature;
+          histories.filter(entry=>seconds(stamp(entry))<=seconds(row.time) && seconds(stamp(entry))>=seconds(rows[0]?.time)).forEach(entry=>point(entry,seconds(stamp(entry))));
+        });
+      }
       item.orderRows ||= {};
       item.orderRows[side]=[...history.values()].sort((a,b)=>a.time-b.time);
       item.layers[side].setData(item.orderRows[side]);
