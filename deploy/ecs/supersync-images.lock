@@ -1,0 +1,13 @@
+# destination-name|source immutable reference|destination tag
+#
+# SuperSync（Super Productivity 自建同步服务端）的上游镜像。**故意与
+# third-party-images.lock 分开**：那份挂在 mirror-third-party job 上，而该 job 是
+# business-cn / sso-candidate / business-candidate 部署的前置，每次业务部署都会把
+# 里面每一条重新过一遍跨境 skopeo。SuperSync 与业务部署毫无关系，混进去只会让
+# 业务部署多背一次跨境失败风险（deploy.md 已记录「跨境 mirror 偶发红」）。
+# 本文件只由 deploy_target=supersync-mirror 手工触发搬运。
+#
+# 上游只发布 latest 和 master-<sha>，没有 release tag，所以目标 tag 里的 sha 取
+# 镜像自己的 org.opencontainers.image.revision label，与既有 <ver>-runtime-<date>
+# 命名保持一致。digest 于 2026-09-10 从 ghcr.io 取得，实测 amd64/linux 单架构。
+supersync|ghcr.io/super-productivity/supersync@sha256:88a7b10afd7f8a1285e5074bc48ea8b5a820569f34f23e61148a92ae2b2f341c|2827f4c-runtime-20260910

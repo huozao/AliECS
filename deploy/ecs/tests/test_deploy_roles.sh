@@ -14,6 +14,8 @@ MANIFEST="$ROOT_DIR/write-deployment-manifest.sh"
 RELEASE_WORKFLOW="$ROOT_DIR/../../.github/workflows/release-deploy.yml"
 BRIDGE_WORKFLOW="$ROOT_DIR/../../.github/workflows/bridge-cutover.yml"
 MIRROR_IMAGES="$ROOT_DIR/mirror-images-to-tcr.sh"
+THIRD_PARTY_LOCK="$ROOT_DIR/third-party-images.lock"
+SUPERSYNC_LOCK="$ROOT_DIR/supersync-images.lock"
 
 assert_contains() {
   local file="$1" pattern="$2"
@@ -109,6 +111,27 @@ assert_contains "$RELEASE_WORKFLOW" "inputs.deploy_target == 'business-cn'"
 assert_contains "$RELEASE_WORKFLOW" "inputs.deploy_target == 'business-candidate'"
 assert_contains "$RELEASE_WORKFLOW" "inputs.deploy_target == 'edge-us'"
 assert_contains "$RELEASE_WORKFLOW" "inputs.deploy_target == 'mirror-only'"
+assert_contains "$RELEASE_WORKFLOW" "  mirror-supersync:"
+assert_contains "$RELEASE_WORKFLOW" "inputs.deploy_target == 'supersync-mirror'"
+assert_contains "$RELEASE_WORKFLOW" "mirror-images-to-tcr.sh deploy/ecs/supersync-images.lock"
+# 两段搬运只给 supersync 开。流式 copy 下写 TCR 的 backpressure 会把读 GHCR
+# 拖到 unexpected EOF（2026-09-10 连着两轮 rerun、6 次尝试全超时）。
+# 判据同时钉住「开关在 supersync job 上」和「脚本支持这个模式」——
+# 少任何一边都会让搬运静默回到会卡的那条路。
+assert_contains "$RELEASE_WORKFLOW" 'MIRROR_VIA_DIR: "true"'
+assert_contains "$RELEASE_WORKFLOW" "  deploy-supersync:"
+assert_contains "$RELEASE_WORKFLOW" "inputs.deploy_target == 'supersync'"
+# 凭据只能经 env 传，不能出现在命令行——`sudo env KEY=值` 会把密码暴露在
+# 进程列表里，而那种泄漏不会有任何报错。
+assert_contains "$RELEASE_WORKFLOW" "sudo -E /usr/local/sbin/supersync-deploy"
+assert_not_contains "$RELEASE_WORKFLOW" 'sudo env TCR_PASSWORD'
+assert_contains "$MIRROR_IMAGES" 'MIRROR_VIA_DIR="${MIRROR_VIA_DIR:-false}"'
+assert_contains "$MIRROR_IMAGES" 'copy_with_retry "dir:$stage" "$destination"'
+# SuperSync 镜像必须留在自己的 lock 里。判据落在「有没有被挪回去」这个连接处：
+# 挪进 third-party-images.lock 不会报错、镜像照样能搬到 TCR，唯一的症状是每次
+# business-cn 部署多背一次跨境 skopeo——那种劣化不会有人从部署日志里看出来。
+assert_not_contains "$THIRD_PARTY_LOCK" "supersync"
+assert_contains "$SUPERSYNC_LOCK" "supersync|ghcr.io/super-productivity/supersync@sha256:"
 assert_contains "$RELEASE_WORKFLOW" 'ROLE_MIGRATIONS_DIR="$CURRENT_LINK/db/migrations"'
 assert_contains "$RELEASE_WORKFLOW" 'ROLE_POSTGRES_CONTAINER_NAME=business-cn-postgres-1'
 assert_contains "$RELEASE_WORKFLOW" 'ROLE_HEALTHCHECK_URL=http://127.0.0.1:8080/health/'

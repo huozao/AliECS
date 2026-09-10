@@ -15,6 +15,8 @@ aliecs 的公网出方向**，每次发布约 350–400 MB，而 aliecs 是按�
 | `bridge-peer`，以及 push main 触发的 bridge 自动发布 | `cutover-bridge-tcr`（复用 `bridge-cutover.yml` 的 `workflow_call` 入口） | bridge 不再自动走 aliecs |
 | `business-cn-peer-legacy` | `stage-business-cn-peer`（aliecs 中转） | ⛔ 应急旁路，必须显式选 |
 | `bridge-peer-legacy` | `stage-openclaw-bridge-peer`（aliecs 中转） | ⛔ 应急旁路，必须显式选 |
+| `supersync-mirror` | `mirror-supersync`（只搬 `deploy/ecs/supersync-images.lock`） | 与业务部署无关的独立搬运。**不 needs `build-push`**，也不参与任何 `deploy-*`。SuperSync 镜像故意不进 `third-party-images.lock`：那份是 business-cn / sso-candidate / business-candidate 的前置，混进去会让每次业务部署多背一次跨境 skopeo 失败风险。⚠️ 该 job 开了 `MIRROR_VIA_DIR=true` 走**两段搬运**（先落本地目录再推 TCR）：流式 copy 下写 TCR 的 backpressure 会把读 GHCR 拖到 `unexpected EOF`，2026-09-10 连着两轮 rerun、6 次 20 分钟尝试全超时，日志指向 GHCR 但根因在写端 |
+| `supersync` | `deploy-supersync`（SSH 到 txecs 跑 `/usr/local/sbin/supersync-deploy`） | ⚠️ **SuperSync 只能这样部署，不能在设备上直接跑那个脚本**：txecs 按设计没有持久 TCR 凭据（`fleet.md` 有记；2026-09-11 实测 `/root/.docker/config.json` 的 `auths` 是空的），手工跑会以 `401` 停在 `compose pull`。凭据由本 job 作为 env 传入，设备侧临时 `docker login`、退出时 `logout`，机器上不留凭据。同样不 needs `build-push` |
 
 ⚠️ **这条改动不是 2026-08 那次 214.75 GB 的成因**——那次归因是 devbox 的 clash 把 aliecs
 选进 GLOBAL 组（`infra/roles/server/aliecs-edge/README.md`），镜像中转不背这个锅。

@@ -20,6 +20,8 @@ on:
         options:
           - build-only
           - mirror-only
+          - supersync-mirror
+          - supersync
           - sso-candidate
           - business-cn
           - bridge-peer
@@ -521,6 +523,73 @@ jobs:
           TCR_USERNAME: ${{ secrets.TCR_USERNAME }}
           TCR_PASSWORD: ${{ secrets.TCR_PASSWORD }}
         run: bash deploy/ecs/mirror-images-to-tcr.sh
+
+  # SuperSync 镜像搬运。与 mirror-third-party 分开的两个理由：
+  #   1. 它不是任何业务部署的前置，混进 mirror-third-party 会让每次 business-cn
+  #      部署都多背一次跨境 skopeo 的失败风险；
+  #   2. 故意不写 needs——搬一个第三方镜像不该先等全套业务镜像构建完。
+  # 修改前行为：没有这个 target，SuperSync 镜像无法进 TCR。
+  # 修改后行为：新增 deploy_target=supersync-mirror，只搬 supersync-images.lock。
+  #             其余 target 的行为一个字都没变。
+  # 回退方式：删掉本 job 与 choice 里的 supersync-mirror 选项即可，无状态残留。
+  mirror-supersync:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_target == 'supersync-mirror' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install skopeo
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq skopeo
+      - name: Mirror digest-pinned SuperSync image to TCR
+        env:
+          TCR_BASE: ${{ vars.TCR_BASE }}
+          TCR_USERNAME: ${{ secrets.TCR_USERNAME }}
+          TCR_PASSWORD: ${{ secrets.TCR_PASSWORD }}
+          # 两段搬运（先落本地目录再推 TCR）。supersync 那两个大 blob 在流式
+          # copy 下连着两轮 rerun、共 6 次 20 分钟尝试全部被 backpressure 拖到
+          # GHCR 侧 unexpected EOF；读写解耦后才通。只给这个 job 开，
+          # mirror-third-party 的四个镜像层更碎、没踩到，行为保持不变。
+          MIRROR_VIA_DIR: "true"
+        run: bash deploy/ecs/mirror-images-to-tcr.sh deploy/ecs/supersync-images.lock
+
+  # SuperSync 部署。为什么必须走 CI 而不是在设备上直接跑 supersync-deploy：
+  # txecs **按设计没有持久 TCR 凭据**（fleet.md 有记；2026-09-11 实测
+  # /root/.docker/config.json 的 auths 是空的、runtime.env 里只有
+  # IMAGE_REGISTRY_BASE），手工跑会以 401 停在 compose pull。那是一条有意设的
+  # 安全边界，所以照 deploy-business-cn 的做法：凭据由这里作为 env 传进去，
+  # 设备侧脚本临时 docker login、trap EXIT 时 logout，机器上不留凭据。
+  #
+  # 同样不写 needs：部署一个第三方服务不该等全套业务镜像构建完。
+  # 修改前行为：没有这个 target，SuperSync 只能人工带着凭据在设备上跑。
+  # 修改后行为：新增 deploy_target=supersync；其余 target 行为未变。
+  # 回退方式：删掉本 job 与 choice 里的选项，无状态残留。
+  deploy-supersync:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_target == 'supersync' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Deploy SuperSync on txecs
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          TCR_BASE: ${{ vars.TCR_BASE }}
+          TCR_USERNAME: ${{ secrets.TCR_USERNAME }}
+          TCR_PASSWORD: ${{ secrets.TCR_PASSWORD }}
+        with:
+          host: ${{ secrets.TENCENT_HOST }}
+          username: ${{ secrets.TENCENT_USER }}
+          key: ${{ secrets.TENCENT_SSH_KEY }}
+          command_timeout: 30m
+          envs: TCR_BASE,TCR_USERNAME,TCR_PASSWORD
+          script: |
+            set -euo pipefail
+            : "${TCR_BASE:?missing TCR_BASE}"
+            : "${TCR_USERNAME:?missing TCR username}"
+            : "${TCR_PASSWORD:?missing TCR password}"
+            # 凭据经环境传递，不写进命令行——`sudo env KEY=值` 会让密码出现在
+            # 进程列表里，而 supersync-deploy 只从 env 读。
+            sudo -E /usr/local/sbin/supersync-deploy
 
   preload-sso-candidate:
     needs:

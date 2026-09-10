@@ -164,8 +164,6 @@ async def _submit_market_ingest(work: Any, kind: str) -> dict[str, Any]:
         # Do not release the permit here: the executor finally block owns it.
         _ingest_logger.info("market ingest client cancelled kind=%s; transaction continues", kind)
         raise
-
-
 async def _read_ingest_wire(request: Request) -> bytes:
     content_length = request.headers.get("content-length")
     if content_length and content_length.isdigit() and int(content_length) > _MAX_INGEST_BYTES:
