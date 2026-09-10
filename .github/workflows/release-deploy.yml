@@ -20,6 +20,7 @@ on:
         options:
           - build-only
           - mirror-only
+          - supersync-mirror
           - sso-candidate
           - business-cn
           - bridge-peer
@@ -521,6 +522,30 @@ jobs:
           TCR_USERNAME: ${{ secrets.TCR_USERNAME }}
           TCR_PASSWORD: ${{ secrets.TCR_PASSWORD }}
         run: bash deploy/ecs/mirror-images-to-tcr.sh
+
+  # SuperSync 镜像搬运。与 mirror-third-party 分开的两个理由：
+  #   1. 它不是任何业务部署的前置，混进 mirror-third-party 会让每次 business-cn
+  #      部署都多背一次跨境 skopeo 的失败风险；
+  #   2. 故意不写 needs——搬一个第三方镜像不该先等全套业务镜像构建完。
+  # 修改前行为：没有这个 target，SuperSync 镜像无法进 TCR。
+  # 修改后行为：新增 deploy_target=supersync-mirror，只搬 supersync-images.lock。
+  #             其余 target 的行为一个字都没变。
+  # 回退方式：删掉本 job 与 choice 里的 supersync-mirror 选项即可，无状态残留。
+  mirror-supersync:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_target == 'supersync-mirror' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install skopeo
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq skopeo
+      - name: Mirror digest-pinned SuperSync image to TCR
+        env:
+          TCR_BASE: ${{ vars.TCR_BASE }}
+          TCR_USERNAME: ${{ secrets.TCR_USERNAME }}
+          TCR_PASSWORD: ${{ secrets.TCR_PASSWORD }}
+        run: bash deploy/ecs/mirror-images-to-tcr.sh deploy/ecs/supersync-images.lock
 
   preload-sso-candidate:
     needs:
