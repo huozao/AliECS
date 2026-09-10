@@ -4,7 +4,7 @@
 
 ## 后续接手入口
 
-先读 `docs/project-ai-map.md` 的 market 段落，再读本文、`2026-09-10-market-three-page-completion.md` 与 `2026-09-10-market-login-504-recovery.md`。代码边界是 AliECS 工作树；Gold 原仓保持只读，`execute=false`。生产的手工热更新已包含本次 `market_review.py` 详情响应收敛，正式 GitHub 发布仍应以本分支提交、合并 `main` 后的手工 `release-deploy.yml` 为准，不能把容器内文件当成唯一源码。新数据库迁移、清理 idle transaction、扩大 worker 数或修改 Gold 发布器重试都不在已授权范围内。
+先读 `docs/project-ai-map.md` 的 market 段落，再读本文、`2026-09-10-market-three-page-completion.md` 与 `2026-09-10-market-login-504-recovery.md`。代码边界是 AliECS 工作树；Gold 原仓保持只读，`execute=false`。生产的手工热更新已被本记录的 GitHub 正式发布回读取代，唯一可发布源码是 GitHub `main`；不能把容器内文件当成唯一源码。新数据库迁移、清理 idle transaction、扩大 worker 数或修改 Gold 发布器重试都不在已授权范围内。
 
 ## 实施内容
 
@@ -69,3 +69,11 @@ PYTHONPATH=. .venv/bin/pytest tests/test_market_review_api.py tests/test_market_
 按已有直接热更新授权，仅更新 txecs `business-cn-backend-api-1:/app/app/market_review.py` 并重启该单后端容器；未运行迁移、未修改 Nginx、未触及 Gold 原仓或市场账户。生产回读 SHA-256=`537bbaa24fb6ecdb200e30e352242defd4c74384cedfb073a9209a8afee94560`，容器 `running/healthy`，`/healthz` 的数据库检查为 `ok`。以相同生产事件直读修复后的详情为 37,521 bytes（较 10,697,629 bytes 减少 99.649%）、172 个图表点、3 条生命周期、780.38ms；这条直读绕过 HTTP 认证，只证明详情构造与序列化边界。热更新后持续写入仍可见有界的市场写入 503（约 15.1s 事务预算）且动态 `/v1/market/latest` 681.93ms、`/v1/market/series` 40.39ms、`/v1/market/events` 36.94ms；这与已记录的写入瓶颈一致，不把它伪称为完全消失。
 
 剩余验收：需要用户已登录市场浏览器再次选择历史/当日任意一笔，确认浏览器经过实际认证链路接收 37KB 级详情并呈现两张图表。该浏览器验证不能由无市场登录态的本机 Chrome 代替；用户本次“可登录、索引已加载”的反馈已经覆盖到 OIDC 返回与动态索引，但详情点击结果需在此热更新版本上复核。
+
+## 2026-09-11 GitHub 正式发布与交接状态
+
+正式源码通过 [PR #384](https://github.com/huozao/AliECS/pull/384) 合并至 GitHub `main`，合并提交为 `677f8f7ffb0b40fca59c6142b4430e1c9356b904`。对应 `release-deploy.yml` 手工发布运行 [34527134966](https://github.com/huozao/AliECS/actions/runs/34527134966) 以该提交为 `headSha`，`deploy-business-cn` 成功（64 秒）；这次正式流程已取代先前仅用于用户即时查看的容器热更新。
+
+发布后 txecs 只读回读：`business-cn-backend-api-1` 为 `healthy`，`/healthz` 返回数据库 `ok`；三个静态入口 `/market/realtime/`、`/market/today/`、`/market/history/` 都返回 `200｜成功`，页面标题和挂载脚本逐页对应。运行中文件 SHA-256 与 GitHub `main@677f8f7` 完全相同：`market_review.py=537bbaa24fb6ecdb200e30e352242defd4c74384cedfb073a9209a8afee94560`、`page-common.js=92fdc49d1b99c57b5a1c5d49b003fac24860ff9e71446f5ea7b243355a3de139`、`realtime.js=36f72c66d8c5f15fd65724f4af2efb1a03539bf1ed5c19db9793cf7e2307c211`、`review-detail.js=fb04dea0058b4443a241bfb73eedcdca09392ac66410c7b4949a35bd2bb4c4f2`。
+
+同一生产事件的详情构造直读为 644.04ms、37,521 bytes、172 个图表点和 3 条生命周期，确认正式镜像仍使用详情响应收敛实现。该回读绕过 HTTP 认证，因此它证明运行版本和载荷边界，不能替代“市场页 → OIDC → Authelia → callback → handoff → 动态 API → 点击详情图表”的已登录浏览器验收。下一位接手者应使用已有市场登录态完成这一步，再更新本文；在获得新授权前，不执行数据库迁移、终止 idle transaction、增加 worker，或修改 Gold 的发布重试。
