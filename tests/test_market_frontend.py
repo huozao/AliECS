@@ -58,6 +58,21 @@ class MarketFrontendTests(unittest.TestCase):
         self.assertIn("不直接暴露给浏览器", self.spec)
         self.assertIn("DNS-only", self.spec)
 
+    def test_three_page_split_has_bounded_entrypoints(self) -> None:
+        realtime = (ROOT / "services/public-web/market/realtime.html").read_text(encoding="utf-8")
+        script = (ROOT / "services/public-web/market/realtime.js").read_text(encoding="utf-8")
+        today = (ROOT / "services/public-web/market/today.html").read_text(encoding="utf-8")
+        history = (ROOT / "services/public-web/market/history.html").read_text(encoding="utf-8")
+        detail = (ROOT / "services/public-web/market/review-detail.js").read_text(encoding="utf-8")
+        self.assertIn("/api/v1/market/realtime", script)
+        self.assertIn("window_minutes", script)
+        self.assertIn("/api/v1/market/events/index", detail)
+        self.assertIn("/detail", detail)
+        for page in (realtime, today, history):
+            self.assertIn("/market/realtime/", page)
+            self.assertIn("/market/today/", page)
+            self.assertIn("/market/history/", page)
+
 
 if __name__ == "__main__":
     unittest.main()
