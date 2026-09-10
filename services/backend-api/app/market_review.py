@@ -268,6 +268,21 @@ def event_index(run_id: str, after: int = 0, limit: int = 50) -> dict:
     ], 'next_sequence': page[-1][1] if page else after, 'has_more': len(rows) > limit}
 
 
+def event_detail(event_id: str) -> dict:
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute('SELECT body,run_id,position_id FROM market_review_events WHERE event_id=%s', (event_id,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(404, 'event not found')
+        body, run_id, position_id = row
+        position = None
+        if position_id:
+            cur.execute('SELECT body FROM market_review_positions WHERE run_id=%s AND position_id=%s', (run_id, position_id))
+            found = cur.fetchone()
+            position = found[0] if found else None
+    return {'event': body, 'position': position, 'run_id': run_id, 'position_id': position_id}
+
+
 def events_page(run_id: str, after: int, limit: int) -> dict:
     with _conn() as conn, conn.cursor() as cur:
         cur.execute('SELECT body FROM market_review_events WHERE run_id=%s AND sequence>%s ORDER BY sequence LIMIT %s', (run_id, after, limit+1))

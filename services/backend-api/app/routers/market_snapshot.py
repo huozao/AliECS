@@ -263,6 +263,12 @@ def market_event_index(run_id: str = Query(min_length=1, max_length=200),
     return market_review.event_index(run_id, after, limit)
 
 
+@router.get('/v1/market/events/{event_id}/detail')
+def market_event_detail(event_id: str,
+                        _: dict = Depends(_review_reader)):
+    return market_review.event_detail(event_id)
+
+
 @router.get('/v1/market/series')
 def market_series(symbol: str = Query(min_length=1,max_length=100), start: str | None = None,
                   end: str | None = None, bucket_ms: int = 1000, after: str | None = None,
