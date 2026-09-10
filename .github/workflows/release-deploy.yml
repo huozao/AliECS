@@ -545,6 +545,11 @@ jobs:
           TCR_BASE: ${{ vars.TCR_BASE }}
           TCR_USERNAME: ${{ secrets.TCR_USERNAME }}
           TCR_PASSWORD: ${{ secrets.TCR_PASSWORD }}
+          # 两段搬运（先落本地目录再推 TCR）。supersync 那两个大 blob 在流式
+          # copy 下连着两轮 rerun、共 6 次 20 分钟尝试全部被 backpressure 拖到
+          # GHCR 侧 unexpected EOF；读写解耦后才通。只给这个 job 开，
+          # mirror-third-party 的四个镜像层更碎、没踩到，行为保持不变。
+          MIRROR_VIA_DIR: "true"
         run: bash deploy/ecs/mirror-images-to-tcr.sh deploy/ecs/supersync-images.lock
 
   preload-sso-candidate:
