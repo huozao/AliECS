@@ -251,6 +251,18 @@ def market_latest(_: dict = Depends(_review_reader)):
     return market_review.latest() or _empty_snapshot()
 
 
+@router.get('/v1/market/realtime')
+def market_realtime(_: dict = Depends(_review_reader)):
+    return market_review.realtime_view()
+
+
+@router.get('/v1/market/events/index')
+def market_event_index(run_id: str = Query(min_length=1, max_length=200),
+                       after: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=200),
+                       _: dict = Depends(_review_reader)):
+    return market_review.event_index(run_id, after, limit)
+
+
 @router.get('/v1/market/series')
 def market_series(symbol: str = Query(min_length=1,max_length=100), start: str | None = None,
                   end: str | None = None, bucket_ms: int = 1000, after: str | None = None,

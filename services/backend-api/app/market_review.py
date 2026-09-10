@@ -14,6 +14,7 @@ from app.core import _conn
 
 SCHEMA = 'market-review.v1'
 SERIES_PAGE_SIZE = 5000
+REALTIME_MAX_MINUTES = 15
 GAP_PAGE_SIZE = 2000
 TARGET_FILL_CODE = 'TARGET_FILL_CONFIRMED'
 
@@ -230,6 +231,41 @@ def latest() -> dict | None:
         result['unresolved_positions'] = unresolved[:200]
         result['unresolved_has_more'] = len(unresolved) > 200
         return result
+
+
+def realtime_view() -> dict:
+    """Return the deliberately small payload used by the live page."""
+    snapshot = latest() or {'quotes': [], 'bands': [], 'run_id': None}
+    return {
+        'window_minutes': REALTIME_MAX_MINUTES,
+        'quotes': snapshot.get('quotes', []),
+        'bands': snapshot.get('bands', []),
+        'orders': [
+            {'contract': row.get('contract'), 'buy': row.get('buy_order'), 'sell': row.get('sell_order')}
+            for row in snapshot.get('quotes', []) if row.get('contract')
+        ],
+        'hedge_ranking': snapshot.get('hedge_ranking', []),
+        'run_id': snapshot.get('run_id'),
+        'updated_at': snapshot.get('received_at') or snapshot.get('published_at'),
+    }
+
+
+def event_index(run_id: str, after: int = 0, limit: int = 50) -> dict:
+    """Compact event index; detail payloads are intentionally omitted."""
+    limit = max(1, min(int(limit), 200))
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute("""SELECT body->>'event_id', sequence, body->>'occurred_at',
+                            body->>'event_type', body->>'position_id', body->'payload'->>'symbol'
+                       FROM market_review_events
+                      WHERE run_id=%s AND sequence>%s
+                      ORDER BY sequence LIMIT %s""", (run_id, after, limit + 1))
+        rows = cur.fetchall()
+    page = rows[:limit]
+    return {'run_id': run_id, 'events': [
+        {'event_id': r[0], 'sequence': r[1], 'occurred_at': r[2],
+         'event_type': r[3], 'position_id': r[4], 'symbol': r[5]}
+        for r in page
+    ], 'next_sequence': page[-1][1] if page else after, 'has_more': len(rows) > limit}
 
 
 def events_page(run_id: str, after: int, limit: int) -> dict:
