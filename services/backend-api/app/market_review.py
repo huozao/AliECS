@@ -236,6 +236,15 @@ def latest() -> dict | None:
 def realtime_view() -> dict:
     """Return the deliberately small payload used by the live page."""
     snapshot = latest() or {'quotes': [], 'bands': [], 'run_id': None}
+    right = datetime.now(timezone.utc); left = right - timedelta(minutes=REALTIME_MAX_MINUTES)
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute("""SELECT contract,field,body,observed_at FROM market_review_observations
+                       WHERE observed_at >= %s ORDER BY observed_at DESC LIMIT 2000""", (left,))
+        points = cur.fetchall()
+    series = {}
+    for contract, field, body, observed_at in reversed(points):
+        series.setdefault(contract, {'quotes': [], 'bands': []})[field].append(
+            dict(body, observed_at=observed_at.isoformat()))
     return {
         'window_minutes': REALTIME_MAX_MINUTES,
         'quotes': snapshot.get('quotes', []),
@@ -245,6 +254,7 @@ def realtime_view() -> dict:
             for row in snapshot.get('quotes', []) if row.get('contract')
         ],
         'hedge_ranking': snapshot.get('hedge_ranking', []),
+        'series': series,
         'run_id': snapshot.get('run_id'),
         'updated_at': snapshot.get('received_at') or snapshot.get('published_at'),
     }
