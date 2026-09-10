@@ -256,6 +256,75 @@ class MarketReviewBrowserTests(unittest.TestCase):
         self.assertEqual(data[-1]['value'],-13)
         page.close()
 
+    def test_delta_order_history_keeps_same_second_changes_window_boundary_and_coordinates(self):
+        """Catches dropped delta transitions and wrong spread/basis coordinates."""
+        page,t=self.three_point_page()
+        base='2026-09-07T01:00:00'
+        states=[
+            ('.100Z',955,[{'observed_at':base+'.100Z','orders':[{'side':'buy','price':955,'status':'EFFECTIVE｜有效挂单'}]}]),
+            ('.500Z',955,[]),
+            ('.700Z',957,[{'observed_at':base+'.700Z','orders':[{'side':'buy','price':957,'status':'EFFECTIVE｜有效挂单'}]}]),
+            ('01.100Z',957,[]),
+        ]
+        quotes=[];bands=[]
+        for suffix,price,delta in states:
+            stamp=base+suffix if suffix.startswith('.') else '2026-09-07T01:00:'+suffix
+            quotes.append({'contract':'SHFE.au2612','source_time':stamp,'observed_at':stamp,
+                'last_price':960,'international_price':950,'orders':[{'side':'buy','price':price,'status':'EFFECTIVE｜有效挂单'}],
+                'order_history_mode':'delta','order_history':delta})
+            bands.append({'contract':'SHFE.au2612','source_time':stamp,'observed_at':stamp,
+                          'center':960,'lower':958,'upper':962})
+        t['snapshot']={**t['snapshot'],'quotes':quotes,'bands':bands}
+        page.evaluate('MarketReview.state.quotes=[];MarketReview.state.snapshotQuotes=[];MarketReview.state.bands=[];MarketReview.state.snapshotBands=[];MarketReview.refresh()')
+
+        def plotted():
+            return page.evaluate("document.getElementById('main-chart').__reviewChart.orderRows.buy")
+
+        self.assertEqual([point.get('value') for point in plotted()],[955,957])
+        self.assertEqual([round(point['time']%60,3) for point in plotted()],[0.1,0.7])
+        page.select_option('#coordinate','spread')
+        self.assertEqual([point.get('value') for point in plotted()],[5,7])
+        page.select_option('#coordinate','deviation')
+        self.assertEqual([point.get('value') for point in plotted()],[-5,-3])
+        page.evaluate("MarketReview.state.historyWindow={start:'2026-09-07T01:00:00.400Z',end:'2026-09-07T01:00:01.500Z'};MarketReview.renderView()")
+        self.assertEqual([point.get('value') for point in plotted()],[-5,-3])
+        self.assertEqual(round(plotted()[0]['time']%60,3),0.5)
+        page.close()
+
+    def test_delta_order_history_breaks_when_current_state_proves_a_missing_change(self):
+        """Catches drawing a complete order line through an explicit delta mismatch."""
+        page,t=self.three_point_page()
+        quotes=t['snapshot']['quotes'][:2]
+        quotes[0].update(order_history_mode='delta',order_history=[{
+            'observed_at':quotes[0]['observed_at'],'orders':quotes[0]['orders']}])
+        quotes[1].update(order_history_mode='delta',order_history=[],
+                         orders=[{'side':'buy','price':950,'status':'EFFECTIVE｜有效挂单'}])
+        t['snapshot']['quotes']=quotes
+        t['snapshot']['bands']=t['snapshot']['bands'][:2]
+        page.evaluate('MarketReview.state.quotes=[];MarketReview.state.snapshotQuotes=[];MarketReview.state.bands=[];MarketReview.state.snapshotBands=[];MarketReview.refresh()')
+        data=page.evaluate("document.getElementById('main-chart').__reviewChart.orderRows.buy")
+        self.assertEqual(len(data),2)
+        self.assertEqual(data[0]['value'],955)
+        self.assertNotIn('value',data[1])
+        page.close()
+
+    def test_mixed_legacy_and_delta_history_keeps_both_wire_formats(self):
+        page,t=self.three_point_page()
+        quotes=t['snapshot']['quotes'][:2]
+        quotes[0].update(order_history=[{'observed_at':quotes[0]['observed_at'],
+                                        'orders':[{'side':'buy','price':955,'status':'EFFECTIVE｜有效挂单'}]}],
+                         orders=[{'side':'buy','price':955,'status':'EFFECTIVE｜有效挂单'}])
+        quotes[1].update(order_history_mode='delta', order_history=[{
+            'observed_at':quotes[1]['observed_at'],
+            'orders':[{'side':'buy','price':957,'status':'EFFECTIVE｜有效挂单'}]}],
+                         orders=[{'side':'buy','price':957,'status':'EFFECTIVE｜有效挂单'}])
+        t['snapshot']['quotes']=quotes
+        t['snapshot']['bands']=t['snapshot']['bands'][:2]
+        page.evaluate('MarketReview.state.quotes=[];MarketReview.state.snapshotQuotes=[];MarketReview.state.bands=[];MarketReview.state.snapshotBands=[];MarketReview.refresh()')
+        data=page.evaluate("document.getElementById('main-chart').__reviewChart.orderRows.buy")
+        self.assertEqual([point.get('value') for point in data],[955,957])
+        page.close()
+
     def test_five_prices_reorder_at_true_price_and_avoid_collisions(self):
         page,t=self.three_point_page()
         t['snapshot']['quotes'][-1]['last_price']=970
