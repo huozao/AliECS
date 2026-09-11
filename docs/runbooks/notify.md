@@ -496,6 +496,17 @@ ssh txecs "sudo docker logs business-cn-backend-api-1 2>&1 | grep 'request valid
 按 source 判断哪一台的心跳缺失。需要减少群消息时，只能在中枢侧另加总览摘要，不能替代
 两条设备侧日报和跨档告警。
 
+### 2026-09-11 首次上线验证
+
+AliECS PR #386 已合并为 `d74bfe9`，并由 release workflow `34551326608` 部署到
+`business-cn`；迁移 `0061_txecs_traffic_notify` 已应用。数据库回读确认
+`txecs-traffic` 来源、同群 `feishu` 路由均存在。txecs 首次 `traffic.daily_report` 返回
+`delivered=True`，对应 `notify_deliveries` 为 `status=sent`、`attempts=1`；设备 pending
+队列为空。用户已确认在飞书群收到消息。
+
+这次验证的是日报正常路径；没有人为伪造 50%/75%/90%/100% 档位，因此阈值消息仍应在
+真实跨档时观察。首个腾讯云套餐周期结束后，再将 vnstat 的 eth0 TX 与云账单对账。
+
 ### 2026-09-06 日报漏发复盘
 
 2026-09-06 00:07（CST）设备 timer 正常运行，但日报在进入 `notify_outbox` 前被
