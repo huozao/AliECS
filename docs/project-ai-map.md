@@ -27,7 +27,7 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 | `backups.py` | 企微结构备份看板、镜像清理策略看板 |
 | `clash_profile.py` | Clash 配置合成器（人类叫法：订阅合并 / 一个订阅选所有节点）。机场订阅源 CRUD + 合成配置下载；渲染逻辑在 `app/clash_profile/render.py`，自建节点走 env `CLASH_SELF_NODES_B64`。`mobile` 目标会把启用订阅源的最新快照嵌成单文件 YAML；2026-09-05 已修复 provider 节点缩进导致的手机 YAML 解析错误。2026-09-08 加 `Codex-Win`/`Codex-WSL` 两个组与 `codex-in` listener（7899，仅 desktop），让两处 codex 各自选节点，接线与判据见 `infra/roles/devbox/clash/README.md`〈三点七〉。验证：`python -m unittest discover -s tests -p "test_clash_profile_render.py"` |
 | `couple.py` | Couple 私密情侣空间：回忆、地图、纪念日、愿望清单，以及按用户 Immich API key 的个人库选片/家庭相册归档；AdventureLog 保持独立入口 |
-| `market_snapshot.py` | V6 市场审阅：只读增量行情、交易事件、双账仓位、历史游标和人工标注；基础迁移 `0055`–`0057`；用户已读、观察投影和事件缺序投影分别见 `db/migrations/0058_market_review_alert_reads.sql`、`0059_market_review_observations.sql`、`0060_market_review_event_gaps.sql`。后两项的原子执行、备份与回读见 `docs/runbooks/deploy.md` 的 V6 迁移节 |
+| `market_snapshot.py` | V6 市场审阅：只读增量行情、交易事件、双账仓位、历史游标和人工标注；基础迁移 `0055`–`0057`；用户已读、观察投影、事件缺序投影和在线投影写放大修复分别见 `db/migrations/0058_market_review_alert_reads.sql`、`0059_market_review_observations.sql`、`0060_market_review_event_gaps.sql`、`0062_market_review_projection_write_amplification.sql`。相关迁移的原子执行、备份与回读见 `docs/runbooks/deploy.md` 的 V6 迁移节 |
 
 输入：Postgres、runtime env、T+ worker 只读输出（`/app/tplus-output`）。
 验证：`python -m pytest tests`（CI 同一条）；相关单测 patch 目标=函数所在文件（已拆域）。
@@ -129,7 +129,8 @@ MCP 编程路线（OAuth 已上线；⚠️ ECS nginx 域根的 OAuth 路由不�
 ## db/migrations
 
 迁移 SQL。写成幂等；`0061_txecs_traffic_notify.sql` 为 txecs 流量看护注册独立通知来源并
-复用 txecs-disk 的飞书目标路由（不复制明文 token）。生产 psql =
+复用 txecs-disk 的飞书目标路由（不复制明文 token）；`0062_market_review_projection_write_amplification.sql`
+将市场观察当前投影改为每个包内键只写一次，保留原始观察历史。生产 psql =
 `ssh txecs 'sudo docker exec -i business-cn-postgres-1 psql -U app -d app'`。
 
 ## local
