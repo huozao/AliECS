@@ -265,6 +265,7 @@ def service(monkeypatch):
         conn.execute((ROOT / 'db/migrations/0058_market_review_alert_reads.sql').read_text())
         conn.execute((ROOT / 'db/migrations/0059_market_review_observations.sql').read_text())
         conn.execute((ROOT / 'db/migrations/0060_market_review_event_gaps.sql').read_text())
+        conn.execute((ROOT / 'db/migrations/0062_market_review_projection_write_amplification.sql').read_text())
     monkeypatch.setattr(mod, '_conn', connect)
     yield mod, connect
     with psycopg.connect(url, autocommit=True) as conn:
@@ -332,6 +333,34 @@ def test_isolated_snapshot_projection_cost_evidence(service):
               base_ordered[len(base_ordered) // 2],
               base_ordered[min(len(base_ordered) - 1, int(len(base_ordered) * .95))],
               plan['Execution Time']))
+
+
+def test_online_projection_reduces_each_packet_key_to_one_current_write(service):
+    from psycopg.types.json import Jsonb
+    _, connect = service
+    with connect() as conn:
+        body = {
+            'quotes': [
+                {'contract': 'A', 'source_time': '2026-09-07T01:00:00Z', 'observed_at': '2026-09-07T01:00:00Z', 'marker': 1},
+                {'contract': 'A', 'source_time': '2026-09-07T01:00:01Z', 'observed_at': '2026-09-07T01:00:01Z', 'marker': 2},
+                {'contract': 'A', 'source_time': '2026-09-07T01:00:02Z', 'observed_at': '2026-09-07T01:00:02Z', 'marker': 3},
+            ],
+            'bands': [],
+        }
+        conn.execute(
+            'INSERT INTO market_review_snapshots(run_id,sequence,published_at,body) VALUES(%s,%s,%s,%s)',
+            ('write-once', 1, '2026-09-07T01:00:02Z', Jsonb(body)),
+        )
+        current = conn.execute(
+            'SELECT sequence,ordinal,body FROM market_review_current_observations '
+            'WHERE run_id=%s AND field=%s AND contract=%s',
+            ('write-once', 'quotes', 'A'),
+        ).fetchone()
+        assert current[:2] == (1, 3)
+        assert current[2]['marker'] == 3
+        assert conn.execute(
+            'SELECT count(*) FROM market_review_observations WHERE run_id=%s', ('write-once',)
+        ).fetchone()[0] == 3
 
 
 def test_latest_keeps_contracts_from_distinct_incremental_packets(service):
