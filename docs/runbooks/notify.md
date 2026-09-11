@@ -486,6 +486,16 @@ ssh txecs "sudo docker logs business-cn-backend-api-1 2>&1 | grep 'request valid
 「心跳缺席」（把 `notify_outbox` 里 aliecs-traffic 的最新一行时间改旧，或停设备侧 timer 满
 30 小时），确认它真的报出来，再把结果补进上表。**在那之前不要认为这条反向看护是可用的。**
 
+## txecs 流量看护：同群但独立来源（2026-09-11）
+
+`txecs-traffic` 与 `aliecs-traffic` 使用同一个飞书群，但保持独立的 source、周期账本、
+`dedup_key` 和日报心跳。txecs 账本按腾讯云流量包的明确重置时间计算，不使用 vnstat 的
+自然月汇总；设备侧按 `eth0` TX 采集，初始账单基线与云控制台对账后再校准。
+
+两台设备的日报不能合并成一条：任一设备出网故障时，另一台仍须独立报警，且接收端可以
+按 source 判断哪一台的心跳缺失。需要减少群消息时，只能在中枢侧另加总览摘要，不能替代
+两条设备侧日报和跨档告警。
+
 ### 2026-09-06 日报漏发复盘
 
 2026-09-06 00:07（CST）设备 timer 正常运行，但日报在进入 `notify_outbox` 前被
