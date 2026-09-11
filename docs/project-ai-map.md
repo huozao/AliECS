@@ -128,7 +128,8 @@ MCP 编程路线（OAuth 已上线；⚠️ ECS nginx 域根的 OAuth 路由不�
 
 ## db/migrations
 
-迁移 SQL。写成幂等；生产 psql =
+迁移 SQL。写成幂等；`0061_txecs_traffic_notify.sql` 为 txecs 流量看护注册独立通知来源并
+复用 txecs-disk 的飞书目标路由（不复制明文 token）。生产 psql =
 `ssh txecs 'sudo docker exec -i business-cn-postgres-1 psql -U app -d app'`。
 
 ## local
