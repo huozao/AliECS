@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import re
 import threading
@@ -28,6 +29,7 @@ DEFAULT_API_BASE = "https://open.feishu.cn/open-apis"
 _token_lock = threading.Lock()
 # {(app_id, api_base): (token, expires_at_monotonic)}
 _token_cache: dict[tuple[str, str], tuple[str, float]] = {}
+logger = logging.getLogger(__name__)
 
 
 def api_base(profile: str) -> str:
@@ -222,6 +224,24 @@ def _notation(content: str) -> dict[str, Any]:
 
 
 def _fields_columns(fields: list[Any]) -> list[dict[str, Any]]:
+    # 单字段不应套用 bisect 双列布局：那会把内容限制在左半屏，右侧留下
+    # 大片空白，长合约/持仓 ID 被迫换行。单字段直接使用全宽 markdown；
+    # `note` 仍保持 notation 小字号。
+    if len(fields) == 1:
+        field = fields[0]
+        if not field.name and not field.value and field.note:
+            return [{"tag": "markdown", "content": field.note, "text_size": _NOTATION}]
+        elements: list[dict[str, Any]] = [
+            {
+                "tag": "markdown",
+                "content": f"**{field.name}**\n{field.value}",
+                "text_size": "normal",
+            }
+        ]
+        if field.note:
+            elements.append({"tag": "markdown", "content": field.note, "text_size": _NOTATION})
+        return elements
+
     rows: list[dict[str, Any]] = []
     for start in range(0, len(fields), 2):
         rows.append(
@@ -352,6 +372,44 @@ def build_card(notification: Notification, image_keys: dict[str, str]) -> dict[s
     }
 
 
+def _native_content_json(content: Any) -> str:
+    """Encode a validated native content object for ``im/v1/messages``.
+
+    A string is treated as an already-serialized JSON body. This keeps the
+    escape hatch genuinely lossless while normal producers can pass a dict/list.
+    """
+    if isinstance(content, str):
+        return content
+    return json.dumps(content, ensure_ascii=False, separators=(",", ":"))
+
+
+def _send_native(
+    notification: Notification,
+    profile: str,
+    path: str,
+    receive_id: str,
+    token: str,
+    *,
+    opener=urllib.request.urlopen,
+) -> bool:
+    """Send the optional channel-native payload; return whether one was supplied."""
+    native = notification.channel_payloads.get("feishu")
+    if native is None:
+        return False
+    _post_json(
+        profile,
+        path,
+        {
+            "receive_id": receive_id,
+            "msg_type": native.msg_type,
+            "content": _native_content_json(native.content),
+        },
+        token,
+        opener=opener,
+    )
+    return True
+
+
 def send(notification: Notification, target: dict[str, Any], *, opener=urllib.request.urlopen) -> None:
     """投递一条通知。失败抛异常，由 dispatch 记账重试。
 
@@ -365,6 +423,24 @@ def send(notification: Notification, target: dict[str, Any], *, opener=urllib.re
 
     token = tenant_access_token(profile, opener=opener)
 
+    path = f"/im/v1/messages?receive_id_type={receive_id_type}"
+    if notification.channel_payloads.get("feishu") is not None:
+        try:
+            _send_native(
+                notification,
+                profile,
+                path,
+                receive_id,
+                token,
+                opener=opener,
+            )
+            return
+        except Exception as exc:
+            # 原生载荷失败时仍走统一字段卡片/纯文本降级，避免一次渠道格式错误
+            # 把通知彻底吞掉；不记录原生正文，避免日志泄露卡片内容。
+            logger.warning("feishu native payload rejected; falling back to normalized rendering: %s", exc)
+            pass
+
     image_keys: dict[str, str] = {}
     for image in notification.images:
         try:
@@ -375,7 +451,6 @@ def send(notification: Notification, target: dict[str, Any], *, opener=urllib.re
             # 单张图传不上去不该让整条消息发不出去——卡片里那一格会写「图片发送失败」。
             continue
 
-    path = f"/im/v1/messages?receive_id_type={receive_id_type}"
     try:
         card = build_card(notification, image_keys)
         _post_json(

@@ -1,7 +1,8 @@
 """统一消息中枢的消息模型。
 
-生产者只描述「发生了什么」，不构造任何飞书 / 企微 payload——否则每加一个投递目标，
-每个生产者都要跟着改。渲染成各家原生格式是 channel 的事。
+生产者默认只描述「发生了什么」，不需要构造任何渠道 payload。对于确实需要渠道特有
+能力的场景，可通过 ``channel_payloads`` 为指定渠道提供受校验的原生载荷；其他渠道
+仍使用通用字段降级渲染。收件人和凭据永远由投递层持有。
 
 段落模型（segments）沿用 openclaw-bridge 的 build_feishu_card：文字和图按文档顺序
 交错排成一条消息，而不是拆成好几个气泡。那套结构在飞书链路上已经跑了几个月。
@@ -11,6 +12,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
+import re
 import unicodedata
 import uuid
 from datetime import datetime, timezone
@@ -181,6 +184,52 @@ class NotifyButton(BaseModel):
         return self
 
 
+MAX_CHANNEL_PAYLOAD_BYTES = 256 * 1024
+_CHANNEL_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+_MESSAGE_TYPE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
+
+
+class NotifyChannelPayload(BaseModel):
+    """某个渠道的原生消息载荷。
+
+    ``content`` 是渠道 API 的 JSON 内容对象，而不是收件人、凭据或请求 URL。
+    例如飞书 interactive 消息的 ``content`` 是 JSON 2.0 卡片对象；``msg_type``
+    可以是 ``interactive``、``text``、``post``、``image`` 等飞书支持的消息类型。
+    渠道适配器负责把对象编码成该渠道 API 要求的字符串格式。
+    """
+
+    msg_type: str = Field(min_length=1, max_length=64)
+    content: Any
+
+    @model_validator(mode="after")
+    def _check_json_content(self) -> "NotifyChannelPayload":
+        self.msg_type = self.msg_type.strip()
+        if not _MESSAGE_TYPE_RE.fullmatch(self.msg_type):
+            raise ValueError(f"invalid native message type: {self.msg_type!r}")
+        if isinstance(self.content, str):
+            # Feishu's API receives content as a JSON string. A string here means
+            # the caller intentionally supplied an already-serialized JSON body.
+            try:
+                parsed = json.loads(self.content)
+                json.dumps(parsed, ensure_ascii=False, allow_nan=False)
+            except (TypeError, ValueError):
+                raise ValueError("native content string must contain valid JSON") from None
+        try:
+            encoded = json.dumps(
+                self.content,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            )
+        except (TypeError, ValueError):
+            raise ValueError("native content must be JSON-serializable") from None
+        if len(encoded.encode("utf-8")) > MAX_CHANNEL_PAYLOAD_BYTES:
+            raise ValueError(
+                f"native content is over the {MAX_CHANNEL_PAYLOAD_BYTES} byte limit"
+            )
+        return self
+
+
 class Notification(BaseModel):
     """一条待投递的通知。
 
@@ -205,6 +254,8 @@ class Notification(BaseModel):
     images: list[NotifyImage] = Field(default_factory=list, max_length=12)
     link: NotifyLink | None = None
     buttons: list[NotifyButton] = Field(default_factory=list, max_length=5)
+    # 统一字段始终保留，供企微和不支持原生载荷的渠道降级；此字段只允许覆盖指定渠道。
+    channel_payloads: dict[str, NotifyChannelPayload] = Field(default_factory=dict, max_length=8)
     dedup_key: str = Field(default="", max_length=200)
     occurred_at: datetime | None = None
 
@@ -214,6 +265,9 @@ class Notification(BaseModel):
             self.occurred_at = datetime.now(timezone.utc)
         if self.theme and self.theme not in HEADER_TEMPLATES:
             raise ValueError(f"unknown header theme: {self.theme}")
+        invalid_channels = [name for name in self.channel_payloads if not _CHANNEL_NAME_RE.fullmatch(name)]
+        if invalid_channels:
+            raise ValueError(f"invalid native channel name: {invalid_channels[0]!r}")
         refs = {image.ref for image in self.images}
         for segment in self.segments:
             if segment.kind == "image" and segment.image_ref not in refs:
@@ -242,6 +296,13 @@ class Notification(BaseModel):
                 digest.update(field.note.encode())
         # 同一内容在不同时刻发生仍是两条通知，所以把时间也算进去；
         # 真正需要「重发不重复」的生产者必须自己给 dedup_key。
+        native = {
+            channel: payload.model_dump(mode="json")
+            for channel, payload in sorted(self.channel_payloads.items())
+        }
+        digest.update(
+            json.dumps(native, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        )
         digest.update(str(self.occurred_at).encode())
         return f"auto:{self.source}:{digest.hexdigest()[:32]}"
 

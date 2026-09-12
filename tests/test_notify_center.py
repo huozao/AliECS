@@ -191,6 +191,53 @@ class ModelTests(unittest.TestCase):
             [(button.text, button.url, button.style) for button in restored.buttons],
         )
 
+    def test_native_channel_payload_survives_storage_roundtrip(self) -> None:
+        native = {
+            "feishu": {
+                "msg_type": "interactive",
+                "content": {"schema": "2.0", "body": {"elements": []}},
+            }
+        }
+        notification = make_notification(channel_payloads=native)
+        restored = Notification.from_stored(notification.storable_payload())
+        self.assertEqual("interactive", restored.channel_payloads["feishu"].msg_type)
+        self.assertEqual(
+            {"schema": "2.0", "body": {"elements": []}},
+            restored.channel_payloads["feishu"].content,
+        )
+
+    def test_native_channel_payload_participates_in_auto_dedup(self) -> None:
+        occurred = "2026-08-30T10:00:00+00:00"
+        first = make_notification(
+            dedup_key="", occurred_at=occurred,
+            channel_payloads={"feishu": {"msg_type": "text", "content": {"text": "A"}}},
+        )
+        second = make_notification(
+            dedup_key="", occurred_at=occurred,
+            channel_payloads={"feishu": {"msg_type": "text", "content": {"text": "B"}}},
+        )
+        self.assertNotEqual(first.dedup_key, second.dedup_key)
+
+    def test_native_channel_payload_rejects_invalid_json(self) -> None:
+        with self.assertRaises(ValueError):
+            make_notification(
+                channel_payloads={"feishu": {"msg_type": "interactive", "content": object()}}
+            )
+        with self.assertRaises(ValueError):
+            make_notification(
+                channel_payloads={"feishu": {"msg_type": "interactive", "content": "not-json"}}
+            )
+        with self.assertRaises(ValueError):
+            make_notification(
+                channel_payloads={"Feishu": {"msg_type": "interactive", "content": {}}}
+            )
+        with self.assertRaises(ValueError):
+            make_notification(
+                channel_payloads={
+                    "feishu": {"msg_type": "interactive", "content": {"body": "x" * (256 * 1024)}}
+                }
+            )
+
 
 class RouteMatchingTests(unittest.TestCase):
     ROUTES = [
@@ -411,6 +458,29 @@ class FeishuRenderTests(unittest.TestCase):
         self.assertEqual([call["msg_type"] for call in calls], ["interactive", "text"])
         self.assertIn("价差异常", json.loads(calls[1]["content"])["text"])
 
+    def test_send_uses_feishu_native_payload_without_re_rendering(self) -> None:
+        calls: list[dict[str, Any]] = []
+
+        def fake_opener(request, timeout=0):  # noqa: ANN001
+            body = json.loads(request.data.decode("utf-8")) if request.data else {}
+            if "tenant_access_token" in request.full_url:
+                return FakeResponse({"code": 0, "tenant_access_token": "native-token", "expire": 7200})
+            calls.append(body)
+            return FakeResponse({"code": 0})
+
+        native_card = {"schema": "2.0", "body": {"elements": [{"tag": "markdown", "content": "原样"}]}}
+        notification = make_notification(
+            channel_payloads={"feishu": {"msg_type": "interactive", "content": native_card}}
+        )
+        with mock.patch.dict("os.environ", {"FEISHU_COMPANY_A_APP_ID": "a", "FEISHU_COMPANY_A_APP_SECRET": "b"}):
+            feishu._token_cache.clear()
+            with mock.patch.object(feishu, "build_card", side_effect=AssertionError("must not render")):
+                feishu.send(notification, {"receive_id": "oc_native"}, opener=fake_opener)
+
+        self.assertEqual(1, len(calls))
+        self.assertEqual("interactive", calls[0]["msg_type"])
+        self.assertEqual(native_card, json.loads(calls[0]["content"]))
+
 
 class FakeResponse:
     def __init__(self, payload: dict[str, Any]) -> None:
@@ -433,6 +503,16 @@ class WecomRenderTests(unittest.TestCase):
         self.assertIn("**合约**：AU2612", rendered)
         self.assertIn("[查看](https://hydwang.xyz/sync/)", rendered)
         self.assertIn("> gold-spread-monitor · wrong_price_detected", rendered)
+
+    def test_native_feishu_payload_does_not_change_wecom_fallback(self) -> None:
+        notification = make_notification(
+            channel_payloads={
+                "feishu": {"msg_type": "interactive", "content": {"schema": "2.0"}}
+            }
+        )
+        rendered = wecom.render_markdown(notification)
+        self.assertIn("**合约**：AU2612", rendered)
+        self.assertNotIn('"schema": "2.0"', rendered)
 
     def test_every_button_degrades_to_a_markdown_link(self) -> None:
         """企微没有按钮组件，但 URL 一个都不能丢——丢了对方就点不到了。"""
