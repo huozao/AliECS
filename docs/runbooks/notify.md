@@ -163,6 +163,22 @@ bridge 上出现不同渲染结果。
 `buttons` 等通用字段。这保证同一条通知同时投递到飞书和企微时，飞书可以使用自己
 的 JSON 2.0 版式，而企微仍获得完整且可读的降级正文。
 
+### 当前出站来源清单（2026-09-12）
+
+| 来源 | 事件范围 | 上行路径 | 飞书原生载荷 | 说明 |
+|---|---|---|---|---|
+| `gold-spread-monitor` | `data_backfill_complete`、纸面成交/对冲/平仓 | notify-center HTTP | 补数卡片按需透传；其余通用渲染 | 研究与模拟交易通知 |
+| `quota-monitor` | `quota.*` | notify-center HTTP | 通用字段 | AI 额度日报与状态 |
+| `feishu-obsidian` | 快照/同步结果 | notify-center HTTP | 通用字段 | 文档快照同步 |
+| `doc-sync` | 文档同步/心跳 | worker outbox | 通用字段 | 服务端内部生产者 |
+| `devbox-traffic` | `traffic.*` | notify-center HTTP | 日报透传 JSON 2.0；启动/阈值用通用字段 | devbox 流量采集器与日报 |
+| `txecs-traffic`、`aliecs-traffic`、`txecs-disk` | 流量/磁盘看护 | notify-center HTTP | 通用字段 | 主机看护 |
+
+OpenClaw 的 `/im/v1/messages` 调用仍保留在**会话传输适配器**内，用于回复指定
+飞书消息、上传附件和 PATCH 已发送卡片；它们没有广播通知的 `source/event/dedup`
+语义，不能误列为通知生产者。OpenClaw 运维告警只走 `notify-center`；中枢不可用时
+由 outbox/重试记录和补发，不再直连飞书，避免一条告警出现两次。
+
 ### aliecs 流量日报卡片（2026-09-05 已确认）
 
 日报不是普通 `fields` 两列，而是 `section` 段落；飞书使用 JSON 2.0 的加权

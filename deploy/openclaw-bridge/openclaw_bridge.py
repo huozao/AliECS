@@ -4781,29 +4781,6 @@ except ValueError:
 FEISHU_BITABLE_RECONCILE_AT = os.getenv("FEISHU_BITABLE_RECONCILE_AT", "04:00")
 
 
-def _send_feishu_alert_direct(text: str) -> None:
-    """Legacy direct Feishu delivery used as the last-resort fallback."""
-    chat_id = FEISHU_ALERT_CHAT_ID
-    if not chat_id:
-        return
-    try:
-        token = feishu_tenant_access_token()
-        if not token:
-            log_line("feishu_alert_skipped no_tenant_token")
-            return
-        feishu_post_json(
-            "/im/v1/messages?receive_id_type=chat_id",
-            {
-                "receive_id": chat_id,
-                "msg_type": "text",
-                "content": json.dumps({"text": text}, ensure_ascii=False),
-            },
-            auth_token=token,
-        )
-    except Exception as exc:
-        log_line(f"feishu_alert_failed {exc}")
-
-
 def _notify_center_payload(text: str) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     minute = now.strftime("%Y%m%d%H%M")
@@ -4827,8 +4804,10 @@ def _send_feishu_alert_via_notify_center(text: str) -> bool:
     """Try the unified notify center; return whether it accepted/delivered the alert.
 
     A 502 means backend-api accepted the outbox row but all targets currently
-    failed, so direct fallback would create a duplicate when retry succeeds.
-    Other HTTP errors and transport failures fall back to the legacy direct path.
+    failed; the outbox owns retry and no second path is attempted. Other HTTP
+    errors and transport failures are logged; no direct Feishu fallback
+    is allowed for operational notifications. The center owns retries and delivery
+    accounting, so a second path would make one alert appear twice.
     """
     if not (NOTIFY_CENTER_ENDPOINT and NOTIFY_CENTER_SOURCE and NOTIFY_CENTER_TOKEN):
         return False
@@ -4872,14 +4851,10 @@ def _send_feishu_alert_via_notify_center(text: str) -> bool:
 
 
 def send_feishu_alert(text: str) -> None:
-    """Post an ops alert without ever affecting the thread that noticed it.
-
-    The unified notify center is preferred; direct Feishu delivery remains the
-    silent fallback for an unavailable or misconfigured center.
-    """
+    """Post an ops alert through the unified notify center only."""
     if _send_feishu_alert_via_notify_center(text):
         return
-    _send_feishu_alert_direct(text)
+    log_line("feishu_alert_not_sent notify_center_unavailable")
 
 
 def _seconds_until(hhmm: str) -> float:

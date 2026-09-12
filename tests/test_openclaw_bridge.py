@@ -4597,9 +4597,6 @@ def test_send_feishu_alert_prefers_notify_center(monkeypatch):
         return Response()
 
     monkeypatch.setattr(bridge.urllib.request, "urlopen", fake_urlopen)
-    direct: list[str] = []
-    monkeypatch.setattr(bridge, "_send_feishu_alert_direct", direct.append)
-
     bridge.send_feishu_alert("bridge test")
 
     request = captured["request"]
@@ -4611,7 +4608,6 @@ def test_send_feishu_alert_prefers_notify_center(monkeypatch):
     assert payload["event"] == "bridge.alert"
     assert payload["summary"] == ""
     assert payload["segments"] == [{"kind": "text", "text": "bridge test"}]
-    assert direct == []
 
 
 def test_send_feishu_alert_does_not_direct_fallback_after_notify_center_502(monkeypatch):
@@ -4623,26 +4619,16 @@ def test_send_feishu_alert_does_not_direct_fallback_after_notify_center_502(monk
         "http://notify/send", 502, "bad gateway", {}, io.BytesIO(b'{"detail":"queued for retry (outbox 9)"}')
     )
     monkeypatch.setattr(bridge.urllib.request, "urlopen", lambda request, timeout: (_ for _ in ()).throw(error))
-    direct: list[str] = []
-    monkeypatch.setattr(bridge, "_send_feishu_alert_direct", direct.append)
-
     bridge.send_feishu_alert("queued alert")
 
-    assert direct == []
 
-
-def test_send_feishu_alert_falls_back_to_direct_when_notify_center_unreachable(monkeypatch):
+def test_send_feishu_alert_does_not_direct_send_when_notify_center_unreachable(monkeypatch):
     bridge = load_bridge()
     monkeypatch.setattr(bridge, "NOTIFY_CENTER_ENDPOINT", "http://notify/send")
     monkeypatch.setattr(bridge, "NOTIFY_CENTER_SOURCE", "openclaw-bridge")
     monkeypatch.setattr(bridge, "NOTIFY_CENTER_TOKEN", "secret")
     monkeypatch.setattr(bridge.urllib.request, "urlopen", lambda request, timeout: (_ for _ in ()).throw(OSError("refused")))
-    direct: list[str] = []
-    monkeypatch.setattr(bridge, "_send_feishu_alert_direct", direct.append)
-
     bridge.send_feishu_alert("fallback alert")
-
-    assert direct == ["fallback alert"]
 
 
 def test_refresh_cycle_defaults_to_a_minute():
