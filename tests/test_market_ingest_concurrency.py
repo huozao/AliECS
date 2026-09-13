@@ -17,7 +17,21 @@ from fastapi import FastAPI
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "services" / "backend-api"))
+
+
+@pytest.fixture(autouse=True)
+def backend_imports(monkeypatch):
+    previous = {key: value for key, value in sys.modules.items() if key == "app" or key.startswith("app.")}
+    for key in previous:
+        del sys.modules[key]
+    monkeypatch.syspath_prepend(str(ROOT / "services" / "backend-api"))
+    try:
+        yield
+    finally:
+        for key in list(sys.modules):
+            if key == "app" or key.startswith("app."):
+                del sys.modules[key]
+        sys.modules.update(previous)
 
 
 def _unused_port() -> int:
@@ -134,4 +148,30 @@ def test_cancelled_client_keeps_market_ingest_capacity_until_write_finishes():
         result = await market_snapshot._submit_market_ingest(lambda: {"ok": True}, "review")
         assert result == {"ok": True}
 
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("slow_kind,fast_kind", [("review", "snapshot"), ("snapshot", "review")])
+def test_independent_market_writers_do_not_starve_each_other(slow_kind, fast_kind):
+    from app.routers import market_snapshot
+
+    started, release = threading.Event(), threading.Event()
+    def slow_write():
+        started.set()
+        assert release.wait(3)
+        return {"ok": True}
+
+    async def scenario():
+        task = asyncio.create_task(market_snapshot._submit_market_ingest(slow_write, slow_kind))
+        try:
+            assert await asyncio.to_thread(started.wait, 1)
+            with pytest.raises(Exception) as busy:
+                await market_snapshot._submit_market_ingest(lambda: {}, slow_kind)
+            assert busy.value.status_code == 503
+            assert await asyncio.wait_for(
+                market_snapshot._submit_market_ingest(lambda: {"independent": True}, fast_kind), .5
+            ) == {"independent": True}
+        finally:
+            release.set()
+            await task
     asyncio.run(scenario())

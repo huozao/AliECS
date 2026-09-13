@@ -423,3 +423,13 @@ ssh txecs 'sudo docker exec -i business-cn-postgres-1 psql -U app -d app -v ON_E
 默认 `deploy/ecs/rollback.sh` 回上一版本；指定
 `deploy/ecs/rollback.sh <deployment_id>` 可按 `$METADATA_DIR/deployments/<id>.json`
 中的不可变 digest 回滚。现有 V tag 不删除，仅作历史兼容。
+
+### 市场写入慢与旧快照 503
+
+旧版原子文件快照与 V6 PostgreSQL 入库使用各自有界执行器；同通道忙时仍返回 503 / Retry-After，取消客户端等待不释放仍在执行的写入名额。验证 `tests/test_market_ingest_concurrency.py`。
+
+若耗时集中在快照触发器，先只读检查 `pg_stat_activity` 的长期 idle-in-transaction、`backend_xmin`，以及当前观察投影表的有效/死行、表体积与查询计划。少量有效行却存在大量死行，可能是其他业务的遗留事务阻止 VACUUM，不能仅增加写入超时或反复重启市场 API。
+
+同步 worker 的目标文档启动查询使用有界事务，避免进入群监听等待后仍保留数据库快照。`tests/test_sync_scheduler_storage.py` 的本地 PostgreSQL 测试验证正常返回和异常后均回到 IDLE，同时保留调用方已有事务。修复部署不能自动结束旧进程已经持有的事务。
+
+生产恢复须先核实旧连接的进程归属与未提交工作；保存表备份和版本基线，经授权结束具体遗留事务或恢复对应 worker。之后评估 VACUUM / 表重写：普通 VACUUM 允许空间复用但不保证缩小文件；VACUUM FULL 会持有排他锁，需单独评估窗口与磁盘余量。不要盲目终止全库连接、删原始行情或直接修改历史迁移。恢复后回读旧事务消失、投影读写耗时、503、发布队列趋势和最新观察时间；容器健康不能代替这些证据。
