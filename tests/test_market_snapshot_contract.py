@@ -11,12 +11,23 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "services" / "backend-api"))
 
 
 class MarketSnapshotContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        previous_path = list(sys.path)
+        previous_modules = {k: v for k, v in sys.modules.items() if k == "app" or k.startswith("app.")}
+        def restore():
+            for key in list(sys.modules):
+                if key == "app" or key.startswith("app."):
+                    del sys.modules[key]
+            sys.modules.update(previous_modules)
+            sys.path[:] = previous_path
+        cls.addClassCleanup(restore)
+        for key in previous_modules:
+            del sys.modules[key]
+        sys.path.insert(0, str(ROOT / "services" / "backend-api"))
         try:
             from app.routers import market_snapshot
         except ModuleNotFoundError as exc:

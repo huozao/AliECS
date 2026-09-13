@@ -5,6 +5,7 @@ import sys
 import time
 import unittest
 from copy import deepcopy
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -85,6 +86,16 @@ class _Connection:
 
     def close(self) -> None:
         return None
+
+    @contextmanager
+    def transaction(self):
+        try:
+            yield
+        except Exception:
+            self.rollback()
+            raise
+        else:
+            self.commit()
 
 
 class _StatefulCursor:
@@ -499,6 +510,36 @@ class DocScheduleStorageTests(unittest.TestCase):
         self.assertIn("external_sources", statement)
         self.assertIn("source_type='smartsheet_sheet'", statement)
         self.assertEqual(("COMPANY_B", "需求表"), params)
+        self.assertEqual(1, conn.commits, "lookup must end before the listener waits for network frames")
+
+    def test_doc_identifier_lookup_rolls_back_failed_transaction(self) -> None:
+        conn = _Connection(fail_on="select distinct external_doc_id")
+        with self.assertRaises(RuntimeError):
+            self.PostgresDocSyncStore(conn).find_unique_wecom_docid("COMPANY_B", "需求表")
+        self.assertEqual(1, conn.rollbacks)
+
+    @unittest.skipUnless(os.getenv("V6_TEST_DATABASE_URL"), "local PostgreSQL URL required")
+    def test_identifier_lookup_releases_real_postgres_snapshot(self) -> None:
+        import psycopg
+        from psycopg.pq import TransactionStatus
+        with psycopg.connect(os.environ["V6_TEST_DATABASE_URL"]) as conn:
+            conn.execute("CREATE TEMP TABLE external_sources (external_doc_id text, provider text, env_profile text, source_type text, status text, sheet_name text)")
+            identifier = "dc" + "x" * 80
+            conn.execute("INSERT INTO external_sources VALUES (%s,'wecom','TEST','smartsheet_sheet','active','sheet')", (identifier,))
+            conn.commit()
+            store = self.PostgresDocSyncStore(conn)
+            self.assertEqual(identifier, store.find_unique_wecom_docid("TEST", "sheet"))
+            self.assertEqual(TransactionStatus.IDLE, conn.info.transaction_status)
+            # A surrounding caller transaction remains owned by its caller.
+            conn.execute("SELECT 1")
+            store.find_unique_wecom_docid("TEST", "sheet")
+            self.assertEqual(TransactionStatus.INTRANS, conn.info.transaction_status)
+            conn.rollback()
+            conn.execute("ALTER TABLE external_sources RENAME COLUMN sheet_name TO removed_column")
+            conn.commit()
+            with self.assertRaises(psycopg.errors.UndefinedColumn):
+                store.find_unique_wecom_docid("TEST", "sheet")
+            self.assertEqual(TransactionStatus.IDLE, conn.info.transaction_status)
 
     def test_doc_read_platform_schedule_is_fail_open(self) -> None:
         class Store:

@@ -8,7 +8,6 @@ from pathlib import Path
 
 
 WORKER_ROOT = Path(__file__).resolve().parents[1] / "services" / "doc-sync-worker"
-sys.path.insert(0, str(WORKER_ROOT))
 
 
 def _clear_app_modules() -> None:
@@ -53,10 +52,15 @@ class FakeSheetClient:
 
 class RndWriterTestCase(unittest.TestCase):
     def setUp(self) -> None:
+        self.previous_path = list(sys.path)
+        self.previous_modules = {k: v for k, v in sys.modules.items() if k == "app" or k.startswith("app.")}
         _clear_app_modules()
+        sys.path.insert(0, str(WORKER_ROOT))
 
     def tearDown(self) -> None:
         _clear_app_modules()
+        sys.modules.update(self.previous_modules)
+        sys.path[:] = self.previous_path
 
     def _mod(self):
         worker_path = str(WORKER_ROOT)

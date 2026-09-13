@@ -449,7 +449,10 @@ class PostgresDocSyncStore:
 
     def find_unique_wecom_docid(self, env_profile: str, sheet_name: str) -> str:
         """Resolve one registered table document without exposing identifiers in source code."""
-        with self.conn.cursor() as cur:
+        # The group listener can wait indefinitely after this startup lookup.
+        # End our read transaction so its snapshot cannot pin database vacuum.
+        # A caller-owned transaction is preserved by psycopg's nested savepoint.
+        with self.conn.transaction(), self.conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT DISTINCT external_doc_id

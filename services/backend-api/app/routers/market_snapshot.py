@@ -50,6 +50,10 @@ _MARKET_INGEST_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="
 # Keeping this separate from Starlette's default worker pool leaves that pool
 # available for the synchronous OIDC callback/login routes.
 _MARKET_INGEST_CAPACITY = threading.BoundedSemaphore(value=1)
+# The legacy atomic file writer shares neither data nor transactions with V6.
+# Give it a bounded worker of its own so continuous DB ingest cannot starve it.
+_SNAPSHOT_INGEST_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="snapshot-ingest")
+_SNAPSHOT_INGEST_CAPACITY = threading.BoundedSemaphore(value=1)
 _ingest_logger = logging.getLogger("aliecs.market_ingest")
 
 
@@ -118,7 +122,7 @@ def _ingest_token() -> str:
     return os.getenv("MARKET_SNAPSHOT_INGEST_TOKEN", "").strip()
 
 
-def _run_market_ingest(work: Any, kind: str) -> dict[str, Any]:
+def _run_market_ingest(work: Any, kind: str, capacity: threading.BoundedSemaphore) -> dict[str, Any]:
     """Run one market write and release capacity only after it has completed."""
 
     started = time.monotonic()
@@ -132,7 +136,7 @@ def _run_market_ingest(work: Any, kind: str) -> dict[str, Any]:
                                  round((time.monotonic() - started) * 1000))
         raise
     finally:
-        _MARKET_INGEST_CAPACITY.release()
+        capacity.release()
 
 
 async def _submit_market_ingest(work: Any, kind: str) -> dict[str, Any]:
@@ -143,15 +147,16 @@ async def _submit_market_ingest(work: Any, kind: str) -> dict[str, Any]:
     the existing idempotent payload rather than racing another write.
     """
 
-    if not _MARKET_INGEST_CAPACITY.acquire(blocking=False):
+    executor, capacity = (_SNAPSHOT_INGEST_EXECUTOR, _SNAPSHOT_INGEST_CAPACITY) if kind == "snapshot" else (_MARKET_INGEST_EXECUTOR, _MARKET_INGEST_CAPACITY)
+    if not capacity.acquire(blocking=False):
         raise HTTPException(status_code=503, detail="market ingest is busy; retry shortly",
                             headers={"Retry-After": "1"})
     try:
         future = asyncio.get_running_loop().run_in_executor(
-            _MARKET_INGEST_EXECUTOR, _run_market_ingest, work, kind,
+            executor, _run_market_ingest, work, kind, capacity,
         )
     except Exception:
-        _MARKET_INGEST_CAPACITY.release()
+        capacity.release()
         raise
     try:
         try:
