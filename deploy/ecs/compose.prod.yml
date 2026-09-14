@@ -41,6 +41,8 @@ services:
       # 快照发布器只发送白名单聚合数据；token 仅由 SOPS/运行环境注入，不写入镜像。
       MARKET_SNAPSHOT_FILE: ${MARKET_SNAPSHOT_FILE:-/app/market-data/latest.json}
       MARKET_SNAPSHOT_INGEST_TOKEN: ${MARKET_SNAPSHOT_INGEST_TOKEN:-}
+      MARKET_REVIEW_ARCHIVE_URL: ${MARKET_REVIEW_ARCHIVE_URL:-}
+      MARKET_REVIEW_ARCHIVE_TOKEN: ${MARKET_REVIEW_ARCHIVE_TOKEN:-}
       # 统一消息中枢。投递代码只在 backend-api 一份，所以三家的凭据都要在这里可见。
       # 路由表（notify_routes）只存 profile / env 变量名，密钥仍旧只在 SOPS。
       NOTIFY_FLUSH_TOKEN: ${NOTIFY_FLUSH_TOKEN:-}

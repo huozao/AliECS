@@ -14,11 +14,13 @@ import time
 import zlib
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import psycopg
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 
 from app.core import require_login
+from app.market_review_source import LocalReviewSource, ReviewSourceInvalid, ReviewSourceUnavailable
 
 
 router = APIRouter()
@@ -289,6 +291,7 @@ async def ingest_market_snapshot(
         raise HTTPException(status_code=401, detail="invalid market snapshot ingest token")
     body = await _decode_ingest_body(request)
     if body.get("schema_version") == market_review.SCHEMA:
+        _require_review_available()
         return await _submit_market_ingest(lambda: market_review.ingest(body), "review")
     payload = _normalize_ingest_payload(body)
     path = _snapshot_path()
@@ -305,6 +308,34 @@ from app import market_review
 from app.core import require_permission
 
 
+def _require_review_available() -> None:
+    if (_snapshot_path().parent / "review-maintenance").exists():
+        raise HTTPException(503, detail={"code": "market_maintenance",
+            "message": "市场审阅归档迁移维护中"})
+
+
+def _local_source() -> LocalReviewSource | None:
+    if not os.getenv("MARKET_REVIEW_ARCHIVE_URL"):
+        return None
+    try:
+        return LocalReviewSource()
+    except ValueError as exc:
+        raise HTTPException(503, detail={"code": "source_unavailable",
+            "message": "市场本机数据源未配置"}) from exc
+
+
+def _source_get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    source = _local_source()
+    if source is None:
+        return None
+    query = "" if not params else "?" + urlencode([(key, value) for key, value in params.items() if value is not None])
+    try:
+        return source.get(path, query)
+    except (ReviewSourceUnavailable, ReviewSourceInvalid) as exc:
+        raise HTTPException(503, detail={"code": "source_unavailable",
+            "message": "市场本机数据源暂时不可用"}) from exc
+
+
 def _review_reader(user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
     require_permission('market.read', user)
     # Login tokens carry uid/sub; retain compatibility with legacy id/username
@@ -312,17 +343,24 @@ def _review_reader(user: dict[str, Any] = Depends(require_login)) -> dict[str, A
     identity = user.get('uid', user.get('id'))
     if type(identity) is not int or identity <= 0:
         raise HTTPException(401, 'invalid authenticated user identity')
+    _require_review_available()
     return dict(user, id=identity, username=user.get('username') or user.get('sub'))
 
 
 @router.get('/v1/market/latest')
 def market_latest(_: dict = Depends(_review_reader)):
+    sourced = _source_get('/latest')
+    if sourced is not None:
+        return sourced
     return market_review.latest() or _empty_snapshot()
 
 
 @router.get('/v1/market/realtime')
 def market_realtime(after: str | None = Query(default=None, max_length=2000),
                     _: dict = Depends(_review_reader)):
+    sourced = _source_get('/realtime', {'after': after})
+    if sourced is not None:
+        return sourced
     return market_review.realtime_view(after=after)
 
 
@@ -342,6 +380,12 @@ def market_event_index(
     # trading-day scopes and therefore intentionally do not need /latest.
     if scope == 'run' and not run_id:
         raise HTTPException(422, 'run_id is required when scope=run')
+    sourced = _source_get('/events/index', {
+        'run_id': run_id, 'after': after, 'limit': limit, 'scope': scope,
+        'date_from': date_from, 'date_to': date_to, 'symbol': symbol, 'status': status,
+    })
+    if sourced is not None:
+        return sourced
     return market_review.event_index(run_id=run_id, after=after, limit=limit,
                                      scope=scope, date_from=date_from, date_to=date_to,
                                      symbol=symbol, status=status)
@@ -350,6 +394,9 @@ def market_event_index(
 @router.get('/v1/market/events/{event_id}/detail')
 def market_event_detail(event_id: str,
                         _: dict = Depends(_review_reader)):
+    sourced = _source_get(f'/events/{event_id}/detail')
+    if sourced is not None:
+        return sourced
     return market_review.event_detail(event_id)
 
 
@@ -358,6 +405,12 @@ def market_series(symbol: str = Query(min_length=1,max_length=100), start: str |
                   end: str | None = None, bucket_ms: int = 1000, after: str | None = None,
                   run_id: str | None = Query(default=None, max_length=200),
                   _: dict = Depends(_review_reader)):
+    sourced = _source_get('/realtime', {'symbol': symbol, 'start': start, 'end': end,
+                                        'run_id': run_id, 'after': after})
+    if sourced is not None:
+        return {'symbol': symbol, 'run_id': sourced.get('run_id'),
+                'series': sourced.get('series', {}).get(symbol, {'quotes': [], 'bands': []}),
+                'next_cursor': sourced.get('next_cursor'), 'truncated': sourced.get('truncated', False)}
     return market_review.series(symbol,start,end,bucket_ms,after,run_id)
 
 
@@ -365,6 +418,9 @@ def market_series(symbol: str = Query(min_length=1,max_length=100), start: str |
 def market_events(run_id: str = Query(min_length=1,max_length=200),
                   after_sequence: int = Query(0,ge=0), limit: int = Query(500,ge=1,le=2000),
                   _: dict = Depends(_review_reader)):
+    sourced = _source_get('/events/index', {'run_id': run_id, 'after': after_sequence, 'limit': limit, 'scope': 'run'})
+    if sourced is not None:
+        return sourced
     return market_review.events_page(run_id,after_sequence,limit)
 
 

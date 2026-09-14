@@ -40,7 +40,7 @@
       return new Error("登录已过期，请重新登录。", {cause: "login"});
     }
     if (response.status === 403) return new Error("当前账户没有市场查看权限。", {cause: "forbidden"});
-    const error = new Error(body?.detail || `市场接口返回 HTTP ${response.status}`);
+    const error = new Error(body?.detail?.message || body?.detail || `市场接口返回 HTTP ${response.status}`);
     const retryAfter = Number(response.headers.get("retry-after"));
     if (Number.isFinite(retryAfter) && retryAfter >= 0) error.retryAfterMs = Math.min(retryAfter * 1000, 30000);
     return error;
