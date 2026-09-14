@@ -19,8 +19,9 @@ install -m 0644 "$ROOT_DIR/host-gateway-proxy@.service" \
 render_instance() {
   local name="$1"
   local port="$2"
+  local bind_host="${3:-172.17.0.1}"
   cat > "$INSTALL_ROOT/etc/default/host-gateway-proxy-$name" <<ENV
-WEBDOCK_PROXY_BIND_HOST=172.17.0.1
+WEBDOCK_PROXY_BIND_HOST=$bind_host
 WEBDOCK_PROXY_BIND_PORT=$port
 WEBDOCK_PROXY_TARGET_HOST=127.0.0.1
 WEBDOCK_PROXY_TARGET_PORT=$port
@@ -31,7 +32,7 @@ ENV
 render_instance wecom-kf 18080
 render_instance erpnext 18200
 render_instance paperless 18201
-render_instance review-archive 18210
+render_instance review-archive 18210 172.18.0.1
 
 if [[ -n "$DESTDIR" ]]; then
   exit 0
