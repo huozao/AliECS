@@ -291,6 +291,7 @@ async def ingest_market_snapshot(
         raise HTTPException(status_code=401, detail="invalid market snapshot ingest token")
     body = await _decode_ingest_body(request)
     if body.get("schema_version") == market_review.SCHEMA:
+        _require_review_ingest_enabled()
         _require_review_available()
         return await _submit_market_ingest(lambda: market_review.ingest(body), "review")
     payload = _normalize_ingest_payload(body)
@@ -312,6 +313,13 @@ def _require_review_available() -> None:
     if (_snapshot_path().parent / "review-maintenance").exists():
         raise HTTPException(503, detail={"code": "market_maintenance",
             "message": "市场审阅归档迁移维护中"})
+
+
+def _require_review_ingest_enabled() -> None:
+    """The permanent archive source replaces the former high-frequency sink."""
+    if os.getenv("MARKET_REVIEW_ARCHIVE_URL"):
+        raise HTTPException(410, detail={"code": "market_review_archived",
+            "message": "高频市场审阅已迁移至本机归档，txecs 不再接收"})
 
 
 def _local_source() -> LocalReviewSource | None:
