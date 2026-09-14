@@ -16,7 +16,8 @@ from app.logging_utils import configure_logging, log_event
 
 SCHEMA = 'market-review.v1'
 SERIES_PAGE_SIZE = 5000
-REALTIME_MAX_MINUTES = 15
+REALTIME_WINDOW_OPTIONS = (5, 10, 15)
+REALTIME_DEFAULT_MINUTES = 5
 GAP_PAGE_SIZE = 2000
 TARGET_FILL_CODE = 'TARGET_FILL_CONFIRMED'
 MARKET_INGEST_LOCK_TIMEOUT_MS = 3000
@@ -283,10 +284,12 @@ def _cursor_decode(value: str | None) -> dict | None:
         raise HTTPException(422, 'invalid market cursor')
 
 
-def realtime_view(after: str | None = None) -> dict:
+def realtime_view(after: str | None = None, window_minutes: int = REALTIME_DEFAULT_MINUTES) -> dict:
     """Return the deliberately small payload used by the live page."""
+    if window_minutes not in REALTIME_WINDOW_OPTIONS:
+        raise HTTPException(422, 'window_minutes must be one of 5, 10, 15')
     snapshot = latest() or {'quotes': [], 'bands': [], 'run_id': None}
-    right = datetime.now(timezone.utc); left = right - timedelta(minutes=REALTIME_MAX_MINUTES)
+    right = datetime.now(timezone.utc); left = right - timedelta(minutes=window_minutes)
     cursor = _cursor_decode(after)
     reset = bool(cursor and (cursor.get('run_id') != snapshot.get('run_id') or cursor.get('version') != 1))
     if reset:
@@ -311,7 +314,7 @@ def realtime_view(after: str | None = None) -> dict:
     last = page[-1] if page else None
     return {
         'server_time': right.isoformat(), 'window_start': left.isoformat(), 'window_end': right.isoformat(),
-        'window_minutes': REALTIME_MAX_MINUTES,
+        'window_minutes': window_minutes,
         'quotes': snapshot.get('quotes', []),
         'bands': snapshot.get('bands', []),
         'orders': [
