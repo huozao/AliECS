@@ -31,6 +31,7 @@ ENV
 render_instance wecom-kf 18080
 render_instance erpnext 18200
 render_instance paperless 18201
+render_instance review-archive 18210
 
 if [[ -n "$DESTDIR" ]]; then
   exit 0
@@ -44,7 +45,7 @@ systemctl daemon-reload
 systemctl disable --now host-gateway-proxy@webdock-photo.service \
   >/dev/null 2>&1 || true
 
-for instance in wecom-kf erpnext paperless; do
+for instance in wecom-kf erpnext paperless review-archive; do
   systemctl enable "host-gateway-proxy@$instance.service"
   systemctl restart "host-gateway-proxy@$instance.service"
   systemctl is-active --quiet "host-gateway-proxy@$instance.service"
