@@ -433,3 +433,9 @@ ssh txecs 'sudo docker exec -i business-cn-postgres-1 psql -U app -d app -v ON_E
 同步 worker 的目标文档启动查询使用有界事务，避免进入群监听等待后仍保留数据库快照。`tests/test_sync_scheduler_storage.py` 的本地 PostgreSQL 测试验证正常返回和异常后均回到 IDLE，同时保留调用方已有事务。修复部署不能自动结束旧进程已经持有的事务。
 
 生产恢复须先核实旧连接的进程归属与未提交工作；保存表备份和版本基线，经授权结束具体遗留事务或恢复对应 worker。之后评估 VACUUM / 表重写：普通 VACUUM 允许空间复用但不保证缩小文件；VACUUM FULL 会持有排他锁，需单独评估窗口与磁盘余量。不要盲目终止全库连接、删原始行情或直接修改历史迁移。恢复后回读旧事务消失、投影读写耗时、503、发布队列趋势和最新观察时间；容器健康不能代替这些证据。
+
+## 市场审阅归档迁移维护
+
+在 `MARKET_SNAPSHOT_FILE` 所在目录建立 `review-maintenance` 标记文件，已认证市场审阅查询和 market-review.v1 ingest 返回 503/market_maintenance；普通 schema_version=1 snapshot 保持原语义。标记保存在既有市场 volume，容器重建后仍生效。维护先停生产者的 review 上传；不能靠服务端拒绝代替停止本机重试。解除标记只在新查询来源通过验收后执行。此开关不清空 PostgreSQL 表、不改标注或其他业务数据。
+
+验证：`tests/test_market_review_api.py` 覆盖权限、维护拒绝及普通 snapshot 兼容；`tests/test_market_ingest_concurrency.py` 保留单进程登录响应回归。热更新必须在 GitHub 合并后用正式镜像交付收尾。

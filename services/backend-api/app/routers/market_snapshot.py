@@ -289,6 +289,7 @@ async def ingest_market_snapshot(
         raise HTTPException(status_code=401, detail="invalid market snapshot ingest token")
     body = await _decode_ingest_body(request)
     if body.get("schema_version") == market_review.SCHEMA:
+        _require_review_available()
         return await _submit_market_ingest(lambda: market_review.ingest(body), "review")
     payload = _normalize_ingest_payload(body)
     path = _snapshot_path()
@@ -305,6 +306,12 @@ from app import market_review
 from app.core import require_permission
 
 
+def _require_review_available() -> None:
+    if (_snapshot_path().parent / "review-maintenance").exists():
+        raise HTTPException(503, detail={"code": "market_maintenance",
+            "message": "市场审阅归档迁移维护中"})
+
+
 def _review_reader(user: dict[str, Any] = Depends(require_login)) -> dict[str, Any]:
     require_permission('market.read', user)
     # Login tokens carry uid/sub; retain compatibility with legacy id/username
@@ -312,6 +319,7 @@ def _review_reader(user: dict[str, Any] = Depends(require_login)) -> dict[str, A
     identity = user.get('uid', user.get('id'))
     if type(identity) is not int or identity <= 0:
         raise HTTPException(401, 'invalid authenticated user identity')
+    _require_review_available()
     return dict(user, id=identity, username=user.get('username') or user.get('sub'))
 
 

@@ -88,6 +88,33 @@ class MarketReviewTests(unittest.TestCase):
             self.assertEqual(index.call_args.kwargs['scope'], 'history')
             self.assertEqual(index.call_args.kwargs['symbol'], 'SHFE.au2612')
 
+    def test_maintenance_blocks_review_only_after_authentication(self):
+        import os
+        from tempfile import TemporaryDirectory
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        app = FastAPI(); app.include_router(self.router.router)
+        app.dependency_overrides[self.router.require_login] = lambda: {'id': 4, 'permissions': ['market.read']}
+        client = TestClient(app)
+        with TemporaryDirectory() as directory, patch.dict(os.environ, {
+                'MARKET_SNAPSHOT_FILE': str(Path(directory) / 'latest.json'),
+                'MARKET_SNAPSHOT_INGEST_TOKEN': 'synthetic-token'}):
+            (Path(directory) / 'review-maintenance').touch()
+            response = client.get('/v1/market/realtime')
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(response.json()['detail']['code'], 'market_maintenance')
+            self.assertEqual(client.get('/v1/market/snapshot').status_code, 200)
+            response = client.post('/v1/internal/market/snapshot',
+                headers={'X-Market-Snapshot-Token': 'synthetic-token'},
+                json={'schema_version': 'market-review.v1'})
+            self.assertEqual(response.status_code, 503)
+            response = client.post('/v1/internal/market/snapshot',
+                headers={'X-Market-Snapshot-Token': 'synthetic-token'},
+                json={'schema_version': 1, 'rows': []})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(client.post('/v1/internal/market/snapshot',
+                json={'schema_version': 'market-review.v1'}).status_code, 401)
+
     def test_event_index_rejects_unknown_scope(self):
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
