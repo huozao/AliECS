@@ -115,6 +115,26 @@ class MarketReviewTests(unittest.TestCase):
             self.assertEqual(client.post('/v1/internal/market/snapshot',
                 json={'schema_version': 'market-review.v1'}).status_code, 401)
 
+    def test_archive_source_permanently_rejects_high_frequency_review_ingest(self):
+        import os
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        app = FastAPI(); app.include_router(self.router.router)
+        client = TestClient(app)
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as directory, patch.dict(os.environ, {
+                'MARKET_REVIEW_ARCHIVE_URL': 'http://host.docker.internal:18210',
+                'MARKET_SNAPSHOT_FILE': str(Path(directory) / 'latest.json'),
+                'MARKET_SNAPSHOT_INGEST_TOKEN': 'synthetic-token'}):
+            response = client.post('/v1/internal/market/snapshot',
+                headers={'X-Market-Snapshot-Token': 'synthetic-token'},
+                json={'schema_version': 'market-review.v1'})
+            self.assertEqual(response.status_code, 410)
+            self.assertEqual(response.json()['detail']['code'], 'market_review_archived')
+            self.assertEqual(client.post('/v1/internal/market/snapshot',
+                headers={'X-Market-Snapshot-Token': 'synthetic-token'},
+                json={'schema_version': 1, 'rows': []}).status_code, 200)
+
     def test_event_index_rejects_unknown_scope(self):
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
