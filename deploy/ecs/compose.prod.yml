@@ -133,7 +133,9 @@ services:
       OPS_HEALTH_PUBLIC_WEB_URL: ${OPS_HEALTH_PUBLIC_WEB_URL:-}
       ENV: prod
     extra_hosts:
-      - "host.docker.internal:host-gateway"
+      # The business-cn network gateway is 172.18.0.1; host-gateway resolves
+      # Docker's default bridge (172.17.0.1), which is unreachable here.
+      - "host.docker.internal:172.18.0.1"
       - "auth.hydwang.xyz:host-gateway"
     ports:
       - "127.0.0.1:8000:8000"
