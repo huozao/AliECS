@@ -81,6 +81,12 @@ class MarketReviewTests(unittest.TestCase):
         app.dependency_overrides[self.router.require_login] = lambda: {'id': 4, 'permissions': []}
         self.assertEqual(client.get('/v1/market/latest').status_code, 403)
         app.dependency_overrides[self.router.require_login] = lambda: {'id': 4, 'permissions': ['market.read']}
+        with patch.object(self.service, 'realtime_view', return_value={'window_minutes': 5}) as realtime:
+            self.assertEqual(client.get('/v1/market/realtime').status_code, 200)
+            self.assertEqual(realtime.call_args.kwargs['window_minutes'], 5)
+            self.assertEqual(client.get('/v1/market/realtime?window_minutes=10').status_code, 200)
+            self.assertEqual(realtime.call_args.kwargs['window_minutes'], 10)
+            self.assertEqual(client.get('/v1/market/realtime?window_minutes=7').status_code, 422)
         self.assertEqual(client.get('/v1/market/series?symbol=X&start=bad').status_code, 422)
         self.assertEqual(client.get('/v1/market/events?run_id=r&limit=2001').status_code, 422)
         with patch.object(self.service, 'event_index', return_value={'items': []}) as index:
