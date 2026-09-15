@@ -28,45 +28,64 @@
     const quotes = [...record.quotes.values()].sort((a,b) => Date.parse(stamp(a))-Date.parse(stamp(b)));
     const bands = [...record.bands.values()].sort((a,b) => Date.parse(stamp(a))-Date.parse(stamp(b)));
     const latest = quote || quotes.at(-1) || {};
-    const value = (field) => {
-      const candidate = latest?.[field];
+    // 秒内最高/最低 live in the snapshot's one-second OHLC bucket; the quote
+    // root has no highest/lowest field, so reading it always rendered "—".
+    const value = (field, source = latest) => {
+      const candidate = source?.[field];
       return Number.isFinite(Number(candidate)) ? Number(candidate).toFixed(2) : "—";
     };
     const order = orders.find((row) => row.contract === contract) || {};
     item.card.querySelector(".last").textContent = value("last_price");
-    item.card.querySelector('[data-extreme="high"]').textContent = value("highest");
-    item.card.querySelector('[data-extreme="low"]').textContent = value("lowest");
+    item.card.querySelector('[data-extreme="high"]').textContent = value("high", latest?.ohlc);
+    item.card.querySelector('[data-extreme="low"]').textContent = value("low", latest?.ohlc);
     const tags = {sell: order.sell?.price, upper: band?.upper, current: latest?.last_price, lower: band?.lower, buy: order.buy?.price};
     Object.entries(tags).forEach(([kind, price]) => { item.card.querySelector(`[data-tag="${kind}"]`).textContent = Number.isFinite(Number(price)) ? Number(price).toFixed(2) : "—"; });
     item.card.querySelector(".muted").textContent = `买 ${order.buy?.price ?? "—"}（${order.buy?.status ?? "—"}） · 卖 ${order.sell?.price ?? "—"}（${order.sell?.status ?? "—"}） · 源时刻 ${latest?.source_time || latest?.observed_at || "—"}`;
-    item.card.querySelector(".hedges").innerHTML = (ranking || []).filter((row) => (row.contract || row.symbol) === contract).slice(0,5).map((row) => `<li>${esc(row.contract || row.symbol)}：${esc(row.rank ?? "—")} · ${esc(row.reason || row.status || "—")}</li>`).join("") || "<li>后端未给出该合约对冲候选</li>";
+    item.card.querySelector(".hedges").innerHTML = (ranking || []).filter((row) => (row.target_contract || row.contract || row.symbol) === contract).slice(0,5).map((row) => `<li>${esc(row.contract || row.symbol || "无候选")}：${esc(row.rank ?? "—")} · ${esc(row.reason || row.status || "—")}</li>`).join("") || "<li>后端未给出该合约对冲候选</li>";
     if (!item.chart) return;
     item.price.setData(quotes.map(point).filter(Boolean));
     for (const [series, field] of [[item.upper,"upper"],[item.center,"center"],[item.lower,"lower"]]) series.setData(bands.map((row) => {const time=Date.parse(stamp(row))/1000,value=Number(row[field]);return Number.isFinite(time)&&Number.isFinite(value)?{time,value}:null;}).filter(Boolean));
   }
   function render(body) {
     const window_minutes = body.window_minutes || state.windowMinutes;
+    // A new run stream, or a server-side reset, invalidates what we hold.
+    if (body.reset || (body.run_id && body.run_id !== state.runId)) state.rows.clear();
+    state.runId = body.run_id ?? state.runId;
     const quotes = new Map((body.quotes || []).filter((row) => row.contract).map((row) => [row.contract,row]));
     const bands = new Map((body.bands || []).filter((row) => row.contract).map((row) => [row.contract,row]));
     const contracts = new Set([...quotes.keys(), ...bands.keys(), ...Object.keys(body.series || {})]);
     [...contracts].sort().forEach((contract) => updateChart(contract, body.series?.[contract], quotes.get(contract), bands.get(contract), body.orders || [], body.hedge_ranking || []));
-    state.cursor = body.next_cursor || state.cursor;
-    status.textContent = `最近 ${window_minutes} 分钟：${body.window_start || "—"} 至 ${body.window_end || "—"}；合约 ${contracts.size} 个；${body.truncated ? "已采样/截断" : "完整返回窗口内上限"}；发布 ${body.freshness?.published_at || "—"}，接收 ${body.freshness?.received_at || "—"}`;
+    // Watermark by parsed instant, not by string: an ISO stamp may or may not
+    // carry microseconds, so lexicographic order is not reliable here.
+    let watermark = state.since ? Date.parse(state.since) : -Infinity;
+    for (const record of state.rows.values())
+      for (const row of [...record.quotes.values(), ...record.bands.values()]) {
+        const at = stamp(row), time = Date.parse(at);
+        if (Number.isFinite(time) && time >= watermark) { watermark = time; state.since = at; }
+      }
+    status.textContent = `最近 ${window_minutes} 分钟：${body.window_start || "—"} 至 ${body.window_end || "—"}；合约 ${contracts.size} 个；${body.truncated ? "仅返回窗口内最新若干点" : "窗口内数据已全部返回"}；发布 ${body.freshness?.published_at || "—"}，接收 ${body.freshness?.received_at || "—"}`;
   }
   function retryDelay(error) {
     if (Number.isFinite(error?.retryAfterMs)) return error.retryAfterMs;
     const base = Math.min(30000, 2000 * (2 ** Math.min(state.retryAttempt, 4)));
     return Math.round(base * (0.75 + Math.random() * 0.5));
   }
-  function schedule(delay = 2000) {
+  // The snapshot stream publishes every 500ms and a steady poll now carries
+  // ~21KB, so matching that cadence costs little and removes what had become
+  // the largest term in the on-screen delay.
+  function schedule(delay = 500) {
     window.clearTimeout(state.timer);
     if (!state.hidden) state.timer = window.setTimeout(() => load(), delay);
   }
-  async function load(force = false) {
+  async function load() {
     if (state.inFlight || state.hidden) return; state.inFlight = true; state.controller?.abort(); state.controller = new AbortController();
     try {
+      // No cursor: the server recomputes the window from `now` on every poll,
+      // so a cursor minted against the previous window can only mismatch.
+      // `since` is an absolute instant instead, so a steady poll carries only
+      // the couple of seconds that are actually new.
       const query = new URLSearchParams({window_minutes: String(state.windowMinutes)});
-      if (!force && state.cursor) query.set("after", state.cursor);
+      if (state.since) query.set("since", state.since);
       render(await MarketPage.request(`/api/v1/market/realtime?${query}`, {controller: state.controller}));
       login.hidden = true; state.retryAttempt = 0; schedule();
     }
@@ -78,14 +97,14 @@
     }
     finally { state.inFlight = false; }
   }
-  document.addEventListener("visibilitychange", () => { state.hidden = document.hidden; if (state.hidden) {state.controller?.abort(); window.clearTimeout(state.timer);} else {load(true);} });
+  document.addEventListener("visibilitychange", () => { state.hidden = document.hidden; if (state.hidden) {state.controller?.abort(); window.clearTimeout(state.timer);} else {load();} });
   window.addEventListener("pagehide", () => {window.clearTimeout(state.timer); state.controller?.abort(); state.charts.forEach((item) => item.chart?.remove());});
   login?.addEventListener("click", () => MarketPage.login());
   windowSelect?.addEventListener("change", () => {
     const next = Number(windowSelect.value);
     if (![5, 10, 15].includes(next)) return;
-    state.windowMinutes = next; state.cursor = null; state.rows.clear(); state.retryAttempt = 0; load(true);
+    state.windowMinutes = next; state.rows.clear(); state.since = null; state.retryAttempt = 0; load();
   });
   try { await MarketPage.absorbLoginHandoff(); } catch (error) { status.textContent = error.message; }
-  await load(true);
+  await load();
 })();

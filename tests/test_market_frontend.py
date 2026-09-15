@@ -73,6 +73,19 @@ class MarketFrontendTests(unittest.TestCase):
         self.assertIn("data-extreme=\"high\"", script)
         self.assertIn("data-tag=\"upper\"", script)
         self.assertIn("window_minutes", script)
+        # 秒内最高/最低 come from the snapshot's one-second OHLC bucket, and the
+        # live poll must stay cursor-free so each request stands on its own.
+        self.assertIn('value("high", latest?.ohlc)', script)
+        self.assertIn('value("low", latest?.ohlc)', script)
+        self.assertIn("row.target_contract", script)
+        self.assertNotIn("state.cursor", script)
+        self.assertNotIn("after=", script)
+        # Steady polling must ask only for what is new, and a hidden legacy tab
+        # must stop polling the market API entirely.
+        self.assertIn('query.set("since", state.since)', script)
+        self.assertIn("function schedule(delay = 500)", script)
+        legacy = (ROOT / "services/public-web/market/market.js").read_text(encoding="utf-8")
+        self.assertIn("if (document.hidden) return;", legacy)
         self.assertIn("Authorization", common)
         self.assertIn("clearToken", common)
         self.assertIn("retryAfterMs", common)
