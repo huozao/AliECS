@@ -70,7 +70,10 @@
     const base = Math.min(30000, 2000 * (2 ** Math.min(state.retryAttempt, 4)));
     return Math.round(base * (0.75 + Math.random() * 0.5));
   }
-  function schedule(delay = 2000) {
+  // The snapshot stream publishes every 500ms and a steady poll now carries
+  // ~21KB, so matching that cadence costs little and removes what had become
+  // the largest term in the on-screen delay.
+  function schedule(delay = 500) {
     window.clearTimeout(state.timer);
     if (!state.hidden) state.timer = window.setTimeout(() => load(), delay);
   }

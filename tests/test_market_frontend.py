@@ -83,6 +83,7 @@ class MarketFrontendTests(unittest.TestCase):
         # Steady polling must ask only for what is new, and a hidden legacy tab
         # must stop polling the market API entirely.
         self.assertIn('query.set("since", state.since)', script)
+        self.assertIn("function schedule(delay = 500)", script)
         legacy = (ROOT / "services/public-web/market/market.js").read_text(encoding="utf-8")
         self.assertIn("if (document.hidden) return;", legacy)
         self.assertIn("Authorization", common)
