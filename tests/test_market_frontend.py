@@ -73,6 +73,13 @@ class MarketFrontendTests(unittest.TestCase):
         self.assertIn("data-extreme=\"high\"", script)
         self.assertIn("data-tag=\"upper\"", script)
         self.assertIn("window_minutes", script)
+        # 秒内最高/最低 come from the snapshot's one-second OHLC bucket, and the
+        # live poll must stay cursor-free so each request stands on its own.
+        self.assertIn('value("high", latest?.ohlc)', script)
+        self.assertIn('value("low", latest?.ohlc)', script)
+        self.assertIn("row.target_contract", script)
+        self.assertNotIn("state.cursor", script)
+        self.assertNotIn("after=", script)
         self.assertIn("Authorization", common)
         self.assertIn("clearToken", common)
         self.assertIn("retryAfterMs", common)
