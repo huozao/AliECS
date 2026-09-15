@@ -48,10 +48,21 @@
   }
   function render(body) {
     const window_minutes = body.window_minutes || state.windowMinutes;
+    // A new run stream, or a server-side reset, invalidates what we hold.
+    if (body.reset || (body.run_id && body.run_id !== state.runId)) state.rows.clear();
+    state.runId = body.run_id ?? state.runId;
     const quotes = new Map((body.quotes || []).filter((row) => row.contract).map((row) => [row.contract,row]));
     const bands = new Map((body.bands || []).filter((row) => row.contract).map((row) => [row.contract,row]));
     const contracts = new Set([...quotes.keys(), ...bands.keys(), ...Object.keys(body.series || {})]);
     [...contracts].sort().forEach((contract) => updateChart(contract, body.series?.[contract], quotes.get(contract), bands.get(contract), body.orders || [], body.hedge_ranking || []));
+    // Watermark by parsed instant, not by string: an ISO stamp may or may not
+    // carry microseconds, so lexicographic order is not reliable here.
+    let watermark = state.since ? Date.parse(state.since) : -Infinity;
+    for (const record of state.rows.values())
+      for (const row of [...record.quotes.values(), ...record.bands.values()]) {
+        const at = stamp(row), time = Date.parse(at);
+        if (Number.isFinite(time) && time >= watermark) { watermark = time; state.since = at; }
+      }
     status.textContent = `最近 ${window_minutes} 分钟：${body.window_start || "—"} 至 ${body.window_end || "—"}；合约 ${contracts.size} 个；${body.truncated ? "仅返回窗口内最新若干点" : "窗口内数据已全部返回"}；发布 ${body.freshness?.published_at || "—"}，接收 ${body.freshness?.received_at || "—"}`;
   }
   function retryDelay(error) {
@@ -68,7 +79,10 @@
     try {
       // No cursor: the server recomputes the window from `now` on every poll,
       // so a cursor minted against the previous window can only mismatch.
+      // `since` is an absolute instant instead, so a steady poll carries only
+      // the couple of seconds that are actually new.
       const query = new URLSearchParams({window_minutes: String(state.windowMinutes)});
+      if (state.since) query.set("since", state.since);
       render(await MarketPage.request(`/api/v1/market/realtime?${query}`, {controller: state.controller}));
       login.hidden = true; state.retryAttempt = 0; schedule();
     }
@@ -86,7 +100,7 @@
   windowSelect?.addEventListener("change", () => {
     const next = Number(windowSelect.value);
     if (![5, 10, 15].includes(next)) return;
-    state.windowMinutes = next; state.rows.clear(); state.retryAttempt = 0; load();
+    state.windowMinutes = next; state.rows.clear(); state.since = null; state.retryAttempt = 0; load();
   });
   try { await MarketPage.absorbLoginHandoff(); } catch (error) { status.textContent = error.message; }
   await load();

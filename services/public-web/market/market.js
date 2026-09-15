@@ -841,7 +841,11 @@
   $("history-load").addEventListener("click", loadHistory);
   $("history-more").addEventListener("click", () => loadSeriesAndComparison($("contract").value, true).catch((error) => { $("review-status").textContent = error.message; }));
   $("events-more").addEventListener("click", loadEvents);
-  state.timer = window.setInterval(() => { if(state.playing) moveCursor(Number($("play-speed").value)); refresh(); }, 1000);
+  // A hidden tab has nobody to show a 1s refresh to; keep polling the market
+  // API only while the page is actually on screen.
+  state.timer = window.setInterval(() => { if (document.hidden) return; if(state.playing) moveCursor(Number($("play-speed").value)); refresh(); }, 1000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+  window.addEventListener("pagehide", () => window.clearInterval(state.timer));
   state.timerCount = 1;
   window.absorbLoginHandoff?.().catch((error) => { $("notice").textContent = error.message; });
   window.syncUserState?.();

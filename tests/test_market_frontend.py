@@ -80,6 +80,11 @@ class MarketFrontendTests(unittest.TestCase):
         self.assertIn("row.target_contract", script)
         self.assertNotIn("state.cursor", script)
         self.assertNotIn("after=", script)
+        # Steady polling must ask only for what is new, and a hidden legacy tab
+        # must stop polling the market API entirely.
+        self.assertIn('query.set("since", state.since)', script)
+        legacy = (ROOT / "services/public-web/market/market.js").read_text(encoding="utf-8")
+        self.assertIn("if (document.hidden) return;", legacy)
         self.assertIn("Authorization", common)
         self.assertIn("clearToken", common)
         self.assertIn("retryAfterMs", common)
