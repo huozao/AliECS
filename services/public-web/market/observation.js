@@ -74,7 +74,7 @@
   }
   function order(row, side) {
     const item = (row?.orders || []).find(item => item.side === side);
-    if (!item || !/^(EFFECTIVE|ACTIVE|WORKING|PARTIALLY_FILLED)(｜|$)/.test(item.status || ""))
+    if (!item || !/^(EFFECTIVE|ACTIVE|WORKING|PARTIALLY_FILLED)([｜|]|$)/.test(item.status || ""))
       return {...(item || {}), side, price:null, status:item?.status || "NONE｜当前无有效挂单"};
     return item;
   }
@@ -130,7 +130,7 @@
         if(x==null || upper==null || lower==null) paint();else segment.push([x,upper,lower]);
       });paint();
       for(const [side,history] of Object.entries(item.orderRows || {})) {
-        ctx.strokeStyle=colors[side];ctx.lineWidth=xr;
+        ctx.strokeStyle=(item.colors || colors)[side];ctx.lineWidth=xr;
         let previous=null;
         history.forEach(point=>{
           const x=item.chart.timeScale().timeToCoordinate(point.time);
@@ -153,8 +153,8 @@
     const lib = window.LightweightCharts;
     item.layers = {};
     bandFill(item);
-    for (const [key,color] of Object.entries(colors)) item.layers[key] = item.chart.addSeries(lib.LineSeries, {
-      color:key === "buy" || key === "sell" ? "transparent" : color,lineWidth:1,lineStyle:key === "center" ? 2 : 0,
+    for (const [key,color] of Object.entries(item.colors || colors)) item.layers[key] = item.chart.addSeries(lib.LineSeries, {
+      color:key === "buy" || key === "sell" ? "transparent" : color,lineWidth:1,lineStyle:key === "center" && !item.colors ? 2 : 0,
       lineType: key === "buy" || key === "sell" ? 1 : 0,
       priceLineVisible:false,lastValueVisible:false,
     });
@@ -187,19 +187,20 @@
       if(["upper","center","lower"].includes(key)) {
         item.layerPlots ||= {};
         item.layerPlots[key] ||= {chart:item.chart,series:item.layers[key]};
-        segmentedLine(item.layerPlots[key],values,colors[key]);
+        segmentedLine(item.layerPlots[key],values,(item.colors || colors)[key]);
       }
       item.layers[key].setData(values);
     }
     item.setBandFill(bucketed.map(row=>({time:row.time,
       upper:finite(row.band?.upper)&&finite(base(row))?Number(row.band.upper)-Number(base(row)):null,
       lower:finite(row.band?.lower)&&finite(base(row))?Number(row.band.lower)-Number(base(row)):null})));
+    const orderRows = item.orderSourceRows || rows;
     for(const side of ["buy","sell"]) {
       const history=new Map();
       const originalAt=time=>{
-        let lo=0,hi=rows.length;
-        while(lo<hi) {const mid=(lo+hi)>>1;if(seconds(rows[mid].time)<=time) lo=mid+1;else hi=mid;}
-        return rows[lo-1];
+        let lo=0,hi=orderRows.length;
+        while(lo<hi) {const mid=(lo+hi)>>1;if(seconds(orderRows[mid].time)<=time) lo=mid+1;else hi=mid;}
+        return orderRows[lo-1];
       };
       const point=(entry,time)=>{
         const raw=order(entry,side).price;
@@ -207,10 +208,10 @@
         const originalBase=coordinate==="price" ? 0 : originalRow ? base(originalRow) : null;
         history.set(time,finite(raw)&&finite(originalBase)?{time,value:Number(raw)-Number(originalBase)}:{time});
       };
-      if(rows.some(row=>row.quote?.order_history_mode==="delta")) {
+      if(orderRows.some(row=>row.quote?.order_history_mode==="delta")) {
         let expected=null,needsAnchor=true;
         const signature=entry=>JSON.stringify((entry?.orders || []).find(item=>item.side===side) || null);
-        rows.forEach((row,index)=>{
+        orderRows.forEach((row,index)=>{
           const rowTime=seconds(row.time),quote=row.quote || {},entries=quote.order_history || [];
           if(needsAnchor || index===0) {
             point({orders:quote.orders || []},rowTime);
@@ -219,7 +220,7 @@
           if(index>0 && quote.order_history_truncated) {
             history.set(rowTime,{time:rowTime});expected=signature(quote);needsAnchor=true;return;
           }
-          entries.filter(entry=>seconds(stamp(entry))<=rowTime && seconds(stamp(entry))>=seconds(rows[0]?.time)).forEach(entry=>{
+          entries.filter(entry=>seconds(stamp(entry))<=rowTime && seconds(stamp(entry))>=seconds(orderRows[0]?.time)).forEach(entry=>{
             const time=seconds(stamp(entry));point(entry,time);expected=signature(entry);
           });
           if(expected!==signature(quote)) {
@@ -228,12 +229,12 @@
         });
       } else {
         let historySignature=null;
-        rows.forEach(row=>{
+        orderRows.forEach(row=>{
           const entries=row.quote?.order_history || [];
           const signature=`${entries.length}|${stamp(entries.at(-1) || {})}`;
           const histories=[...(signature===historySignature ? [] : entries),{observed_at:row.time,orders:row.quote?.orders || []}];
           historySignature=signature;
-          histories.filter(entry=>seconds(stamp(entry))<=seconds(row.time) && seconds(stamp(entry))>=seconds(rows[0]?.time)).forEach(entry=>point(entry,seconds(stamp(entry))));
+          histories.filter(entry=>seconds(stamp(entry))<=seconds(row.time) && seconds(stamp(entry))>=seconds(orderRows[0]?.time)).forEach(entry=>point(entry,seconds(stamp(entry))));
         });
       }
       item.orderRows ||= {};

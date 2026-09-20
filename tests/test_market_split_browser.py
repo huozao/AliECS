@@ -79,3 +79,23 @@ class MarketSplitBrowserTests(unittest.TestCase):
             page.wait_for_function("!document.querySelector('#login').hidden")
             self.assertIn(message, page.locator('#events').inner_text())
             page.close()
+
+    def test_realtime_palette_footer_and_mobile_layout_from_frozen_fixture(self):
+        base = f'http://127.0.0.1:{self.http.server_port}'
+        page, _ = self.page()
+        errors = []
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.goto(base + '/market/realtime/')
+        page.wait_for_selector('[data-contract="SHFE.au2612"]')
+        self.assertEqual(errors, [])
+        self.assertIn('TradingView', page.locator('.chart-attribution').inner_text())
+        self.assertIn('I 价格带中心', page.locator('.realtime-legend').inner_text())
+        out = Path('/home/ishelwsl/.local/state/gold-terra-acceptance/20260919T095543Z')
+        out.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(out / 'w3-realtime-desktop.png'), full_page=True)
+        page.set_viewport_size({'width': 390, 'height': 844})
+        page.reload()
+        page.wait_for_selector('[data-contract="SHFE.au2612"]')
+        self.assertLessEqual(page.locator('body').bounding_box()['width'], 390)
+        page.screenshot(path=str(out / 'w3-realtime-mobile.png'), full_page=True)
+        page.close()
