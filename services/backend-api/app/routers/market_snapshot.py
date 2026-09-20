@@ -367,11 +367,14 @@ def market_latest(_: dict = Depends(_review_reader)):
 def market_realtime(after: str | None = Query(default=None, max_length=2000),
                     since: str | None = Query(default=None, max_length=64,
                                               description='只取该时刻起的新增点，缺省返回整个窗口'),
+                    revision: str | None = Query(default=None, max_length=512,
+                                                  description='客户端已消费的来源修订；变化时强制整窗重取'),
                     window_minutes: int = Query(default=5, description='实时显示窗口，允许 5、10、15 分钟'),
                     _: dict = Depends(_review_reader)):
     if window_minutes not in (5, 10, 15):
         raise HTTPException(422, 'window_minutes must be one of 5, 10, 15')
-    sourced = _source_get('/realtime', {'after': after, 'since': since, 'window_minutes': window_minutes})
+    sourced = _source_get('/realtime', {'after': after, 'since': since, 'revision': revision,
+                                        'window_minutes': window_minutes})
     if sourced is not None:
         return sourced
     return market_review.realtime_view(after=after, window_minutes=window_minutes)
