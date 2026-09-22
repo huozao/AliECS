@@ -31,6 +31,13 @@
   - AND,((PROCESS-NAME,codex.exe),(GEOIP,CN,no-resolve)),DIRECT
   - PROCESS-NAME,codex.exe,Codex-Win
 
+  # --- Chrome 专用出口（接管 Chrome 全部出境流量，模式 B）-----------------------
+  # 排在所有常规域名规则之前，Chrome 进程的境外流量全部归入 Chrome 策略组控制。
+  # 国内网站直连以节省代理流量与延迟。
+  - AND,((PROCESS-NAME,chrome.exe),(GEOSITE,CN)),DIRECT
+  - AND,((PROCESS-NAME,chrome.exe),(GEOIP,CN,no-resolve)),DIRECT
+  - PROCESS-NAME,chrome.exe,Chrome
+
   # --- Windows 系统更新 / 分发（原在 devbox 的 profile 扩展里，2026-09-02 并入）------
   #
   # 订阅规则表里没有任何 windowsupdate 条目，DOMAIN-KEYWORD,microsoft 也匹配不到
