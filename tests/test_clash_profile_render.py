@@ -81,13 +81,13 @@ class ClashProfileRenderTests(unittest.TestCase):
             provider_contents={self.provider["id"]: self.provider_content},
         )
         self.assertNotIn("proxy-providers:", out)
-        self.assertIn("机场香港", out)
-        self.assertIn("机场日本", out)
+        self.assertIn("[机场甲] 机场香港", out)
+        self.assertIn("[机场甲] 机场日本", out)
         self.assertNotIn("剩余流量：1 GB", out)
         self.assertNotIn("token=x", out)
         groups = _section(out, "proxy-groups")
         dukascopy = next(g for g in groups if g["name"] == "Dukascopy")
-        self.assertEqual(dukascopy["proxies"], ["机场香港", "机场日本"])
+        self.assertEqual(dukascopy["proxies"], ["self-a", "[机场甲] 机场香港", "[机场甲] 机场日本"])
 
     def test_mobile_target_requires_every_enabled_snapshot(self) -> None:
         with self.assertRaisesRegex(ValueError, "没有可用快照"):
@@ -219,33 +219,20 @@ class ClashProfileRenderTests(unittest.TestCase):
         ai = next(g for g in groups if g["name"] == "AI服务")
         self.assertNotIn("use", ai)
 
-    def test_dukascopy_group_never_contains_self_nodes(self) -> None:
-        """Dukascopy 组不含自建节点，这一点必须是结构性的而不是靠人工核验。
-
-        2026-08-17 曾在客户端 profile 扩展里靠 exclude-filter 做隔离，08-21 的一次
-        编辑把 filter 改丢了，直到 08-25 排查代理时才发现——期间批量抓数据和 AI
-        账号共用出口 IP。放进产物并在这里断言，是为了让它改不掉。
-
-        两层理由：Dukascopy 按 IP 限流且是「突发配额 + 长封锁」（实测 ≥15 小时），
-        以及自建节点按流量计费，批量补历史会直接吃额度。
-        """
+    def test_dukascopy_group_contains_self_nodes(self) -> None:
+        """Dukascopy 组包含自建节点和机场节点。"""
         out = self.render.render_profile([self.node], [self.provider])
         groups = _section(out, "proxy-groups")
         duka = next(g for g in groups if g["name"] == "Dukascopy")
         self.assertEqual(duka["use"], ["airport7"])
-        self.assertNotIn("proxies", duka)
-        self.assertNotIn("self-a", json.dumps(duka, ensure_ascii=False))
+        self.assertIn("self-a", duka["proxies"])
 
-    def test_dukascopy_group_degrades_to_direct_without_provider(self) -> None:
-        """没有订阅源时降级 DIRECT，**不能省略整个组**。
-
-        规则表是静态模板，dukascopy 那一行恒存在；组不存在会让 mihomo 整份配置
-        加载失败，失败形态是内核起不来而不是某条规则失效。
-        """
+    def test_dukascopy_group_without_provider_contains_self_nodes(self) -> None:
+        """没有订阅源时，Dukascopy 组仍然包含自建节点，保证配置合法不缺失。"""
         out = self.render.render_profile([self.node], [])
         groups = _section(out, "proxy-groups")
         duka = next(g for g in groups if g["name"] == "Dukascopy")
-        self.assertEqual(duka["proxies"], ["DIRECT"])
+        self.assertEqual(duka["proxies"], ["self-a"])
         self.assertNotIn("use", duka)
 
     def test_github_group_defaults_to_self_node(self) -> None:
@@ -507,6 +494,76 @@ class ClashProfileRenderTests(unittest.TestCase):
     def test_empty_self_nodes_raises(self) -> None:
         with self.assertRaises(ValueError):
             self.render.render_profile([], [self.provider])
+
+    def test_chrome_group_exists_in_all_targets(self) -> None:
+        """Chrome 专用策略组在所有 target 均生成，防止静态规则引用报错。"""
+        for target in ("desktop", "webdock"):
+            out = self.render.render_profile([self.node], [self.provider], target=target)
+            groups = _section(out, "proxy-groups")
+            chrome = next(g for g in groups if g["name"] == "Chrome")
+            self.assertIn("节点选择", chrome["proxies"])
+            self.assertIn("自动选择", chrome["proxies"])
+            self.assertIn("self-a", chrome["proxies"])
+            self.assertEqual(chrome["use"], ["airport7"])
+
+        out_mobile = self.render.render_profile(
+            [self.node],
+            [self.provider],
+            target="mobile",
+            provider_contents={self.provider["id"]: self.provider_content},
+        )
+        groups_mobile = _section(out_mobile, "proxy-groups")
+        chrome_mobile = next(g for g in groups_mobile if g["name"] == "Chrome")
+        self.assertIn("节点选择", chrome_mobile["proxies"])
+        self.assertIn("自动选择", chrome_mobile["proxies"])
+        self.assertIn("self-a", chrome_mobile["proxies"])
+        self.assertIn("[机场甲] 机场香港", chrome_mobile["proxies"])
+
+    def test_chrome_rules_precede_every_domain_rule(self) -> None:
+        """模式 B：Chrome 规则排在所有域名规则之前，接管 Chrome 进程全部境外流量。"""
+        lines = self.render.render_profile([self.node], [self.provider]).splitlines()
+        chrome_last = max(
+            i for i, line in enumerate(lines) if "PROCESS-NAME,chrome.exe" in line
+        )
+        first_domain = min(
+            i for i, line in enumerate(lines) if line.startswith("  - DOMAIN")
+        )
+        self.assertLess(chrome_last, first_domain)
+
+    def test_chrome_lane_keeps_cn_traffic_direct(self) -> None:
+        """Chrome 进程访问国内域名与 IP 直连，避免国内流量误走代理。"""
+        lines = self.render.render_profile([self.node], [self.provider]).splitlines()
+        self.assertIn("  - AND,((PROCESS-NAME,chrome.exe),(GEOSITE,CN)),DIRECT", lines)
+        self.assertIn("  - AND,((PROCESS-NAME,chrome.exe),(GEOIP,CN,no-resolve)),DIRECT", lines)
+        self.assertIn("  - PROCESS-NAME,chrome.exe,Chrome", lines)
+
+    def test_auto_group_contains_self_nodes(self) -> None:
+        """自动选择 (url-test) 组必须同时包含自建节点参与延迟测速。"""
+        out = self.render.render_profile([self.node], [self.provider])
+        groups = _section(out, "proxy-groups")
+        auto = next(g for g in groups if g["name"] == "自动选择")
+        self.assertIn("self-a", auto["proxies"])
+        self.assertEqual(auto["use"], ["airport7"])
+
+        out_mobile = self.render.render_profile(
+            [self.node],
+            [self.provider],
+            target="mobile",
+            provider_contents={self.provider["id"]: self.provider_content},
+        )
+        groups_mobile = _section(out_mobile, "proxy-groups")
+        auto_mobile = next(g for g in groups_mobile if g["name"] == "自动选择")
+        self.assertIn("self-a", auto_mobile["proxies"])
+        self.assertIn("[机场甲] 机场香港", auto_mobile["proxies"])
+
+    def test_proxy_providers_override_prefix(self) -> None:
+        """desktop/webdock 产物的 proxy-providers 带有 override.additional-prefix。"""
+        out = self.render.render_profile([self.node], [self.provider])
+        providers = _section(out, "proxy-providers")
+        self.assertIn("override", providers["airport7"])
+        self.assertEqual(
+            providers["airport7"]["override"]["additional-prefix"], "[机场甲] "
+        )
 
 
 if __name__ == "__main__":

@@ -45,6 +45,7 @@ GROUP_DIRECT = "全球直连"
 # WSL 里那份跑在同一台机器上，但出口 IP 需要能分别调。
 GROUP_CODEX_WIN = "Codex-Win"
 GROUP_CODEX_WSL = "Codex-WSL"
+GROUP_CHROME = "Chrome"
 
 # WSL 里的 codex 走 NAT 连到宿主机，mihomo 侧看不到它的进程名（find-process-mode
 # 对 NAT 过来的连接无效），所以只能按**入站入口**区分：给 desktop 产物多开一个
@@ -162,7 +163,9 @@ def _base_text(target: str) -> str:
     ).rstrip("\n")
 
 
-def _inline_provider_nodes(content: str) -> tuple[list[str], list[str], list[str]]:
+def _inline_provider_nodes(
+    content: str, provider_name: str = ""
+) -> tuple[list[str], list[str], list[str]]:
     """Return provider node YAML blocks, names, and server addresses for a mobile bundle."""
     match = _PROVIDER_PROXY_SECTION.search(content)
     if not match:
@@ -181,6 +184,7 @@ def _inline_provider_nodes(content: str) -> tuple[list[str], list[str], list[str
     blocks: list[str] = []
     names: list[str] = []
     servers: list[str] = []
+    prefix = f"[{provider_name}] " if provider_name else ""
     for index, item in enumerate(top_level_items):
         start = item.start()
         next_start = top_level_items[index + 1].start() if index + 1 < len(top_level_items) else len(body)
@@ -191,12 +195,18 @@ def _inline_provider_nodes(content: str) -> tuple[list[str], list[str], list[str
         server_match = _NODE_SERVER.search(block)
         if not name_match or not server_match:
             raise ValueError("订阅快照存在缺少 name/server 的节点，无法生成手机配置")
-        name = (name_match.group(1) or name_match.group(2) or "").strip()
+        raw_name = (name_match.group(1) or name_match.group(2) or "").strip()
         server = (server_match.group(1) or server_match.group(2) or "").strip()
-        if not name or not server:
+        if not raw_name or not server:
             raise ValueError("订阅快照存在空 name/server 的节点，无法生成手机配置")
+        name = f"{prefix}{raw_name}" if prefix else raw_name
         if name in names:
             raise ValueError(f"订阅快照存在重复节点名：{name}")
+        if prefix:
+            escaped_raw = re.escape(raw_name)
+            pattern = rf"(\bname:\s*)(?:'{escaped_raw}'|\"{escaped_raw}\"|{escaped_raw})"
+            dumped_name = json.dumps(name, ensure_ascii=False)
+            block = re.sub(pattern, lambda m: f"{m.group(1)}{dumped_name}", block, count=1)
         # Re-indent every provider item to the canonical two-space list level.
         # Keeping the source indentation would produce an invalid mixed list
         # when the self nodes use two spaces and the airport uses four.
@@ -254,7 +264,9 @@ def render_profile(
             content = provider_contents.get(provider["id"], "")
             if not content:
                 raise ValueError(f"{provider_key(provider['id'])} 没有可用快照，无法生成手机配置")
-            blocks, names_from_provider, servers_from_provider = _inline_provider_nodes(content)
+            blocks, names_from_provider, servers_from_provider = _inline_provider_nodes(
+                content, provider_name=provider.get("name", "")
+            )
             inline_blocks.extend(blocks)
             inline_names.extend(names_from_provider)
             inline_servers.extend(servers_from_provider)
@@ -285,6 +297,9 @@ def render_profile(
                 # 消失"而不是"起不来"，排查时容易往错的方向找。导入配置时务必确认
                 # providers/ 下有对应文件。
                 "path": f"{PROVIDER_FILE_DIR}/{provider_key(p['id'])}.yaml",
+                "override": {
+                    "additional-prefix": f"[{p.get('name', provider_key(p['id']))}] ",
+                },
                 "exclude-filter": PSEUDO_NODE_FILTER,
                 "health-check": {
                     "enable": True,
@@ -318,7 +333,7 @@ def render_profile(
         groups.append({
             "name": GROUP_AUTO,
             "type": "url-test",
-            "proxies": provider_names,
+            "proxies": [*names, *provider_names],
             "url": HEALTH_CHECK_URL,
             "interval": HEALTH_CHECK_INTERVAL,
             "tolerance": 50,
@@ -327,6 +342,7 @@ def render_profile(
         groups.append({
             "name": GROUP_AUTO,
             "type": "url-test",
+            "proxies": [*names],
             "use": keys,
             "url": HEALTH_CHECK_URL,
             "interval": HEALTH_CHECK_INTERVAL,
@@ -342,23 +358,15 @@ def render_profile(
         ai_group["use"] = keys
     groups.append(ai_group)
 
-    # Dukascopy 复盘数据抓取专用出口。**结构性排除自建节点**：批量补历史不能和 AI 账号
-    # 共用出口 IP（Dukascopy 按 IP 限流，且是「突发配额 + 长封锁」，实测封 ≥15 小时），
-    # 而自建节点是按流量计费的，批量下载走它会直接吃计费额度。
-    #
-    # 2026-08-17 曾在客户端 profile 扩展里建过同名组，靠 exclude-filter 排除；
-    # 08-21 的一次编辑把 filter 改丢了没人发现。放进产物并由 tests 断言，是为了让
-    # 「不含自建节点」变成结构性事实，而不是需要定期人工核验的行为约定。
-    #
-    # ⚠️ 没有任何订阅源时降级成 DIRECT，不能省略整个组：规则表是静态模板，
-    # 里面的 dukascopy 一行恒存在，组不存在会让 mihomo **整份配置加载失败**。
-    if target == PROFILE_MOBILE:
-        dukascopy_options = {"proxies": provider_names or ["DIRECT"]}
-    elif keys:
-        dukascopy_options = {"use": keys}
-    else:
-        dukascopy_options = {"proxies": ["DIRECT"]}
-    groups.append({"name": GROUP_DUKASCOPY, "type": "select", **dukascopy_options})
+    # Dukascopy 历史行情抓取。包含自建节点与全部机场节点。
+    dukascopy_group: dict[str, Any] = {
+        "name": GROUP_DUKASCOPY,
+        "type": "select",
+        "proxies": [*all_names],
+    }
+    if keys and target != PROFILE_MOBILE:
+        dukascopy_group["use"] = keys
+    groups.append(dukascopy_group)
 
     # GitHub 默认走自建节点：git 长连接被换节点会断，要的是稳而不是快。
     # 代价是 git clone 大仓库与 ghcr 拉镜像都计入自建节点的流量额度，
@@ -384,6 +392,18 @@ def render_profile(
         if keys and target != PROFILE_MOBILE:
             codex_group["use"] = keys
         groups.append(codex_group)
+
+    # Chrome 专用出口（模式 B：接管电脑 Chrome 全部境外流量）。
+    # ⚠️ 在所有 target 都要生成。规则表是静态模板，PROCESS-NAME 规则恒存在，
+    # 组缺失会让 mihomo 整份配置加载失败。
+    chrome_group: dict[str, Any] = {
+        "name": GROUP_CHROME,
+        "type": "select",
+        "proxies": [GROUP_SELECT, GROUP_AUTO, *all_names],
+    }
+    if keys and target != PROFILE_MOBILE:
+        chrome_group["use"] = keys
+    groups.append(chrome_group)
 
     # 明确的直连组。Windows Update / svchost 一类规则指向它而不是内置 DIRECT，
     # 目的是留一个面板开关：这些流量平时直连（走代理会被调度到境外 CDN 白烧流量），

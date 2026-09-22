@@ -34,6 +34,16 @@ docker exec business-cn-backend-api-1 python -m app.clash_profile.cli profile mo
 WebDock 的配置切换必须先在临时目录用 mihomo `-t` 校验，
 再在无 ChatGPT 任务的维护窗口重启 mihomo；不要把配置渲染步骤绑定到浏览器容器重启。
 
+## 2026-09-22：多订阅聚合与策略组升级
+
+1. **节点前缀与防重名机制**：
+   - `desktop` / `webdock`：通过 `proxy-providers` 的 `override.additional-prefix` 配置 `[{provider.name}] `，由 Mihomo 内核在加载时自动为节点追加机场名前缀，彻底消除多机场间同名冲突，客户端界面区分清晰。
+   - `mobile`：在服务端生成单文件时，解析快照节点时自动注入 `[{provider.name}] ` 前缀并重写。
+2. **策略组增强**：
+   - `自动选择`（`url-test`）：自建节点加入 `proxies`，与所有启用 provider 节点一同参与延迟优选。
+   - `Dukascopy`（`select`）：加入自建节点与所有机场节点，提供灵活出口。
+   - 新增 `Chrome`（`select`）：电脑端 Chrome 专用策略组。规则模板中配置模式 B（`PROCESS-NAME,chrome.exe` 排在所有域名规则前，国内流量直连，境外流量归入 Chrome 策略组）。
+
 ## 关键决策
 
 | 决策 | 内容 | 理由 |
