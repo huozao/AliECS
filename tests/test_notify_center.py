@@ -898,6 +898,61 @@ class CrossServiceContractTests(unittest.TestCase):
         restored = Notification.from_stored(payload)
         self.assertEqual(restored.title, "T+ 核对")
 
+    def test_parent_match_scheme_a_dashboard_card_renders_feishu_card(self) -> None:
+        """测试 T+ 物料核对方案 A 卡片：包含 2x2 指标看板与 Markdown 异常区块。"""
+        worker = self._load_worker_client()
+        payload = worker.build_payload(
+            source="tplus",
+            event="parent_match",
+            level="warn",
+            title="【色粉使用记录表 · T+ 物料清单核对】",
+            summary="核对时间 2026-09-23 09:45",
+            fields=[
+                ("总检查行数", "334 行"),
+                ("正常在产", "296 行"),
+                ("T+ 停用", "1 行"),
+                ("未维护编码", "37 行"),
+            ],
+            text_segments=[
+                "🚫 **T+ 新增停用 1 行（编码仍有效，禁止再投产）：**\n"
+                "• `HYD-1836` ｜ 型号：**HYD-1836白**\n"
+                "  <font color='grey'>↳ 说明：T+ 档案已标记停用，请车间停止领料投产。</font>"
+            ],
+        )
+        notification = Notification.model_validate(payload)
+        card = feishu.build_card(notification, {})
+
+        self.assertEqual(card["schema"], "2.0")
+        self.assertEqual(card["header"]["template"], "yellow")
+        self.assertIn("【色粉使用记录表 · T+ 物料清单核对】", card["header"]["title"]["content"])
+
+        elements = card["body"]["elements"]
+        # Summary 元素
+        self.assertEqual(elements[0]["tag"], "markdown")
+        self.assertIn("核对时间 2026-09-23 09:45", elements[0]["content"])
+
+        # 指标看板：2x2 bisect column_set (前 4 项指标拆成 2 个 column_set)
+        column_sets = [elem for elem in elements if elem.get("tag") == "column_set"]
+        self.assertEqual(len(column_sets), 2)
+        # 第一行指标：总检查行数、正常在产
+        row1_cols = column_sets[0]["columns"]
+        self.assertIn("总检查行数", row1_cols[0]["elements"][0]["content"])
+        self.assertIn("334 行", row1_cols[0]["elements"][0]["content"])
+        self.assertIn("正常在产", row1_cols[1]["elements"][0]["content"])
+        self.assertIn("296 行", row1_cols[1]["elements"][0]["content"])
+        # 第二行指标：T+ 停用、未维护编码
+        row2_cols = column_sets[1]["columns"]
+        self.assertIn("T+ 停用", row2_cols[0]["elements"][0]["content"])
+        self.assertIn("1 行", row2_cols[0]["elements"][0]["content"])
+        self.assertIn("未维护编码", row2_cols[1]["elements"][0]["content"])
+        self.assertIn("37 行", row2_cols[1]["elements"][0]["content"])
+
+        # 异常详情 Markdown 元素
+        anomaly_elem = elements[3]
+        self.assertEqual(anomaly_elem["tag"], "markdown")
+        self.assertIn("HYD-1836", anomaly_elem["content"])
+        self.assertIn("HYD-1836白", anomaly_elem["content"])
+
     def test_worker_dedup_key_is_stable_for_identical_content(self) -> None:
         worker = self._load_worker_client()
         first = worker.build_payload(source="doc-sync", event="e", title="t", summary="s")

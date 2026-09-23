@@ -740,6 +740,78 @@ class TplusParentMatchTests(unittest.TestCase):
         self.assertEqual(len(fake_client.add_records_batches), 2, "第 1 批裸 RuntimeError 后第 2 批仍应被调用，不能 break")
         mock_send_feishu_alert.assert_called_once()
 
+    def test_plan_updates_tracks_active_and_total_disabled(self) -> None:
+        records = [
+            {"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("甲")}},
+            {"record_id": "r2", "values": {"父件编码": _cells("B"), "父件名称": _cells("乙"), "型号": _cells("HYD-1836白")}},
+            {"record_id": "r3", "values": {"型号": _cells("无编码行")}},
+            {"record_id": "r4", "values": {"父件编码": _cells("MISSING_CODE"), "型号": _cells("失联")}},
+        ]
+        bom = {
+            "A": ("甲", "v1", False),
+            "B": ("乙", "v1", True),  # 停用
+        }
+        result = self._plan(records, bom)
+        self.assertEqual(result.total, 4)
+        self.assertEqual(result.with_code, 3)
+        self.assertEqual(result.no_code, 1)
+        self.assertEqual(result.active, 1)
+        self.assertEqual(result.total_disabled, 1)
+        self.assertEqual(len(result.missing), 1)
+        # 验证算术闭环：在产 + 停用 + 失联 + 无编码 = 总数
+        self.assertEqual(result.active + result.total_disabled + len(result.missing) + result.no_code, result.total)
+
+    def test_alert_summary_line_has_no_contradiction(self) -> None:
+        records = [
+            {"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("甲")}},
+            {"record_id": "r2", "values": {"父件编码": _cells("B"), "父件名称": _cells("乙"), "型号": _cells("HYD-1836白")}},
+            {"record_id": "r3", "values": {"型号": _cells("草稿")}},
+        ]
+        bom = {
+            "A": ("甲", "v1", False),
+            "B": ("乙", "v1", True),
+        }
+        result = self._plan(records, bom)
+        text = self.module.build_alert(result)
+        self.assertIn("共 3 行，其中有父件编码 2 行（正常在产 1 行）；无编码 1 行。", text)
+        self.assertIn("T+ 新增停用 1 行", text)
+
+    def test_send_feishu_alert_builds_scheme_a_dashboard_card(self) -> None:
+        records = [
+            {"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("甲")}},
+            {"record_id": "r2", "values": {"父件编码": _cells("B"), "父件名称": _cells("乙"), "型号": _cells("HYD-1836白")}},
+            {"record_id": "r3", "values": {"型号": _cells("草稿")}},
+        ]
+        bom = {
+            "A": ("甲", "v1", False),
+            "B": ("乙", "v1", True),
+        }
+        result = self._plan(records, bom)
+        enqueued_payloads = []
+        with patch.object(self.module.notify_client, "enqueue", side_effect=enqueued_payloads.append) as mock_enqueue:
+            self.module.send_feishu_alert(self.module.build_alert(result), result=result)
+
+        mock_enqueue.assert_called_once()
+        payload = enqueued_payloads[0]
+        self.assertEqual(payload["source"], "tplus")
+        self.assertEqual(payload["event"], "parent_match")
+        self.assertEqual(payload["level"], "warn")
+        self.assertIn("核对时间", payload["summary"])
+
+        # 检查 Scheme A 大盘指标 fields
+        fields_dict = {f["name"]: f["value"] for f in payload["segments"][0]["fields"]}
+        self.assertEqual(fields_dict["总检查行数"], "3 行")
+        self.assertEqual(fields_dict["正常在产"], "1 行")
+        self.assertEqual(fields_dict["T+ 停用"], "1 行")
+        self.assertEqual(fields_dict["未维护编码"], "1 行")
+
+        # 检查正文段落包含 Markdown 格式且 preformatted 未被强制置 True
+        text_segment = payload["segments"][1]
+        self.assertEqual(text_segment["kind"], "text")
+        self.assertFalse(text_segment.get("preformatted", False))
+        self.assertIn("🚫 **T+ 新增停用 1 行（编码仍有效，禁止再投产）：**", text_segment["text"])
+        self.assertIn("• `B` ｜ 型号：**HYD-1836白**", text_segment["text"])
+
 
 if __name__ == "__main__":
     unittest.main()

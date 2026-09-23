@@ -87,6 +87,8 @@ class MatchResult:
     missing: list[tuple[str, str]] = field(default_factory=list)
     disabled: list[tuple[str, str]] = field(default_factory=list)
     no_code: int = 0
+    active: int = 0
+    total_disabled: int = 0
     updates: list[dict[str, Any]] = field(default_factory=list)
     created_fields: list[str] = field(default_factory=list)
     created_rows: list[str] = field(default_factory=list)
@@ -188,6 +190,10 @@ def plan_updates(records: list[dict[str, Any]], bom: dict[str, tuple[str, str, b
                     target_version = hit[1]
                 # 停用不影响匹配判定：停用件仍在 T+ 里，编码有效，只是不该再投产。
                 target_disabled = DISABLED_YES if hit[2] else DISABLED_NO
+                if hit[2]:
+                    result.total_disabled += 1
+                else:
+                    result.active += 1
                 if current_name and current_name != target_name:
                     status = STATUS_RENAMED
                     result.renamed.append((code, model, current_name, target_name))
@@ -241,7 +247,7 @@ def build_alert(result: MatchResult) -> str:
     lines = [
         f"【{SOURCE_DOCUMENT} · T+ 物料清单核对】",
         f"核对时间 {result.checked_at}",
-        f"共 {result.total} 行，其中有父件编码 {result.with_code} 行；一致 {result.ok} 行。",
+        f"共 {result.total} 行，其中有父件编码 {result.with_code} 行（正常在产 {result.active} 行）；无编码 {result.no_code} 行。",
     ]
     if result.created_fields:
         lines.append("🆕 已新建列：" + "、".join(result.created_fields))
@@ -281,7 +287,7 @@ def build_alert(result: MatchResult) -> str:
     return "\n".join(lines)
 
 
-def send_feishu_alert(text: str) -> bool:
+def send_feishu_alert(text: str, result: MatchResult | None = None) -> bool:
     """交给统一消息中枢。收件人由 notify_routes 决定，不再读 TPLUS_PARENT_MATCH_CHAT_ID。
 
     推送失败仍旧不让核对本身算失败——这是收敛前的既有行为，保持不变。
@@ -289,16 +295,81 @@ def send_feishu_alert(text: str) -> bool:
     lines = [line for line in (text or "").splitlines() if line.strip()]
     if not lines:
         return False
+
+    title = lines[0].strip()
+    level = "warn"
+    if result and result.write_errors:
+        level = "error"
+    elif not result and ("❌" in text or "失败" in text):
+        level = "error"
+
+    fields = None
+    summary = ""
+    text_segments = []
+
+    if result is not None:
+        summary = f"核对时间 {result.checked_at}"
+        fields = [
+            ("总检查行数", f"{result.total} 行"),
+            ("正常在产", f"{result.active} 行"),
+            ("T+ 停用", f"{result.total_disabled} 行"),
+            ("未维护编码", f"{result.no_code} 行"),
+        ]
+        anomaly_lines = []
+        if result.created_fields:
+            anomaly_lines.append("🆕 **已新建列：** " + "、".join(result.created_fields))
+        if result.renamed:
+            anomaly_lines.append(f"🔄 **名称已按 T+ 更新 {len(result.renamed)} 行：**")
+            for code, model, old, new in result.renamed[:20]:
+                anomaly_lines.append(f"• `{code}` ｜ {model or '-'}：{old or '(空)'} → **{new}**")
+            if len(result.renamed) > 20:
+                anomaly_lines.append(f"…另有 {len(result.renamed) - 20} 行")
+        if result.missing:
+            anomaly_lines.append(f"⛔ **编码失联 {len(result.missing)} 行，需人工确认（未自动改编码）：**")
+            for code, model in result.missing[:20]:
+                anomaly_lines.append(f"• `{code}` ｜ {model or '-'}")
+            if len(result.missing) > 20:
+                anomaly_lines.append(f"…另有 {len(result.missing) - 20} 行")
+        if result.disabled:
+            anomaly_lines.append(f"🚫 **T+ 新增停用 {len(result.disabled)} 行（编码仍有效，禁止再投产）：**")
+            for code, model in result.disabled[:20]:
+                anomaly_lines.append(f"• `{code}` ｜ 型号：**{model or '-'}**\n  <font color='grey'>↳ 说明：T+ 档案已标记停用，请车间停止领料投产。</font>")
+            if len(result.disabled) > 20:
+                anomaly_lines.append(f"…另有 {len(result.disabled) - 20} 行")
+        if result.created_rows:
+            anomaly_lines.append(f"🆕 **按 T+ 补建 {len(result.created_rows)} 行（编码、名称与版本号已带入，标准待人工补）：**")
+            for code in result.created_rows[:20]:
+                anomaly_lines.append(f"• `{code}`")
+            if len(result.created_rows) > 20:
+                anomaly_lines.append(f"…另有 {len(result.created_rows) - 20} 行")
+        if result.write_errors:
+            anomaly_lines.append(f"❌ **写入失败 {len(result.write_errors)} 批：**")
+            for msg in result.write_errors[:10]:
+                anomaly_lines.append(f"• {msg}")
+            if len(result.write_errors) > 10:
+                anomaly_lines.append(f"…另有 {len(result.write_errors) - 10} 批")
+        if anomaly_lines:
+            text_segments.append("\n".join(anomaly_lines))
+        elif not result.renamed and not result.missing and not result.disabled \
+                and not result.created_rows and not result.write_errors:
+            text_segments.append("✅ **无异常。**")
+    else:
+        body_lines = lines[1:]
+        if body_lines and body_lines[0].startswith("核对时间"):
+            summary = body_lines[0]
+            body_lines = body_lines[1:]
+        if body_lines:
+            text_segments.append("\n".join(body_lines))
+
     payload = notify_client.build_payload(
         source="tplus",
         event="parent_match",
-        level="warn",
-        title=lines[0].strip(),
-        text_segments=["\n".join(lines[1:])] if len(lines) > 1 else [],
+        level=level,
+        title=title,
+        summary=summary,
+        fields=fields,
+        text_segments=text_segments,
     )
-    for segment in payload["segments"]:
-        if segment.get("kind") == "text":
-            segment["preformatted"] = True
     return notify_client.enqueue(payload)
 
 
@@ -530,7 +601,7 @@ def _run_tplus_parent_match(*, dry_run: bool, notify: bool, platform_run: _Platf
     platform_run.step(5, "notify", "running")
     if notify and (result.missing or result.renamed or result.disabled or result.created_fields
                    or result.created_rows or result.write_errors):
-        if not send_feishu_alert(build_alert(result)):
+        if not send_feishu_alert(build_alert(result), result=result):
             print("[T+核对] 飞书告警未送达。")
             result.exit_code = 1
             platform_run.step(5, "notify", "failed", message="delivery failed")
