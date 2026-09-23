@@ -44,9 +44,13 @@ def build_payload(
     """
     segments: list[dict[str, Any]] = []
     if fields:
-        segments.append(
-            {"kind": "fields", "fields": [{"name": name, "value": value} for name, value in fields]}
-        )
+        field_items = []
+        for item in fields:
+            f_dict = {"name": str(item[0]), "value": str(item[1])}
+            if len(item) >= 3 and item[2]:
+                f_dict["note"] = str(item[2])
+            field_items.append(f_dict)
+        segments.append({"kind": "fields", "fields": field_items})
     for text in text_segments or []:
         if text.strip():
             segments.append({"kind": "text", "text": text})

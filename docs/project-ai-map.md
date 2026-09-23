@@ -60,6 +60,8 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 `sync_job_alerts` 的 partial unique open claim 去重；行锁只保护投递和恢复，resolved 后由 partial unique 允许重开，步骤清理由独立 DELETE 按 30/90 天执行。
 调度候选内核在 `app/pipelines/sync_scheduler.py`；`sync_jobs.schedule` 是候选配置面，legacy `integration_sync_config` 仍驱动 shadow 期的真实执行并作为回滚面。shadow 证据只合并到已有真实 `trigger='schedule'` run 的 `detail_json.shadow`，不创建伪 run。
 文档定位档案在 `document_locator_registry/events/mirror_jobs/copy_requests`；导入为 `app/pipelines/document_locator_import.py`，源同步后对账为 `document_locator.py`，企微人工镜像为 `document_locator_mirror.py`，它在备份文档里维护三张表：「文档定位档案」（文档级）、「定位档案变更历史」、「同步表格清单」（表级身份，含子表 ID 与来源 ID，随全量同步整表刷新）；三张表都写完即回读校验，写不进就失败重试。真实 docid、分享标识、管理员与凭据引用只落生产私有库/企微镜像，不进公开仓。
+`app/pipelines/tplus_parent_match.py` 负责 T+ 物料清单核对与产品标准目录维护：提取 BOM 资产数据对比企微标准型号，将父件总数、版本总数、启用/停用数及缺失默认 BOM 告警渲染为飞书 2x2 指标看板卡片推送到消息中枢；T+ 变动事件由 `run_backfill_if_bom_synced` 水位监听自动触发。
+验证：`python -m unittest tests/test_tplus_parent_match.py`。
 验证：`SYNC_ALERT_INTEGRATION_DATABASE_URL=<postgres-url> python -m unittest discover -s tests -p "test_sync_alert_notifier_integration.py" -v`。
 
 ## services/tplus-sync-worker

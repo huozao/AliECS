@@ -59,6 +59,14 @@ WHERE missing_since IS NULL AND coalesce(raw_json->>'Code', '') <> ''
 ORDER BY raw_json->>'Code', raw_json->>'UpdateDate' DESC
 """
 
+_ALL_BOM_RECORDS_SQL = """
+SELECT raw_json->>'Code', raw_json->>'Name', raw_json->>'Version',
+       raw_json->>'Disabled', raw_json->>'IsDefaultBom'
+FROM tplus_bom_records
+WHERE missing_since IS NULL AND coalesce(raw_json->>'Code', '') <> ''
+ORDER BY raw_json->>'Code', raw_json->>'UpdateDate' DESC NULLS LAST
+"""
+
 _ACTIVE_INVENTORY_SQL = """
 SELECT raw_json->>'Code', raw_json->>'Name', raw_json->>'Disabled'
 FROM tplus_inventory_records
@@ -78,6 +86,15 @@ LIMIT 1
 
 
 @dataclass
+class BomAssetSummary:
+    total_parents: int = 0
+    total_versions: int = 0
+    enabled_versions: int = 0
+    disabled_versions: int = 0
+    missing_defaults: list[tuple[str, str]] = field(default_factory=list)
+
+
+@dataclass
 class MatchResult:
     checked_at: str
     total: int = 0
@@ -87,6 +104,9 @@ class MatchResult:
     missing: list[tuple[str, str]] = field(default_factory=list)
     disabled: list[tuple[str, str]] = field(default_factory=list)
     no_code: int = 0
+    active: int = 0
+    total_disabled: int = 0
+    bom_summary: BomAssetSummary = field(default_factory=BomAssetSummary)
     updates: list[dict[str, Any]] = field(default_factory=list)
     created_fields: list[str] = field(default_factory=list)
     created_rows: list[str] = field(default_factory=list)
@@ -111,6 +131,86 @@ def disabled_flag(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in {"true", "1"}
+
+
+def load_bom_asset_summary() -> BomAssetSummary:
+    """统计 T+ 全量物料清单资产概况：父件数、版本数、启用/停用数，以及缺失默认 BOM 的父件。"""
+    try:
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(_ALL_BOM_RECORDS_SQL)
+                rows = cur.fetchall()
+    except Exception:
+        return BomAssetSummary()
+
+    if not rows:
+        return BomAssetSummary()
+
+    versions_by_key: dict[tuple[str, str], tuple[str, bool, bool]] = {}
+    parent_names: dict[str, str] = {}
+    for code_raw, name_raw, ver_raw, dis_raw, def_raw in rows:
+        code = str(code_raw or "").strip()
+        version = str(ver_raw or "").strip()
+        if not code:
+            continue
+        name = str(name_raw or "").strip()
+        if name and code not in parent_names:
+            parent_names[code] = name
+        is_disabled = disabled_flag(dis_raw)
+        is_default = disabled_flag(def_raw)
+        key = (code, version)
+        if key not in versions_by_key:
+            versions_by_key[key] = (name, is_disabled, is_default)
+
+    total_versions = len(versions_by_key)
+    enabled_versions = 0
+    disabled_versions = 0
+
+    parents: dict[str, dict[str, Any]] = {}
+    for (code, version), (name, is_disabled, is_default) in versions_by_key.items():
+        if is_disabled:
+            disabled_versions += 1
+        else:
+            enabled_versions += 1
+
+        if code not in parents:
+            parents[code] = {
+                "name": parent_names.get(code) or name,
+                "has_enabled": False,
+                "has_enabled_default": False,
+            }
+        if not is_disabled:
+            parents[code]["has_enabled"] = True
+            if is_default:
+                parents[code]["has_enabled_default"] = True
+
+    total_parents = len(parents)
+    missing_defaults: list[tuple[str, str]] = []
+    for code, info in sorted(parents.items()):
+        if info["has_enabled"] and not info["has_enabled_default"]:
+            missing_defaults.append((code, info["name"]))
+
+    return BomAssetSummary(
+        total_parents=total_parents,
+        total_versions=total_versions,
+        enabled_versions=enabled_versions,
+        disabled_versions=disabled_versions,
+        missing_defaults=missing_defaults,
+    )
+
+
+def summarize_bom_dict(bom: dict[str, tuple[str, str, bool]]) -> BomAssetSummary:
+    """根据内存中的有效父件字典生成基础概况（单测/降级兜底）。"""
+    total_parents = len(bom)
+    enabled = sum(1 for _, (_, _, dis) in bom.items() if not dis)
+    disabled = sum(1 for _, (_, _, dis) in bom.items() if dis)
+    return BomAssetSummary(
+        total_parents=total_parents,
+        total_versions=total_parents,
+        enabled_versions=enabled,
+        disabled_versions=disabled,
+        missing_defaults=[],
+    )
 
 
 def load_active_bom() -> dict[str, tuple[str, str, bool]]:
@@ -154,7 +254,7 @@ def ensure_fields(client: WeComSmartsheetClient, docid: str, sheet_id: str) -> l
 
 
 def plan_updates(records: list[dict[str, Any]], bom: dict[str, tuple[str, str, bool]], checked_at: str) -> MatchResult:
-    result = MatchResult(checked_at=checked_at)
+    result = MatchResult(checked_at=checked_at, bom_summary=summarize_bom_dict(bom))
     for record in records:
         values = record.get("values") or {}
         record_id = str(record.get("record_id") or "")
@@ -188,6 +288,10 @@ def plan_updates(records: list[dict[str, Any]], bom: dict[str, tuple[str, str, b
                     target_version = hit[1]
                 # 停用不影响匹配判定：停用件仍在 T+ 里，编码有效，只是不该再投产。
                 target_disabled = DISABLED_YES if hit[2] else DISABLED_NO
+                if hit[2]:
+                    result.total_disabled += 1
+                else:
+                    result.active += 1
                 if current_name and current_name != target_name:
                     status = STATUS_RENAMED
                     result.renamed.append((code, model, current_name, target_name))
@@ -241,8 +345,15 @@ def build_alert(result: MatchResult) -> str:
     lines = [
         f"【{SOURCE_DOCUMENT} · T+ 物料清单核对】",
         f"核对时间 {result.checked_at}",
-        f"共 {result.total} 行，其中有父件编码 {result.with_code} 行；一致 {result.ok} 行。",
+        f"【T+ BOM 资产】父件物料 {result.bom_summary.total_parents} 个，BOM 版本 {result.bom_summary.total_versions} 版（启用 {result.bom_summary.enabled_versions} / 停用 {result.bom_summary.disabled_versions}）。",
+        f"共 {result.total} 行，其中有父件编码 {result.with_code} 行（在用标准 {result.active} 行）；无编码 {result.no_code} 行。",
     ]
+    if result.bom_summary.missing_defaults:
+        lines.append(f"⚠️ 缺失默认 BOM {len(result.bom_summary.missing_defaults)} 个父件（有启用版本但未设默认 BOM）：")
+        for code, name in result.bom_summary.missing_defaults[:20]:
+            lines.append(f"  {code}｜{name or '-'}")
+        if len(result.bom_summary.missing_defaults) > 20:
+            lines.append(f"  …另有 {len(result.bom_summary.missing_defaults) - 20} 个父件")
     if result.created_fields:
         lines.append("🆕 已新建列：" + "、".join(result.created_fields))
     if result.renamed:
@@ -276,12 +387,13 @@ def build_alert(result: MatchResult) -> str:
         if len(result.write_errors) > 10:
             lines.append(f"  …另有 {len(result.write_errors) - 10} 批")
     if not result.renamed and not result.missing and not result.disabled \
-            and not result.created_rows and not result.write_errors:
+            and not result.created_rows and not result.write_errors \
+            and not result.bom_summary.missing_defaults:
         lines.append("✅ 无异常。")
     return "\n".join(lines)
 
 
-def send_feishu_alert(text: str) -> bool:
+def send_feishu_alert(text: str, result: MatchResult | None = None) -> bool:
     """交给统一消息中枢。收件人由 notify_routes 决定，不再读 TPLUS_PARENT_MATCH_CHAT_ID。
 
     推送失败仍旧不让核对本身算失败——这是收敛前的既有行为，保持不变。
@@ -289,16 +401,114 @@ def send_feishu_alert(text: str) -> bool:
     lines = [line for line in (text or "").splitlines() if line.strip()]
     if not lines:
         return False
+
+    title = lines[0].strip()
+    level = "info"
+    if result and result.write_errors:
+        level = "error"
+    elif result and (result.missing or result.disabled or result.bom_summary.missing_defaults):
+        level = "warn"
+    elif not result and ("❌" in text or "失败" in text):
+        level = "error"
+    elif not result and ("⚠️" in text or "⛔" in text or "🚫" in text):
+        level = "warn"
+
+    fields = None
+    summary = ""
+    text_segments = []
+
+    if result is not None:
+        summary = f"核对时间 {result.checked_at}"
+        bs = result.bom_summary
+        fields = [
+            ("父件物料总数", f"**{bs.total_parents}** 个", "T+ 已建清单物料"),
+            ("BOM 版本总数", f"**{bs.total_versions}** 版", "多版本清单累积"),
+            ("启用版本 (有效)", f"<font color='green'>**{bs.enabled_versions}**</font> 版", "现行有效版本"),
+            ("停用版本 (封存)", f"<font color='grey'>**{bs.disabled_versions}**</font> 版", "历史版本归档"),
+        ]
+
+        # 产品标准目录对照
+        sheet_lines = [
+            "> 📋 **产品标准目录对照：**",
+            f"> 目录现维护 **{result.total}** 行（在用标准 <font color='green'>**{result.active}**</font> 行 / T+已停用 <font color='grey'>**{result.total_disabled}**</font> 行 / 待设编码 <font color='orange'>**{result.no_code}**</font> 行）",
+        ]
+        if result.created_fields:
+            sheet_lines.append(f"> 🆕 已补全字段列：{'、'.join(result.created_fields)}")
+        text_segments.append("\n".join(sheet_lines))
+
+        anomaly_lines = []
+        if bs.missing_defaults:
+            anomaly_lines.append(
+                f"⚠️ **缺失默认 BOM ({len(bs.missing_defaults)} 个父件)：**\n"
+                "<font color='orange'>以下父件有启用版本，但未在 T+ 勾选「默认BOM」，MRP / 派工将无法自动匹配配方：</font>"
+            )
+            for code, name in bs.missing_defaults[:20]:
+                anomaly_lines.append(f"• `{code}` ｜ {name or '-'}")
+            if len(bs.missing_defaults) > 20:
+                anomaly_lines.append(f"…另有 {len(bs.missing_defaults) - 20} 个父件待维护")
+
+        if result.disabled:
+            anomaly_lines.append(f"🚫 **T+ 新增停用 ({len(result.disabled)} 行)：**")
+            for code, model in result.disabled[:20]:
+                anomaly_lines.append(
+                    f"• `{code}` ｜ 型号：**{model or '-'}**\n"
+                    "  <font color='grey'>↳ 说明：T+ 档案已标记停用，该标准规格已同步标记停用。</font>"
+                )
+            if len(result.disabled) > 20:
+                anomaly_lines.append(f"…另有 {len(result.disabled) - 20} 行")
+
+        if result.missing:
+            anomaly_lines.append(f"⛔ **编码失联 ({len(result.missing)} 行，需人工确认)：**")
+            for code, model in result.missing[:20]:
+                anomaly_lines.append(
+                    f"• `{code}` ｜ 型号：**{model or '-'}**\n"
+                    "  <font color='grey'>↳ 说明：企微表中填写的父件编码在 T+ 均已不存在，请核实是否录错或废弃。</font>"
+                )
+            if len(result.missing) > 20:
+                anomaly_lines.append(f"…另有 {len(result.missing) - 20} 行")
+
+        if result.renamed:
+            anomaly_lines.append(f"🔄 **名称已按 T+ 更新 ({len(result.renamed)} 行)：**")
+            for code, model, old, new in result.renamed[:20]:
+                anomaly_lines.append(f"• `{code}` ｜ {model or '-'}：{old or '(空)'} → **{new}**")
+            if len(result.renamed) > 20:
+                anomaly_lines.append(f"…另有 {len(result.renamed) - 20} 行")
+
+        if result.created_rows:
+            anomaly_lines.append(f"🆕 **按 T+ 补建 ({len(result.created_rows)} 行)：**")
+            for code in result.created_rows[:20]:
+                anomaly_lines.append(f"• `{code}`")
+            if len(result.created_rows) > 20:
+                anomaly_lines.append(f"…另有 {len(result.created_rows) - 20} 行")
+
+        if result.write_errors:
+            anomaly_lines.append(f"❌ **写入失败 ({len(result.write_errors)} 批)：**")
+            for msg in result.write_errors[:10]:
+                anomaly_lines.append(f"• {msg}")
+            if len(result.write_errors) > 10:
+                anomaly_lines.append(f"…另有 {len(result.write_errors) - 10} 批")
+
+        if anomaly_lines:
+            text_segments.append("\n".join(anomaly_lines))
+        else:
+            text_segments.append("✅ **所有父件匹配一致，默认 BOM 配置完备，无异常。**")
+    else:
+        body_lines = lines[1:]
+        if body_lines and body_lines[0].startswith("核对时间"):
+            summary = body_lines[0]
+            body_lines = body_lines[1:]
+        if body_lines:
+            text_segments.append("\n".join(body_lines))
+
     payload = notify_client.build_payload(
         source="tplus",
         event="parent_match",
-        level="warn",
-        title=lines[0].strip(),
-        text_segments=["\n".join(lines[1:])] if len(lines) > 1 else [],
+        level=level,
+        title=title,
+        summary=summary,
+        fields=fields,
+        text_segments=text_segments,
     )
-    for segment in payload["segments"]:
-        if segment.get("kind") == "text":
-            segment["preformatted"] = True
     return notify_client.enqueue(payload)
 
 
@@ -390,6 +600,7 @@ def _platform_detail(result: MatchResult, *, dry_run: bool, notify: bool) -> dic
         "created_field_count": len(result.created_fields),
         "created_row_count": len(result.created_rows),
         "write_error_count": len(result.write_errors),
+        "missing_default_bom_count": len(result.bom_summary.missing_defaults),
         "dry_run": dry_run,
         "notify": notify,
     }
@@ -468,7 +679,11 @@ def _run_tplus_parent_match(*, dry_run: bool, notify: bool, platform_run: _Platf
     platform_run.step(2, "fetch_page", "success", items=len(records))
     platform_run.step(3, "normalize", "running")
     checked_at = datetime.now(_BEIJING).strftime("%Y-%m-%d %H:%M")
+    bom_summary = load_bom_asset_summary()
+    if bom_summary.total_parents == 0 and bom:
+        bom_summary = summarize_bom_dict(bom)
     result = plan_updates(records, bom, checked_at)
+    result.bom_summary = bom_summary
     result.created_fields = created
     creates = plan_creates(records, bom, checked_at)
     result.created_rows = [item["values"][F_PARENT_CODE][0]["text"] for item in creates]
@@ -527,10 +742,18 @@ def _run_tplus_parent_match(*, dry_run: bool, notify: bool, platform_run: _Platf
     else:
         platform_run.step(4, "writeback", "success", items=changed_count)
 
+    has_anomaly = bool(
+        result.missing
+        or result.renamed
+        or result.disabled
+        or result.created_fields
+        or result.created_rows
+        or result.write_errors
+        or result.bom_summary.missing_defaults
+    )
     platform_run.step(5, "notify", "running")
-    if notify and (result.missing or result.renamed or result.disabled or result.created_fields
-                   or result.created_rows or result.write_errors):
-        if not send_feishu_alert(build_alert(result)):
+    if notify and has_anomaly:
+        if not send_feishu_alert(build_alert(result), result=result):
             print("[T+核对] 飞书告警未送达。")
             result.exit_code = 1
             platform_run.step(5, "notify", "failed", message="delivery failed")

@@ -740,6 +740,143 @@ class TplusParentMatchTests(unittest.TestCase):
         self.assertEqual(len(fake_client.add_records_batches), 2, "第 1 批裸 RuntimeError 后第 2 批仍应被调用，不能 break")
         mock_send_feishu_alert.assert_called_once()
 
+    def test_plan_updates_tracks_active_and_total_disabled(self) -> None:
+        records = [
+            {"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("甲")}},
+            {"record_id": "r2", "values": {"父件编码": _cells("B"), "父件名称": _cells("乙"), "型号": _cells("HYD-1836白")}},
+            {"record_id": "r3", "values": {"型号": _cells("无编码行")}},
+            {"record_id": "r4", "values": {"父件编码": _cells("MISSING_CODE"), "型号": _cells("失联")}},
+        ]
+        bom = {
+            "A": ("甲", "v1", False),
+            "B": ("乙", "v1", True),  # 停用
+        }
+        result = self._plan(records, bom)
+        self.assertEqual(result.total, 4)
+        self.assertEqual(result.with_code, 3)
+        self.assertEqual(result.no_code, 1)
+        self.assertEqual(result.active, 1)
+        self.assertEqual(result.total_disabled, 1)
+        self.assertEqual(len(result.missing), 1)
+        # 验证算术闭环：在产 + 停用 + 失联 + 无编码 = 总数
+        self.assertEqual(result.active + result.total_disabled + len(result.missing) + result.no_code, result.total)
+
+    def test_alert_summary_line_has_no_contradiction(self) -> None:
+        records = [
+            {"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("甲")}},
+            {"record_id": "r2", "values": {"父件编码": _cells("B"), "父件名称": _cells("乙"), "型号": _cells("HYD-1836白")}},
+            {"record_id": "r3", "values": {"型号": _cells("草稿")}},
+        ]
+        bom = {
+            "A": ("甲", "v1", False),
+            "B": ("乙", "v1", True),
+        }
+        result = self._plan(records, bom)
+        text = self.module.build_alert(result)
+        self.assertIn("共 3 行，其中有父件编码 2 行（在用标准 1 行）；无编码 1 行。", text)
+        self.assertIn("T+ 新增停用 1 行", text)
+
+    def test_send_feishu_alert_builds_scheme_a_dashboard_card(self) -> None:
+        records = [
+            {"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("甲")}},
+            {"record_id": "r2", "values": {"父件编码": _cells("B"), "父件名称": _cells("乙"), "型号": _cells("HYD-1836白")}},
+            {"record_id": "r3", "values": {"型号": _cells("草稿")}},
+        ]
+        bom = {
+            "A": ("甲", "v1", False),
+            "B": ("乙", "v1", True),
+        }
+        result = self._plan(records, bom)
+        enqueued_payloads = []
+        with patch.object(self.module.notify_client, "enqueue", side_effect=enqueued_payloads.append) as mock_enqueue:
+            self.module.send_feishu_alert(self.module.build_alert(result), result=result)
+
+        mock_enqueue.assert_called_once()
+        payload = enqueued_payloads[0]
+        self.assertEqual(payload["source"], "tplus")
+        self.assertEqual(payload["event"], "parent_match")
+        self.assertEqual(payload["level"], "warn")
+        self.assertIn("核对时间", payload["summary"])
+
+        # 检查 BOM 资产看板 2x2 指标 fields
+        fields_dict = {f["name"]: f["value"] for f in payload["segments"][0]["fields"]}
+        self.assertEqual(fields_dict["父件物料总数"], "**2** 个")
+        self.assertEqual(fields_dict["BOM 版本总数"], "**2** 版")
+        self.assertIn("1", fields_dict["启用版本 (有效)"])
+        self.assertIn("1", fields_dict["停用版本 (封存)"])
+
+        # 检查 note 说明
+        notes_dict = {f["name"]: f.get("note", "") for f in payload["segments"][0]["fields"]}
+        self.assertEqual(notes_dict["父件物料总数"], "T+ 已建清单物料")
+        self.assertEqual(notes_dict["BOM 版本总数"], "多版本清单累积")
+        self.assertEqual(notes_dict["启用版本 (有效)"], "现行有效版本")
+        self.assertEqual(notes_dict["停用版本 (封存)"], "历史版本归档")
+
+        # 检查产品标准目录对照引用区块
+        sheet_segment = payload["segments"][1]
+        self.assertEqual(sheet_segment["kind"], "text")
+        self.assertIn("产品标准目录对照", sheet_segment["text"])
+        self.assertIn("目录现维护 **3** 行", sheet_segment["text"])
+        self.assertIn("在用标准 <font color='green'>**1**</font> 行", sheet_segment["text"])
+        self.assertIn("T+已停用 <font color='grey'>**1**</font> 行", sheet_segment["text"])
+        self.assertIn("待设编码 <font color='orange'>**1**</font> 行", sheet_segment["text"])
+
+        # 检查异常清单 Markdown 段落
+        anomaly_segment = payload["segments"][2]
+        self.assertEqual(anomaly_segment["kind"], "text")
+        self.assertFalse(anomaly_segment.get("preformatted", False))
+        self.assertIn("🚫 **T+ 新增停用 (1 行)：**", anomaly_segment["text"])
+        self.assertIn("• `B` ｜ 型号：**HYD-1836白**", anomaly_segment["text"])
+
+    def test_send_feishu_alert_reports_missing_default_bom(self) -> None:
+        records = [
+            {"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("甲")}},
+        ]
+        bom = {
+            "A": ("甲", "v1", False),
+        }
+        result = self._plan(records, bom)
+        result.bom_summary.missing_defaults = [("A", "甲")]
+
+        enqueued_payloads = []
+        with patch.object(self.module.notify_client, "enqueue", side_effect=enqueued_payloads.append):
+            self.module.send_feishu_alert(self.module.build_alert(result), result=result)
+
+        payload = enqueued_payloads[0]
+        self.assertEqual(payload["level"], "warn")
+        anomaly_segment = payload["segments"][2]
+        self.assertIn("⚠️ **缺失默认 BOM (1 个父件)：**", anomaly_segment["text"])
+        self.assertIn("• `A` ｜ 甲", anomaly_segment["text"])
+
+    def test_load_bom_asset_summary_parses_versions_and_missing_defaults(self) -> None:
+        fake_rows = [
+            # code, name, version, disabled, is_default
+            ("P1", "父件1", "v1", "0", "0"),
+            ("P1", "父件1", "v2", "0", "1"),  # P1 有启用默认
+            ("P2", "父件2", "v1", "0", "0"),  # P2 启用但没有默认
+            ("P3", "父件3", "v1", "1", "1"),  # P3 停用且默认（全部停用）
+        ]
+        class _FakeConn:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+            def cursor(self):
+                return self
+            def execute(self, sql):
+                pass
+            def fetchall(self):
+                return fake_rows
+
+        with patch.object(self.module, "connect", return_value=_FakeConn()):
+            summary = self.module.load_bom_asset_summary()
+
+        self.assertEqual(summary.total_parents, 3)
+        self.assertEqual(summary.total_versions, 4)
+        self.assertEqual(summary.enabled_versions, 3)
+        self.assertEqual(summary.disabled_versions, 1)
+        self.assertEqual(summary.missing_defaults, [("P2", "父件2")])
+
 
 if __name__ == "__main__":
     unittest.main()
