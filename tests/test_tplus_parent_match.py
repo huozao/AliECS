@@ -798,19 +798,82 @@ class TplusParentMatchTests(unittest.TestCase):
         self.assertEqual(payload["level"], "warn")
         self.assertIn("核对时间", payload["summary"])
 
-        # 检查 Scheme A 大盘指标 fields
+        # 检查 BOM 资产看板 2x2 指标 fields
         fields_dict = {f["name"]: f["value"] for f in payload["segments"][0]["fields"]}
-        self.assertEqual(fields_dict["总检查行数"], "3 行")
-        self.assertEqual(fields_dict["正常在产"], "1 行")
-        self.assertEqual(fields_dict["T+ 停用"], "1 行")
-        self.assertEqual(fields_dict["未维护编码"], "1 行")
+        self.assertEqual(fields_dict["父件物料总数"], "**2** 个")
+        self.assertEqual(fields_dict["BOM 版本总数"], "**2** 版")
+        self.assertIn("1", fields_dict["启用版本 (有效)"])
+        self.assertIn("1", fields_dict["停用版本 (封存)"])
 
-        # 检查正文段落包含 Markdown 格式且 preformatted 未被强制置 True
-        text_segment = payload["segments"][1]
-        self.assertEqual(text_segment["kind"], "text")
-        self.assertFalse(text_segment.get("preformatted", False))
-        self.assertIn("🚫 **T+ 新增停用 1 行（编码仍有效，禁止再投产）：**", text_segment["text"])
-        self.assertIn("• `B` ｜ 型号：**HYD-1836白**", text_segment["text"])
+        # 检查 note 说明
+        notes_dict = {f["name"]: f.get("note", "") for f in payload["segments"][0]["fields"]}
+        self.assertEqual(notes_dict["父件物料总数"], "T+ 已建清单物料")
+        self.assertEqual(notes_dict["BOM 版本总数"], "多版本清单累积")
+
+        # 检查车间对照引用区块
+        sheet_segment = payload["segments"][1]
+        self.assertEqual(sheet_segment["kind"], "text")
+        self.assertIn("车间色粉表对照 (配方执行)", sheet_segment["text"])
+        self.assertIn("现执行清单共 **3** 行", sheet_segment["text"])
+        self.assertIn("在产 <font color='green'>**1**</font> 行", sheet_segment["text"])
+        self.assertIn("停用 <font color='grey'>**1**</font> 行", sheet_segment["text"])
+        self.assertIn("待设编码 <font color='orange'>**1**</font> 行", sheet_segment["text"])
+
+        # 检查异常清单 Markdown 段落
+        anomaly_segment = payload["segments"][2]
+        self.assertEqual(anomaly_segment["kind"], "text")
+        self.assertFalse(anomaly_segment.get("preformatted", False))
+        self.assertIn("🚫 **T+ 新增停用 (1 行，禁止投产)：**", anomaly_segment["text"])
+        self.assertIn("• `B` ｜ 型号：**HYD-1836白**", anomaly_segment["text"])
+
+    def test_send_feishu_alert_reports_missing_default_bom(self) -> None:
+        records = [
+            {"record_id": "r1", "values": {"父件编码": _cells("A"), "父件名称": _cells("甲")}},
+        ]
+        bom = {
+            "A": ("甲", "v1", False),
+        }
+        result = self._plan(records, bom)
+        result.bom_summary.missing_defaults = [("A", "甲")]
+
+        enqueued_payloads = []
+        with patch.object(self.module.notify_client, "enqueue", side_effect=enqueued_payloads.append):
+            self.module.send_feishu_alert(self.module.build_alert(result), result=result)
+
+        payload = enqueued_payloads[0]
+        self.assertEqual(payload["level"], "warn")
+        anomaly_segment = payload["segments"][2]
+        self.assertIn("⚠️ **缺失默认 BOM (1 个父件)：**", anomaly_segment["text"])
+        self.assertIn("• `A` ｜ 甲", anomaly_segment["text"])
+
+    def test_load_bom_asset_summary_parses_versions_and_missing_defaults(self) -> None:
+        fake_rows = [
+            # code, name, version, disabled, is_default
+            ("P1", "父件1", "v1", "0", "0"),
+            ("P1", "父件1", "v2", "0", "1"),  # P1 有启用默认
+            ("P2", "父件2", "v1", "0", "0"),  # P2 启用但没有默认
+            ("P3", "父件3", "v1", "1", "1"),  # P3 停用且默认（全部停用）
+        ]
+        class _FakeConn:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+            def cursor(self):
+                return self
+            def execute(self, sql):
+                pass
+            def fetchall(self):
+                return fake_rows
+
+        with patch.object(self.module, "connect", return_value=_FakeConn()):
+            summary = self.module.load_bom_asset_summary()
+
+        self.assertEqual(summary.total_parents, 3)
+        self.assertEqual(summary.total_versions, 4)
+        self.assertEqual(summary.enabled_versions, 3)
+        self.assertEqual(summary.disabled_versions, 1)
+        self.assertEqual(summary.missing_defaults, [("P2", "父件2")])
 
 
 if __name__ == "__main__":

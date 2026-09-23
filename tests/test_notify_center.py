@@ -953,6 +953,69 @@ class CrossServiceContractTests(unittest.TestCase):
         self.assertIn("HYD-1836", anomaly_elem["content"])
         self.assertIn("HYD-1836白", anomaly_elem["content"])
 
+    def test_parent_match_bom_asset_dashboard_card_renders_feishu_card(self) -> None:
+        """测试 T+ 物料清单资产看板卡片：4 大核心 BOM 指标带小字 note、车间色粉表对照引用块与缺失默认 BOM 告警。"""
+        worker = self._load_worker_client()
+        payload = worker.build_payload(
+            source="tplus",
+            event="parent_match",
+            level="warn",
+            title="【色粉使用记录表 · T+ 物料清单核对】",
+            summary="核对时间 2026-09-23 13:00",
+            fields=[
+                ("父件物料总数", "**1,245** 个", "T+ 已建清单物料"),
+                ("BOM 版本总数", "**1,820** 版", "多版本清单累积"),
+                ("启用版本 (有效)", "<font color='green'>**1,700**</font> 版", "现行生产配方"),
+                ("停用版本 (封存)", "<font color='grey'>**120**</font> 版", "历史配方归档"),
+            ],
+            text_segments=[
+                "> 📋 **车间色粉表对照 (配方执行)：**\n"
+                "> 现执行清单共 **334** 行（在产 <font color='green'>**296**</font> 行 / 停用 <font color='grey'>**1**</font> 行 / 待设编码 <font color='orange'>**37**</font> 行）",
+                "⚠️ **缺失默认 BOM (2 个父件)：**\n"
+                "<font color='orange'>以下父件有启用版本，但未在 T+ 勾选「默认BOM」，MRP / 派工将无法自动匹配配方：</font>\n"
+                "• `06.01.0023` ｜ 珍珠白母粒\n"
+                "• `06.01.0045` ｜ 哑黑高浓度色粉",
+            ],
+        )
+        notification = Notification.model_validate(payload)
+        card = feishu.build_card(notification, {})
+
+        self.assertEqual(card["schema"], "2.0")
+        self.assertEqual(card["header"]["template"], "yellow")
+        self.assertIn("【色粉使用记录表 · T+ 物料清单核对】", card["header"]["title"]["content"])
+
+        elements = card["body"]["elements"]
+        self.assertEqual(elements[0]["tag"], "markdown")
+        self.assertIn("核对时间 2026-09-23 13:00", elements[0]["content"])
+
+        # 验证 2x2 bisect column_set 及 note 渲染
+        column_sets = [elem for elem in elements if elem.get("tag") == "column_set"]
+        self.assertEqual(len(column_sets), 2)
+        row1_cols = column_sets[0]["columns"]
+        self.assertIn("父件物料总数", row1_cols[0]["elements"][0]["content"])
+        self.assertIn("1,245", row1_cols[0]["elements"][0]["content"])
+        self.assertEqual(row1_cols[0]["elements"][1]["content"], "T+ 已建清单物料")
+        self.assertEqual(row1_cols[0]["elements"][1]["text_size"], "notation")
+
+        self.assertIn("BOM 版本总数", row1_cols[1]["elements"][0]["content"])
+        self.assertIn("1,820", row1_cols[1]["elements"][0]["content"])
+
+        row2_cols = column_sets[1]["columns"]
+        self.assertIn("启用版本 (有效)", row2_cols[0]["elements"][0]["content"])
+        self.assertIn("停用版本 (封存)", row2_cols[1]["elements"][0]["content"])
+
+        # 验证车间对照 callout 引用段
+        sheet_elem = elements[3]
+        self.assertEqual(sheet_elem["tag"], "markdown")
+        self.assertIn("车间色粉表对照 (配方执行)", sheet_elem["content"])
+        self.assertIn("现执行清单共 **334** 行", sheet_elem["content"])
+
+        # 验证缺失默认 BOM 异常段
+        anomaly_elem = elements[4]
+        self.assertEqual(anomaly_elem["tag"], "markdown")
+        self.assertIn("缺失默认 BOM (2 个父件)", anomaly_elem["content"])
+        self.assertIn("06.01.0023", anomaly_elem["content"])
+
     def test_worker_dedup_key_is_stable_for_identical_content(self) -> None:
         worker = self._load_worker_client()
         first = worker.build_payload(source="doc-sync", event="e", title="t", summary="s")
