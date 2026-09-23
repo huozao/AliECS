@@ -383,6 +383,27 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
         self.assertIn("/formula/colors/", sql)
         self.assertIn("formula.read", sql)
 
+    def test_image_color_picker_workbench_contract(self) -> None:
+        """图片配色工作台：拍照/上传、放大镜、大色块双拼比对、取样半径调节与算法微调。"""
+        self.assertIn('id="topbarPickerBtn"', self.html)
+        self.assertIn('id="cardPickerBtn"', self.html)
+        self.assertIn('id="pickerModal"', self.html)
+        self.assertIn('id="imageCanvas"', self.html)
+        self.assertIn('id="reticle"', self.html)
+        self.assertIn('id="loupe"', self.html)
+        self.assertIn('id="loupeCanvas"', self.html)
+        self.assertIn('id="cropCanvas"', self.html)
+        self.assertIn('id="pureSwatch"', self.html)
+        self.assertIn('id="swatchContainer"', self.html)
+        self.assertIn('id="radiusSlider"', self.html)
+        self.assertIn('id="previewMatches"', self.html)
+        for algo in ("trim-glare", "trim-shadow", "average", "median"):
+            self.assertIn(f'value="{algo}"', self.html)
+        for sample in ("red", "green", "yellow"):
+            self.assertIn(f'data-sample="{sample}"', self.html)
+        self.assertIn("function updateSamplingColor", self.html)
+        self.assertIn("locateTarget([l,a,b])", self.html)
+
 
 if __name__ == "__main__":
     unittest.main()
