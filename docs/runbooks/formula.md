@@ -62,8 +62,30 @@ chrome --headless --disable-gpu --window-size=1600,1000 \
 
 读回 `data-probe` 即可。**探针文件用完必须删掉**，别提交进仓库。
 
+## 标准型号色彩空间与图片拍照取色（/formula/colors/）
+
+入口：`/formula/colors/`。代码单文件位于 `services/public-web/formula/colors/index.html`，设计详见 [`docs/superpowers/specs/2026-09-23-formula-colors-image-picker-design.md`](../superpowers/specs/2026-09-23-formula-colors-image-picker-design.md)。
+
+- **图片取色工作台（`#pickerModal`）**：支持手机相机拍照直传、本地相册、拖拽与剪贴板 `Ctrl+V`；同时内置 3 块经典塑胶样板预设（红光面、绿咬花、黄哑面）便于无图时快速体验。
+- **手势与防遮挡放大镜**：单指/鼠标拖动准星定位，双指捏合/滚轮无级缩放全图；触控时上方自动浮现 **$4\times$ 悬浮圆形放大镜（`#loupe`）**，彻底消除移动端手指遮挡取样圆圈的痛点。
+- **1:1 双拼大色块比对（肉眼校色核心）**：
+  - 左半边：直接截取准星下的原图高倍微观实况（保留光泽、颗粒纹理）；
+  - 右半边：展示算法提取出的配方目标纯色；
+  - 配备 **⚪ 白底 / 🔘 50% 中性灰（D65 推荐） / ⚫ 黑底** 切换，消除环境对比错觉。
+- **实物材质滤波算法（4 种模式）**：
+  - `trim-glare`（光面塑料首选 ⭐）：截除前 15% 最亮高光耀斑像素，防止提取色泛白；
+  - `trim-shadow`（皮纹/咬花首选）：截除后 15% 最暗凹陷阴影像素，防止提取色偏暗偏脏；
+  - `average`（平整哑光表面）：物理线性 RGB 均匀积分；
+  - `median`（抗噪点/杂质）：取亮度中位数稳态色。
+  - ⚠️ **色彩学踩坑**：像素平均必须在**物理线性 RGB 空间**进行（先去 Gamma 后平均），若直接在 sRGB 字节上取代数平均会导致提取出来的颜色明度 $L^*$ 显著偏暗。
+- **系统查找闭环**：准星移动时毫秒级预演 Top 3 近邻型号（含 `✅容差内` 标签）；点击应用自动回填主界面的 `#targetL`、`#targetA`、`#targetB` 并调用 `locateTarget`，在三维空间中高亮定位并拉出引线。
+- **前端契约验证**：
+  ```bash
+  python3 -m unittest tests/test_formula_color_space_frontend.py
+  ```
+
 ## 热更新
 
-`public-web` 是 nginx 静态，`docker cp` 进 `business-cn-public-web-1:/usr/share/nginx/html/formula/` 即生效，不用重启；改了 `backend-api` 的 Python 才需要 `docker restart business-cn-backend-api-1`。当前生产在 txecs，路径与容器名见 `docs/fleet.md`。热补丁必须回灌 Git。
+`public-web` 是 nginx 静态；热更新前从 [fleet](../fleet.md) 核对目标和容器，从 [deploy](deploy.md) 读取发布、重建与回灌要求。操作须在用户授权范围内；涉及共享脚本时同时发布依赖。
 
 自证判据要**双向**：新判据命中数 > 0 **且**旧判据反证 = 0，同时打印 `%{http_code}` 和 `size_download`——只看一个计数分不清"没生效"和"没测到"。服务端自证只能证明"我返回了什么"，用户看到什么另说：让人验证前第一句写「用无痕窗口打开」。

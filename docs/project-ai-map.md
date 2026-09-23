@@ -83,10 +83,11 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 ⚠️ `compare-core.js` 是微信小程序共享模块的权威源，改完要在 weapp 仓跑 `sync-shared.mjs`。
 `formula/colors/` 是标准型号色彩空间（three.js + camera-controls，数据走 `/v1/formula/colors`，
 需登录且有 `formula.read`）；`mock-data.js` 是默认隐藏的参考示例，惰性加载。视图设置已从画布浮层移到顶部 `#settingsPanel`；色点标签由 `rebuildLabels()` / `syncLabels()` 的 DOM 层渲染，偏好存 `localStorage['aliecs_formula_colors_view_prefs']`。
+已集成图片取色工作台（`#pickerModal`，支持拍照/上传、防手指遮挡放大镜、1:1 双拼大色块对比、4 种实物材料滤波算法与近邻三维查找联动，设计详见 [`docs/superpowers/specs/2026-09-23-formula-colors-image-picker-design.md`](superpowers/specs/2026-09-23-formula-colors-image-picker-design.md)）。
 「刷新数据」按钮走 `POST /v1/formula/colors/refresh` 入队 `sync_requests` 后轮询 `meta.last_sync_at`（死线 180s）——
 它**只重拉企微表**，页面上的父件名称/匹配状态来自 T+ 两张表，不在这条链路上。页内所有请求都经 `api(path, options)`，
 第二个参数会展开进 `fetch` 的 init；漏掉它会把 POST 悄悄降级成 GET。
-生产热更新可 `docker cp`；HTML 已加 no-cache 头。验证：JS 语法检查 + 浏览器 smoke。
+生产热更新可 `docker cp`；HTML 已加 no-cache 头。验证：`python -m unittest tests/test_formula_color_space_frontend.py` + 浏览器 smoke。
 
 ⚠️ `exports/` 与 `sync/` 引用共享资产 `common/admin.css` + `common/admin-auth.js`；旧 `tplus-sync/` 仅保留重定向兜底页
 （后者导出 `window.AliECSAdmin`，页面内联脚本第一条语句就解构它）。**热更新必须成对拷贝**：
