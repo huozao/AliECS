@@ -437,6 +437,21 @@ ssh txecs "docker exec business-cn-doc-sync-worker-1 \
 - `sync_job_steps` 走 `ON DELETE CASCADE` 一起清；`sync_job_alerts.run_id` 是
   `ON DELETE SET NULL`，告警本身不受影响。
 
+## T+ 物料清单核对与产品标准目录看板（2026-09-23）
+
+`services/doc-sync-worker/app/pipelines/tplus_parent_match.py` 负责将 T+ 的 BOM 数据与企微表格进行比对与维护：
+- **业务定位**：企微「色粉使用记录表 / 标准型号0117」不是车间生产表，而是**产品标准目录**（维护产品标准参数如 Lab 值、规格型号）。核对状态分为「在用标准」、「T+已停用」和「待设编码」。
+- **事件驱动链路**：T+ 发生 BOM 审核/启用/停用等操作时，通过 Webhook 推送至 `POST /v1/webhooks/chanjet`，排队写入 `integration_sync_requests(module='bom')`；`tplus-sync-worker` 拉取落库 `tplus_bom_records` 并在 `integration_sync_runs` 记录成功；`doc-sync-worker` 水位监控（`run_backfill_if_bom_synced`）检测到时间戳抬升后自动触发 `run_tplus_parent_match(trigger="event")`。
+- **飞书卡片架构（方案 A 资产看板）**：
+  1. **2×2 双列指标看板（JSON 2.0 Bisect Grid）**：父件物料总数、BOM 版本总数、启用版本 (有效) 与停用版本 (封存)。附带 notation 小字说明；严格满足数学闭环：`启用版本 + 停用版本 = BOM 版本总数`。
+  2. **产品标准目录对照（引用区块）**：`> 📋 **产品标准目录对照：**` 单独展示目录收录行数（在用标准 / T+已停用 / 待设编码），与 T+ 资产数字分层。
+  3. **待处理事项列表**：
+     - `⚠️ **缺失默认 BOM**`：全量扫描有启用版本但未设 `IsDefaultBom` 的父件，作为高优先级异常单独抓出，提示在 T+ 补设默认；
+     - `🚫 **T+ 新增停用**`：T+ 档案已标记停用，标准规格同步标记停用；
+     - `⛔ **编码失联**`：目录中填写的编码在 T+ 均已不存在，需人工确认（**失联只标状态，绝不自动改编码**）；
+     - `🔄 **名称已按 T+ 更新**`、`🆕 **按 T+ 补建行**`、`❌ **写入失败**`。
+  4. **交互约束**：消息发往飞书群，卡片中绝不添加企微文档跳转链接或按钮。
+
 <!-- 本文点名的符号，改名时本文必须同批更新；校验器会拦 -->
 <!-- nav-check-python: services/doc-sync-worker/app/pipelines/rnd_record_writer.py:build_node_row_values -->
 <!-- nav-check-python: services/doc-sync-worker/app/pipelines/document_locator_mirror.py:write_locator_mirror -->
@@ -446,3 +461,4 @@ ssh txecs "docker exec business-cn-doc-sync-worker-1 \
 <!-- nav-check-python: services/backend-api/app/sync_control.py:manual_triggerable -->
 <!-- nav-check-python: services/tplus-sync-worker/src/tplus_datahub/jobs/db_sync_requests.py:finish_bom_request -->
 <!-- nav-check-python: services/tplus-sync-worker/src/tplus_datahub/jobs/sync_state.py:record_tplus_sync_run_if_configured -->
+<!-- nav-check-python: services/doc-sync-worker/app/pipelines/tplus_parent_match.py:run_tplus_parent_match -->
