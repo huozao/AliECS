@@ -346,7 +346,7 @@ def build_alert(result: MatchResult) -> str:
         f"【{SOURCE_DOCUMENT} · T+ 物料清单核对】",
         f"核对时间 {result.checked_at}",
         f"【T+ BOM 资产】父件物料 {result.bom_summary.total_parents} 个，BOM 版本 {result.bom_summary.total_versions} 版（启用 {result.bom_summary.enabled_versions} / 停用 {result.bom_summary.disabled_versions}）。",
-        f"共 {result.total} 行，其中有父件编码 {result.with_code} 行（正常在产 {result.active} 行）；无编码 {result.no_code} 行。",
+        f"共 {result.total} 行，其中有父件编码 {result.with_code} 行（在用标准 {result.active} 行）；无编码 {result.no_code} 行。",
     ]
     if result.bom_summary.missing_defaults:
         lines.append(f"⚠️ 缺失默认 BOM {len(result.bom_summary.missing_defaults)} 个父件（有启用版本但未设默认 BOM）：")
@@ -423,14 +423,14 @@ def send_feishu_alert(text: str, result: MatchResult | None = None) -> bool:
         fields = [
             ("父件物料总数", f"**{bs.total_parents}** 个", "T+ 已建清单物料"),
             ("BOM 版本总数", f"**{bs.total_versions}** 版", "多版本清单累积"),
-            ("启用版本 (有效)", f"<font color='green'>**{bs.enabled_versions}**</font> 版", "现行生产配方"),
-            ("停用版本 (封存)", f"<font color='grey'>**{bs.disabled_versions}**</font> 版", "历史配方归档"),
+            ("启用版本 (有效)", f"<font color='green'>**{bs.enabled_versions}**</font> 版", "现行有效版本"),
+            ("停用版本 (封存)", f"<font color='grey'>**{bs.disabled_versions}**</font> 版", "历史版本归档"),
         ]
 
-        # 企微车间执行表对照
+        # 产品标准目录对照
         sheet_lines = [
-            "> 📋 **车间色粉表对照 (配方执行)：**",
-            f"> 现执行清单共 **{result.total}** 行（在产 <font color='green'>**{result.active}**</font> 行 / 停用 <font color='grey'>**{result.total_disabled}**</font> 行 / 待设编码 <font color='orange'>**{result.no_code}**</font> 行）",
+            "> 📋 **产品标准目录对照：**",
+            f"> 目录现维护 **{result.total}** 行（在用标准 <font color='green'>**{result.active}**</font> 行 / T+已停用 <font color='grey'>**{result.total_disabled}**</font> 行 / 待设编码 <font color='orange'>**{result.no_code}**</font> 行）",
         ]
         if result.created_fields:
             sheet_lines.append(f"> 🆕 已补全字段列：{'、'.join(result.created_fields)}")
@@ -448,11 +448,11 @@ def send_feishu_alert(text: str, result: MatchResult | None = None) -> bool:
                 anomaly_lines.append(f"…另有 {len(bs.missing_defaults) - 20} 个父件待维护")
 
         if result.disabled:
-            anomaly_lines.append(f"🚫 **T+ 新增停用 ({len(result.disabled)} 行，禁止投产)：**")
+            anomaly_lines.append(f"🚫 **T+ 新增停用 ({len(result.disabled)} 行)：**")
             for code, model in result.disabled[:20]:
                 anomaly_lines.append(
                     f"• `{code}` ｜ 型号：**{model or '-'}**\n"
-                    "  <font color='grey'>↳ 说明：T+ 档案已标记停用，车间请停止领料投产。</font>"
+                    "  <font color='grey'>↳ 说明：T+ 档案已标记停用，该标准规格已同步标记停用。</font>"
                 )
             if len(result.disabled) > 20:
                 anomaly_lines.append(f"…另有 {len(result.disabled) - 20} 行")

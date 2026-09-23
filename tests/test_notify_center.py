@@ -954,7 +954,7 @@ class CrossServiceContractTests(unittest.TestCase):
         self.assertIn("HYD-1836白", anomaly_elem["content"])
 
     def test_parent_match_bom_asset_dashboard_card_renders_feishu_card(self) -> None:
-        """测试 T+ 物料清单资产看板卡片：4 大核心 BOM 指标带小字 note、车间色粉表对照引用块与缺失默认 BOM 告警。"""
+        """测试 T+ 物料清单资产看板卡片：4 大核心 BOM 指标带小字 note、产品标准目录对照引用块与缺失默认 BOM 告警。"""
         worker = self._load_worker_client()
         payload = worker.build_payload(
             source="tplus",
@@ -965,12 +965,12 @@ class CrossServiceContractTests(unittest.TestCase):
             fields=[
                 ("父件物料总数", "**1,245** 个", "T+ 已建清单物料"),
                 ("BOM 版本总数", "**1,820** 版", "多版本清单累积"),
-                ("启用版本 (有效)", "<font color='green'>**1,700**</font> 版", "现行生产配方"),
-                ("停用版本 (封存)", "<font color='grey'>**120**</font> 版", "历史配方归档"),
+                ("启用版本 (有效)", "<font color='green'>**1,700**</font> 版", "现行有效版本"),
+                ("停用版本 (封存)", "<font color='grey'>**120**</font> 版", "历史版本归档"),
             ],
             text_segments=[
-                "> 📋 **车间色粉表对照 (配方执行)：**\n"
-                "> 现执行清单共 **334** 行（在产 <font color='green'>**296**</font> 行 / 停用 <font color='grey'>**1**</font> 行 / 待设编码 <font color='orange'>**37**</font> 行）",
+                "> 📋 **产品标准目录对照：**\n"
+                "> 目录现维护 **334** 行（在用标准 <font color='green'>**296**</font> 行 / T+已停用 <font color='grey'>**1**</font> 行 / 待设编码 <font color='orange'>**37**</font> 行）",
                 "⚠️ **缺失默认 BOM (2 个父件)：**\n"
                 "<font color='orange'>以下父件有启用版本，但未在 T+ 勾选「默认BOM」，MRP / 派工将无法自动匹配配方：</font>\n"
                 "• `06.01.0023` ｜ 珍珠白母粒\n"
@@ -1002,13 +1002,15 @@ class CrossServiceContractTests(unittest.TestCase):
 
         row2_cols = column_sets[1]["columns"]
         self.assertIn("启用版本 (有效)", row2_cols[0]["elements"][0]["content"])
+        self.assertEqual(row2_cols[0]["elements"][1]["content"], "现行有效版本")
         self.assertIn("停用版本 (封存)", row2_cols[1]["elements"][0]["content"])
+        self.assertEqual(row2_cols[1]["elements"][1]["content"], "历史版本归档")
 
-        # 验证车间对照 callout 引用段
+        # 验证产品标准目录对照 callout 引用段
         sheet_elem = elements[3]
         self.assertEqual(sheet_elem["tag"], "markdown")
-        self.assertIn("车间色粉表对照 (配方执行)", sheet_elem["content"])
-        self.assertIn("现执行清单共 **334** 行", sheet_elem["content"])
+        self.assertIn("产品标准目录对照", sheet_elem["content"])
+        self.assertIn("目录现维护 **334** 行", sheet_elem["content"])
 
         # 验证缺失默认 BOM 异常段
         anomaly_elem = elements[4]

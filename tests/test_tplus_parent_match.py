@@ -773,7 +773,7 @@ class TplusParentMatchTests(unittest.TestCase):
         }
         result = self._plan(records, bom)
         text = self.module.build_alert(result)
-        self.assertIn("共 3 行，其中有父件编码 2 行（正常在产 1 行）；无编码 1 行。", text)
+        self.assertIn("共 3 行，其中有父件编码 2 行（在用标准 1 行）；无编码 1 行。", text)
         self.assertIn("T+ 新增停用 1 行", text)
 
     def test_send_feishu_alert_builds_scheme_a_dashboard_card(self) -> None:
@@ -809,21 +809,23 @@ class TplusParentMatchTests(unittest.TestCase):
         notes_dict = {f["name"]: f.get("note", "") for f in payload["segments"][0]["fields"]}
         self.assertEqual(notes_dict["父件物料总数"], "T+ 已建清单物料")
         self.assertEqual(notes_dict["BOM 版本总数"], "多版本清单累积")
+        self.assertEqual(notes_dict["启用版本 (有效)"], "现行有效版本")
+        self.assertEqual(notes_dict["停用版本 (封存)"], "历史版本归档")
 
-        # 检查车间对照引用区块
+        # 检查产品标准目录对照引用区块
         sheet_segment = payload["segments"][1]
         self.assertEqual(sheet_segment["kind"], "text")
-        self.assertIn("车间色粉表对照 (配方执行)", sheet_segment["text"])
-        self.assertIn("现执行清单共 **3** 行", sheet_segment["text"])
-        self.assertIn("在产 <font color='green'>**1**</font> 行", sheet_segment["text"])
-        self.assertIn("停用 <font color='grey'>**1**</font> 行", sheet_segment["text"])
+        self.assertIn("产品标准目录对照", sheet_segment["text"])
+        self.assertIn("目录现维护 **3** 行", sheet_segment["text"])
+        self.assertIn("在用标准 <font color='green'>**1**</font> 行", sheet_segment["text"])
+        self.assertIn("T+已停用 <font color='grey'>**1**</font> 行", sheet_segment["text"])
         self.assertIn("待设编码 <font color='orange'>**1**</font> 行", sheet_segment["text"])
 
         # 检查异常清单 Markdown 段落
         anomaly_segment = payload["segments"][2]
         self.assertEqual(anomaly_segment["kind"], "text")
         self.assertFalse(anomaly_segment.get("preformatted", False))
-        self.assertIn("🚫 **T+ 新增停用 (1 行，禁止投产)：**", anomaly_segment["text"])
+        self.assertIn("🚫 **T+ 新增停用 (1 行)：**", anomaly_segment["text"])
         self.assertIn("• `B` ｜ 型号：**HYD-1836白**", anomaly_segment["text"])
 
     def test_send_feishu_alert_reports_missing_default_bom(self) -> None:
