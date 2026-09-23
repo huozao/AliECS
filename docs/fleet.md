@@ -20,6 +20,7 @@
 | `txecs` | 当前生产唯一写端 / business-cn 主栈 / 公网中心边界 | 腾讯云轻量 / Ubuntu 24.04，4C4G | `ssh txecs`（ubuntu@106.52.51.67） | 主站、PostgreSQL、SSO、OpenClaw、bridge、worker、nginx |
 | `webdock1` | webdock 算力节点（**当前备用**） | 旧 Ubuntu 笔记本 | `ssh webdock1`（Tailscale 100.97.176.57） | webdock 镜像 + 第三方自托管服务 |
 | `webdock2` | webdock 算力节点（**当前主力**）+ gold 归档/备份边界 | 新台式机 Windows 11 + WSL2 | `ssh webdock2`（Tailscale 100.67.38.52） | webdock 镜像；**`D:\gold-spread-monitor` 由 GitHub Actions 自动部署**，见下节 |
+| `nina` | 受控便携笔记本 / 移动终端 | 笔记本 Windows 11 24H2 | `ssh nina`（Tailscale 100.122.244.79） | 专属 Ed25519 鉴权；运维与避坑见 `ai-general/docs/runbooks/windows-device-provisioning-and-control.md` |
 
 ### gold-spread-monitor 的部署位置（2026-09-23 实测补记）
 
@@ -415,6 +416,13 @@ GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会�
   `infra/config/devices/devbox.env`（换 console 边界只改这里两行）。
 - 低延迟捷径：tailnet 内可原生 VNC 直连 `100.116.248.82:5900`，不经公网与域名。
 - 验证：`pwsh -File infra/roles/devbox/windows-native/apply.ps1 -CheckOnly`。
+
+### nina（受控便携笔记本）
+
+- 别名：`laptop-nina`、`LAPTOP-CTB16G4C`。Windows 11 24H2，用户 `nina`。
+- 入口：`ssh nina`（`100.122.244.79`，私钥 `~/.ssh/devbox_admin` 与 `~/.ssh/id_ed25519`）。
+- 架构约束：严禁随意启动 Windows SCM `sshd` 服务（24H2 调度必报 1067），常驻依赖用户启动目录 `Start-SSH.vbs` 与计划任务 `OpenSSHDaemon`；接通电源策略为从不休眠（`STANDBYIDLE=0`）。
+- 权威手册：[`ai-general/docs/runbooks/windows-device-provisioning-and-control.md`](../../ai-general/docs/runbooks/windows-device-provisioning-and-control.md)。
 
 ## 仓库 ↔ 设备映射
 
