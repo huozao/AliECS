@@ -13,6 +13,26 @@
     .detail-card{padding:16px;overflow:auto}.detail-card h2{margin:0 0 5px;font-size:20px}.detail-empty{color:var(--muted);padding:36px 6px;text-align:center}.swatch{height:94px;border-radius:13px;border:1px solid rgba(0,0,0,.12);margin:12px 0;position:relative;overflow:hidden}.swatch span{position:absolute;right:8px;bottom:7px;padding:3px 7px;border-radius:7px;background:rgba(255,255,255,.82);font:12px ui-monospace,monospace;color:#222}.info{display:grid;gap:7px;padding:12px 0;border-top:1px solid var(--line)}.info-row{display:grid;grid-template-columns:92px minmax(0,1fr) 24px;gap:8px;align-items:start}.info dt{color:var(--muted)}.info dd{margin:0;font-weight:720;word-break:break-word}.field-toggle{display:grid;place-items:center;width:24px;height:24px;cursor:pointer}.field-toggle input{width:16px;height:16px;margin:0;accent-color:var(--primary)}.triplet{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.warning{display:none;padding:9px 10px;border-radius:9px;background:#fff3e5;color:#9a4e05;margin:9px 0}.detail-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
     .coverage{margin-top:14px;padding:12px;border:1px solid var(--line);border-radius:11px;background:#fbf7f0}.coverage h3{margin:0 0 5px}.coverage p{margin:0;color:var(--muted);font-size:12px}.nearest{margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}.nearest h3{margin:0 0 8px}.nearest-inputs{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.nearest-inputs input{width:100%;height:36px;border:1px solid var(--line);border-radius:8px;padding:0 8px}.nearest>button{width:100%;margin-top:8px}.nearest-results{display:grid;gap:7px;margin-top:10px}.neighbor{display:grid;grid-template-columns:25px 1fr auto;align-items:center;gap:7px;width:100%;text-align:left;padding:8px;border:1px solid var(--line);border-radius:9px;background:#fff;font-weight:650}.neighbor:hover{border-color:#b99b76;background:#fffaf2}.neighbor-rank{display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:#eee4d7;color:#5f4932;font-size:12px}.neighbor small{display:block;color:var(--muted);font-weight:500}.neighbor-de{font-family:ui-monospace,monospace;color:#8d4e2c}.legend{display:flex;gap:12px;flex-wrap:wrap;padding:10px 18px;color:var(--muted);background:rgba(255,253,249,.8);border-top:1px solid var(--line)}.legend span{display:flex;align-items:center;gap:5px}.dot{width:10px;height:10px;border-radius:50%;background:#8b6b47}.dot.reference{width:8px;height:8px;background:linear-gradient(135deg,#e85d5d,#e9ce69,#66a9df);opacity:.55}.dot.target{border-radius:2px;transform:rotate(45deg);background:#fff;border:2px solid #222}.dot.hollow{background:#fff;border:2px solid #8b6b47}.diamond{width:9px;height:9px;background:#fff;transform:rotate(45deg);border:2px solid #5f6670}
     @media(max-width:1000px){.toolbar{grid-template-columns:repeat(4,minmax(0,1fr))}.mode-row{grid-column:1/-1}.workspace{grid-template-columns:1fr}.stage-card{min-height:560px}.detail-card{max-height:none}}@media(max-width:620px){.topbar{align-items:flex-start;flex-direction:column}.toolbar{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 7px;padding:8px}.mode-row{grid-column:1/-1}.workspace{padding:8px}.stage-card{min-height:600px}.detail-actions{grid-template-columns:1fr}.stage-overlay{left:8px;right:8px;top:8px}.metric-row{gap:3px}.metric{flex:1;justify-content:center;padding:4px 3px;font-size:10px}.metric b{font-size:14px}.reference-controls label{flex:1;min-width:115px}.reference-controls select{width:100%;min-width:0}.reference-controls input{width:100%}.reference-controls .slice-switch input{width:16px;flex:0 0 16px}.settings-panel{gap:9px;padding:8px}.settings-group{width:100%}}
+    .modal-backdrop{position:fixed;inset:0;z-index:1000;background:rgba(30,26,22,.65);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;padding:16px;opacity:0;pointer-events:none;transition:opacity .2s}.modal-backdrop.active{opacity:1;pointer-events:auto}
+    .modal-dialog{width:100%;max-width:1120px;height:90vh;max-height:760px;background:#fffdfa;border:1px solid var(--line);border-radius:18px;box-shadow:0 24px 60px rgba(0,0,0,.35);display:flex;flex-direction:column;overflow:hidden;animation:popIn .24s cubic-bezier(0.16,1,0.3,1)}@keyframes popIn{from{transform:scale(.97) translateY(8px);opacity:0}to{transform:scale(1) translateY(0);opacity:1}}
+    .modal-header{padding:13px 18px;border-bottom:1px solid var(--line);background:#faf6f0;display:flex;align-items:center;justify-content:space-between;gap:12px}.modal-header h2{margin:0;font-size:17px;display:flex;align-items:center;gap:8px}
+    .modal-close{width:30px;height:30px;border-radius:8px;border:1px solid var(--line);background:#fff;cursor:pointer;font-size:15px;display:grid;place-items:center;color:var(--muted)}.modal-close:hover{background:#f5eee4;color:var(--text)}
+    .modal-body{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1.4fr) minmax(360px,1fr)}.viewport-panel{position:relative;background:#221f1c;display:flex;flex-direction:column;user-select:none;overflow:hidden}.viewport-canvas-container{flex:1;position:relative;overflow:hidden;cursor:crosshair;touch-action:none}
+    #imageCanvas{position:absolute;left:0;top:0;transform-origin:0 0}
+    .reticle{position:absolute;pointer-events:none;transform:translate(-50%,-50%);border:2px solid #fff;border-radius:50%;box-shadow:0 0 0 1px rgba(0,0,0,.7),inset 0 0 0 1px rgba(0,0,0,.7);z-index:20}.reticle::before,.reticle::after{content:'';position:absolute;background:#fff;box-shadow:0 0 2px #000}.reticle::before{left:50%;top:-8px;bottom:-8px;width:1.5px;transform:translateX(-50%)}.reticle::after{top:50%;left:-8px;right:-8px;height:1.5px;transform:translateY(-50%)}
+    .loupe{position:absolute;width:110px;height:110px;border-radius:50%;border:3px solid #fff;box-shadow:0 10px 24px rgba(0,0,0,.55);pointer-events:none;overflow:hidden;z-index:30;background:#000;transform:translate(-50%,-140px);display:none}.loupe canvas{width:100%;height:100%;image-rendering:pixelated}.loupe-cross{position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle,transparent 18px,rgba(0,0,0,.25) 19px)}.loupe-cross::before,.loupe-cross::after{content:'';position:absolute;background:rgba(255,255,255,.85)}.loupe-cross::before{left:50%;top:0;bottom:0;width:1px;transform:translateX(-50%)}.loupe-cross::after{top:50%;left:0;right:0;height:1px;transform:translateY(-50%)}
+    .viewport-toolbar{padding:7px 12px;background:rgba(18,15,13,.88);backdrop-filter:blur(6px);display:flex;justify-content:space-between;align-items:center;gap:8px;z-index:10}.tool-btn{padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.1);color:#fff;font-size:12px;cursor:pointer}.tool-btn:hover{background:rgba(255,255,255,.22)}.scale-text{color:rgba(255,255,255,.7);font-size:12px;font-family:monospace;min-width:44px;text-align:center}
+    .upload-guide{position:absolute;inset:0;background:#faf7f2;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;z-index:50}.upload-guide.hidden{display:none}.upload-dropzone{width:100%;max-width:420px;border:2px dashed var(--line);border-radius:14px;padding:24px 18px;background:#fff;display:flex;flex-direction:column;align-items:center;gap:10px;cursor:pointer;transition:border-color .15s}.upload-dropzone:hover,.upload-dropzone.dragover{border-color:var(--primary);background:#fefdfa}
+    .sample-buttons{margin-top:14px;display:flex;flex-direction:column;gap:8px;width:100%;max-width:420px}.sample-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.sample-pill{padding:6px;border:1px solid var(--line);border-radius:8px;background:#fff;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px}.sample-pill:hover{border-color:var(--primary);background:#faf6f0}.sample-dot{width:11px;height:11px;border-radius:50%;border:1px solid rgba(0,0,0,.15)}
+    .control-panel{padding:14px;background:#fffdfa;border-left:1px solid var(--line);display:flex;flex-direction:column;gap:12px;overflow-y:auto}.panel-block{border:1px solid var(--line);border-radius:12px;padding:11px;background:#fdfaf6}.block-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}.block-title{font-size:12.5px;font-weight:750;color:var(--text)}
+    .swatch-compare-container{position:relative;border-radius:12px;overflow:hidden;border:1px solid rgba(0,0,0,.15);height:110px;box-shadow:0 4px 14px rgba(0,0,0,.08);transition:background .15s}.swatch-split{display:flex;height:100%;width:100%}.swatch-half{flex:1;position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;padding:6px 10px}.swatch-half-label{position:relative;z-index:2;font-size:11px;font-weight:700;padding:2px 6px;border-radius:4px;width:max-content;background:rgba(0,0,0,.45);color:#fff;backdrop-filter:blur(4px)}.swatch-left canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.swatch-right{background:#a85858;transition:background .08s}.swatch-divider{width:2px;background:#fff;box-shadow:0 0 6px rgba(0,0,0,.6);position:relative;z-index:5}
+    .bg-switch{display:flex;gap:4px}.bg-btn{width:20px;height:20px;border-radius:4px;border:1px solid var(--line);cursor:pointer;display:grid;place-items:center;font-size:10px;padding:0}.bg-btn.white{background:#fff}.bg-btn.gray{background:#808080;border-color:#666}.bg-btn.black{background:#1a1a1a;border-color:#000}.bg-btn.active{outline:2px solid var(--primary);outline-offset:1px}
+    .color-values-row{margin-top:9px;display:flex;justify-content:space-between;align-items:baseline;padding-top:7px;border-top:1px solid rgba(0,0,0,.06)}.lab-readout-main{font-family:ui-monospace,monospace;font-size:14px;font-weight:750;color:#201a14}.lab-readout-main span{color:var(--muted);font-size:11px;margin-right:2px}.rgb-hex-readout{font-family:ui-monospace,monospace;font-size:12px;color:var(--muted)}
+    .radius-row{display:flex;align-items:center;gap:8px}.radius-slider{flex:1;accent-color:var(--primary)}.radius-value{font-family:monospace;font-size:12px;font-weight:700;width:40px;text-align:right}.quick-radii{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-top:7px}.btn-radius-preset{padding:4px;border:1px solid var(--line);border-radius:6px;background:#fff;font-size:11px;cursor:pointer;text-align:center}.btn-radius-preset:hover,.btn-radius-preset.active{border-color:var(--primary);background:#f7eee2;color:#4e3922;font-weight:700}
+    .algo-options{display:grid;gap:5px}.algo-item{display:flex;align-items:flex-start;gap:7px;padding:5px 7px;border:1px solid var(--line);border-radius:8px;background:#fff;cursor:pointer}.algo-item:hover{border-color:#bfaea0}.algo-item.active{border-color:var(--primary);background:#faf4ed}.algo-item input{margin-top:3px;accent-color:var(--primary)}.algo-name{font-size:11.5px;font-weight:700;display:block}.algo-desc{font-size:10.5px;color:var(--muted);display:block}
+    .preview-matches{display:grid;gap:5px}.preview-match-item{display:flex;justify-content:space-between;align-items:center;padding:5px 7px;border-radius:7px;background:#fff;border:1px solid var(--line);font-size:11.5px}.preview-match-name{font-weight:700}.preview-match-meta{font-size:10.5px;color:var(--muted)}.preview-match-de{font-family:monospace;font-weight:700;color:#a44f24}
+    .modal-footer{padding:11px 18px;border-top:1px solid var(--line);background:#faf6f0;display:flex;justify-content:space-between;align-items:center;gap:12px}.btn-apply{padding:9px 18px;border-radius:9px;border:none;background:var(--primary);color:#fff;font-weight:750;font-size:13.5px;cursor:pointer;display:flex;align-items:center;gap:6px}.btn-apply:hover{background:#5a452e}
+    @media(max-width:860px){.modal-dialog{height:96vh;max-height:none}.modal-body{grid-template-columns:1fr;grid-template-rows:50% 50%}.swatch-compare-container{height:80px}.control-panel{padding:9px;gap:9px}}
   </style>
   <script type="importmap">
     {"imports":{"three":"https://unpkg.com/three@0.180.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.180.0/examples/jsm/","camera-controls":"https://unpkg.com/camera-controls@2.10.1/dist/camera-controls.module.js"}}
@@ -22,7 +42,7 @@
 <div class="page">
   <header class="topbar">
     <div><h1>标准型号色彩空间 <span id="datasetBadge" class="mock-badge">加载中…</span></h1><div id="datasetSubtitle" class="subtitle">以客户标准 CIELAB 与内控容差为主空间，定位标准型号与判色风险</div></div>
-    <div class="actions"><a class="btn" href="/">返回主页</a><a class="btn primary" href="/formula/">系统配方</a><button id="refreshData" class="btn">刷新数据</button><button id="loginBtn" class="btn" hidden>登录</button></div>
+    <div class="actions"><button id="topbarPickerBtn" class="btn" type="button">📷 图片配色</button><a class="btn" href="/">返回主页</a><a class="btn primary" href="/formula/">系统配方</a><button id="refreshData" class="btn">刷新数据</button><button id="loginBtn" class="btn" hidden>登录</button></div>
   </header>
   <section class="toolbar">
     <div class="field"><label for="formulaSearch">型号搜索</label><input id="formulaSearch" placeholder="型号 / 父件编码 / 父件名称"/></div>
@@ -87,10 +107,157 @@
         <div class="detail-actions"><a id="formulaLink" class="btn primary" href="/formula/">查看完整配方</a><button id="focusTrajectory">只看同基料</button></div>
       </div>
       <section class="coverage"><h3>标准型号覆盖</h3><p id="coverageSummary">正在计算当前筛选范围…</p></section>
-      <section class="nearest"><h3>目标 Lab 定位与近邻型号</h3><div class="nearest-inputs"><input id="targetL" type="number" step="0.1" placeholder="L*" aria-label="目标 L*"/><input id="targetA" type="number" step="0.1" placeholder="a*" aria-label="目标 a*"/><input id="targetB" type="number" step="0.1" placeholder="b*" aria-label="目标 b*"/></div><button id="findNearest">在三维空间定位并查找附近产品</button><div id="nearestResults" class="nearest-results"></div></section>
+      <section class="nearest"><h3>目标 Lab 定位与近邻型号</h3><button id="cardPickerBtn" class="btn primary" type="button" style="width:100%;margin-bottom:8px;display:flex;align-items:center;justify-content:center;gap:6px;">📷 拍照 / 上传图片取色</button><div class="nearest-inputs"><input id="targetL" type="number" step="0.1" placeholder="L*" aria-label="目标 L*"/><input id="targetA" type="number" step="0.1" placeholder="a*" aria-label="目标 a*"/><input id="targetB" type="number" step="0.1" placeholder="b*" aria-label="目标 b*"/></div><button id="findNearest">在三维空间定位并查找附近产品</button><div id="nearestResults" class="nearest-results"></div></section>
     </aside>
   </main>
   <footer class="legend"><span><i class="dot reference"></i><span id="referenceLegend">sRGB + Display-P3 方块外壳</span></span><span><i class="dot"></i>客户标准色</span><span><i class="dot hollow"></i>内控容差盒</span><span><i class="diamond"></i>基料空白</span><span><i class="dot target"></i>目标颜色</span><span id="datasetNote">近邻按 ΔE00 排序</span></footer>
+</div>
+<div id="pickerModal" class="modal-backdrop">
+  <div class="modal-dialog">
+    <header class="modal-header">
+      <h2>📷 样板拍照 / 图片取色工作台</h2>
+      <div style="font-size:12px;color:var(--muted)">拖拽准星任意取样 · 调节范围与算法 · 肉眼大色块即时校对</div>
+      <button id="closeModalBtn" class="modal-close" title="关闭">✕</button>
+    </header>
+    <div class="modal-body">
+      <section class="viewport-panel">
+        <div id="canvasContainer" class="viewport-canvas-container">
+          <canvas id="imageCanvas"></canvas>
+          <div id="reticle" class="reticle"></div>
+          <div id="loupe" class="loupe">
+            <canvas id="loupeCanvas" width="110" height="110"></canvas>
+            <div class="loupe-cross"></div>
+          </div>
+          <div id="uploadGuide" class="upload-guide">
+            <div id="dropZone" class="upload-dropzone">
+              <svg style="width:40px;height:40px;fill:var(--primary)" viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg>
+              <div style="font-weight:750;font-size:14.5px">点击拍照 / 上传样片图片</div>
+              <div style="font-size:12px;color:var(--muted)">支持手机相机直拍、文件选择、拖拽或 Ctrl+V 粘贴</div>
+              <input id="fileInput" type="file" accept="image/*" capture="environment" style="display:none;"/>
+            </div>
+            <div class="sample-buttons">
+              <div style="font-size:11.5px;color:var(--muted)">或直接加载内置塑胶样片体验微调：</div>
+              <div class="sample-grid">
+                <button class="sample-pill" data-sample="red" type="button"><span class="sample-dot" style="background:#b73232"></span>红光面板</button>
+                <button class="sample-pill" data-sample="green" type="button"><span class="sample-dot" style="background:#1f7c68"></span>绿咬花板</button>
+                <button class="sample-pill" data-sample="yellow" type="button"><span class="sample-dot" style="background:#c9962a"></span>黄哑面板</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <footer class="viewport-toolbar">
+          <div style="display:flex;align-items:center;gap:6px">
+            <button id="reselectImageBtn" class="tool-btn" type="button">📷 更换图片</button>
+            <button id="rotateBtn" class="tool-btn" type="button">↺ 旋转 90°</button>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <button id="zoomOutBtn" class="tool-btn" type="button">−</button>
+            <span id="zoomText" class="scale-text">100%</span>
+            <button id="zoomInBtn" class="tool-btn" type="button">+</button>
+            <button id="fitScreenBtn" class="tool-btn" type="button">🔍 适应屏幕</button>
+          </div>
+        </footer>
+      </section>
+      <aside class="control-panel">
+        <div class="panel-block">
+          <div class="block-header">
+            <div class="block-title">【肉眼校色大预览】</div>
+            <div class="bg-switch" title="切换底色">
+              <button class="bg-btn white" data-bg="#ffffff" type="button" title="白底"></button>
+              <button class="bg-btn gray active" data-bg="#808080" type="button" title="50% 中性灰底 (D65推荐)"></button>
+              <button class="bg-btn black" data-bg="#1a1a1a" type="button" title="黑底"></button>
+            </div>
+          </div>
+          <div id="swatchContainer" class="swatch-compare-container" style="background:#808080">
+            <div class="swatch-split">
+              <div class="swatch-half swatch-left">
+                <canvas id="cropCanvas"></canvas>
+                <span class="swatch-half-label">原图局部实况</span>
+              </div>
+              <div class="swatch-divider"></div>
+              <div id="pureSwatch" class="swatch-half swatch-right">
+                <span class="swatch-half-label">提取纯色效果</span>
+              </div>
+            </div>
+          </div>
+          <div class="color-values-row">
+            <div class="lab-readout-main">
+              <span>L*</span><b id="readoutL">52.3</b>
+              <span>a*</span><b id="readoutA">28.4</b>
+              <span>b*</span><b id="readoutB">14.6</b>
+            </div>
+            <div id="readoutHex" class="rgb-hex-readout">#A85858</div>
+          </div>
+        </div>
+        <div class="panel-block">
+          <div class="block-header">
+            <div class="block-title">【取样范围与大小】</div>
+            <span id="radiusText" class="radius-value">15 px</span>
+          </div>
+          <div class="radius-row">
+            <span style="font-size:11px;color:var(--muted)">1px</span>
+            <input id="radiusSlider" class="radius-slider" type="range" min="1" max="60" value="15"/>
+            <span style="font-size:11px;color:var(--muted)">60px</span>
+          </div>
+          <div class="quick-radii">
+            <button class="btn-radius-preset" data-r="1" type="button">单点 1px</button>
+            <button class="btn-radius-preset" data-r="5" type="button">微区 5px</button>
+            <button class="btn-radius-preset active" data-r="15" type="button">中区 15px</button>
+            <button class="btn-radius-preset" data-r="30" type="button">大区 30px</button>
+          </div>
+        </div>
+        <div class="panel-block">
+          <div class="block-header">
+            <div class="block-title">【算法模式 (按样板表面微调)】</div>
+          </div>
+          <div class="algo-options">
+            <label class="algo-item active" data-algo="trim-glare">
+              <input type="radio" name="samplingAlgo" value="trim-glare" checked/>
+              <div>
+                <span class="algo-name">剔除反光 (光面塑料首选 ⭐)</span>
+                <span class="algo-desc">截除高光耀斑像素，防止提取颜色泛白</span>
+              </div>
+            </label>
+            <label class="algo-item" data-algo="trim-shadow">
+              <input type="radio" name="samplingAlgo" value="trim-shadow"/>
+              <div>
+                <span class="algo-name">剔除阴影 (皮纹/咬花首选)</span>
+                <span class="algo-desc">截除纹理凹陷暗点，防止颜色偏暗偏脏</span>
+              </div>
+            </label>
+            <label class="algo-item" data-algo="average">
+              <input type="radio" name="samplingAlgo" value="average"/>
+              <div>
+                <span class="algo-name">标准物理均值 (平整表面)</span>
+                <span class="algo-desc">选区内全像素物理线性 RGB 积分</span>
+              </div>
+            </label>
+            <label class="algo-item" data-algo="median">
+              <input type="radio" name="samplingAlgo" value="median"/>
+              <div>
+                <span class="algo-name">中位数稳态 (抗噪点/杂质)</span>
+                <span class="algo-desc">取中间稳态色，抗表面划痕或尘埃杂斑</span>
+              </div>
+            </label>
+          </div>
+        </div>
+        <div class="panel-block" style="flex:1">
+          <div class="block-header">
+            <div class="block-title">【匹配预演 (实时 Top 3)】</div>
+            <span style="font-size:11px;color:var(--muted)">随准星移动毫秒联动</span>
+          </div>
+          <div id="previewMatches" class="preview-matches"></div>
+        </div>
+      </aside>
+    </div>
+    <footer class="modal-footer">
+      <div style="font-size:12px;color:var(--muted)">提示：双指捏合或滚轮可无级缩放图片，大拇指按住画面可任意移动准星。</div>
+      <div style="display:flex;gap:8px">
+        <button id="cancelModalBtn" class="btn" type="button">取消</button>
+        <button id="applyModalBtn" class="btn-apply" type="button">🎯 应用此颜色并在空间中查找</button>
+      </div>
+    </footer>
+  </div>
 </div>
 <script type="module">
   import * as THREE from 'three';
@@ -774,6 +941,341 @@
   // 面板是 .page 这个 flex column 的一个节点，展开时 .workspace 的 flex:1 自动让出高度，
   // 不覆盖三维画布。ResizeObserver 已监听 #stage，相机 aspect 会自动跟上。
   $('toggleSettings').onclick=()=>{const panel=$('settingsPanel');panel.hidden=!panel.hidden;$('toggleSettings').classList.toggle('active',!panel.hidden);};
+
+  // -------------------------------------------------------------
+  // 图片配色工作台 (Image Color Picker Workbench Engine)
+  // -------------------------------------------------------------
+  const pickerState={
+    image:null,scale:1,panX:0,panY:0,rotation:0,
+    reticleImgX:0,reticleImgY:0,radius:15,algo:'trim-glare',
+    currentLab:[52.4,28.4,14.6],currentHex:'#A85858',
+    isDragging:false,dragStartPointer:{x:0,y:0},dragStartPan:{x:0,y:0},
+  };
+  const pCanvas=$('imageCanvas'),pCtx=pCanvas.getContext('2d',{willReadFrequently:true});
+  const pContainer=$('canvasContainer'),reticleEl=$('reticle'),loupeEl=$('loupe');
+  const loupeCanvas=$('loupeCanvas'),loupeCtx=loupeCanvas.getContext('2d');
+  const cropCanvas=$('cropCanvas'),cropCtx=cropCanvas.getContext('2d');
+  const pureSwatch=$('pureSwatch'),pModal=$('pickerModal');
+  const pOffscreen=document.createElement('canvas'),pOffCtx=pOffscreen.getContext('2d',{willReadFrequently:true});
+
+  function resizePickerCanvas(){
+    if(!pContainer)return;
+    const rect=pContainer.getBoundingClientRect();
+    if(rect.width&&rect.height){pCanvas.width=rect.width;pCanvas.height=rect.height;redrawPickerViewport();}
+  }
+  window.addEventListener('resize',resizePickerCanvas);
+
+  function screenToImage(sx,sy){
+    if(!pickerState.image)return{x:0,y:0};
+    const rad=-pickerState.rotation*Math.PI/180,cos=Math.cos(rad),sin=Math.sin(rad);
+    const dx=(sx-pickerState.panX)/pickerState.scale,dy=(sy-pickerState.panY)/pickerState.scale;
+    const cx=pickerState.image.width/2,cy=pickerState.image.height/2;
+    const rx=dx-cx,ry=dy-cy;
+    const ix=rx*cos-ry*sin+cx,iy=rx*sin+ry*cos+cy;
+    return{x:Math.max(0,Math.min(pickerState.image.width-1,ix)),y:Math.max(0,Math.min(pickerState.image.height-1,iy))};
+  }
+  function imageToScreen(ix,iy){
+    if(!pickerState.image)return{x:0,y:0};
+    const rad=pickerState.rotation*Math.PI/180,cos=Math.cos(rad),sin=Math.sin(rad);
+    const cx=pickerState.image.width/2,cy=pickerState.image.height/2;
+    const rx=ix-cx,ry=iy-cy;
+    const rotX=rx*cos-ry*sin+cx,rotY=rx*sin+ry*cos+cy;
+    return{x:rotX*pickerState.scale+pickerState.panX,y:rotY*pickerState.scale+pickerState.panY};
+  }
+
+  function redrawPickerViewport(){
+    pCtx.clearRect(0,0,pCanvas.width,pCanvas.height);
+    if(!pickerState.image)return;
+    pCtx.save();
+    pCtx.translate(pickerState.panX,pickerState.panY);
+    pCtx.scale(pickerState.scale,pickerState.scale);
+    pCtx.translate(pickerState.image.width/2,pickerState.image.height/2);
+    pCtx.rotate(pickerState.rotation*Math.PI/180);
+    pCtx.drawImage(pickerState.image,-pickerState.image.width/2,-pickerState.image.height/2);
+    pCtx.restore();
+    updateReticlePosition();
+    updateSamplingColor();
+  }
+
+  function fitPickerScreen(){
+    if(!pickerState.image)return;
+    const cw=pCanvas.width,ch=pCanvas.height;
+    const iw=pickerState.image.width,ih=pickerState.image.height;
+    const rot=Math.abs(pickerState.rotation)%180;
+    const w=rot===90?ih:iw,h=rot===90?iw:ih;
+    const scale=Math.min((cw-40)/w,(ch-40)/h,1.5);
+    pickerState.scale=scale;
+    pickerState.panX=(cw-w*scale)/2+(rot===90?(w-iw)*scale/2:0);
+    pickerState.panY=(ch-h*scale)/2+(rot===90?(h-ih)*scale/2:0);
+    $('zoomText').textContent=`${Math.round(scale*100)}%`;
+    redrawPickerViewport();
+  }
+
+  function updateReticlePosition(){
+    if(!pickerState.image)return;
+    const pos=imageToScreen(pickerState.reticleImgX,pickerState.reticleImgY);
+    const screenDiameter=Math.max(10,pickerState.radius*2*pickerState.scale);
+    reticleEl.style.left=`${pos.x}px`;
+    reticleEl.style.top=`${pos.y}px`;
+    reticleEl.style.width=`${screenDiameter}px`;
+    reticleEl.style.height=`${screenDiameter}px`;
+  }
+
+  function srgbToLinearByte(c){const v=c/255;return v<=.04045?v/12.92:Math.pow((v+.055)/1.055,2.4);}
+  function linearToSrgbByte(v){const c=v<=.0031308?12.92*v:1.055*Math.pow(v,1/2.4)-.055;return Math.round(Math.min(1,Math.max(0,c))*255);}
+
+  function updateSamplingColor(){
+    if(!pickerState.image)return;
+    const img=pickerState.image;
+    const cx=Math.round(pickerState.reticleImgX),cy=Math.round(pickerState.reticleImgY);
+    const r=pickerState.radius;
+    const cropSize=Math.max(4,r*2);
+    const cropX=Math.max(0,cx-r),cropY=Math.max(0,cy-r);
+    const cropW=Math.min(img.width-cropX,cropSize),cropH=Math.min(img.height-cropY,cropSize);
+
+    pOffscreen.width=img.width;pOffscreen.height=img.height;
+    pOffCtx.drawImage(img,0,0);
+    const imgData=pOffCtx.getImageData(cropX,cropY,cropW,cropH);
+    const pixels=imgData.data;
+
+    const validPixels=[],rSq=r*r;
+    for(let y=0;y<cropH;y++){
+      for(let x=0;x<cropW;x++){
+        const actualX=cropX+x,actualY=cropY+y;
+        const distSq=(actualX-cx)*(actualX-cx)+(actualY-cy)*(actualY-cy);
+        if(distSq<=rSq||r===1){
+          const idx=(y*cropW+x)*4;
+          const r8=pixels[idx],g8=pixels[idx+1],b8=pixels[idx+2];
+          const lum=0.2126*r8+0.7152*g8+0.0722*b8;
+          validPixels.push({r:r8,g:g8,b:b8,lum});
+        }
+      }
+    }
+    if(!validPixels.length)return;
+
+    let finalPixels=validPixels;
+    if(pickerState.algo==='trim-glare'&&validPixels.length>=8){
+      validPixels.sort((a,b)=>a.lum-b.lum);
+      const cut=Math.floor(validPixels.length*0.15);
+      finalPixels=validPixels.slice(0,validPixels.length-cut);
+    }else if(pickerState.algo==='trim-shadow'&&validPixels.length>=8){
+      validPixels.sort((a,b)=>a.lum-b.lum);
+      const cut=Math.floor(validPixels.length*0.15);
+      finalPixels=validPixels.slice(cut);
+    }else if(pickerState.algo==='median'&&validPixels.length>=3){
+      validPixels.sort((a,b)=>a.lum-b.lum);
+      finalPixels=[validPixels[Math.floor(validPixels.length/2)]];
+    }
+
+    let sumR=0,sumG=0,sumB=0;
+    for(const p of finalPixels){
+      sumR+=srgbToLinearByte(p.r);
+      sumG+=srgbToLinearByte(p.g);
+      sumB+=srgbToLinearByte(p.b);
+    }
+    const avgLinR=sumR/finalPixels.length,avgLinG=sumG/finalPixels.length,avgLinB=sumB/finalPixels.length;
+    const avgR=linearToSrgbByte(avgLinR),avgG=linearToSrgbByte(avgLinG),avgB=linearToSrgbByte(avgLinB);
+    const lab=srgbToLab([avgR/255,avgG/255,avgB/255]);
+    pickerState.currentLab=lab.map((v)=>Number(v.toFixed(2)));
+    const srgbInfo=labToSrgb(lab);
+    pickerState.currentHex=srgbInfo.hex;
+
+    pureSwatch.style.background=srgbInfo.hex;
+    cropCanvas.width=160;cropCanvas.height=110;
+    cropCtx.imageSmoothingEnabled=false;
+    const viewPad=Math.max(12,r*1.5);
+    cropCtx.drawImage(img,cx-viewPad,cy-viewPad,viewPad*2,viewPad*2,0,0,cropCanvas.width,cropCanvas.height);
+
+    $('readoutL').textContent=round(lab[0],1);
+    $('readoutA').textContent=round(lab[1],1);
+    $('readoutB').textContent=round(lab[2],1);
+    $('readoutHex').textContent=srgbInfo.hex;
+
+    const pos=imageToScreen(cx,cy);
+    loupeEl.style.left=`${pos.x}px`;loupeEl.style.top=`${pos.y}px`;
+    loupeCtx.imageSmoothingEnabled=false;
+    loupeCtx.drawImage(img,cx-16,cy-16,32,32,0,0,110,110);
+
+    updatePickerMatches(lab);
+  }
+
+  function updatePickerMatches(targetLab){
+    const pool=enriched.length?enriched:state.points;
+    if(!pool.length){$('previewMatches').innerHTML='<div class="detail-empty" style="padding:10px 0;">暂无可匹配型号</div>';return;}
+    const sorted=[...pool].map((item)=>({
+      ...item,de:deltaE00(targetLab,item.sample_lab)
+    })).sort((a,b)=>a.de-b.de);
+    const inBox=(item)=>item.tolerance&&[0,1,2].every((axis)=>{const[low,high]=toleranceRange(item,axis);return targetLab[axis]>=low&&targetLab[axis]<=high;});
+    $('previewMatches').innerHTML=sorted.slice(0,3).map((m,idx)=>`
+      <div class="preview-match-item">
+        <div>
+          <span class="preview-match-name">${idx+1}. ${m.model}</span>
+          ${inBox(m)?'<span style="color:#2e7d32;font-size:10px;font-weight:700;">✅容差内</span>':''}
+          <div class="preview-match-meta">${[m.resin_name,dosageText(m)].filter(Boolean).join(' · ')}</div>
+        </div>
+        <div class="preview-match-de">ΔE00 ${round(m.de,2)}</div>
+      </div>
+    `).join('');
+  }
+
+  let pPointerDown=false;
+  pContainer.addEventListener('pointerdown',(e)=>{
+    pPointerDown=true;
+    pickerState.dragStartPointer={x:e.clientX,y:e.clientY};
+    pickerState.dragStartPan={x:pickerState.panX,y:pickerState.panY};
+    pContainer.setPointerCapture(e.pointerId);
+    const rect=pCanvas.getBoundingClientRect();
+    const imgCoords=screenToImage(e.clientX-rect.left,e.clientY-rect.top);
+    pickerState.reticleImgX=imgCoords.x;pickerState.reticleImgY=imgCoords.y;
+    loupeEl.style.display='block';
+    redrawPickerViewport();
+  });
+  pContainer.addEventListener('pointermove',(e)=>{
+    if(!pPointerDown)return;
+    const dx=e.clientX-pickerState.dragStartPointer.x,dy=e.clientY-pickerState.dragStartPointer.y;
+    if(e.shiftKey||e.buttons===2){
+      pickerState.panX=pickerState.dragStartPan.x+dx;pickerState.panY=pickerState.dragStartPan.y+dy;
+    }else{
+      const rect=pCanvas.getBoundingClientRect();
+      const imgCoords=screenToImage(e.clientX-rect.left,e.clientY-rect.top);
+      pickerState.reticleImgX=imgCoords.x;pickerState.reticleImgY=imgCoords.y;
+    }
+    redrawPickerViewport();
+  });
+  const stopPickerPointer=()=>{if(pPointerDown){pPointerDown=false;loupeEl.style.display='none';}};
+  pContainer.addEventListener('pointerup',stopPickerPointer);
+  pContainer.addEventListener('pointercancel',stopPickerPointer);
+
+  pContainer.addEventListener('wheel',(e)=>{
+    e.preventDefault();
+    if(!pickerState.image)return;
+    const rect=pCanvas.getBoundingClientRect();
+    const mx=e.clientX-rect.left,my=e.clientY-rect.top;
+    const factor=e.deltaY<0?1.15:.87;
+    const newScale=Math.min(12,Math.max(.15,pickerState.scale*factor));
+    pickerState.panX=mx-(mx-pickerState.panX)*(newScale/pickerState.scale);
+    pickerState.panY=my-(my-pickerState.panY)*(newScale/pickerState.scale);
+    pickerState.scale=newScale;
+    $('zoomText').textContent=`${Math.round(newScale*100)}%`;
+    redrawPickerViewport();
+  },{passive:false});
+
+  function setPickerImage(img){
+    pickerState.image=img;pickerState.rotation=0;
+    pickerState.reticleImgX=img.width/2;pickerState.reticleImgY=img.height/2;
+    $('uploadGuide').classList.add('hidden');
+    fitPickerScreen();
+  }
+
+  function loadProceduralSample(type){
+    const sCanvas=document.createElement('canvas');sCanvas.width=640;sCanvas.height=480;
+    const sCtx=sCanvas.getContext('2d');
+    if(type==='red'){
+      const grad=sCtx.createRadialGradient(240,180,20,320,240,360);
+      grad.addColorStop(0,'#e55a5a');grad.addColorStop(.2,'#b73232');grad.addColorStop(.8,'#881b1b');grad.addColorStop(1,'#631010');
+      sCtx.fillStyle=grad;sCtx.fillRect(0,0,640,480);
+      const glare=sCtx.createRadialGradient(220,160,0,220,160,60);
+      glare.addColorStop(0,'rgba(255,255,255,0.7)');glare.addColorStop(.5,'rgba(255,255,255,0.25)');glare.addColorStop(1,'transparent');
+      sCtx.fillStyle=glare;sCtx.fillRect(0,0,640,480);
+    }else if(type==='green'){
+      sCtx.fillStyle='#1e7562';sCtx.fillRect(0,0,640,480);
+      for(let i=0;i<4000;i++){
+        sCtx.fillStyle=Math.random()>.5?'rgba(0,0,0,0.18)':'rgba(255,255,255,0.12)';
+        sCtx.fillRect(Math.random()*640,Math.random()*480,2,2);
+      }
+    }else{
+      const grad=sCtx.createLinearGradient(0,0,640,480);
+      grad.addColorStop(0,'#e0ab3b');grad.addColorStop(1,'#b07f1b');
+      sCtx.fillStyle=grad;sCtx.fillRect(0,0,640,480);
+    }
+    const img=new Image();img.onload=()=>setPickerImage(img);img.src=sCanvas.toDataURL();
+  }
+
+  document.querySelectorAll('[data-sample]').forEach((btn)=>{
+    btn.onclick=()=>loadProceduralSample(btn.dataset.sample);
+  });
+
+  const fileInput=$('fileInput'),dropZone=$('dropZone');
+  dropZone.onclick=()=>fileInput.click();
+  $('reselectImageBtn').onclick=()=>fileInput.click();
+  fileInput.onchange=(e)=>{
+    const file=e.target.files?.[0];if(!file)return;
+    const reader=new FileReader();
+    reader.onload=(evt)=>{const img=new Image();img.onload=()=>setPickerImage(img);img.src=evt.target.result;};
+    reader.readAsDataURL(file);
+  };
+  dropZone.ondragover=(e)=>{e.preventDefault();dropZone.classList.add('dragover');};
+  dropZone.ondragleave=()=>dropZone.classList.remove('dragover');
+  dropZone.ondrop=(e)=>{
+    e.preventDefault();dropZone.classList.remove('dragover');
+    const file=e.dataTransfer.files?.[0];
+    if(file&&file.type.startsWith('image/')){
+      const reader=new FileReader();
+      reader.onload=(evt)=>{const img=new Image();img.onload=()=>setPickerImage(img);img.src=evt.target.result;};
+      reader.readAsDataURL(file);
+    }
+  };
+  window.addEventListener('paste',(e)=>{
+    const items=e.clipboardData?.items;if(!items)return;
+    for(const item of items){
+      if(item.type.startsWith('image/')){
+        const file=item.getAsFile(),reader=new FileReader();
+        reader.onload=(evt)=>{const img=new Image();img.onload=()=>setPickerImage(img);img.src=evt.target.result;};
+        reader.readAsDataURL(file);break;
+      }
+    }
+  });
+
+  $('rotateBtn').onclick=()=>{pickerState.rotation=(pickerState.rotation+90)%360;fitPickerScreen();};
+  $('fitScreenBtn').onclick=fitPickerScreen;
+  $('zoomInBtn').onclick=()=>{pickerState.scale=Math.min(12,pickerState.scale*1.25);$('zoomText').textContent=`${Math.round(pickerState.scale*100)}%`;redrawPickerViewport();};
+  $('zoomOutBtn').onclick=()=>{pickerState.scale=Math.max(.15,pickerState.scale/1.25);$('zoomText').textContent=`${Math.round(pickerState.scale*100)}%`;redrawPickerViewport();};
+
+  const radiusSlider=$('radiusSlider'),radiusText=$('radiusText');
+  radiusSlider.oninput=(e)=>{
+    pickerState.radius=Number(e.target.value);radiusText.textContent=`${pickerState.radius} px`;
+    document.querySelectorAll('.btn-radius-preset').forEach((b)=>b.classList.remove('active'));
+    redrawPickerViewport();
+  };
+  document.querySelectorAll('.btn-radius-preset').forEach((btn)=>{
+    btn.onclick=()=>{
+      document.querySelectorAll('.btn-radius-preset').forEach((b)=>b.classList.remove('active'));
+      btn.classList.add('active');pickerState.radius=Number(btn.dataset.r);
+      radiusSlider.value=pickerState.radius;radiusText.textContent=`${pickerState.radius} px`;
+      redrawPickerViewport();
+    };
+  });
+  document.querySelectorAll('.algo-item').forEach((label)=>{
+    label.onclick=()=>{
+      document.querySelectorAll('.algo-item').forEach((l)=>l.classList.remove('active'));
+      label.classList.add('active');pickerState.algo=label.dataset.algo;
+      redrawPickerViewport();
+    };
+  });
+  document.querySelectorAll('.bg-btn').forEach((btn)=>{
+    btn.onclick=()=>{
+      document.querySelectorAll('.bg-btn').forEach((b)=>b.classList.remove('active'));
+      btn.classList.add('active');$('swatchContainer').style.background=btn.dataset.bg;
+    };
+  });
+
+  function openPickerModal(){
+    pModal.classList.add('active');resizePickerCanvas();
+    if(!pickerState.image)loadProceduralSample('red');
+    else redrawPickerViewport();
+  }
+  function closePickerModal(){pModal.classList.remove('active');}
+  $('cardPickerBtn').onclick=openPickerModal;
+  $('topbarPickerBtn').onclick=openPickerModal;
+  $('closeModalBtn').onclick=closePickerModal;
+  $('cancelModalBtn').onclick=closePickerModal;
+
+  $('applyModalBtn').onclick=()=>{
+    const [l,a,b]=pickerState.currentLab;
+    $('targetL').value=round(l,1);$('targetA').value=round(a,1);$('targetB').value=round(b,1);
+    closePickerModal();
+    locateTarget([l,a,b]);
+  };
 
   const params=new URLSearchParams(location.search),queryParam=params.get('q')||params.get('formula_key');
   if(queryParam){state.query=queryParam.split('::')[0];$('formulaSearch').value=state.query;}
