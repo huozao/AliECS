@@ -425,3 +425,8 @@ admin-ui 新增页签，复用现有 `common/toast.js` 风格：
 - infra `secrets/README.md`：新增 SOPS 键
 - 顶层 `功能地图-人类版.md`：人类叫法到代码位置的对照
 - PR 记录 `Nav-Impact: updated`
+
+### 2026-09-24 规则演进：自建业务域名与 Dukascopy 探测直连
+
+- **自建与业务域名直连**：`DOMAIN-SUFFIX,hydwang.xyz,DIRECT` 进入 `template_rules.yaml` 正式模板，并在 Codex（`codex-in` / `codex.exe`）及 Chrome 进程模式中前置放行，避免管理后台、文件服务及控制台被误分流或落入兜底规则走自建/机场节点代理。
+- **Dukascopy 探测节点对齐**：补充 `checkip.amazonaws.com` 与 `api.ipify.org` 路由至 Dukascopy 策略组，便于抓取时验证实际出口 IP。
