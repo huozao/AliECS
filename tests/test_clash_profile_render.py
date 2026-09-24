@@ -309,6 +309,8 @@ class ClashProfileRenderTests(unittest.TestCase):
         out = self.render.render_profile([self.node], [self.provider])
         lines = out.splitlines()
         self.assertIn("  - DOMAIN-SUFFIX,dukascopy.com,Dukascopy", lines)
+        self.assertIn("  - DOMAIN,checkip.amazonaws.com,Dukascopy", lines)
+        self.assertIn("  - DOMAIN,api.ipify.org,Dukascopy", lines)
         for suffix in ("github.com", "githubusercontent.com", "githubassets.com", "ghcr.io"):
             self.assertIn(f"  - DOMAIN-SUFFIX,{suffix},GitHub", lines)
             self.assertNotIn(f"  - DOMAIN-SUFFIX,{suffix},节点选择", lines)
@@ -331,6 +333,14 @@ class ClashProfileRenderTests(unittest.TestCase):
         for suffix in ("windowsupdate.com", "update.microsoft.com", "delivery.mp.microsoft.com"):
             self.assertIn(f"  - DOMAIN-SUFFIX,{suffix},全球直连", lines)
         self.assertIn("  - PROCESS-NAME,svchost.exe,全球直连", lines)
+
+    def test_hydwang_domain_routes_direct(self) -> None:
+        """自建与业务域名 hydwang.xyz 必须走直连，且 codex/chrome 也支持例外直连。"""
+        lines = self.render.render_profile([self.node], []).splitlines()
+        self.assertIn("  - DOMAIN-SUFFIX,hydwang.xyz,DIRECT", lines)
+        self.assertIn("  - AND,((IN-NAME,codex-in),(DOMAIN-SUFFIX,hydwang.xyz)),DIRECT", lines)
+        self.assertIn("  - AND,((PROCESS-NAME,codex.exe),(DOMAIN-SUFFIX,hydwang.xyz)),DIRECT", lines)
+        self.assertIn("  - AND,((PROCESS-NAME,chrome.exe),(DOMAIN-SUFFIX,hydwang.xyz)),DIRECT", lines)
 
     def test_provider_excludes_pseudo_nodes(self) -> None:
         """机场的套餐提示伪节点必须在 provider 层就被排掉。
