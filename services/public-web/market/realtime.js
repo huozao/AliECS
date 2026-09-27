@@ -13,7 +13,11 @@
   const ageText = (source) => {
     if (source?.age_seconds == null) return "年龄未知";
     const age = Number(source.age_seconds);
-    return !Number.isFinite(age) ? "年龄未知" : `${Math.max(0, age).toFixed(1)} 秒前`;
+    return !Number.isFinite(age) ? "年龄未知" : age < 1 ? "<1秒前" : `${age.toFixed(1)} 秒前`;
+  };
+  const timeText = (value) => {
+    const time = Date.parse(value || "");
+    return Number.isFinite(time) ? new Date(time).toLocaleTimeString("zh-SG", {hour12: false}) : "时间未知";
   };
   function renderLayers(body, quotes) {
     const latest = quotes[quotes.length - 1] || {}, sources = latest.sources || {}, international = body.international || {};
@@ -25,7 +29,7 @@
     const overlap = body.overlap?.status || (domesticReady && intlReady ? "READY｜存在有效重叠" : domesticReady ? "DOMESTIC_ONLY｜仅国内行情可用" : intlReady ? "INTERNATIONAL_ONLY｜等待国内行情" : "BLOCKED｜两层行情均待确认");
     const strategy = body.strategy?.status || (domesticReady && intlReady ? "READY｜策略可运行" : "BLOCKED｜等待有效重叠行情");
     document.querySelector("#international-status").textContent = intlStatus;
-    document.querySelector("#international-detail").textContent = `$${priceText(intlXau.price ?? latest.xauusd_usd_per_oz)} · ¥${priceText(international.international_cny_per_g ?? latest.international_price)}/克 · XAU ${ageText(intlXau)} · FX ${ageText(intlFx)}`;
+    document.querySelector("#international-detail").textContent = `$${priceText(intlXau.price ?? latest.xauusd_usd_per_oz)} · ¥${priceText(international.international_cny_per_g ?? latest.international_price)}/克 · XAU ${ageText(intlXau)} · FX ${ageText(intlFx)} · 更新 ${timeText(international.updated_at)}`;
     document.querySelector("#domestic-status").textContent = body.domestic?.status || (domesticReady ? "FRESH｜国内行情新鲜" : "STALE｜国内行情待确认");
     document.querySelector("#domestic-detail").textContent = `${quotes.length} 个合约 · ${ageText(domestic)} · ${domesticReady ? "可参与策略计算" : "不参与新策略"}`;
     document.querySelector("#overlap-status").textContent = overlap;
