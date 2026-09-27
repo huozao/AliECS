@@ -5,6 +5,7 @@ import http.server
 import json
 import os
 from pathlib import Path
+import shutil
 import threading
 import unittest
 
@@ -21,7 +22,7 @@ class MarketReviewBrowserTests(unittest.TestCase):
         cls.http=http.server.ThreadingHTTPServer(('127.0.0.1',0),handler)
         threading.Thread(target=cls.http.serve_forever,daemon=True).start()
         cls.pw=sync_playwright().start()
-        cls.browser=cls.pw.chromium.launch(executable_path=os.environ.get('MARKET_TEST_CHROMIUM','/home/ishelwsl/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome'),headless=True,args=['--no-sandbox'])
+        cls.browser=cls.pw.chromium.launch(executable_path=os.getenv('MARKET_TEST_CHROMIUM') or shutil.which('google-chrome-stable'),headless=True,args=['--no-sandbox'])
 
     @classmethod
     def tearDownClass(cls):
