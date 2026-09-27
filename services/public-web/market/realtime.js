@@ -4,6 +4,10 @@
   const status = document.querySelector("#status"), root = document.querySelector("#contracts"), login = document.querySelector("#login");
   const state = {cursor: null, timer: null, controller: null, inFlight: false, charts: new Map(), rows: new Map(), hidden: document.hidden, retryAttempt: 0};
   const esc = (value) => String(value ?? "—").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+  const priceText = (value, digits = 2) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? number.toFixed(digits) : "—";
+  };
   const stamp = (row) => row.observed_at || row.captured_at || row.source_time;
   const point = (row) => { const time = Date.parse(stamp(row)) / 1000, value = Number(row.last_price); return Number.isFinite(time) && Number.isFinite(value) ? {time, value} : null; };
   const ageText = (source) => {
@@ -21,7 +25,7 @@
     const overlap = body.overlap?.status || (domesticReady && intlReady ? "READY｜存在有效重叠" : domesticReady ? "DOMESTIC_ONLY｜仅国内行情可用" : intlReady ? "INTERNATIONAL_ONLY｜等待国内行情" : "BLOCKED｜两层行情均待确认");
     const strategy = body.strategy?.status || (domesticReady && intlReady ? "READY｜策略可运行" : "BLOCKED｜等待有效重叠行情");
     document.querySelector("#international-status").textContent = intlStatus;
-    document.querySelector("#international-detail").textContent = `$${intlXau.price ?? latest.xauusd_usd_per_oz ?? "—"} · ¥${international.international_cny_per_g ?? latest.international_price ?? "—"}/克 · XAU ${ageText(intlXau)} · FX ${ageText(intlFx)}`;
+    document.querySelector("#international-detail").textContent = `$${priceText(intlXau.price ?? latest.xauusd_usd_per_oz)} · ¥${priceText(international.international_cny_per_g ?? latest.international_price)}/克 · XAU ${ageText(intlXau)} · FX ${ageText(intlFx)}`;
     document.querySelector("#domestic-status").textContent = body.domestic?.status || (domesticReady ? "FRESH｜国内行情新鲜" : "STALE｜国内行情待确认");
     document.querySelector("#domestic-detail").textContent = `${quotes.length} 个合约 · ${ageText(domestic)} · ${domesticReady ? "可参与策略计算" : "不参与新策略"}`;
     document.querySelector("#overlap-status").textContent = overlap;
