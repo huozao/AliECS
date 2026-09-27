@@ -6,7 +6,11 @@
   const esc = (value) => String(value ?? "—").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
   const stamp = (row) => row.observed_at || row.captured_at || row.source_time;
   const point = (row) => { const time = Date.parse(stamp(row)) / 1000, value = Number(row.last_price); return Number.isFinite(time) && Number.isFinite(value) ? {time, value} : null; };
-  const ageText = (source) => source?.age_seconds == null ? "年龄未知" : `${Number(source.age_seconds).toFixed(1)} 秒前`;
+  const ageText = (source) => {
+    if (source?.age_seconds == null) return "年龄未知";
+    const age = Number(source.age_seconds);
+    return !Number.isFinite(age) ? "年龄未知" : `${Math.max(0, age).toFixed(1)} 秒前`;
+  };
   function renderLayers(body, quotes) {
     const latest = quotes[quotes.length - 1] || {}, sources = latest.sources || {}, international = body.international || {};
     const xau = sources.xau || sources.xauusd || {}, fx = sources.fx || sources.usdcnh || {}, domestic = sources.domestic || {};
