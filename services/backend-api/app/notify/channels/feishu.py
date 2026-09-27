@@ -293,6 +293,9 @@ def build_card(notification: Notification, image_keys: dict[str, str]) -> dict[s
     使用 JSON 2.0：支持 column_set 加权列和独立字号，适配日报的三列排版。
     """
     elements: list[dict[str, Any]] = []
+    trend_elements: list[dict[str, Any]] = []
+    shot_elements: list[dict[str, Any]] = []
+    other_elements: list[dict[str, Any]] = []
     if notification.summary.strip():
         elements.append({"tag": "markdown", "content": _markdown(notification.summary.strip()), "text_size": "normal"})
     for segment in notification.segments:
@@ -325,7 +328,42 @@ def build_card(notification: Notification, image_keys: dict[str, str]) -> dict[s
             }
             if caption:
                 image_element["title"] = {"tag": "plain_text", "content": caption}
-            elements.append(image_element)
+
+            if notification.event == "quota.daily_report":
+                if "周限额趋势" in caption or "trend" in segment.image_ref:
+                    trend_elements.append(image_element)
+                elif "截图" in caption or "screen" in segment.image_ref:
+                    shot_elements.append(image_element)
+                else:
+                    other_elements.append(image_element)
+            else:
+                elements.append(image_element)
+
+    if notification.event == "quota.daily_report":
+        if trend_elements:
+            elements.append({
+                "tag": "collapsible_panel",
+                "expanded": False,
+                "header": {
+                    "title": {"tag": "plain_text", "content": f"📈 点击展开周限额趋势图 ({len(trend_elements)} 张)"},
+                    "icon": {"tag": "standard_icon", "token": "trend-up_outlined"},
+                },
+                "border": {"color": "grey", "corner_radius": "8px"},
+                "elements": trend_elements,
+            })
+        if shot_elements:
+            elements.append({
+                "tag": "collapsible_panel",
+                "expanded": False,
+                "header": {
+                    "title": {"tag": "plain_text", "content": f"🖥️ 点击展开页面现场截图 ({len(shot_elements)} 张)"},
+                    "icon": {"tag": "standard_icon", "token": "image_outlined"},
+                },
+                "border": {"color": "grey", "corner_radius": "8px"},
+                "elements": shot_elements,
+            })
+        if other_elements:
+            elements.extend(other_elements)
 
     buttons = notification.all_buttons()
     if len(buttons) == 1:
