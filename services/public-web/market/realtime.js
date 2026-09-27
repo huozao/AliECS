@@ -6,6 +6,31 @@
   const esc = (value) => String(value ?? "—").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
   const stamp = (row) => row.observed_at || row.captured_at || row.source_time;
   const point = (row) => { const time = Date.parse(stamp(row)) / 1000, value = Number(row.last_price); return Number.isFinite(time) && Number.isFinite(value) ? {time, value} : null; };
+  const ageText = (source) => source?.age_seconds == null ? "年龄未知" : `${Number(source.age_seconds).toFixed(1)} 秒前`;
+  function renderLayers(body, quotes) {
+    const latest = quotes[quotes.length - 1] || {}, sources = latest.sources || {}, international = body.international || {};
+    const xau = sources.xau || sources.xauusd || {}, fx = sources.fx || sources.usdcnh || {}, domestic = sources.domestic || {};
+    const intlXau = international.xauusd || xau, intlFx = international.usdcnh || fx;
+    const intlReady = international.strategy_allowed === true || (Number.isFinite(Number(latest.international_price)) && Number(intlXau.age_seconds) <= 30 && Number(intlFx.age_seconds) <= 30);
+    const domesticReady = Number(domestic.age_seconds) <= 30;
+    const intlStatus = body.international?.status || (intlReady ? "READY｜国际参考可用" : "REFERENCE_BLOCKED｜国际参考不可用");
+    const overlap = body.overlap?.status || (domesticReady && intlReady ? "READY｜存在有效重叠" : domesticReady ? "DOMESTIC_ONLY｜仅国内行情可用" : intlReady ? "INTERNATIONAL_ONLY｜等待国内行情" : "BLOCKED｜两层行情均待确认");
+    const strategy = body.strategy?.status || (domesticReady && intlReady ? "READY｜策略可运行" : "BLOCKED｜等待有效重叠行情");
+    document.querySelector("#international-status").textContent = intlStatus;
+    document.querySelector("#international-detail").textContent = `$${intlXau.price ?? latest.xauusd_usd_per_oz ?? "—"} · ¥${international.international_cny_per_g ?? latest.international_price ?? "—"}/克 · XAU ${ageText(intlXau)} · FX ${ageText(intlFx)}`;
+    document.querySelector("#domestic-status").textContent = body.domestic?.status || (domesticReady ? "FRESH｜国内行情新鲜" : "STALE｜国内行情待确认");
+    document.querySelector("#domestic-detail").textContent = `${quotes.length} 个合约 · ${ageText(domestic)} · ${domesticReady ? "可参与策略计算" : "不参与新策略"}`;
+    document.querySelector("#overlap-status").textContent = overlap;
+    document.querySelector("#overlap-detail").textContent = body.overlap?.reason || (domesticReady && intlReady ? "国内与国际行情均有新鲜报价" : "国际参考不可用时阻断新策略");
+    document.querySelector("#strategy-status").textContent = strategy;
+    document.querySelector("#strategy-detail").textContent = body.strategy?.reason || (domesticReady && intlReady ? "新建策略信号允许" : "只读采集继续，等待有效参考");
+  }
+  function renderHedgeCandidates(rows) {
+    const node = document.querySelector("#hedge-candidates");
+    if (!rows?.length) { node.textContent = "当前没有带目标腿上下文的候选；排序模块已启用，等待策略候选快照。"; return; }
+    const items = rows.map((row) => `<tr><td>${esc(row.target_contract || "通用")}</td><td>${esc(row.contract || row.symbol || "—")}</td><td>${esc(row.rank ?? "—")}</td><td>${esc(row.activity_count_300s ?? "—")}</td><td>${esc(row.expected_net_cny ?? row.expected_cost_cny ?? "—")}</td><td>${esc(row.reason || row.status || "—")}</td></tr>`).join("");
+    node.innerHTML = `<div class="table-wrap"><table><thead><tr><th>目标腿</th><th>候选合约</th><th>排序</th><th>300秒成交次数</th><th>预期收益/成本</th><th>资格状态</th></tr></thead><tbody>${items}</tbody></table></div>`;
+  }
   function chartFor(contract) {
     let item = state.charts.get(contract); if (item) return item;
     const card = document.createElement("article"); card.className = "card"; card.dataset.contract = contract;
@@ -40,6 +65,8 @@
     const quotes = new Map((body.quotes || []).filter((row) => row.contract).map((row) => [row.contract,row]));
     const bands = new Map((body.bands || []).filter((row) => row.contract).map((row) => [row.contract,row]));
     const contracts = new Set([...quotes.keys(), ...bands.keys(), ...Object.keys(body.series || {})]);
+    renderLayers(body, [...quotes.values()]);
+    renderHedgeCandidates(body.hedge_ranking || []);
     [...contracts].sort().forEach((contract) => updateChart(contract, body.series?.[contract], quotes.get(contract), bands.get(contract), body.orders || [], body.hedge_ranking || []));
     state.cursor = body.next_cursor || state.cursor;
     status.textContent = `最近 ${window_minutes} 分钟：${body.window_start || "—"} 至 ${body.window_end || "—"}；合约 ${contracts.size} 个；${body.truncated ? "已采样/截断" : "完整返回窗口内上限"}；发布 ${body.freshness?.published_at || "—"}，接收 ${body.freshness?.received_at || "—"}`;
