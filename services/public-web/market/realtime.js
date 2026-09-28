@@ -2,7 +2,7 @@
 (async () => {
   "use strict";
   const status = document.querySelector("#status"), root = document.querySelector("#contracts"), login = document.querySelector("#login");
-  const state = {cursor: null, timer: null, controller: null, inFlight: false, charts: new Map(), rows: new Map(), hidden: document.hidden, retryAttempt: 0};
+  const state = {cursor: null, timer: null, ageTimer: null, internationalAges: null, controller: null, inFlight: false, charts: new Map(), rows: new Map(), hidden: document.hidden, retryAttempt: 0};
   const esc = (value) => String(value ?? "—").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
   const priceText = (value, digits = 2) => {
     const number = Number(value);
@@ -10,17 +10,24 @@
   };
   const stamp = (row) => row.observed_at || row.captured_at || row.source_time;
   const point = (row) => { const time = Date.parse(stamp(row)) / 1000, value = Number(row.last_price); return Number.isFinite(time) && Number.isFinite(value) ? {time, value} : null; };
-  const ageText = (source) => {
-    if (source?.age_seconds == null) return "年龄未知";
-    const age = Number(source.age_seconds);
-    return !Number.isFinite(age) ? "年龄未知" : `${Math.max(0, age).toFixed(2)} 秒前`;
-  };
-  const ageValue = (source) => Number(source?.age_seconds);
-  const ageClass = (source) => Number.isFinite(ageValue(source)) && ageValue(source) > 1 ? "quote-age quote-age-stale" : "quote-age";
+  const ageValue = (source) => source?.age_seconds == null ? null : Number(source.age_seconds);
+  const ageText = (source) => Number.isFinite(ageValue(source)) ? `${Math.max(0, ageValue(source)).toFixed(2)}s` : "—";
   const timeText = (value) => {
     const time = Date.parse(value || "");
-    return Number.isFinite(time) ? new Date(time).toLocaleTimeString("zh-SG", {hour12: false}) : "时间未知";
+    return Number.isFinite(time) ? new Date(time).toLocaleTimeString("zh-SG", {hour12: false, timeZone: "Asia/Singapore"}) : "—";
   };
+  function updateInternationalAges() {
+    if (!state.internationalAges) return;
+    const elapsed = Math.max(0, (performance.now() - state.internationalAges.receivedAt) / 1000);
+    for (const name of ["xau", "fx"]) {
+      const node = document.querySelector(`#international-${name}-age`);
+      const initial = state.internationalAges[name];
+      const age = initial == null ? null : Math.max(0, initial + elapsed);
+      node.textContent = age == null ? "—" : `${age.toFixed(2)}s`;
+      node.classList.toggle("quote-age-stale", age != null && age > 1);
+    }
+    if (!state.hidden) state.ageTimer = window.setTimeout(updateInternationalAges, 100);
+  }
   function renderLayers(body, quotes) {
     const latest = quotes[quotes.length - 1] || {}, sources = latest.sources || {}, international = body.international || {};
     const xau = sources.xau || sources.xauusd || {}, fx = sources.fx || sources.usdcnh || {}, domestic = sources.domestic || {};
@@ -31,7 +38,11 @@
     const overlap = body.overlap?.status || (domesticReady && intlReady ? "READY｜存在有效重叠" : domesticReady ? "DOMESTIC_ONLY｜仅国内行情可用" : intlReady ? "INTERNATIONAL_ONLY｜等待国内行情" : "BLOCKED｜两层行情均待确认");
     const strategy = body.strategy?.status || (domesticReady && intlReady ? "READY｜策略可运行" : "BLOCKED｜等待有效重叠行情");
     document.querySelector("#international-status").textContent = intlStatus;
-    document.querySelector("#international-detail").innerHTML = `$${priceText(intlXau.price ?? latest.xauusd_usd_per_oz)} · ¥${priceText(international.international_cny_per_g ?? latest.international_price)}/克 · XAU <span class="${ageClass(intlXau)}">${ageText(intlXau)}</span> · FX <span class="${ageClass(intlFx)}">${ageText(intlFx)}</span> · 更新 ${esc(timeText(international.updated_at))}`;
+    document.querySelector("#international-detail").innerHTML = `$${priceText(intlXau.price ?? latest.xauusd_usd_per_oz)}/oz · ¥${priceText(international.international_cny_per_g ?? latest.international_price)}/g <span class="quote-divider">|</span> XAU <span id="international-xau-age" class="quote-age">${ageText(intlXau)}</span> · FX <span id="international-fx-age" class="quote-age">${ageText(intlFx)}</span> <span class="quote-divider">|</span> ↻${esc(timeText(international.updated_at))}`;
+    state.internationalAges = {xau: Number.isFinite(ageValue(intlXau)) ? Math.max(0, ageValue(intlXau)) : null,
+                               fx: Number.isFinite(ageValue(intlFx)) ? Math.max(0, ageValue(intlFx)) : null,
+                               receivedAt: performance.now()};
+    updateInternationalAges();
     document.querySelector("#domestic-status").textContent = body.domestic?.status || (domesticReady ? "FRESH｜国内行情新鲜" : "STALE｜国内行情待确认");
     document.querySelector("#domestic-detail").textContent = `${quotes.length} 个合约 · ${ageText(domestic)} · ${domesticReady ? "可参与策略计算" : "不参与新策略"}`;
     document.querySelector("#overlap-status").textContent = overlap;
@@ -108,9 +119,10 @@
     }
     finally { state.inFlight = false; }
   }
-  document.addEventListener("visibilitychange", () => { state.hidden = document.hidden; if (state.hidden) {state.controller?.abort(); window.clearTimeout(state.timer);} else {load(true);} });
-  window.addEventListener("pagehide", () => {window.clearTimeout(state.timer); state.controller?.abort(); state.charts.forEach((item) => item.chart?.remove());});
+  document.addEventListener("visibilitychange", () => { state.hidden = document.hidden; if (state.hidden) {state.controller?.abort(); window.clearTimeout(state.timer); window.clearTimeout(state.ageTimer); state.ageTimer = null;} else {updateInternationalAges(); load(true);} });
+  window.addEventListener("pagehide", () => {window.clearTimeout(state.timer); window.clearTimeout(state.ageTimer); state.controller?.abort(); state.charts.forEach((item) => item.chart?.remove());});
   login?.addEventListener("click", () => MarketPage.login());
   try { await MarketPage.absorbLoginHandoff(); } catch (error) { status.textContent = error.message; }
+  if (!state.hidden) state.ageTimer = window.setTimeout(updateInternationalAges, 100);
   await load(true);
 })();

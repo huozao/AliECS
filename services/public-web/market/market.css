@@ -4,3 +4,6 @@
 .market-nav a, nav a { color: #79b8ff; margin-right: 8px; }
 @keyframes quote-age-blink { 50% { opacity: .35; } }
 .quote-age-stale { color: #ff5f56; animation: quote-age-blink 1s steps(2, jump-none) infinite; font-weight: 700; }
+.realtime-overview #international-detail { font-variant-numeric: tabular-nums; line-height: 1.5; }
+.realtime-overview .quote-divider { color: #60788c; margin: 0 3px; }
+@media (prefers-reduced-motion: reduce) { .quote-age-stale { animation: none; } }
