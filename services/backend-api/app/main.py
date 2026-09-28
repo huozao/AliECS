@@ -24,6 +24,7 @@ from app.routers.exports import router as exports_router
 from app.routers.formula_colors import router as formula_colors_router
 from app.routers.gold_spread_alerts import router as gold_spread_alerts_router
 from app.routers.market_snapshot import router as market_snapshot_router
+from app.routers.market_stream import router as market_stream_router
 from app.routers.miniapp_accounts import router as miniapp_accounts_router
 from app.routers.notify import router as notify_router
 from app.routers.ops import router as ops_router
@@ -46,6 +47,7 @@ app.include_router(clash_profile_router)
 app.include_router(versions_router)
 app.include_router(gold_spread_alerts_router)
 app.include_router(market_snapshot_router)
+app.include_router(market_stream_router)
 app.include_router(notify_router)
 app.include_router(auth_admin_router)
 app.include_router(auth_oidc_router)

@@ -441,3 +441,10 @@ ssh txecs 'sudo docker exec -i business-cn-postgres-1 psql -U app -d app -v ON_E
 切换到本机只读来源时，运行环境通过 `MARKET_REVIEW_ARCHIVE_URL` 和 `MARKET_REVIEW_ARCHIVE_TOKEN` 注入；token 只来自 SOPS/运行环境，不进仓库或日志。连接固定调用 `/internal/review/v1`，超时 8 秒、响应上限 8 MiB；来源断连对已认证浏览器返回 `503 source_unavailable`，不伪装成空列表。未设置 URL 时保留 PG 维护期兼容路径。
 
 验证：`tests/test_market_review_api.py` 覆盖权限、维护拒绝及普通 snapshot 兼容；`tests/test_market_ingest_concurrency.py` 保留单进程登录响应回归。热更新必须在 GitHub 合并后用正式镜像交付收尾。
+
+实时消息流签发接口当前只在隔离实现中验证。部署时需由受限运行环境注入
+`GSM_CENTRIFUGO_TOKEN_SECRET`，与 broker `client.token.hmac_secret_key` 一致，
+与 `AUTH_TOKEN_SECRET` 分开；broker 同时校验 audience `gold-market-stream` 和
+issuer `aliecs-market`。缺少密钥时接口返回 503。只允许 `gold:market` 服务端订阅，
+Broker 的客户端发布权限必须保持关闭；上线前还需完成本机及公网 WebSocket 代理、
+页面接线、鉴权和回滚验证，不能仅凭 token 接口通过就发布。
