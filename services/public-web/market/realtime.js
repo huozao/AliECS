@@ -2,7 +2,7 @@
 (async () => {
   "use strict";
   const status = document.querySelector("#status"), root = document.querySelector("#contracts"), login = document.querySelector("#login"), windowSelect = document.querySelector("#window-minutes");
-  const state = {cursor: null, timer: null, ageTimer: null, internationalAges: null, controller: null, inFlight: false, pendingReload: false, generation: 0, runId: null, charts: new Map(), rows: new Map(), hidden: document.hidden, retryAttempt: 0, windowMinutes: 5};
+  const state = {cursor: null, since: null, timer: null, ageTimer: null, internationalAges: null, controller: null, inFlight: false, pendingReload: false, generation: 0, runId: null, charts: new Map(), rows: new Map(), hidden: document.hidden, retryAttempt: 0, windowMinutes: 5};
   const esc = (value) => String(value ?? "—").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
   const priceText = (value, digits = 2) => {
     const number = Number(value);
@@ -35,13 +35,19 @@
   }
   function renderLayers(body, quotes) {
     const latest = quotes[quotes.length - 1] || {}, sources = latest.sources || {}, international = body.international || {};
-    const xau = sources.xau || sources.xauusd || {}, fx = sources.fx || sources.usdcnh || {}, domestic = sources.domestic || {};
+    const xau = sources.xau || sources.xauusd || {}, fx = sources.fx || sources.usdcnh || {};
     const intlXau = international.xauusd || xau, intlFx = international.usdcnh || fx;
     const intlReady = international.strategy_allowed === true || (Number.isFinite(Number(latest.international_price)) && Number(intlXau.age_seconds) <= 30 && Number(intlFx.age_seconds) <= 30);
-    const domesticReady = Number(domestic.age_seconds) <= 30;
+    const freshQuotes = quotes.filter((quote) => {
+      const sourceTime = Date.parse(quote.source_time || "");
+      const age = (Date.now() - sourceTime) / 1000;
+      return Number.isFinite(age) && age >= -5 && age <= 30;
+    });
+    const domesticReady = quotes.length > 0 && freshQuotes.length === quotes.length;
+    const domesticAge = quotes.length ? Math.max(...quotes.map((quote) => (Date.now() - Date.parse(quote.source_time || "")) / 1000)) : null;
     const intlStatus = body.international?.status || (intlReady ? "READY｜国际参考可用" : "REFERENCE_BLOCKED｜国际参考不可用");
     const overlap = body.overlap?.status || (domesticReady && intlReady ? "READY｜存在有效重叠" : domesticReady ? "DOMESTIC_ONLY｜仅国内行情可用" : intlReady ? "INTERNATIONAL_ONLY｜等待国内行情" : "BLOCKED｜两层行情均待确认");
-    const strategy = body.strategy?.status || (domesticReady && intlReady ? "READY｜策略可运行" : "BLOCKED｜等待有效重叠行情");
+    const strategy = body.strategy?.status || (domesticReady && intlReady ? "MARKET_READY｜行情重叠可用，策略状态待核对" : "BLOCKED｜等待有效重叠行情");
     document.querySelector("#international-status").textContent = intlStatus;
     document.querySelector("#international-detail").innerHTML = `$${priceText(intlXau.price ?? latest.xauusd_usd_per_oz)}/oz · ¥${priceText(international.international_cny_per_g ?? latest.international_price)}/g <span class="quote-divider">|</span> XAU <span id="international-xau-age" class="quote-age">${ageText(intlXau)}</span> · FX <span id="international-fx-age" class="quote-age">${ageText(intlFx)}</span> <span class="quote-divider">|</span> ↻${esc(timeText(international.updated_at))}`;
     state.internationalAges = {xau: Number.isFinite(ageValue(intlXau)) ? Math.max(0, ageValue(intlXau)) : null,
@@ -49,11 +55,11 @@
                                receivedAt: performance.now()};
     updateInternationalAges();
     document.querySelector("#domestic-status").textContent = body.domestic?.status || (domesticReady ? "FRESH｜国内行情新鲜" : "STALE｜国内行情待确认");
-    document.querySelector("#domestic-detail").textContent = `${quotes.length} 个合约 · ${ageText(domestic)} · ${domesticReady ? "可参与策略计算" : "不参与新策略"}`;
+    document.querySelector("#domestic-detail").textContent = `${freshQuotes.length}/${quotes.length} 个合约新鲜 · ${Number.isFinite(domesticAge) ? Math.max(0, domesticAge).toFixed(2) + "s" : "—"} · ${domesticReady ? "可参与行情计算" : "不参与新策略"}`;
     document.querySelector("#overlap-status").textContent = overlap;
-    document.querySelector("#overlap-detail").textContent = body.overlap?.reason || (domesticReady && intlReady ? "国内与国际行情均有新鲜报价" : "国际参考不可用时阻断新策略");
+    document.querySelector("#overlap-detail").textContent = body.overlap?.reason || (domesticReady && intlReady ? "国内与国际行情均有新鲜报价" : domesticReady ? "等待国际参考" : "等待国内行情新鲜报价");
     document.querySelector("#strategy-status").textContent = strategy;
-    document.querySelector("#strategy-detail").textContent = body.strategy?.reason || (domesticReady && intlReady ? "新建策略信号允许" : "只读采集继续，等待有效参考");
+    document.querySelector("#strategy-detail").textContent = body.strategy?.reason || (domesticReady && intlReady ? "行情已重叠；账户执行仍以服务端风控为准" : "只读采集继续，等待有效参考");
   }
   function renderHedgeCandidates(rows) {
     const node = document.querySelector("#hedge-candidates");
@@ -98,7 +104,8 @@
   }
   function render(body) {
     const window_minutes = body.window_minutes || state.windowMinutes;
-    if (body.reset || (state.runId && body.run_id && state.runId !== body.run_id)) { state.rows.clear(); state.cursor = null; }
+    const runChanged = Boolean(state.runId && body.run_id && state.runId !== body.run_id);
+    if (body.reset || runChanged) { state.rows.clear(); state.cursor = null; state.since = null; }
     state.runId = body.run_id || state.runId;
     const quotes = new Map((body.quotes || []).filter((row) => row.contract).map((row) => [row.contract,row]));
     const bands = new Map((body.bands || []).filter((row) => row.contract).map((row) => [row.contract,row]));
@@ -107,7 +114,10 @@
     renderHedgeCandidates(body.hedge_ranking || []);
     [...contracts].sort().forEach((contract) => updateChart(contract, body.series?.[contract], quotes.get(contract), bands.get(contract), body.orders || [], body.hedge_ranking || []));
     state.cursor = body.next_cursor || state.cursor;
-    status.textContent = `最近 ${window_minutes} 分钟：${body.window_start || "—"} 至 ${body.window_end || "—"}；合约 ${contracts.size} 个；${body.truncated ? "已采样/截断" : "完整返回窗口内上限"}；发布 ${body.freshness?.published_at || "—"}，接收 ${body.freshness?.received_at || "—"}`;
+    state.since = runChanged || body.truncated || body.orders_truncated ? null : body.next_since || state.since;
+    const windowEnd = body.window_end || body.server_time;
+    const windowStart = Number.isFinite(Date.parse(windowEnd)) ? new Date(Date.parse(windowEnd) - window_minutes * 60000).toISOString() : "—";
+    status.textContent = `最近 ${window_minutes} 分钟：${windowStart} 至 ${windowEnd || "—"}；合约 ${contracts.size} 个；${body.truncated ? "已采样/截断" : "完整返回窗口内上限"}；发布 ${body.freshness?.published_at || "—"}，接收 ${body.freshness?.received_at || "—"}`;
   }
   function retryDelay(error) {
     if (Number.isFinite(error?.retryAfterMs)) return error.retryAfterMs;
@@ -124,7 +134,9 @@
     state.inFlight = true; state.controller = new AbortController(); const generation = state.generation;
     try {
       const query = new URLSearchParams({window_minutes: String(state.windowMinutes)});
-      if (!force && state.cursor) query.set("after", state.cursor);
+      if (!force && state.since) {
+        query.set("since", state.since);
+      } else if (!force && state.cursor) query.set("after", state.cursor);
       const body = await MarketPage.request(`/api/v1/market/realtime?${query}`, {controller: state.controller});
       if (generation !== state.generation || state.hidden) return;
       render(body);
@@ -144,7 +156,7 @@
   windowSelect?.addEventListener("change", () => {
     const next = Number(windowSelect.value);
     if (![5, 10, 15].includes(next)) return;
-    state.windowMinutes = next; state.generation += 1; state.cursor = null; state.rows.clear(); state.retryAttempt = 0; load(true);
+    state.windowMinutes = next; state.generation += 1; state.cursor = null; state.since = null; state.rows.clear(); state.retryAttempt = 0; load(true);
   });
   try { await MarketPage.absorbLoginHandoff(); } catch (error) { status.textContent = error.message; }
   if (!state.hidden) state.ageTimer = window.setTimeout(updateInternationalAges, 100);

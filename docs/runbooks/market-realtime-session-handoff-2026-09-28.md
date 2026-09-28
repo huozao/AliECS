@@ -79,6 +79,13 @@ d0046a8 Use backend auth for market dashboard access
 - 右侧显示上方卖挂单、价格带上边缘、真实成交价、价格带中心、价格带下边缘、下方买挂单；
 - 不在国内合约窗口中再渲染对冲候选列表；候选只在页面下方统一显示。
 
+后续修复：国内新鲜度由每个精简报价的 `source_time` 计算并显示新鲜合约数；
+精简接口不带 `sources.domestic`，不能以其缺失判定国内断线。页面首次读取整窗，后续
+用 Review API 的 `next_since` 增量读取；不传 `source_revision`，因为它随每次发布改变，
+传入会强制整窗重取。run_id 切换、窗口切换和页面重新显示时重新读取整窗。
+页面上的行情重叠状态只说明报价新鲜，不宣称账户执行已获准。验证入口：
+`node --test tests/realtime-page.test.cjs`，再以浏览器 Network 核对首屏整窗和后续 `since` 请求。
+
 ## 生产热更新与回退
 
 本次最终实时页热更新前创建了备份：
