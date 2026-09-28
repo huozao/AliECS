@@ -82,3 +82,31 @@ class MarketStreamAuthTests(unittest.TestCase):
         self.assertEqual(response.json()["run_id"], "r")
         with patch.object(self.module, "_user_roles_permissions", return_value=([], ["market.read"])):
             self.assertEqual(client.get("/v1/market/bootstrap?window_minutes=7").status_code, 422)
+
+    def test_bootstrap_is_gzipped_only_when_client_accepts_it(self):
+        app = FastAPI()
+        app.include_router(self.snapshot_module.router)
+        client = TestClient(app)
+        app.dependency_overrides[self.snapshot_module.require_login] = lambda: {"uid": 7, "permissions": ["market.read"]}
+        sourced = {"schema_version": "gold-display-bootstrap/v1", "run_id": "r",
+                   "stream_epoch": "e", "source_sequence": 2, "continuous": True,
+                   "window_minutes": 5, "events": [{"contract": "SHFE.au2612", "price": 1.5}] * 200}
+        with patch.object(self.module, "_user_roles_permissions", return_value=([], ["market.read"])), \
+                patch.object(self.snapshot_module, "_source_get", return_value=sourced):
+            zipped = client.get("/v1/market/bootstrap?window_minutes=5",
+                                headers={"Accept-Encoding": "br, gzip;q=0.8"})
+            plain = client.get("/v1/market/bootstrap?window_minutes=5",
+                               headers={"Accept-Encoding": "identity"})
+            refused = client.get("/v1/market/bootstrap?window_minutes=5",
+                                 headers={"Accept-Encoding": "gzip;q=0"})
+        self.assertEqual(zipped.headers["content-encoding"], "gzip")
+        self.assertLess(int(zipped.headers["content-length"]), len(plain.content))
+        self.assertEqual(zipped.json(), sourced)
+        for response in (zipped, plain, refused):
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.headers["cache-control"], "no-store")
+            self.assertEqual(response.headers["vary"], "Accept-Encoding")
+            self.assertTrue(response.headers["content-type"].startswith("application/json"))
+        self.assertNotIn("content-encoding", plain.headers)
+        self.assertNotIn("content-encoding", refused.headers)
+        self.assertEqual(plain.json(), sourced)
