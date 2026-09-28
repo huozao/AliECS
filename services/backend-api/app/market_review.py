@@ -4,10 +4,12 @@ from __future__ import annotations
 import copy
 import base64
 import json
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
+from urllib.request import Request, urlopen
 
 from fastapi import HTTPException
 from psycopg.types.json import Jsonb
@@ -24,6 +26,30 @@ MARKET_INGEST_LOCK_TIMEOUT_MS = 3000
 MARKET_INGEST_STATEMENT_TIMEOUT_MS = 15000
 _ingest_logger = configure_logging('aliecs.market_review_ingest')
 _DETAIL_CHART_FIELDS = ('last_price', 'center', 'lower', 'upper', 'fair_price')
+
+
+def _international_reference() -> dict:
+    """Read the independent MT5 reference layer from the WSL review API."""
+    base = os.getenv('MARKET_REVIEW_ARCHIVE_URL', '').rstrip('/')
+    token = os.getenv('MARKET_REVIEW_ARCHIVE_TOKEN', '')
+    if not base or not token:
+        return {'status': 'UNAVAILABLE｜国际状态接口未配置', 'strategy_allowed': False,
+                'fallback_policy': 'MANUAL_ONLY｜备用源人工选择',
+                'reason': 'INTERNATIONAL_API_NOT_CONFIGURED', 'xauusd': {}, 'usdcnh': {},
+                'international_cny_per_g': None}
+    try:
+        request = Request(base + '/internal/review/v1/international',
+                          headers={'X-Review-Archive-Token': token})
+        with urlopen(request, timeout=1.0) as response:
+            payload = json.loads(response.read().decode('utf-8'))
+        return payload if isinstance(payload, dict) else {'status': 'UNAVAILABLE｜国际状态响应无效', 'strategy_allowed': False,
+                'fallback_policy': 'MANUAL_ONLY｜备用源人工选择', 'reason': 'INTERNATIONAL_API_INVALID_RESPONSE',
+                'xauusd': {}, 'usdcnh': {}, 'international_cny_per_g': None}
+    except Exception as exc:
+        return {'status': 'UNAVAILABLE｜国际状态接口不可用', 'strategy_allowed': False,
+                'fallback_policy': 'MANUAL_ONLY｜备用源人工选择',
+                'reason': f'INTERNATIONAL_API_UNAVAILABLE｜{type(exc).__name__}',
+                'xauusd': {}, 'usdcnh': {}, 'international_cny_per_g': None}
 
 
 def utc(value: str) -> datetime:
@@ -322,6 +348,7 @@ def realtime_view(after: str | None = None, window_minutes: int = REALTIME_DEFAU
             for row in snapshot.get('quotes', []) if row.get('contract')
         ],
         'hedge_ranking': snapshot.get('hedge_ranking', []),
+        'international': _international_reference(),
         'series': series,
         'run_id': snapshot.get('run_id'),
         'freshness': {'published_at': snapshot.get('published_at'), 'received_at': snapshot.get('received_at')},

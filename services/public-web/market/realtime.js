@@ -1,188 +1,377 @@
-/* Fixed-window market screen: one bounded request, then cursor increments. */
+/* Live market screen: a stream owns the hot path; bounded HTTP remains the explicit fallback. */
 (async () => {
   "use strict";
-  const status = document.querySelector("#status"), root = document.querySelector("#contracts"), login = document.querySelector("#login"), windowSelect = document.querySelector("#window-minutes");
-  const state = {cursor: null, timer: null, controller: null, inFlight: false, pendingReload: false, generation: 0, sourceRevision: null, charts: new Map(), rows: new Map(), hidden: document.hidden, retryAttempt: 0, windowMinutes: 5};
+  const status = document.querySelector("#status"), streamStatus = document.querySelector("#stream-status"), root = document.querySelector("#contracts"), login = document.querySelector("#login"), windowSelect = document.querySelector("#window-minutes");
+  const state = {since: null, timer: null, headTimer: null, ageTimer: null, internationalAges: null, controller: null, inFlight: false, pendingReload: false, generation: 0, streamGeneration: 0, runId: null, charts: new Map(), rows: new Map(), hidden: document.hidden, retryAttempt: 0, windowMinutes: 5, streamReady: false, streamStarting: false, streamTransport: null, streamStartPromise: null, streamUpdates: 0};
+  const streamReducer = typeof GoldMarketRealtimeState !== "undefined" ? GoldMarketRealtimeState.create({
+    expectedContracts: 8,
+    onResync: ({reason}) => {
+      clearStreamView();
+      state.streamReady = false;
+      status.textContent = `实时流已暂停（${reason}），正在重新取得窗口…`;
+      state.streamTransport?.bootstrap(`state:${reason}`);
+    },
+  }) : null;
+  function setStreamStatus(text) { if (streamStatus) streamStatus.textContent = text; }
   const esc = (value) => String(value ?? "—").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+  const priceText = (value, digits = 2) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? number.toFixed(digits) : "—";
+  };
   const stamp = (row) => row.observed_at || row.captured_at || row.source_time;
-  // A source may revise an order state at the same observed instant.  Keep the
-  // revision/sequence in the cache key; collapsing to the timestamp erases a
-  // cancel/reprice transition before the chart code can decide how to render it.
-  const orderKey = row => `${stamp(row)}|${row.revision ?? row.snapshot_sequence ?? row.sequence ?? ""}|${row.ordinal ?? row.event_sequence ?? ""}|${JSON.stringify(row.orders || row.order_history || [])}`;
-  const finite = value => value != null && value !== "" && Number.isFinite(Number(value));
-  const colors = {upper:"#84b8ef", center:"#f6c85f", lower:"#84b8ef", buy:"#56d6b0", sell:"#ef9a6a"};
-  const sgt = new Intl.DateTimeFormat("en-GB", {timeZone:"Asia/Singapore", hour:"2-digit", minute:"2-digit", second:"2-digit", hour12:false});
-  const timeLabel = value => Number.isFinite(Date.parse(value)) ? `${sgt.format(new Date(value))} SGT` : "—";
-  const point = (row) => { const time = Date.parse(stamp(row)) / 1000, value = Number(row.last_price); return Number.isFinite(time) && finite(row.last_price) ? {time:Math.floor(time), value} : null; };
+  const point = (row) => { const time = Date.parse(stamp(row)) / 1000, value = Number(row.last_price); return Number.isFinite(time) && Number.isFinite(value) ? {time, value} : null; };
+  const finite = (value) => value != null && value !== "" && Number.isFinite(Number(value));
+  const seriesPoints = (rows, field) => [...new Map(rows.map((row) => {
+    const time = row.bucket_start_ms != null ? Number(row.bucket_start_ms) / 1000 : Date.parse(stamp(row)) / 1000;
+    return [time, Number.isFinite(time) && finite(row[field]) ? {time, value: Number(row[field])} : null];
+  }).filter((entry) => entry[1])).values()].sort((a, b) => a.time - b.time);
+  const ageValue = (source) => source?.age_seconds == null ? null : Number(source.age_seconds);
+  const ageText = (source) => Number.isFinite(ageValue(source)) ? `${Math.max(0, ageValue(source)).toFixed(2)}s` : "—";
+  const timeText = (value) => {
+    const time = Date.parse(value || "");
+    return Number.isFinite(time) ? new Date(time).toLocaleTimeString("zh-SG", {hour12: false, timeZone: "Asia/Singapore"}) : "—";
+  };
+  function updateInternationalAges() {
+    if (!state.internationalAges) return;
+    const elapsed = Math.max(0, (performance.now() - state.internationalAges.receivedAt) / 1000);
+    for (const name of ["xau", "fx"]) {
+      const node = document.querySelector(`#international-${name}-age`);
+      const initial = state.internationalAges[name];
+      const age = initial == null ? null : Math.max(0, initial + elapsed);
+      node.textContent = age == null ? "—" : `${age.toFixed(2)}s`;
+      node.classList.toggle("quote-age-stale", age != null && age > 1);
+    }
+    if (!state.hidden) state.ageTimer = window.setTimeout(updateInternationalAges, 100);
+  }
+  function renderLayers(body, quotes) {
+    const latest = quotes[quotes.length - 1] || {}, sources = latest.sources || {}, international = body.international || {};
+    const xau = sources.xau || sources.xauusd || {}, fx = sources.fx || sources.usdcnh || {};
+    const intlXau = international.xauusd || xau, intlFx = international.usdcnh || fx;
+    const intlReady = international.strategy_allowed === true || (Number.isFinite(Number(latest.international_price)) && Number(intlXau.age_seconds) <= 30 && Number(intlFx.age_seconds) <= 30);
+    const freshQuotes = quotes.filter((quote) => {
+      const sourceTime = Date.parse(quote.source_time || "");
+      const age = (Date.now() - sourceTime) / 1000;
+      return Number.isFinite(age) && age >= -5 && age <= 30;
+    });
+    const domesticReady = quotes.length > 0 && freshQuotes.length === quotes.length;
+    const domesticAge = quotes.length ? Math.max(...quotes.map((quote) => (Date.now() - Date.parse(quote.source_time || "")) / 1000)) : null;
+    const intlStatus = body.international?.status || (intlReady ? "READY｜国际参考可用" : "REFERENCE_BLOCKED｜国际参考不可用");
+    const overlap = body.overlap?.status || (domesticReady && intlReady ? "READY｜存在有效重叠" : domesticReady ? "DOMESTIC_ONLY｜仅国内行情可用" : intlReady ? "INTERNATIONAL_ONLY｜等待国内行情" : "BLOCKED｜两层行情均待确认");
+    const strategy = body.strategy?.status || (domesticReady && intlReady ? "MARKET_READY｜行情重叠可用，策略状态待核对" : "BLOCKED｜等待有效重叠行情");
+    document.querySelector("#international-status").textContent = intlStatus;
+    document.querySelector("#international-detail").innerHTML = `$${priceText(intlXau.price ?? latest.xauusd_usd_per_oz)}/oz · ¥${priceText(international.international_cny_per_g ?? latest.international_price)}/g <span class="quote-divider">|</span> XAU <span id="international-xau-age" class="quote-age">${ageText(intlXau)}</span> · FX <span id="international-fx-age" class="quote-age">${ageText(intlFx)}</span> <span class="quote-divider">|</span> ↻${esc(timeText(international.updated_at))}`;
+    state.internationalAges = {xau: Number.isFinite(ageValue(intlXau)) ? Math.max(0, ageValue(intlXau)) : null,
+                               fx: Number.isFinite(ageValue(intlFx)) ? Math.max(0, ageValue(intlFx)) : null,
+                               receivedAt: performance.now()};
+    updateInternationalAges();
+    document.querySelector("#domestic-status").textContent = body.domestic?.status || (domesticReady ? "FRESH｜国内行情新鲜" : "STALE｜国内行情待确认");
+    document.querySelector("#domestic-detail").textContent = `${freshQuotes.length}/${quotes.length} 个合约新鲜 · ${Number.isFinite(domesticAge) ? Math.max(0, domesticAge).toFixed(2) + "s" : "—"} · ${domesticReady ? "可参与行情计算" : "不参与新策略"}`;
+    document.querySelector("#overlap-status").textContent = overlap;
+    document.querySelector("#overlap-detail").textContent = body.overlap?.reason || (domesticReady && intlReady ? "国内与国际行情均有新鲜报价" : domesticReady ? "等待国际参考" : "等待国内行情新鲜报价");
+    document.querySelector("#strategy-status").textContent = strategy;
+    document.querySelector("#strategy-detail").textContent = body.strategy?.reason || (domesticReady && intlReady ? "行情已重叠；账户执行仍以服务端风控为准" : "只读采集继续，等待有效参考");
+  }
+  function renderHedgeCandidates(rows) {
+    const node = document.querySelector("#hedge-candidates");
+    if (!rows?.length) { node.textContent = "当前没有带目标腿上下文的候选；排序模块已启用，等待策略候选快照。"; return; }
+    const items = rows.map((row) => `<tr><td>${esc(row.target_contract || "通用")}</td><td>${esc(row.contract || row.symbol || "—")}</td><td>${esc(row.rank ?? "—")}</td><td>${esc(row.activity_count_300s ?? "—")}</td><td>${esc(row.expected_net_cny ?? row.expected_cost_cny ?? "—")}</td><td>${esc(row.reason || row.status || "—")}</td></tr>`).join("");
+    node.innerHTML = `<div class="table-wrap"><table><thead><tr><th>目标腿</th><th>候选合约</th><th>排序</th><th>300秒成交次数</th><th>预期收益/成本</th><th>资格状态</th></tr></thead><tbody>${items}</tbody></table></div>`;
+  }
   function chartFor(contract) {
     let item = state.charts.get(contract); if (item) return item;
     const card = document.createElement("article"); card.className = "market-card realtime-contract-card"; card.dataset.contract = contract;
-    card.innerHTML = `<div class="realtime-card-head"><h2>${esc(contract)}</h2><div class="last">—</div></div><div class="realtime-parallel"><div><div class="realtime-extremes"><span>秒内最高 <b data-extreme="high">—</b></span><span>秒内最低 <b data-extreme="low">—</b></span></div><div class="chart" aria-label="${esc(contract)} 成交与 I 价格带"></div></div><div class="five-price" aria-label="${esc(contract)} 模型价格带与盘口"><span class="sell"><small>上方卖挂单</small><b data-tag="sell">—</b></span><span class="upper"><small>I 价格带上边缘</small><b data-tag="upper">—</b></span><span class="current"><small>真实成交价</small><b data-tag="current">—</b></span><span class="center"><small>I 价格带中心</small><b data-tag="center">—</b></span><span class="lower"><small>I 价格带下边缘</small><b data-tag="lower">—</b></span><span class="buy"><small>下方买挂单</small><b data-tag="buy">—</b></span></div></div><div class="muted"></div><ol class="hedges"></ol>`;
+    card.innerHTML = `<div class="realtime-card-head"><h2>${esc(contract)}</h2><div class="last">—</div></div><div class="realtime-parallel"><div><div class="realtime-extremes"><span>秒内最高 <b data-extreme="high">—</b></span><span>秒内最低 <b data-extreme="low">—</b></span></div><div class="chart" aria-label="${esc(contract)} 成交与 I 价格带"></div></div><div class="five-price" aria-label="${esc(contract)} 模型价格带与盘口"><span class="sell"><small>上方卖挂单</small><b data-tag="sell">—</b></span><span class="upper"><small>I 价格带上边缘</small><b data-tag="upper">—</b></span><span class="current"><small>真实成交价</small><b data-tag="current">—</b></span><span class="center"><small>I 价格带中心</small><b data-tag="center">—</b></span><span class="lower"><small>I 价格带下边缘</small><b data-tag="lower">—</b></span><span class="buy"><small>下方买挂单</small><b data-tag="buy">—</b></span></div></div><div class="muted"></div>`;
     root.append(card); const node = card.querySelector(".chart");
     if (window.LightweightCharts) {
-      const chart = LightweightCharts.createChart(node, {autoSize: true,
-        layout: {background:{color:"transparent"}, textColor:"#91a1af", attributionLogo:false},
-        localization:{timeFormatter:time=>`${sgt.format(new Date(time*1000))} SGT`},
-        timeScale:{timeVisible:true, secondsVisible:true, tickMarkFormatter:time=>sgt.format(new Date(time*1000))},
-        grid:{vertLines:{visible:false},horzLines:{color:"#243244"}}});
-      const price = chart.addSeries(LightweightCharts.LineSeries, {color:"#ffffff",lineWidth:2,priceLineVisible:false,lastValueVisible:false});
-      item = {card, chart, price, series:price, colors};
+      const chart = LightweightCharts.createChart(node, {autoSize: true, layout: {background:{color:"transparent"}, textColor:"#91a1af", attributionLogo:false}, timeScale:{timeVisible:true,secondsVisible:true}, grid:{vertLines:{visible:false},horzLines:{color:"#243244"}}});
+      const line = (color, options = {}) => chart.addSeries(LightweightCharts.LineSeries, {color, lineWidth:1, priceLineVisible:false, lastValueVisible:false, ...options});
+      item = {card, chart, price:line("#ffffff", {lineWidth:2}), upper:line("#84b8ef"), center:line("#f6c85f", {lineStyle:2}), lower:line("#84b8ef"), lastTimes: {price: null, upper: null, center: null, lower: null}};
     } else item = {card};
     state.charts.set(contract, item); return item;
   }
-  function updateChart(contract, data, quote, band, orders, ranking, orderData, ordersTruncated) {
-    const item = chartFor(contract), record = state.rows.get(contract) || {quotes: new Map(), bands: new Map(), orders: new Map()};
+  function updateChart(contract, data, quote, band, orders, ranking) {
+    const item = chartFor(contract), record = state.rows.get(contract) || {quotes: new Map(), bands: new Map()};
     for (const row of data?.quotes || []) record.quotes.set(`${stamp(row)}|${row.snapshot_sequence || ""}`, row);
     for (const row of data?.bands || []) record.bands.set(`${stamp(row)}|${row.snapshot_sequence || ""}`, row);
-    for (const row of orderData || []) record.orders.set(orderKey(row), row);
     const left = Date.now() - state.windowMinutes * 60 * 1000;
-    const previous = [...record.orders.values()].filter(row => Date.parse(stamp(row)) < left).at(-1);
-    for (const [key,row] of record.orders) if (Date.parse(stamp(row)) < left) record.orders.delete(key);
-    // Preserve the state entering the window, without retaining the whole session.
-    if (previous) {
-      // This is a visual state-anchor, not a new market observation.  Preserve
-      // the source timestamp for audit/revisions and keep the derived display
-      // coordinate separately so the page never rewrites market history.
-      const renderAnchorAt = new Date(left).toISOString();
-      record.orders.set(`render-anchor|${renderAnchorAt}`, {
-        ...previous, render_anchor_at: renderAnchorAt, order_history: [],
-      });
-    }
     for (const [key,row] of record.quotes) if (Date.parse(stamp(row)) < left) record.quotes.delete(key);
     for (const [key,row] of record.bands) if (Date.parse(stamp(row)) < left) record.bands.delete(key);
     state.rows.set(contract, record);
     const quotes = [...record.quotes.values()].sort((a,b) => Date.parse(stamp(a))-Date.parse(stamp(b)));
     const bands = [...record.bands.values()].sort((a,b) => Date.parse(stamp(a))-Date.parse(stamp(b)));
     const latest = quote || quotes.at(-1) || {};
-    // 秒内最高/最低 live in the snapshot's one-second OHLC bucket; the quote
-    // root has no highest/lowest field, so reading it always rendered "—".
-    const value = (field, source = latest) => {
-      const candidate = source?.[field];
-      return finite(candidate) ? Number(candidate).toFixed(2) : "—";
-    };
-    const rawOrder = orders.find((row) => row.contract === contract) || {};
-    const order = Object.fromEntries(["buy", "sell"].map(side => [side, MarketObservation.order({orders:[rawOrder.buy,rawOrder.sell].filter(Boolean)}, side)]));
+    const value = (field, source = latest) => finite(source?.[field]) ? Number(source[field]).toFixed(2) : "—";
+    const order = orders.find((row) => row.contract === contract) || {};
     item.card.querySelector(".last").textContent = value("last_price");
-    item.card.querySelector('[data-extreme="high"]').textContent = value("high", latest?.ohlc);
-    item.card.querySelector('[data-extreme="low"]').textContent = value("low", latest?.ohlc);
-    const tags = {sell: order.sell?.price, upper: band?.upper, current: latest?.last_price, center: band?.center, lower: band?.lower, buy: order.buy?.price};
+    item.card.querySelector('[data-extreme="high"]').textContent = value("high", latest.ohlc);
+    item.card.querySelector('[data-extreme="low"]').textContent = value("low", latest.ohlc);
+    const tags = {sell: order.sell?.price, upper: band?.upper, current: latest.last_price, center: band?.center, lower: band?.lower, buy: order.buy?.price};
     Object.entries(tags).forEach(([kind, price]) => { item.card.querySelector(`[data-tag="${kind}"]`).textContent = finite(price) ? Number(price).toFixed(2) : "—"; });
-    item.card.querySelector(".muted").textContent = `买 ${order.buy?.price ?? "—"}（${order.buy?.status ?? "—"}） · 卖 ${order.sell?.price ?? "—"}（${order.sell?.status ?? "—"}） · 源时刻 ${timeLabel(latest?.source_time || latest?.observed_at)}${orderData == null ? " · 挂单历史未提供" : ordersTruncated ? " · 挂单历史已截断" : ""}`;
-    item.card.querySelector(".hedges").innerHTML = (ranking || []).filter((row) => (row.target_contract || row.contract || row.symbol) === contract).slice(0,5).map((row) => `<li>${esc(row.contract || row.symbol || "无候选")}：${esc(row.rank ?? "—")} · ${esc(row.reason || row.status || "—")}</li>`).join("") || "<li>后端未给出该合约对冲候选</li>";
+    item.card.querySelector(".muted").textContent = `买 ${order.buy?.price ?? "—"}（${order.buy?.status ?? "—"}） · 卖 ${order.sell?.price ?? "—"}（${order.sell?.status ?? "—"}） · 源时刻 ${quote?.source_time || "—"}`;
     if (!item.chart) return;
-    const unique = rows => [...new Map(rows.map(row => [row.time,row])).values()].sort((a,b)=>a.time-b.time);
-    item.price.setData(unique(quotes.map(point).filter(Boolean)));
-    const timeline = new Map();
-    for (const row of quotes) timeline.set(stamp(row), {time:stamp(row), quote:row});
-    for (const row of bands) timeline.set(stamp(row), {...timeline.get(stamp(row)),time:stamp(row),band:row});
-    const rows = [...timeline.values()].sort((a,b)=>Date.parse(a.time)-Date.parse(b.time));
-    item.orderSourceRows = [...record.orders.values()]
-      .sort((a,b)=>Date.parse(a.render_anchor_at || stamp(a))-Date.parse(b.render_anchor_at || stamp(b)))
-      .map(row=>({time:row.render_anchor_at || stamp(row), source_time:stamp(row), quote:row}));
-    MarketObservation.layers(item, rows, false);
-
+    const pricePoints = seriesPoints(quotes, "last_price");
+    item.price.setData(pricePoints);
+    item.lastTimes.price = pricePoints.at(-1)?.time ?? null;
+    for (const [series, field, name] of [[item.upper,"upper","upper"],[item.center,"center","center"],[item.lower,"lower","lower"]]) {
+      const points = seriesPoints(bands, field);
+      series.setData(points);
+      item.lastTimes[name] = points.at(-1)?.time ?? null;
+    }
   }
-  function clearCharts() {
+  function clearStreamView() {
     state.rows.clear();
-    for (const item of state.charts.values()) { item.chart?.remove(); item.card.remove(); }
-    state.charts.clear(); state.since = null;
+    state.charts.forEach((item) => item.chart?.remove());
+    state.charts.clear();
+    root.innerHTML = "";
+  }
+  function streamIso(value) {
+    const time = Number(value);
+    return Number.isFinite(time) ? new Date(time).toISOString() : "";
+  }
+  function streamOrderRow(event) {
+    const result = {contract: event.contract, buy: null, sell: null};
+    for (const order of Array.isArray(event.orders) ? event.orders : []) {
+      const side = String(order.side || order.direction || "").toLowerCase();
+      const item = {price: order.price ?? order.price_cny_per_g,
+        status: order.status || order.state || "—"};
+      if (side.includes("buy") || side.includes("买")) result.buy = item;
+      if (side.includes("sell") || side.includes("卖")) result.sell = item;
+    }
+    return result;
+  }
+  function streamProjection(contract) {
+    if (!streamReducer) return {quotes: [], bands: [], latest: {}, band: {}, orders: []};
+    const parts = streamReducer.seriesFor(contract);
+    const quotes = [], bands = [];
+    for (const part of parts) {
+      const event = part.event;
+      const source = streamIso(event.source_time_ms);
+      const observed = streamIso(event.observed_at_ms);
+      const ohlc = event.ohlc && typeof event.ohlc === "object" ? event.ohlc : {};
+      quotes.push({contract, source_time: source, observed_at: observed, captured_at: observed,
+        bucket_start_ms: event.bucket_start_ms, snapshot_sequence: event.source_sequence,
+        last_price: event.price, ohlc: {high: ohlc.high, low: ohlc.low, close: ohlc.close,
+          bucket_start: streamIso(event.bucket_start_ms)}, orders: event.orders || []});
+      bands.push({contract, source_time: source, observed_at: observed,
+        bucket_start_ms: event.bucket_start_ms, snapshot_sequence: event.source_sequence,
+        upper: event.band?.upper, center: event.band?.center, lower: event.band?.lower});
+    }
+    const latest = quotes.at(-1) || {};
+    const band = bands.at(-1) || {};
+    const event = parts.at(-1)?.event;
+    return {quotes, bands, latest, band, orders: event ? [streamOrderRow(event)] : []};
+  }
+  function renderStreamSnapshot(snapshot) {
+    const result = streamReducer?.install(snapshot);
+    if (!result || result.action !== "bootstrap") return false;
+    clearStreamView();
+    const contracts = new Set(streamReducer.eventsFor().map((event) => event.contract));
+    for (const contract of [...contracts].sort()) {
+      const projection = streamProjection(contract);
+      updateChart(contract, {quotes: projection.quotes, bands: projection.bands},
+        projection.latest, projection.band, projection.orders, []);
+    }
+    const meta = streamReducer.metadata();
+    state.runId = meta.run_id || state.runId;
+    state.streamReady = meta.continuous;
+    status.textContent = `消息流已连接；窗口 ${meta.window_minutes} 分钟；源序号 ${meta.source_sequence}；${meta.window_complete ? "完整窗口" : "窗口预热中，暂不宣称连续"}`;
+    return true;
+  }
+  function renderStreamEvent(event) {
+    const result = streamReducer?.receive(event);
+    if (!result || result.action !== "applied") return result;
+    const projection = streamProjection(event.contract);
+    const item = chartFor(event.contract);
+    const latest = projection.latest, band = projection.band, order = projection.orders[0] || {};
+    item.card.querySelector(".last").textContent = priceText(latest.last_price);
+    item.card.querySelector('[data-extreme="high"]').textContent = priceText(latest.ohlc?.high);
+    item.card.querySelector('[data-extreme="low"]').textContent = priceText(latest.ohlc?.low);
+    const tags = {sell: order.sell?.price, upper: band.upper, current: latest.last_price,
+      center: band.center, lower: band.lower, buy: order.buy?.price};
+    Object.entries(tags).forEach(([kind, price]) => {
+      item.card.querySelector(`[data-tag="${kind}"]`).textContent = finite(price) ? Number(price).toFixed(2) : "—";
+    });
+    item.card.querySelector(".muted").textContent = `买 ${order.buy?.price ?? "—"}（${order.buy?.status ?? "—"}） · 卖 ${order.sell?.price ?? "—"}（${order.sell?.status ?? "—"}） · 源时刻 ${latest.source_time || "—"}`;
+    if (!item.chart) return result;
+    const time = Number(event.bucket_start_ms) / 1000;
+    const points = [[item.price, "price", event.price], [item.upper, "upper", band.upper],
+      [item.center, "center", band.center], [item.lower, "lower", band.lower]];
+    for (const [series, name, value] of points) {
+      if (!series || !finite(value)) continue;
+      const oldTime = item.lastTimes[name];
+      if (oldTime == null || time >= oldTime) {
+        series.update({time, value: Number(value)});
+        item.lastTimes[name] = time;
+      } else {
+        const fields = name === "price" ? "last_price" : name;
+        series.setData(seriesPoints(name === "price" ? projection.quotes : projection.bands, fields));
+        item.lastTimes[name] = time;
+      }
+    }
+    state.streamUpdates = (state.streamUpdates || 0) + 1;
+    if (state.streamUpdates % 120 === 0) {
+      updateChart(event.contract, {quotes: projection.quotes, bands: projection.bands},
+        latest, band, projection.orders, []);
+    }
+    const meta = streamReducer.metadata();
+    state.streamReady = meta.continuous;
+    status.textContent = `消息流已连接；窗口 ${meta.window_minutes} 分钟；源序号 ${meta.source_sequence}；${meta.window_complete ? "完整窗口" : "窗口预热中，暂不宣称连续"}`;
+    return result;
+  }
+  function renderHead(body) {
+    if (!body || state.hidden) return;
+    const quotes = (body.quotes || []).filter((row) => row.contract);
+    renderLayers(body, quotes);
+    renderHedgeCandidates(body.hedge_ranking || []);
   }
   function render(body) {
     const window_minutes = body.window_minutes || state.windowMinutes;
-    // A new run stream, or a server-side reset, invalidates what we hold.
-    if (body.reset || body.revision_reset || (body.run_id && body.run_id !== state.runId)) {
-      clearCharts();
-    }
-    state.runId = body.run_id ?? state.runId;
-    state.sourceRevision = body.source_revision ?? state.sourceRevision;
+    const runChanged = Boolean(state.runId && body.run_id && state.runId !== body.run_id);
+    if (body.reset || runChanged) { state.rows.clear(); state.since = null; }
+    state.runId = body.run_id || state.runId;
     const quotes = new Map((body.quotes || []).filter((row) => row.contract).map((row) => [row.contract,row]));
     const bands = new Map((body.bands || []).filter((row) => row.contract).map((row) => [row.contract,row]));
     const contracts = new Set([...quotes.keys(), ...bands.keys(), ...Object.keys(body.series || {})]);
-    [...contracts].sort().forEach((contract) => updateChart(contract, body.series?.[contract], quotes.get(contract), bands.get(contract), body.orders || [], body.hedge_ranking || [], body.order_series?.[contract], body.orders_truncated));
-    // The server states how far it actually covered. Deriving the watermark
-    // from the price rows we happened to draw assumes order state never lands
-    // after the last quote, and it keeps incrementing past a window the server
-    // had to truncate — the dropped left edge would then never be re-requested.
-    // `next_since: null` means exactly that: ask for the whole window again.
-    if ("next_since" in body) state.since = body.next_since || null;
-    else {
-      // Older source without the field: fall back to the drawn rows. Parse the
-      // instant rather than comparing strings, since an ISO stamp may or may
-      // not carry microseconds.
-      let watermark = state.since ? Date.parse(state.since) : -Infinity;
-      for (const record of state.rows.values())
-        for (const row of [...record.quotes.values(), ...record.bands.values()]) {
-          const at = stamp(row), time = Date.parse(at);
-          if (Number.isFinite(time) && time >= watermark) { watermark = time; state.since = at; }
-        }
+    renderLayers(body, [...quotes.values()]);
+    renderHedgeCandidates(body.hedge_ranking || []);
+    if (state.streamReady) {
+      state.since = null;
+      status.textContent = `消息流已连接；状态快照 ${body.freshness?.received_at || body.server_time || "—"}；${contracts.size} 个合约由消息流绘制`;
+      return;
     }
-    const gaps = Array.isArray(body.sequence_gap_alerts) ? body.sequence_gap_alerts : [];
-    const resolvedGaps = Array.isArray(body.sequence_gap_resolutions) ? body.sequence_gap_resolutions : [];
-    const gapNotice = gaps.length
-      ? `；⚠ 源序号缺口 ${gaps.map(gap => `${gap.first_missing_sequence}-${gap.last_missing_sequence}`).join(",")}`
-      : "";
-    const resolvedNotice = resolvedGaps.length && !gaps.length
-      ? `；✓ 源序号缺口已补齐 ${resolvedGaps.map(gap => `${gap.first_missing_sequence}-${gap.last_missing_sequence}`).join(",")}`
-      : "";
-    status.textContent = `最近 ${window_minutes} 分钟：${timeLabel(body.window_start)} 至 ${timeLabel(body.window_end)}；合约 ${contracts.size} 个；${body.truncated ? "仅返回窗口内最新若干点" : "窗口内数据已全部返回"}${gapNotice}${resolvedNotice}；发布 ${timeLabel(body.freshness?.published_at)}，接收 ${timeLabel(body.freshness?.received_at)}`;
+    [...contracts].sort().forEach((contract) => updateChart(contract, body.series?.[contract], quotes.get(contract), bands.get(contract), body.orders || [], body.hedge_ranking || []));
+    state.since = runChanged || body.truncated || body.orders_truncated ? null : body.next_since || state.since;
+    const windowEnd = body.window_end || body.server_time;
+    const windowStart = Number.isFinite(Date.parse(windowEnd)) ? new Date(Date.parse(windowEnd) - window_minutes * 60000).toISOString() : "—";
+    status.textContent = `最近 ${window_minutes} 分钟：${windowStart} 至 ${windowEnd || "—"}；合约 ${contracts.size} 个；${body.truncated ? "已采样/截断" : "完整返回窗口内上限"}；发布 ${body.freshness?.published_at || "—"}，接收 ${body.freshness?.received_at || "—"}`;
+  }
+  function stopStream(reason = "stopped") {
+    state.streamGeneration += 1;
+    state.streamTransport?.stop();
+    state.streamTransport = null;
+    state.streamStartPromise = null;
+    state.streamStarting = false;
+    state.streamReady = false;
+    streamReducer?.reset();
+    clearStreamView();
+    setStreamStatus(`消息流${reason}；使用 HTTP 窗口回退`);
+  }
+  function streamStatusText(update) {
+    const labels = {
+      token: "正在取得消息流凭据…", connecting: "消息流连接中…", connected: "消息流已连接，等待频道…",
+      subscribed: "频道已订阅，正在取得一次完整窗口…", bootstrapping: "消息流窗口同步中…",
+      disconnected: "消息流断开；等待重连或 HTTP 回退", gap: `消息流有缺口（${update.reason || "UNKNOWN"}）`,
+      error: `消息流错误：${update.error?.message || "UNKNOWN"}`,
+    };
+    return labels[update.state] || `消息流：${update.state || "UNKNOWN"}`;
+  }
+  function startStream() {
+    if (state.hidden || typeof GoldMarketRealtimeStream === "undefined"
+        || typeof GoldMarketRealtimeStream.create !== "function") {
+      setStreamStatus("消息流未加载；使用 HTTP 窗口回退");
+      return Promise.resolve(false);
+    }
+    if (state.streamStartPromise) return state.streamStartPromise;
+    if (state.streamTransport) state.streamTransport.stop();
+    const generation = ++state.streamGeneration;
+    const transport = GoldMarketRealtimeStream.create({
+      channel: "gold:market",
+      fetchToken: () => MarketPage.request("/api/v1/market/stream-token"),
+      fetchBootstrap: () => MarketPage.request(`/api/v1/market/bootstrap?window_minutes=${state.windowMinutes}`),
+      onSnapshot: (snapshot) => { if (generation === state.streamGeneration) renderStreamSnapshot(snapshot); },
+      onEvent: (event) => { if (generation === state.streamGeneration) renderStreamEvent(event); },
+      onStatus: (update) => {
+        if (generation !== state.streamGeneration) return;
+        setStreamStatus(streamStatusText(update));
+        if (update.state === "error" && (update.error?.cause === "login" || update.error?.cause === "forbidden")) login.hidden = false;
+      },
+      resync: () => { if (generation === state.streamGeneration) { state.streamReady = false; load(true); } },
+    });
+    state.streamTransport = transport;
+    state.streamStarting = true;
+    const promise = transport.start().then(() => {
+      if (generation !== state.streamGeneration) return false;
+      state.streamStarting = false;
+      login.hidden = true;
+      return state.streamReady;
+    }).catch((error) => {
+      if (generation !== state.streamGeneration) return false;
+      state.streamStarting = false;
+      state.streamReady = false;
+      setStreamStatus(`消息流不可用：${error.message || "UNKNOWN"}；使用 HTTP 窗口回退`);
+      load(true);
+      return false;
+    }).finally(() => {
+      if (generation === state.streamGeneration) state.streamStartPromise = null;
+    });
+    state.streamStartPromise = promise;
+    return promise;
+  }
+  async function refreshHead() {
+    if (state.hidden) return;
+    try {
+      const head = await MarketPage.request("/api/v1/market/latest");
+      if (!state.hidden) { renderHead(head); login.hidden = true; }
+    } catch (error) {
+      if (error.cause === "login" || error.cause === "forbidden") login.hidden = false;
+    } finally {
+      window.clearTimeout(state.headTimer);
+      if (!state.hidden) state.headTimer = window.setTimeout(refreshHead, 5000);
+    }
   }
   function retryDelay(error) {
     if (Number.isFinite(error?.retryAfterMs)) return error.retryAfterMs;
     const base = Math.min(30000, 2000 * (2 ** Math.min(state.retryAttempt, 4)));
     return Math.round(base * (0.75 + Math.random() * 0.5));
   }
-  // The snapshot stream publishes every 500ms and a steady poll now carries
-  // ~21KB, so matching that cadence costs little and removes what had become
-  // the largest term in the on-screen delay.
-  function schedule(delay = 500) {
+  function schedule(delay = 2000) {
     window.clearTimeout(state.timer);
     if (!state.hidden) state.timer = window.setTimeout(() => load(), delay);
   }
-  async function load() {
+  async function load(force = false) {
+    if (state.streamReady) { void refreshHead(); return; }
+    if (state.inFlight) { if (force) { state.pendingReload = true; state.controller?.abort(); } return; }
     if (state.hidden) return;
-    if (state.inFlight) { state.pendingReload = true; state.controller?.abort(); return; }
-    state.inFlight = true; state.controller?.abort(); state.controller = new AbortController();
-    const generation = state.generation;
+    state.inFlight = true; state.controller = new AbortController(); const generation = state.generation;
     try {
-      // No cursor: the server recomputes the window from `now` on every poll,
-      // so a cursor minted against the previous window can only mismatch.
-      // `since` is an absolute instant instead, so a steady poll carries only
-      // the couple of seconds that are actually new.
       const query = new URLSearchParams({window_minutes: String(state.windowMinutes)});
-      if (state.since) query.set("since", state.since);
-      if (state.sourceRevision) query.set("revision", state.sourceRevision);
+      if (!force && state.since) query.set("since", state.since);
       const body = await MarketPage.request(`/api/v1/market/realtime?${query}`, {controller: state.controller});
-      // A changed window/run may have aborted this request, but an intermediary
-      // can still resolve it.  Its cursor and rows must not overwrite the newer
-      // generation after the user selected another window.
       if (generation !== state.generation || state.hidden) return;
       render(body);
       login.hidden = true; state.retryAttempt = 0; schedule();
     }
     catch (error) {
-      if (state.hidden) return;
+      if (state.hidden || generation !== state.generation) return;
       status.textContent = error.cause === "timeout" ? "实时请求超时；将退避重试。" : error.message;
       if (error.cause === "login" || error.cause === "forbidden") { login.hidden = false; return; }
       state.retryAttempt += 1; schedule(retryDelay(error));
     }
-    finally {
-      state.inFlight = false;
-      if (state.pendingReload && !state.hidden) { state.pendingReload = false; load(); }
-    }
+    finally { state.inFlight = false; if (state.pendingReload && !state.hidden) { state.pendingReload = false; load(true); } }
   }
-  document.addEventListener("visibilitychange", () => { state.hidden = document.hidden; if (state.hidden) {state.controller?.abort(); window.clearTimeout(state.timer);} else {load();} });
-  window.addEventListener("pagehide", () => {window.clearTimeout(state.timer); state.controller?.abort(); state.charts.forEach((item) => item.chart?.remove());});
+  document.addEventListener("visibilitychange", () => {
+    state.hidden = document.hidden;
+    if (state.hidden) {
+      state.controller?.abort(); window.clearTimeout(state.timer); window.clearTimeout(state.headTimer);
+      window.clearTimeout(state.ageTimer); state.ageTimer = null; stopStream("已暂停");
+    } else {
+      updateInternationalAges(); void startStream().then((available) => { if (!available) load(true); }); void refreshHead();
+    }
+  });
+  window.addEventListener("pagehide", () => {window.clearTimeout(state.timer); window.clearTimeout(state.headTimer); window.clearTimeout(state.ageTimer); state.controller?.abort(); stopStream("已关闭"); state.charts.forEach((item) => item.chart?.remove());});
   login?.addEventListener("click", () => MarketPage.login());
   windowSelect?.addEventListener("change", () => {
     const next = Number(windowSelect.value);
     if (![5, 10, 15].includes(next)) return;
-    // Retain card/chart instances while the replacement request is in flight:
-    // removing them makes an already rendered eight-contract screen flash to
-    // zero cards and lets stale vendor probes race the new window.  Clear only
-    // cached rows/cursor; the accepted generation replaces every series.
-    state.windowMinutes = next; state.generation += 1; state.rows.clear(); state.since = null;
-    state.retryAttempt = 0; load();
+    state.windowMinutes = next; state.generation += 1; state.since = null; state.rows.clear(); state.retryAttempt = 0;
+    if (state.streamTransport) stopStream("窗口切换");
+    void startStream().then((available) => { if (!available) load(true); });
   });
   try { await MarketPage.absorbLoginHandoff(); } catch (error) { status.textContent = error.message; }
-  await load();
+  if (!state.hidden) state.ageTimer = window.setTimeout(updateInternationalAges, 100);
+  if (!state.hidden) {
+    void refreshHead();
+    const streamAvailable = await startStream();
+    if (!streamAvailable && !state.hidden) await load(true);
+  }
 })();

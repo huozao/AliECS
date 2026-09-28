@@ -43,6 +43,8 @@ services:
       MARKET_SNAPSHOT_INGEST_TOKEN: ${MARKET_SNAPSHOT_INGEST_TOKEN:-}
       MARKET_REVIEW_ARCHIVE_URL: ${MARKET_REVIEW_ARCHIVE_URL:-}
       MARKET_REVIEW_ARCHIVE_TOKEN: ${MARKET_REVIEW_ARCHIVE_TOKEN:-}
+      # 实时行情流 JWT 签名密钥，须与 WSL Centrifugo client.token.hmac_secret_key 一致。
+      GSM_CENTRIFUGO_TOKEN_SECRET: ${GSM_CENTRIFUGO_TOKEN_SECRET:-}
       # 统一消息中枢。投递代码只在 backend-api 一份，所以三家的凭据都要在这里可见。
       # 路由表（notify_routes）只存 profile / env 变量名，密钥仍旧只在 SOPS。
       NOTIFY_FLUSH_TOKEN: ${NOTIFY_FLUSH_TOKEN:-}

@@ -441,3 +441,15 @@ ssh txecs 'sudo docker exec -i business-cn-postgres-1 psql -U app -d app -v ON_E
 切换到本机只读来源时，运行环境通过 `MARKET_REVIEW_ARCHIVE_URL` 和 `MARKET_REVIEW_ARCHIVE_TOKEN` 注入；token 只来自 SOPS/运行环境，不进仓库或日志。连接固定调用 `/internal/review/v1`，超时 8 秒、响应上限 8 MiB；来源断连对已认证浏览器返回 `503 source_unavailable`，不伪装成空列表。未设置 URL 时保留 PG 维护期兼容路径。
 
 验证：`tests/test_market_review_api.py` 覆盖权限、维护拒绝及普通 snapshot 兼容；`tests/test_market_ingest_concurrency.py` 保留单进程登录响应回归。热更新必须在 GitHub 合并后用正式镜像交付收尾。
+
+实时消息流：`GSM_CENTRIFUGO_TOKEN_SECRET` 来自 infra `secrets/txecs-production.enc.env`，
+经 `deploy.sh` 写入 runtime env、由 `compose.prod.yml` 注入 backend；它必须与 WSL broker
+`client.token.hmac_secret_key` 一致，且与 `AUTH_TOKEN_SECRET` 分开。改值需两端同时更新。
+broker 在 WSL（Gold `gold-centrifugo.service`，127.0.0.1:18290），经 Gold 反向隧道到 txecs
+回环，由宿主 nginx 代理 `/connection/websocket`（infra `90-market-dashboard-https.conf`，
+sshd 两层放行 18290）。broker 只允许 JWT `channels` 声明的 `gold:market` 服务端订阅，
+客户端发布/自行订阅关闭。`GET /v1/market/bootstrap` 经登录与 `market.read` 检查后只读调用
+私有 Review API 的 `/display/bootstrap`；Gold 网关未启用时返回 503，不以秒级归档冒充。
+排障顺序：`/api/v1/market/stream-token` 是否 200 → WebSocket 101 → bootstrap 200 且
+`continuous=true` → 页面 `#stream-status`。验证入口 `tests/test_market_stream_auth.py`
+和 Gold `tests/test_realtime_stream.py`。

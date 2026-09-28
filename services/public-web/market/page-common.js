@@ -6,12 +6,17 @@
   const clearToken = () => keys.forEach((key) => localStorage.removeItem(key));
   const b64 = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   async function login() {
-    const verifier = b64(crypto.getRandomValues(new Uint8Array(32)));
-    sessionStorage.setItem("market_handoff_verifier", verifier);
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
-    const challenge = b64(new Uint8Array(digest));
-    const returnTo = `${location.origin}${location.pathname}${location.search}`;
-    location.assign(`https://hydwang.xyz/api/v1/auth/oidc/login?rd=${encodeURIComponent(returnTo)}&handoff_challenge=${challenge}`);
+    const username = window.prompt("行情调试账号");
+    if (!username) return;
+    const password = window.prompt("行情调试密码");
+    if (!password) return;
+    const body = await request("/api/v1/auth/login", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({username, password}), auth: false, timeout: 8000,
+    });
+    if (!body?.token || typeof body.token !== "string") throw new Error("账号密码登录返回无效。");
+    localStorage.setItem("aliecs_auth_token", body.token);
+    window.location.reload();
   }
   async function absorbLoginHandoff() {
     const code = new URLSearchParams(location.hash.slice(1)).get("handoff_code");
