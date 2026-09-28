@@ -135,11 +135,6 @@ node --check services/public-web/market/realtime.js
 
 本 session 创建过临时账号 `market-debug-1bd01a`，只有 `market.read` 权限。密码没有写入本文和 Git。调试完成后应删除该账号；不要把密码写入仓库、日志、截图或新提交。
 
-## 新 session 继续前的检查顺序
+## 当前交接状态
 
-1. 先读本交接文档、AliECS `AGENTS.md`、`docs/runbooks/deploy.md`。
-2. 检查两个仓库当前分支、远端、status 和最近提交，不要清理其他会话改动。
-3. 对比 txecs 容器中的三个实时页文件与 AliECS 源码 SHA-256。
-4. 用临时或用户账号读取 5/10/15 分钟 API，确认生产仍走当前 release/source。
-5. 在有实际行情曲线点的交易时段用 Chrome 验证：窗口选择、白色成交线、黄色中心线、上下边缘、右侧价格标签、排序模块位置和开源标识隐藏。
-6. 如果要继续性能优化，先测量 API 读取耗时、series 点数和 503，再决定是否改 backend；不要把页面卡顿直接归因于 CSS。
+本 session 已完成上述代码提交、生产热更新和验证。实时页最终以 AliECS 提交 `148087a` 及 txecs 容器当前文件为准；交接文档本身由提交 `d72f045` 新增。临时账号 `market-debug-1bd01a` 仍是调试账号，密码未写入仓库。
