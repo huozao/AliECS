@@ -438,7 +438,7 @@ ssh txecs 'sudo docker exec -i business-cn-postgres-1 psql -U app -d app -v ON_E
 
 在 `MARKET_SNAPSHOT_FILE` 所在目录建立 `review-maintenance` 标记文件，已认证市场审阅查询和 market-review.v1 ingest 返回 503/market_maintenance；普通 schema_version=1 snapshot 保持原语义。标记保存在既有市场 volume，容器重建后仍生效。维护先停生产者的 review 上传；不能靠服务端拒绝代替停止本机重试。解除标记只在新查询来源通过验收后执行。此开关不清空 PostgreSQL 表、不改标注或其他业务数据。
 
-切换到本机只读来源时，运行环境通过 `MARKET_REVIEW_ARCHIVE_URL` 和 `MARKET_REVIEW_ARCHIVE_TOKEN` 注入；token 只来自 SOPS/运行环境，不进仓库或日志。连接固定调用 `/internal/review/v1`，超时 8 秒、响应上限 8 MiB；来源断连对已认证浏览器返回 `503 source_unavailable`，不伪装成空列表。未设置 URL 时保留 PG 维护期兼容路径。
+切换到本机只读来源时，运行环境通过 `MARKET_REVIEW_ARCHIVE_URL` 和 `MARKET_REVIEW_ARCHIVE_TOKEN` 注入；token 只来自 SOPS/运行环境，不进仓库或日志。连接固定调用 `/internal/review/v1`，超时 8 秒、响应上限 8 MiB（`/display/bootstrap` 单独 64 MiB）；来源断连对已认证浏览器返回 `503 source_unavailable`，不伪装成空列表。未设置 URL 时保留 PG 维护期兼容路径。
 
 验证：`tests/test_market_review_api.py` 覆盖权限、维护拒绝及普通 snapshot 兼容；`tests/test_market_ingest_concurrency.py` 保留单进程登录响应回归。热更新必须在 GitHub 合并后用正式镜像交付收尾。
 
@@ -450,6 +450,10 @@ broker 在 WSL（Gold `gold-centrifugo.service`，127.0.0.1:18290），经 Gold 
 sshd 两层放行 18290）。broker 只允许 JWT `channels` 声明的 `gold:market` 服务端订阅，
 客户端发布/自行订阅关闭。`GET /v1/market/bootstrap` 经登录与 `market.read` 检查后只读调用
 私有 Review API 的 `/display/bootstrap`；Gold 网关未启用时返回 503，不以秒级归档冒充。
+半秒分桶约 1 KB/事件，开盘活跃时 5 分钟窗口可超 12k 事件（>8 MiB），曾因通用 8 MiB
+上限整段返回 503（2026-09-28 夜）；现 bootstrap 单独放宽上限，并在客户端声明 `gzip` 时由
+backend 自行压缩（宿主 nginx 不压 JSON，约 20 倍压缩）。bootstrap 503 时先查 backend-api
+日志的 `duration_ms`：几百毫秒即被拒多为来源不可用或超限，而非超时。
 排障顺序：`/api/v1/market/stream-token` 是否 200 → WebSocket 101 → bootstrap 200 且
 `continuous=true` → 页面 `#stream-status`。验证入口 `tests/test_market_stream_auth.py`
 和 Gold `tests/test_realtime_stream.py`。
