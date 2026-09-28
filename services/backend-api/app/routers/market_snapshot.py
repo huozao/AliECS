@@ -17,7 +17,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 import psycopg
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 
 from app.core import require_login
 from app.market_review_source import LocalReviewSource, ReviewSourceInvalid, ReviewSourceUnavailable
@@ -307,6 +307,7 @@ async def ingest_market_snapshot(
 # Versioned review endpoints keep legacy /snapshot untouched.
 from app import market_review
 from app.core import require_permission
+from app.routers.market_stream import require_stream_reader
 
 
 def _require_review_available() -> None:
@@ -378,6 +379,26 @@ def market_realtime(after: str | None = Query(default=None, max_length=2000),
     if sourced is not None:
         return sourced
     return market_review.realtime_view(after=after, window_minutes=window_minutes)
+
+
+@router.get('/v1/market/bootstrap')
+def market_display_bootstrap(response: Response, window_minutes: int = Query(default=5),
+                             _: dict = Depends(require_stream_reader)):
+    if window_minutes not in (5, 10, 15):
+        raise HTTPException(422, 'window_minutes must be one of 5, 10, 15')
+    sourced = _source_get('/display/bootstrap', {'window_minutes': window_minutes})
+    if sourced is None:
+        raise HTTPException(503, detail={"code": "display_stream_unavailable"})
+    if (not isinstance(sourced, dict)
+            or sourced.get('schema_version') != 'gold-display-bootstrap/v1'
+            or sourced.get('window_minutes') != window_minutes
+            or not isinstance(sourced.get('events'), list)
+            or type(sourced.get('source_sequence')) is not int
+            or type(sourced.get('continuous')) is not bool):
+        raise HTTPException(503, detail={"code": "display_stream_invalid"})
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['Pragma'] = 'no-cache'
+    return sourced
 
 
 @router.get('/v1/market/events/index')
