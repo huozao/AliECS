@@ -13,7 +13,7 @@
   const ageText = (source) => {
     if (source?.age_seconds == null) return "年龄未知";
     const age = Number(source.age_seconds);
-    return !Number.isFinite(age) ? "年龄未知" : age < 1 ? "<1秒前" : `${age.toFixed(1)} 秒前`;
+    return !Number.isFinite(age) ? "年龄未知" : `${Math.max(0, age).toFixed(2)} 秒前`;
   };
   const timeText = (value) => {
     const time = Date.parse(value || "");
