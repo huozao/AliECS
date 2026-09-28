@@ -146,3 +146,5 @@ node --check services/public-web/market/realtime.js
 ## 当前交接状态
 
 本 session 已完成上述代码提交、生产热更新和验证。实时页最终以 AliECS 提交 `148087a` 及 txecs 容器当前文件为准；交接文档本身由提交 `d72f045` 新增。临时账号 `market-debug-1bd01a` 仍是调试账号，密码未写入仓库。
+
+后续消息流架构与 GPT-6 Sol 执行入口见 [实时消息流实施计划](../superpowers/plans/2026-09-28-market-streaming-sol-implementation.md)。该计划尚未实施，不能替代本页的生产回读记录。
