@@ -80,7 +80,8 @@ d0046a8 Use backend auth for market dashboard access
 - 不在国内合约窗口中再渲染对冲候选列表；候选只在页面下方统一显示。
 
 后续修复：国内新鲜度由每个精简报价的 `source_time` 计算并显示新鲜合约数；
-精简接口不带 `sources.domestic`，不能以其缺失判定国内断线。页面首次读取整窗，后续
+精简接口不带 `sources.domestic`，不能以其缺失判定国内断线。页面首次先读 `/latest`
+显示合约头与价格标签，再读取整窗曲线；后续
 用 Review API 的 `next_since` 增量读取；不传 `source_revision`，因为它随每次发布改变，
 传入会强制整窗重取。run_id 切换、窗口切换和页面重新显示时重新读取整窗。
 页面上的行情重叠状态只说明报价新鲜，不宣称账户执行已获准。验证入口：

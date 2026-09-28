@@ -160,5 +160,14 @@
   });
   try { await MarketPage.absorbLoginHandoff(); } catch (error) { status.textContent = error.message; }
   if (!state.hidden) state.ageTimer = window.setTimeout(updateInternationalAges, 100);
+  if (!state.hidden) {
+    try {
+      const head = await MarketPage.request("/api/v1/market/latest");
+      if (!state.hidden) render({...head, window_minutes: state.windowMinutes,
+        window_end: new Date().toISOString(), freshness: {published_at: head.published_at}});
+    } catch (error) {
+      // The full realtime request still owns authentication and retry messages.
+    }
+  }
   await load(true);
 })();

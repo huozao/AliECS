@@ -22,6 +22,7 @@ test('realtime page derives domestic freshness from quote timestamps and polls i
       xauusd: {price: 4000, age_seconds: 1}, usdcnh: {price: 7, age_seconds: 1}},
     window_minutes: 5};
   const responses = [
+    {...base, published_at: now.toISOString()},
     {...base, next_since: now.toISOString(), source_revision: 'revision-1'},
     {...base, incremental: true, next_since: now.toISOString(), source_revision: 'revision-1'},
   ];
@@ -43,6 +44,8 @@ test('realtime page derives domestic freshness from quote timestamps and polls i
   assert.ok(poll, 'a subsequent poll is scheduled');
   poll.callback();
   for (let i = 0; i < 4; i++) await new Promise(setImmediate);
-  assert.match(requests[1], /since=/);
-  assert.doesNotMatch(requests[1], /revision=/);
+  assert.equal(requests[0], '/api/v1/market/latest');
+  assert.match(requests[1], /\/api\/v1\/market\/realtime/);
+  assert.match(requests[2], /since=/);
+  assert.doesNotMatch(requests[2], /revision=/);
 });
