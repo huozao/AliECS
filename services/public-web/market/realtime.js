@@ -1,8 +1,8 @@
 /* Fixed-window market screen: one bounded request, then cursor increments. */
 (async () => {
   "use strict";
-  const status = document.querySelector("#status"), root = document.querySelector("#contracts"), login = document.querySelector("#login");
-  const state = {cursor: null, timer: null, ageTimer: null, internationalAges: null, controller: null, inFlight: false, charts: new Map(), rows: new Map(), hidden: document.hidden, retryAttempt: 0};
+  const status = document.querySelector("#status"), root = document.querySelector("#contracts"), login = document.querySelector("#login"), windowSelect = document.querySelector("#window-minutes");
+  const state = {cursor: null, timer: null, ageTimer: null, internationalAges: null, controller: null, inFlight: false, pendingReload: false, generation: 0, runId: null, charts: new Map(), rows: new Map(), hidden: document.hidden, retryAttempt: 0, windowMinutes: 5};
   const esc = (value) => String(value ?? "—").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
   const priceText = (value, digits = 2) => {
     const number = Number(value);
@@ -10,6 +10,11 @@
   };
   const stamp = (row) => row.observed_at || row.captured_at || row.source_time;
   const point = (row) => { const time = Date.parse(stamp(row)) / 1000, value = Number(row.last_price); return Number.isFinite(time) && Number.isFinite(value) ? {time, value} : null; };
+  const finite = (value) => value != null && value !== "" && Number.isFinite(Number(value));
+  const seriesPoints = (rows, field) => [...new Map(rows.map((row) => {
+    const time = Math.floor(Date.parse(stamp(row)) / 1000);
+    return [time, Number.isFinite(time) && finite(row[field]) ? {time, value: Number(row[field])} : null];
+  }).filter((entry) => entry[1])).values()].sort((a, b) => a.time - b.time);
   const ageValue = (source) => source?.age_seconds == null ? null : Number(source.age_seconds);
   const ageText = (source) => Number.isFinite(ageValue(source)) ? `${Math.max(0, ageValue(source)).toFixed(2)}s` : "—";
   const timeText = (value) => {
@@ -58,12 +63,13 @@
   }
   function chartFor(contract) {
     let item = state.charts.get(contract); if (item) return item;
-    const card = document.createElement("article"); card.className = "card"; card.dataset.contract = contract;
-    card.innerHTML = `<h2>${esc(contract)}</h2><div class="value">—</div><div class="chart" aria-label="${esc(contract)} 最近十五分钟成交与 I 价格带"></div><div class="muted"></div><ol class="hedges"></ol>`;
+    const card = document.createElement("article"); card.className = "market-card realtime-contract-card"; card.dataset.contract = contract;
+    card.innerHTML = `<div class="realtime-card-head"><h2>${esc(contract)}</h2><div class="last">—</div></div><div class="realtime-parallel"><div><div class="realtime-extremes"><span>秒内最高 <b data-extreme="high">—</b></span><span>秒内最低 <b data-extreme="low">—</b></span></div><div class="chart" aria-label="${esc(contract)} 成交与 I 价格带"></div></div><div class="five-price" aria-label="${esc(contract)} 模型价格带与盘口"><span class="sell"><small>上方卖挂单</small><b data-tag="sell">—</b></span><span class="upper"><small>I 价格带上边缘</small><b data-tag="upper">—</b></span><span class="current"><small>真实成交价</small><b data-tag="current">—</b></span><span class="center"><small>I 价格带中心</small><b data-tag="center">—</b></span><span class="lower"><small>I 价格带下边缘</small><b data-tag="lower">—</b></span><span class="buy"><small>下方买挂单</small><b data-tag="buy">—</b></span></div></div><div class="muted"></div>`;
     root.append(card); const node = card.querySelector(".chart");
     if (window.LightweightCharts) {
-      const chart = LightweightCharts.createChart(node, {height: 160, autoSize: true, layout: {background:{color:"transparent"}, textColor:"#91a1af"}, grid:{vertLines:{visible:false},horzLines:{visible:false}}});
-      item = {card, chart, price: chart.addSeries(LightweightCharts.LineSeries, {color:"#54d6bc"}), upper: chart.addSeries(LightweightCharts.LineSeries, {color:"#ef9a9a"}), center: chart.addSeries(LightweightCharts.LineSeries, {color:"#f6c85f"}), lower: chart.addSeries(LightweightCharts.LineSeries, {color:"#8cc7ff"})};
+      const chart = LightweightCharts.createChart(node, {autoSize: true, layout: {background:{color:"transparent"}, textColor:"#91a1af", attributionLogo:false}, timeScale:{timeVisible:true,secondsVisible:true}, grid:{vertLines:{visible:false},horzLines:{color:"#243244"}}});
+      const line = (color, options = {}) => chart.addSeries(LightweightCharts.LineSeries, {color, lineWidth:1, priceLineVisible:false, lastValueVisible:false, ...options});
+      item = {card, chart, price:line("#ffffff", {lineWidth:2}), upper:line("#84b8ef"), center:line("#f6c85f", {lineStyle:2}), lower:line("#84b8ef")};
     } else item = {card};
     state.charts.set(contract, item); return item;
   }
@@ -71,22 +77,29 @@
     const item = chartFor(contract), record = state.rows.get(contract) || {quotes: new Map(), bands: new Map()};
     for (const row of data?.quotes || []) record.quotes.set(`${stamp(row)}|${row.snapshot_sequence || ""}`, row);
     for (const row of data?.bands || []) record.bands.set(`${stamp(row)}|${row.snapshot_sequence || ""}`, row);
-    const left = Date.now() - 15 * 60 * 1000;
+    const left = Date.now() - state.windowMinutes * 60 * 1000;
     for (const [key,row] of record.quotes) if (Date.parse(stamp(row)) < left) record.quotes.delete(key);
     for (const [key,row] of record.bands) if (Date.parse(stamp(row)) < left) record.bands.delete(key);
     state.rows.set(contract, record);
     const quotes = [...record.quotes.values()].sort((a,b) => Date.parse(stamp(a))-Date.parse(stamp(b)));
     const bands = [...record.bands.values()].sort((a,b) => Date.parse(stamp(a))-Date.parse(stamp(b)));
-    item.card.querySelector(".value").textContent = Number.isFinite(Number(quote?.last_price)) ? Number(quote.last_price).toFixed(2) : "—";
+    const latest = quote || quotes.at(-1) || {};
+    const value = (field, source = latest) => finite(source?.[field]) ? Number(source[field]).toFixed(2) : "—";
     const order = orders.find((row) => row.contract === contract) || {};
+    item.card.querySelector(".last").textContent = value("last_price");
+    item.card.querySelector('[data-extreme="high"]').textContent = value("high", latest.ohlc);
+    item.card.querySelector('[data-extreme="low"]').textContent = value("low", latest.ohlc);
+    const tags = {sell: order.sell?.price, upper: band?.upper, current: latest.last_price, center: band?.center, lower: band?.lower, buy: order.buy?.price};
+    Object.entries(tags).forEach(([kind, price]) => { item.card.querySelector(`[data-tag="${kind}"]`).textContent = finite(price) ? Number(price).toFixed(2) : "—"; });
     item.card.querySelector(".muted").textContent = `买 ${order.buy?.price ?? "—"}（${order.buy?.status ?? "—"}） · 卖 ${order.sell?.price ?? "—"}（${order.sell?.status ?? "—"}） · 源时刻 ${quote?.source_time || "—"}`;
-    item.card.querySelector(".hedges").innerHTML = (ranking || []).filter((row) => (row.contract || row.symbol) === contract).slice(0,5).map((row) => `<li>${esc(row.contract || row.symbol)}：${esc(row.rank ?? "—")} · ${esc(row.reason || row.status || "—")}</li>`).join("") || "<li>后端未给出该合约对冲候选</li>";
     if (!item.chart) return;
-    item.price.setData(quotes.map(point).filter(Boolean));
-    for (const [series, field] of [[item.upper,"upper"],[item.center,"center"],[item.lower,"lower"]]) series.setData(bands.map((row) => {const time=Date.parse(stamp(row))/1000,value=Number(row[field]);return Number.isFinite(time)&&Number.isFinite(value)?{time,value}:null;}).filter(Boolean));
+    item.price.setData(seriesPoints(quotes, "last_price"));
+    for (const [series, field] of [[item.upper,"upper"],[item.center,"center"],[item.lower,"lower"]]) series.setData(seriesPoints(bands, field));
   }
   function render(body) {
-    const window_minutes = body.window_minutes;
+    const window_minutes = body.window_minutes || state.windowMinutes;
+    if (body.reset || (state.runId && body.run_id && state.runId !== body.run_id)) { state.rows.clear(); state.cursor = null; }
+    state.runId = body.run_id || state.runId;
     const quotes = new Map((body.quotes || []).filter((row) => row.contract).map((row) => [row.contract,row]));
     const bands = new Map((body.bands || []).filter((row) => row.contract).map((row) => [row.contract,row]));
     const contracts = new Set([...quotes.keys(), ...bands.keys(), ...Object.keys(body.series || {})]);
@@ -106,22 +119,33 @@
     if (!state.hidden) state.timer = window.setTimeout(() => load(), delay);
   }
   async function load(force = false) {
-    if (state.inFlight || state.hidden) return; state.inFlight = true; state.controller?.abort(); state.controller = new AbortController();
+    if (state.inFlight) { if (force) { state.pendingReload = true; state.controller?.abort(); } return; }
+    if (state.hidden) return;
+    state.inFlight = true; state.controller = new AbortController(); const generation = state.generation;
     try {
-      render(await MarketPage.request(`/api/v1/market/realtime${!force && state.cursor ? `?after=${encodeURIComponent(state.cursor)}` : ""}`, {controller: state.controller}));
+      const query = new URLSearchParams({window_minutes: String(state.windowMinutes)});
+      if (!force && state.cursor) query.set("after", state.cursor);
+      const body = await MarketPage.request(`/api/v1/market/realtime?${query}`, {controller: state.controller});
+      if (generation !== state.generation || state.hidden) return;
+      render(body);
       login.hidden = true; state.retryAttempt = 0; schedule();
     }
     catch (error) {
-      if (state.hidden) return;
+      if (state.hidden || generation !== state.generation) return;
       status.textContent = error.cause === "timeout" ? "实时请求超时；将退避重试。" : error.message;
       if (error.cause === "login" || error.cause === "forbidden") { login.hidden = false; return; }
       state.retryAttempt += 1; schedule(retryDelay(error));
     }
-    finally { state.inFlight = false; }
+    finally { state.inFlight = false; if (state.pendingReload && !state.hidden) { state.pendingReload = false; load(true); } }
   }
   document.addEventListener("visibilitychange", () => { state.hidden = document.hidden; if (state.hidden) {state.controller?.abort(); window.clearTimeout(state.timer); window.clearTimeout(state.ageTimer); state.ageTimer = null;} else {updateInternationalAges(); load(true);} });
   window.addEventListener("pagehide", () => {window.clearTimeout(state.timer); window.clearTimeout(state.ageTimer); state.controller?.abort(); state.charts.forEach((item) => item.chart?.remove());});
   login?.addEventListener("click", () => MarketPage.login());
+  windowSelect?.addEventListener("change", () => {
+    const next = Number(windowSelect.value);
+    if (![5, 10, 15].includes(next)) return;
+    state.windowMinutes = next; state.generation += 1; state.cursor = null; state.rows.clear(); state.retryAttempt = 0; load(true);
+  });
   try { await MarketPage.absorbLoginHandoff(); } catch (error) { status.textContent = error.message; }
   if (!state.hidden) state.ageTimer = window.setTimeout(updateInternationalAges, 100);
   await load(true);
