@@ -32,7 +32,8 @@ class LocalReviewSource:
                  total_timeout: float = 8.0, max_bytes: int = 8 * 1024 * 1024):
         self.base_url = (url or os.getenv("MARKET_REVIEW_ARCHIVE_URL", "")).rstrip("/")
         self.token = token if token is not None else os.getenv("MARKET_REVIEW_ARCHIVE_TOKEN", "")
-        self.opener = (urllib.request.build_opener(_NoRedirect())
+        # OpenerDirector itself is not callable; keep the same call shape as urlopen.
+        self.opener = (urllib.request.build_opener(_NoRedirect()).open
                        if opener is urllib.request.urlopen else opener)
         self.connect_timeout = connect_timeout
         self.total_timeout = total_timeout
