@@ -9,6 +9,7 @@ import http.server
 import importlib
 import json
 import os
+import shutil
 from pathlib import Path
 import threading
 import time
@@ -149,8 +150,7 @@ def test_source_to_authenticated_browser_and_durable_review(service, monkeypatch
         assert complete['account']['fixed_cost_net_cny'] == 950
         assert mod.position_view('unresolved', ledger.run_id)['account']['fixed_cost_net_cny'] is None
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True, executable_path=os.getenv(
-                'MARKET_TEST_CHROMIUM', '/home/ishelwsl/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome'),
+            browser = pw.chromium.launch(headless=True, executable_path=os.getenv('MARKET_TEST_CHROMIUM') or shutil.which('google-chrome-stable'),
                 args=['--no-sandbox'])
             page = browser.new_page(viewport={'width': 1366, 'height': 900})
             errors = []

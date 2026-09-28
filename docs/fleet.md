@@ -15,11 +15,41 @@
 
 | 逻辑名 | 角色 | 硬件/OS | 网络入口 | 运行代码来源 |
 |---|---|---|---|---|
-| `devbox` | 开发机 | 本地 Windows 11 | 本机 | 3 个仓库克隆（不运行生产） |
+| `devbox` | 开发机 **+ gold-spread-monitor 生产宿主** | 本地 Windows 11（含 WSL2） | 本机 | 3 个仓库克隆；**`C:\tools\gold-spread-monitor` 是 gold 的生产检出**，见下节 |
 | `aliecs` | 海外边界 + business-cn 隔离候选 | 阿里云 ECS 美国 / Ubuntu 24.04，2G 内存 | `ssh aliecs`（root@47.77.176.62） | console/ERP；旧写端冻结；可作反向迁移候选 |
 | `txecs` | 当前生产唯一写端 / business-cn 主栈 / 公网中心边界 | 腾讯云轻量 / Ubuntu 24.04，4C4G | `ssh txecs`（ubuntu@106.52.51.67） | 主站、PostgreSQL、SSO、OpenClaw、bridge、worker、nginx |
 | `webdock1` | webdock 算力节点（**当前备用**） | 旧 Ubuntu 笔记本 | `ssh webdock1`（Tailscale 100.97.176.57） | webdock 镜像 + 第三方自托管服务 |
-| `webdock2` | webdock 算力节点（**当前主力**） | 新台式机 Windows 11 + WSL2 | `ssh webdock2`（Tailscale 100.67.38.52） | webdock 镜像 |
+| `webdock2` | webdock 算力节点（**当前主力**）+ gold 归档/备份边界 | 新台式机 Windows 11 + WSL2 | `ssh webdock2`（Tailscale 100.67.38.52） | webdock 镜像；**`D:\gold-spread-monitor` 由 GitHub Actions 自动部署**，见下节 |
+| `nina` | 受控便携笔记本 / 移动终端 | 笔记本 Windows 11 24H2 | `ssh nina`（Tailscale 100.122.244.79） | 专属 Ed25519 鉴权；运维与避坑见 `ai-general/docs/runbooks/windows-device-provisioning-and-control.md` |
+
+### gold-spread-monitor 的部署位置（2026-09-23 实测补记）
+
+本表此前写着 devbox「不运行生产」，**该说法已不成立**：gold-spread-monitor 的
+生产计划任务就在 devbox 上跑。两个目标的更新方式完全不同，勿混。
+
+| 目标 | 路径 | 更新方式 | 说明 |
+|---|---|---|---|
+| `devbox` | `C:\tools\gold-spread-monitor` | **纯人工**，没有任何工作流 | 交易/采集/复盘/归档 API 的实际宿主 |
+| `webdock2` | `D:\gold-spread-monitor` | **push 到 gold 仓 master 自动触发** `deploy-webdock2.yml` | 归档/备份边界；`checkout --detach --force`，不重启服务 |
+
+devbox 上的 gold 计划任务（2026-09-23 01:16 实测，全部指向
+`C:\tools\gold-spread-monitor` 下的 `.ps1`）：
+
+| 任务 | 状态 | 入口 |
+|---|---|---|
+| `GoldSpreadMonitor` | Ready（约 5 分钟守护触发一次） | `start-background.ps1` |
+| `GoldSpreadMt5Bridge` | Ready | `start-mt5-bridge.ps1` |
+| `GoldReviewArchiveApi` | Ready | `start-review-archive-api.ps1 -BindHost 127.0.0.1 -Port 18210` |
+| `GoldReviewArchiveTunnel` | Running | 归档隧道 |
+| `GoldReviewArchiveSync` | Ready（每日 05:15） | `archive-sync-nightly.ps1 -ReclaimLocal` |
+| `GoldSpreadReplay` | Ready（每日 05:00） | 夜间复盘 |
+| `GoldSpreadBackfill` | Ready（每日 03:10） | 补数 |
+| `GoldSpreadFormalReplay` | Ready（每日 15:20） | 正式复盘 |
+| `GoldSpreadMarketSnapshot` | **Disabled** | 行情快照，当前停用 |
+
+更新 `C:\tools\gold-spread-monitor` 等于同时换掉上面所有任务的代码，
+所以要按「停任务 → 更新 → 验证 → 恢复」做，并避开交易时段与夜间批次窗口
+（上期所夜盘 21:00–02:30；03:10/05:00/05:15 是批次）。
 
 ### 当前事实与目标定位
 
@@ -386,6 +416,13 @@ GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会�
   `infra/config/devices/devbox.env`（换 console 边界只改这里两行）。
 - 低延迟捷径：tailnet 内可原生 VNC 直连 `100.116.248.82:5900`，不经公网与域名。
 - 验证：`pwsh -File infra/roles/devbox/windows-native/apply.ps1 -CheckOnly`。
+
+### nina（受控便携笔记本）
+
+- 别名：`laptop-nina`、`LAPTOP-CTB16G4C`。Windows 11 24H2，用户 `nina`。
+- 入口：`ssh nina`（`100.122.244.79`，私钥 `~/.ssh/devbox_admin` 与 `~/.ssh/id_ed25519`）。
+- 架构约束：严禁随意启动 Windows SCM `sshd` 服务（24H2 调度必报 1067），常驻依赖用户启动目录 `Start-SSH.vbs` 与计划任务 `OpenSSHDaemon`；接通电源策略为从不休眠（`STANDBYIDLE=0`）。
+- 权威手册：[`ai-general/docs/runbooks/windows-device-provisioning-and-control.md`](../../ai-general/docs/runbooks/windows-device-provisioning-and-control.md)。
 
 ## 仓库 ↔ 设备映射
 

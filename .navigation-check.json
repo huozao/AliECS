@@ -15,7 +15,8 @@
     "services/public-web/README.md",
     "services/tplus-sync-worker/README.md",
     "db/README.md",
-    "deploy/README.md"
+    "deploy/README.md",
+    "docs/superpowers/plans/2026-09-28-market-streaming-sol-implementation.md"
   ],
   "paths": [
     "services/public-web",
