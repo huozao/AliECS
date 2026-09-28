@@ -2,7 +2,7 @@
 (async () => {
   "use strict";
   const status = document.querySelector("#status"), streamStatus = document.querySelector("#stream-status"), root = document.querySelector("#contracts"), login = document.querySelector("#login"), windowSelect = document.querySelector("#window-minutes");
-  const state = {cursor: null, since: null, timer: null, headTimer: null, ageTimer: null, internationalAges: null, controller: null, inFlight: false, pendingReload: false, generation: 0, streamGeneration: 0, runId: null, charts: new Map(), rows: new Map(), hidden: document.hidden, retryAttempt: 0, windowMinutes: 5, streamReady: false, streamStarting: false, streamTransport: null, streamStartPromise: null, streamUpdates: 0};
+  const state = {since: null, timer: null, headTimer: null, ageTimer: null, internationalAges: null, controller: null, inFlight: false, pendingReload: false, generation: 0, streamGeneration: 0, runId: null, charts: new Map(), rows: new Map(), hidden: document.hidden, retryAttempt: 0, windowMinutes: 5, streamReady: false, streamStarting: false, streamTransport: null, streamStartPromise: null, streamUpdates: 0};
   const streamReducer = typeof GoldMarketRealtimeState !== "undefined" ? GoldMarketRealtimeState.create({
     expectedContracts: 8,
     onResync: ({reason}) => {
@@ -227,7 +227,7 @@
   function render(body) {
     const window_minutes = body.window_minutes || state.windowMinutes;
     const runChanged = Boolean(state.runId && body.run_id && state.runId !== body.run_id);
-    if (body.reset || runChanged) { state.rows.clear(); state.cursor = null; state.since = null; }
+    if (body.reset || runChanged) { state.rows.clear(); state.since = null; }
     state.runId = body.run_id || state.runId;
     const quotes = new Map((body.quotes || []).filter((row) => row.contract).map((row) => [row.contract,row]));
     const bands = new Map((body.bands || []).filter((row) => row.contract).map((row) => [row.contract,row]));
@@ -235,13 +235,11 @@
     renderLayers(body, [...quotes.values()]);
     renderHedgeCandidates(body.hedge_ranking || []);
     if (state.streamReady) {
-      state.cursor = body.next_cursor || state.cursor;
       state.since = null;
       status.textContent = `消息流已连接；状态快照 ${body.freshness?.received_at || body.server_time || "—"}；${contracts.size} 个合约由消息流绘制`;
       return;
     }
     [...contracts].sort().forEach((contract) => updateChart(contract, body.series?.[contract], quotes.get(contract), bands.get(contract), body.orders || [], body.hedge_ranking || []));
-    state.cursor = body.next_cursor || state.cursor;
     state.since = runChanged || body.truncated || body.orders_truncated ? null : body.next_since || state.since;
     const windowEnd = body.window_end || body.server_time;
     const windowStart = Number.isFinite(Date.parse(windowEnd)) ? new Date(Date.parse(windowEnd) - window_minutes * 60000).toISOString() : "—";
@@ -337,9 +335,7 @@
     state.inFlight = true; state.controller = new AbortController(); const generation = state.generation;
     try {
       const query = new URLSearchParams({window_minutes: String(state.windowMinutes)});
-      if (!force && state.since) {
-        query.set("since", state.since);
-      } else if (!force && state.cursor) query.set("after", state.cursor);
+      if (!force && state.since) query.set("since", state.since);
       const body = await MarketPage.request(`/api/v1/market/realtime?${query}`, {controller: state.controller});
       if (generation !== state.generation || state.hidden) return;
       render(body);
@@ -367,7 +363,7 @@
   windowSelect?.addEventListener("change", () => {
     const next = Number(windowSelect.value);
     if (![5, 10, 15].includes(next)) return;
-    state.windowMinutes = next; state.generation += 1; state.cursor = null; state.since = null; state.rows.clear(); state.retryAttempt = 0;
+    state.windowMinutes = next; state.generation += 1; state.since = null; state.rows.clear(); state.retryAttempt = 0;
     if (state.streamTransport) stopStream("窗口切换");
     void startStream().then((available) => { if (!available) load(true); });
   });

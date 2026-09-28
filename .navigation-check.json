@@ -35,5 +35,7 @@
     ".github/workflows/bridge-cutover.yml"
   ],
   "python_symbols": [],
-  "optional_link_prefixes": []
+  "optional_link_prefixes": [
+    "../../ai-general"
+  ]
 }

@@ -442,13 +442,14 @@ ssh txecs 'sudo docker exec -i business-cn-postgres-1 psql -U app -d app -v ON_E
 
 验证：`tests/test_market_review_api.py` 覆盖权限、维护拒绝及普通 snapshot 兼容；`tests/test_market_ingest_concurrency.py` 保留单进程登录响应回归。热更新必须在 GitHub 合并后用正式镜像交付收尾。
 
-实时消息流签发接口当前只在隔离实现中验证。部署时需由受限运行环境注入
-`GSM_CENTRIFUGO_TOKEN_SECRET`，与 broker `client.token.hmac_secret_key` 一致，
-与 `AUTH_TOKEN_SECRET` 分开；broker 同时校验 audience `gold-market-stream` 和
-issuer `aliecs-market`。缺少密钥时接口返回 503。只允许 `gold:market` 服务端订阅，
-Broker 的客户端发布权限必须保持关闭；上线前还需完成本机及公网 WebSocket 代理、
-页面接线、鉴权和回滚验证，不能仅凭 token 接口通过就发布。
-`GET /v1/market/bootstrap?window_minutes=5|10|15` 经现有登录与 `market.read`
-检查后只读调用私有 Review API 的 `/display/bootstrap`；本机网关未启用时返回
-503，不能以旧的秒级归档代替半秒消息流。验证入口是
-`tests/test_market_stream_auth.py` 和 Gold `tests/test_review_archive_api.py`。
+实时消息流：`GSM_CENTRIFUGO_TOKEN_SECRET` 来自 infra `secrets/txecs-production.enc.env`，
+经 `deploy.sh` 写入 runtime env、由 `compose.prod.yml` 注入 backend；它必须与 WSL broker
+`client.token.hmac_secret_key` 一致，且与 `AUTH_TOKEN_SECRET` 分开。改值需两端同时更新。
+broker 在 WSL（Gold `gold-centrifugo.service`，127.0.0.1:18290），经 Gold 反向隧道到 txecs
+回环，由宿主 nginx 代理 `/connection/websocket`（infra `90-market-dashboard-https.conf`，
+sshd 两层放行 18290）。broker 只允许 JWT `channels` 声明的 `gold:market` 服务端订阅，
+客户端发布/自行订阅关闭。`GET /v1/market/bootstrap` 经登录与 `market.read` 检查后只读调用
+私有 Review API 的 `/display/bootstrap`；Gold 网关未启用时返回 503，不以秒级归档冒充。
+排障顺序：`/api/v1/market/stream-token` 是否 200 → WebSocket 101 → bootstrap 200 且
+`continuous=true` → 页面 `#stream-status`。验证入口 `tests/test_market_stream_auth.py`
+和 Gold `tests/test_realtime_stream.py`。
