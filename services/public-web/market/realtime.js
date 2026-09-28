@@ -2,12 +2,13 @@
 (async () => {
   "use strict";
   const status = document.querySelector("#status"), streamStatus = document.querySelector("#stream-status"), root = document.querySelector("#contracts"), login = document.querySelector("#login"), windowSelect = document.querySelector("#window-minutes");
-  const state = {since: null, timer: null, headTimer: null, ageTimer: null, internationalAges: null, controller: null, inFlight: false, pendingReload: false, generation: 0, streamGeneration: 0, runId: null, charts: new Map(), rows: new Map(), hidden: document.hidden, retryAttempt: 0, windowMinutes: 5, streamReady: false, streamStarting: false, streamTransport: null, streamStartPromise: null, streamUpdates: 0};
+  const state = {since: null, timer: null, headTimer: null, ageTimer: null, internationalAges: null, controller: null, inFlight: false, pendingReload: false, generation: 0, streamGeneration: 0, runId: null, charts: new Map(), rows: new Map(), hidden: document.hidden, retryAttempt: 0, windowMinutes: 5, streamReady: false, streamWaiting: false, streamStarting: false, streamTransport: null, streamStartPromise: null, streamUpdates: 0};
   const streamReducer = typeof GoldMarketRealtimeState !== "undefined" ? GoldMarketRealtimeState.create({
     expectedContracts: 8,
     onResync: ({reason}) => {
       clearStreamView();
       state.streamReady = false;
+      state.streamWaiting = false;
       status.textContent = `实时流已暂停（${reason}），正在重新取得窗口…`;
       state.streamTransport?.bootstrap(`state:${reason}`);
     },
@@ -174,6 +175,11 @@
     const meta = streamReducer.metadata();
     state.runId = meta.run_id || state.runId;
     state.streamReady = meta.continuous;
+    state.streamWaiting = meta.gap_reason === "WAITING_FOR_SOURCE";
+    if (state.streamWaiting) {
+      setStreamStatus("频道已订阅；等待首条行情");
+      window.clearTimeout(state.timer);
+    }
     status.textContent = `消息流已连接；窗口 ${meta.window_minutes} 分钟；源序号 ${meta.source_sequence}；${meta.window_complete ? "完整窗口" : "窗口预热中，暂不宣称连续"}`;
     return true;
   }
@@ -252,6 +258,7 @@
     state.streamStartPromise = null;
     state.streamStarting = false;
     state.streamReady = false;
+    state.streamWaiting = false;
     streamReducer?.reset();
     clearStreamView();
     setStreamStatus(`消息流${reason}；使用 HTTP 窗口回退`);
@@ -293,11 +300,12 @@
       if (generation !== state.streamGeneration) return false;
       state.streamStarting = false;
       login.hidden = true;
-      return state.streamReady;
+      return state.streamReady || state.streamWaiting;
     }).catch((error) => {
       if (generation !== state.streamGeneration) return false;
       state.streamStarting = false;
       state.streamReady = false;
+      state.streamWaiting = false;
       setStreamStatus(`消息流不可用：${error.message || "UNKNOWN"}；使用 HTTP 窗口回退`);
       load(true);
       return false;
@@ -329,6 +337,7 @@
     if (!state.hidden) state.timer = window.setTimeout(() => load(), delay);
   }
   async function load(force = false) {
+    if (state.streamWaiting) return;
     if (state.streamReady) { void refreshHead(); return; }
     if (state.inFlight) { if (force) { state.pendingReload = true; state.controller?.abort(); } return; }
     if (state.hidden) return;

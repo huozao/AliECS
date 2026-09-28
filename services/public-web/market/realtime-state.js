@@ -98,6 +98,13 @@
       records.clear();
       const ordered = snapshot.events.map(normalized).filter(Boolean)
         .sort((a, b) => a.source_sequence - b.source_sequence);
+      // Before the first observation there is no run identity to join yet.
+      // Wait for a publication to trigger a fresh bootstrap instead of
+      // recursively retrying the same empty snapshot.
+      if (continuous && !runId && sourceSequence === 0 && snapshot.events.length === 0 && !windowComplete) {
+        continuous = false;
+        gapReason = "WAITING_FOR_SOURCE";
+      }
       if (continuous && (!runId || !streamEpoch)) return requestResync("INVALID_BOOTSTRAP_IDENTITY");
       if (ordered.length && (!runId || !streamEpoch)) return requestResync("INVALID_BOOTSTRAP_IDENTITY");
       let previousSequence = null;

@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {create} = require('../services/public-web/market/realtime-stream.js');
+const {create: createState} = require('../services/public-web/market/realtime-state.js');
 
 class FakeCentrifuge {
   constructor(endpoint, options) {
@@ -98,5 +99,40 @@ test('publication arriving while snapshot callback runs is drained before readin
   await started;
   assert.deepEqual(seen, [2]);
   assert.equal(stream.bufferedCount, 0);
+  stream.stop();
+});
+
+test('empty source waits for first publication without looping bootstrap requests', async () => {
+  let calls = 0;
+  let stream;
+  const reducer = createState({onResync: ({reason}) => { void stream.bootstrap(reason); }});
+  stream = create({
+    CentrifugeClass: FakeCentrifuge,
+    fetchToken: async () => ({token: 't'}),
+    fetchBootstrap: async () => {
+      calls += 1;
+      if (calls > 3) throw new Error('bootstrap loop');
+      return calls === 1 ? {
+        schema_version: 'gold-display-bootstrap/v1', run_id: null, stream_epoch: 'epoch-0',
+        source_sequence: 0, continuous: true, window_complete: false,
+        window_minutes: 5, events: [],
+      } : {...snapshot(1), events: [publication(1)]};
+    },
+    onSnapshot: (value) => reducer.install(value),
+    onEvent: (value) => reducer.receive(value),
+  });
+  const started = stream.start();
+  await new Promise(setImmediate);
+  FakeCentrifuge.instance.emit('subscribed', {channel: 'gold:market'});
+  await started;
+  assert.equal(calls, 1);
+  assert.equal(reducer.metadata().installed, true);
+  assert.equal(reducer.metadata().continuous, false);
+
+  FakeCentrifuge.instance.emit('publication', {channel: 'gold:market', data: publication(1)});
+  await new Promise(setImmediate);
+  assert.equal(calls, 2);
+  assert.equal(reducer.metadata().run_id, 'run-1');
+  assert.equal(reducer.metadata().continuous, true);
   stream.stop();
 });
