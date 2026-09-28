@@ -71,4 +71,7 @@ test('bootstrap sequence gaps and invalid identities fail closed and clear old r
   assert.equal(state.install({schema_version: 'gold-display-bootstrap/v1', run_id: null,
     stream_epoch: 'epoch-1', source_sequence: 0, continuous: true, window_complete: false,
     window_minutes: 5, events: [event(1, 1000)]}).reason, 'INVALID_BOOTSTRAP_IDENTITY');
+  assert.equal(state.install({schema_version: 'gold-display-bootstrap/v1', run_id: null,
+    stream_epoch: 'epoch-1', source_sequence: 0, continuous: true, window_complete: false,
+    window_minutes: 5, events: [{}]}).reason, 'INVALID_BOOTSTRAP_IDENTITY');
 });
