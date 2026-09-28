@@ -448,3 +448,7 @@ ssh txecs 'sudo docker exec -i business-cn-postgres-1 psql -U app -d app -v ON_E
 issuer `aliecs-market`。缺少密钥时接口返回 503。只允许 `gold:market` 服务端订阅，
 Broker 的客户端发布权限必须保持关闭；上线前还需完成本机及公网 WebSocket 代理、
 页面接线、鉴权和回滚验证，不能仅凭 token 接口通过就发布。
+`GET /v1/market/bootstrap?window_minutes=5|10|15` 经现有登录与 `market.read`
+检查后只读调用私有 Review API 的 `/display/bootstrap`；本机网关未启用时返回
+503，不能以旧的秒级归档代替半秒消息流。验证入口是
+`tests/test_market_stream_auth.py` 和 Gold `tests/test_review_archive_api.py`。

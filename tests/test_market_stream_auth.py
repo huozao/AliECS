@@ -24,6 +24,7 @@ class MarketStreamAuthTests(unittest.TestCase):
                 del sys.modules[name]
         sys.path.insert(0, str(BACKEND))
         cls.module = importlib.import_module("app.routers.market_stream")
+        cls.snapshot_module = importlib.import_module("app.routers.market_snapshot")
 
     @classmethod
     def tearDownClass(cls):
@@ -62,3 +63,22 @@ class MarketStreamAuthTests(unittest.TestCase):
         self.assertEqual(claims["aud"], "gold-market-stream")
         self.assertEqual(claims["iss"], "aliecs-market")
         self.assertLessEqual(claims["exp"] - claims["iat"], 60)
+
+    def test_bootstrap_requires_market_permission_and_private_source(self):
+        app = FastAPI()
+        app.include_router(self.snapshot_module.router)
+        client = TestClient(app)
+        app.dependency_overrides[self.snapshot_module.require_login] = lambda: {"uid": 7, "permissions": []}
+        with patch.object(self.module, "_user_roles_permissions", return_value=([], [])):
+            self.assertEqual(client.get("/v1/market/bootstrap?window_minutes=5").status_code, 403)
+        app.dependency_overrides[self.snapshot_module.require_login] = lambda: {"uid": 7, "permissions": ["market.read"]}
+        with patch.object(self.module, "_user_roles_permissions", return_value=([], ["market.read"])):
+            with patch.object(self.snapshot_module, "_source_get", return_value={
+                "schema_version": "gold-display-bootstrap/v1", "run_id": "r",
+                "stream_epoch": "e", "source_sequence": 0, "continuous": True,
+                "window_minutes": 5, "events": []}):
+                response = client.get("/v1/market/bootstrap?window_minutes=5")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["run_id"], "r")
+        with patch.object(self.module, "_user_roles_permissions", return_value=([], ["market.read"])):
+            self.assertEqual(client.get("/v1/market/bootstrap?window_minutes=7").status_code, 422)

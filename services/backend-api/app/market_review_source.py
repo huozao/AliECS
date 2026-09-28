@@ -10,6 +10,12 @@ import os
 import urllib.error
 import urllib.request
 from typing import Any
+from urllib.parse import urlsplit
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 class ReviewSourceUnavailable(RuntimeError):
@@ -26,7 +32,8 @@ class LocalReviewSource:
                  total_timeout: float = 8.0, max_bytes: int = 8 * 1024 * 1024):
         self.base_url = (url or os.getenv("MARKET_REVIEW_ARCHIVE_URL", "")).rstrip("/")
         self.token = token if token is not None else os.getenv("MARKET_REVIEW_ARCHIVE_TOKEN", "")
-        self.opener = opener
+        self.opener = (urllib.request.build_opener(_NoRedirect())
+                       if opener is urllib.request.urlopen else opener)
         self.connect_timeout = connect_timeout
         self.total_timeout = total_timeout
         self.max_bytes = max_bytes
@@ -36,7 +43,8 @@ class LocalReviewSource:
             raise ValueError("MARKET_REVIEW_ARCHIVE_TOKEN is required")
 
     def get(self, path: str, query: str = "") -> dict[str, Any]:
-        allowed = {"/health", "/latest", "/realtime", "/events/index", "/coverage"}
+        allowed = {"/health", "/latest", "/realtime", "/display/bootstrap",
+                   "/events/index", "/coverage"}
         if path not in allowed and not (path.startswith("/events/") and path.endswith("/detail")):
             raise ValueError("unsupported review source path")
         request = urllib.request.Request(
@@ -45,6 +53,12 @@ class LocalReviewSource:
         )
         try:
             with self.opener(request, timeout=self.total_timeout) as response:
+                response_url = response.geturl() if hasattr(response, "geturl") else request.full_url
+                expected = urlsplit(request.full_url)
+                actual = urlsplit(response_url)
+                if (actual.scheme, actual.netloc, actual.path) != (
+                        expected.scheme, expected.netloc, expected.path):
+                    raise ReviewSourceUnavailable("review source redirected unexpectedly")
                 if response.status != 200:
                     raise ReviewSourceUnavailable(f"source returned {response.status}")
                 payload = response.read(self.max_bytes + 1)
