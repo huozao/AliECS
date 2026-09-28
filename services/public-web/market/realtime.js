@@ -15,6 +15,8 @@
     const age = Number(source.age_seconds);
     return !Number.isFinite(age) ? "年龄未知" : `${Math.max(0, age).toFixed(2)} 秒前`;
   };
+  const ageValue = (source) => Number(source?.age_seconds);
+  const ageClass = (source) => Number.isFinite(ageValue(source)) && ageValue(source) > 1 ? "quote-age quote-age-stale" : "quote-age";
   const timeText = (value) => {
     const time = Date.parse(value || "");
     return Number.isFinite(time) ? new Date(time).toLocaleTimeString("zh-SG", {hour12: false}) : "时间未知";
@@ -29,7 +31,7 @@
     const overlap = body.overlap?.status || (domesticReady && intlReady ? "READY｜存在有效重叠" : domesticReady ? "DOMESTIC_ONLY｜仅国内行情可用" : intlReady ? "INTERNATIONAL_ONLY｜等待国内行情" : "BLOCKED｜两层行情均待确认");
     const strategy = body.strategy?.status || (domesticReady && intlReady ? "READY｜策略可运行" : "BLOCKED｜等待有效重叠行情");
     document.querySelector("#international-status").textContent = intlStatus;
-    document.querySelector("#international-detail").textContent = `$${priceText(intlXau.price ?? latest.xauusd_usd_per_oz)} · ¥${priceText(international.international_cny_per_g ?? latest.international_price)}/克 · XAU ${ageText(intlXau)} · FX ${ageText(intlFx)} · 更新 ${timeText(international.updated_at)}`;
+    document.querySelector("#international-detail").innerHTML = `$${priceText(intlXau.price ?? latest.xauusd_usd_per_oz)} · ¥${priceText(international.international_cny_per_g ?? latest.international_price)}/克 · XAU <span class="${ageClass(intlXau)}">${ageText(intlXau)}</span> · FX <span class="${ageClass(intlFx)}">${ageText(intlFx)}</span> · 更新 ${esc(timeText(international.updated_at))}`;
     document.querySelector("#domestic-status").textContent = body.domestic?.status || (domesticReady ? "FRESH｜国内行情新鲜" : "STALE｜国内行情待确认");
     document.querySelector("#domestic-detail").textContent = `${quotes.length} 个合约 · ${ageText(domestic)} · ${domesticReady ? "可参与策略计算" : "不参与新策略"}`;
     document.querySelector("#overlap-status").textContent = overlap;
