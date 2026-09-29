@@ -2,7 +2,7 @@
 (async () => {
   "use strict";
   const status = document.querySelector("#status"), streamStatus = document.querySelector("#stream-status"), root = document.querySelector("#contracts"), login = document.querySelector("#login"), windowSelect = document.querySelector("#window-minutes");
-  const state = {since: null, timer: null, headTimer: null, ageTimer: null, internationalAges: null, controller: null, inFlight: false, pendingReload: false, generation: 0, streamGeneration: 0, runId: null, charts: new Map(), rows: new Map(), hidden: document.hidden, retryAttempt: 0, windowMinutes: 5, streamReady: false, streamWaiting: false, streamStarting: false, streamTransport: null, streamStartPromise: null, streamUpdates: 0};
+  const state = {since: null, timer: null, headTimer: null, ageTimer: null, internationalAges: null, latestHead: null, controller: null, inFlight: false, pendingReload: false, generation: 0, streamGeneration: 0, runId: null, charts: new Map(), rows: new Map(), hidden: document.hidden, retryAttempt: 0, windowMinutes: 5, streamReady: false, streamWaiting: false, streamStarting: false, streamTransport: null, streamStartPromise: null, streamUpdates: 0};
   const streamReducer = typeof GoldMarketRealtimeState !== "undefined" ? GoldMarketRealtimeState.create({
     expectedContracts: 8,
     onResync: ({reason}) => {
@@ -150,7 +150,8 @@
     let item = state.charts.get(contract); if (item) return item;
     const card = document.createElement("article"); card.className = "market-card realtime-contract-card"; card.dataset.contract = contract;
     card.innerHTML = `<div class="realtime-card-head"><h2>${esc(contract)}</h2><div class="last">—</div></div><div class="realtime-parallel"><div><div class="realtime-extremes"><span>秒内最高 <b data-extreme="high">—</b></span><span>秒内最低 <b data-extreme="low">—</b></span></div><div class="chart" aria-label="${esc(contract)} 成交与 I 价格带"></div></div><div class="five-price" aria-label="${esc(contract)} 模型价格带与盘口"><span class="sell"><small>上方卖挂单</small><b data-tag="sell">—</b></span><span class="upper"><small>I 价格带上边缘</small><b data-tag="upper">—</b></span><span class="current"><small>真实成交价</small><b data-tag="current">—</b></span><span class="center"><small>I 价格带中心</small><b data-tag="center">—</b></span><span class="lower"><small>I 价格带下边缘</small><b data-tag="lower">—</b></span><span class="buy"><small>下方买挂单</small><b data-tag="buy">—</b></span></div></div><div class="muted"></div>`;
-    root.append(card); const node = card.querySelector(".chart");
+    if (root?.append) root.append(card); else if (root?.appendChild) root.appendChild(card);
+    const node = card.querySelector(".chart");
     if (window.LightweightCharts) {
       const chart = LightweightCharts.createChart(node, {autoSize: true, layout: {background:{color:"transparent"}, textColor:"#91a1af", attributionLogo:false}, timeScale:{timeVisible:true,secondsVisible:true}, grid:{vertLines:{visible:false},horzLines:{color:"#243244"}}, rightPriceScale: {visible: true}});
       const line = (color, options = {}) => chart.addSeries(LightweightCharts.LineSeries, {color, lineWidth:1, priceLineVisible:false, lastValueVisible:false, ...options});
@@ -303,6 +304,9 @@
       window.clearTimeout(state.timer);
     }
     status.textContent = `消息流已连接；窗口 ${meta.window_minutes} 分钟；源序号 ${meta.source_sequence}；${meta.window_complete ? "完整窗口" : "窗口预热中，暂不宣称连续"}`;
+    if (contracts.size === 0 && state.latestHead) {
+      renderHead(state.latestHead);
+    }
     return true;
   }
   function renderStreamEvent(event) {
@@ -359,9 +363,22 @@
   }
   function renderHead(body) {
     if (!body || state.hidden) return;
+    state.latestHead = body;
     const quotes = (body.quotes || []).filter((row) => row.contract);
     renderLayers(body, quotes);
     renderHedgeCandidates(body.hedge_ranking || []);
+    const quotesMap = new Map(quotes.map((row) => [row.contract, row]));
+    const bandsMap = new Map((body.bands || []).filter((row) => row.contract).map((row) => [row.contract, row]));
+    const contracts = new Set([...quotesMap.keys(), ...bandsMap.keys()]);
+    for (const contract of [...contracts].sort()) {
+      const streamCount = streamReducer ? streamReducer.seriesFor(contract).length : 0;
+      if (streamCount === 0) {
+        const quote = quotesMap.get(contract);
+        const band = bandsMap.get(contract);
+        updateChart(contract, {quotes: quote ? [quote] : [], bands: band ? [band] : []},
+          quote, band, body.orders || [], body.hedge_ranking || []);
+      }
+    }
   }
   function render(body) {
     const window_minutes = body.window_minutes || state.windowMinutes;
@@ -376,6 +393,11 @@
     if (state.streamReady) {
       state.since = null;
       status.textContent = `消息流已连接；状态快照 ${body.freshness?.received_at || body.server_time || "—"}；${contracts.size} 个合约由消息流绘制`;
+      for (const contract of [...contracts].sort()) {
+        if (!streamReducer || streamReducer.seriesFor(contract).length === 0) {
+          updateChart(contract, body.series?.[contract], quotes.get(contract), bands.get(contract), body.orders || [], body.hedge_ranking || []);
+        }
+      }
       return;
     }
     [...contracts].sort().forEach((contract) => updateChart(contract, body.series?.[contract], quotes.get(contract), bands.get(contract), body.orders || [], body.hedge_ranking || []));

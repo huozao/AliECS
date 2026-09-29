@@ -183,3 +183,90 @@ test('realtime page does not block domesticReady when domestic quotes are older 
   assert.match(buyPriceLine.options?.title, /买 901\.00/);
 });
 
+test('realtime page renders cards from latest quotes and bands when stream bootstrap has empty events', async () => {
+  const script = fs.readFileSync(path.join(__dirname, '../services/public-web/market/realtime.js'), 'utf8');
+  const nodes = new Map();
+  const node = (selector) => {
+    if (!nodes.has(selector)) nodes.set(selector, {textContent: '', innerHTML: '', hidden: false,
+      classList: {toggle() {}}, addEventListener() {}, querySelector: node});
+    return nodes.get(selector);
+  };
+  const appendedCards = [];
+  node('#contracts').append = (el) => appendedCards.push(el);
+  const now = new Date();
+  const quote = {
+    contract: 'SHFE.au2610',
+    source_time: now.toISOString(),
+    observed_at: now.toISOString(),
+    last_price: 896.18,
+    ohlc: {high: 896.20, low: 896.14}
+  };
+  const band = {
+    contract: 'SHFE.au2610',
+    source_time: now.toISOString(),
+    upper: 898.17,
+    center: 896.17,
+    lower: 894.17
+  };
+  const latestHead = {
+    run_id: 'live-review-test',
+    quotes: [quote],
+    bands: [band],
+    orders: [{contract: 'SHFE.au2610', buy: {price: 895.0, status: 'EFFECTIVE'}, sell: {price: 899.0, status: 'EFFECTIVE'}}],
+    international: {strategy_allowed: true, status: 'READY｜国际参考可用',
+      xauusd: {price: 4100, age_seconds: 2}, usdcnh: {price: 7.1, age_seconds: 2}},
+    window_minutes: 5
+  };
+  // Stream connects with continuous=true but events=[]
+  const emptyBootstrap = {
+    schema_version: 'gold-display-bootstrap/v1',
+    run_id: 'live-review-test',
+    stream_epoch: 'epoch-1',
+    source_sequence: 100,
+    continuous: true,
+    window_complete: false,
+    window_minutes: 5,
+    events: []
+  };
+  const document = {
+    hidden: false,
+    querySelector: node,
+    addEventListener() {},
+    createElement() {
+      const card = {className: '', dataset: {}, innerHTML: '', querySelector: node};
+      return card;
+    }
+  };
+  node('#window-minutes').value = '5';
+  const context = {
+    document,
+    window: {setTimeout: () => 1, clearTimeout() {}, addEventListener() {}},
+    performance: {now: () => 0},
+    GoldMarketRealtimeState,
+    GoldMarketRealtimeStream: {
+      create: (options) => ({
+        async start() {
+          options.onStatus({state: 'bootstrapping'});
+          options.onSnapshot(emptyBootstrap);
+        },
+        stop() {},
+        bootstrap() {}
+      })
+    },
+    MarketPage: {
+      absorbLoginHandoff: async () => {},
+      request: async (url) => {
+        if (url.includes('/latest')) return latestHead;
+        return {quotes: [], bands: [], orders: [], series: {}, window_minutes: 5};
+      }
+    },
+    URLSearchParams, Date, Number, Map, Set, AbortController, console
+  };
+  vm.runInNewContext(script, context);
+  for (let i = 0; i < 4; i++) await new Promise(setImmediate);
+  // Verify that even with empty stream bootstrap, contract card was created and populated from latestHead
+  assert.equal(appendedCards.length, 1, 'one contract card should be created');
+  assert.equal(appendedCards[0].dataset.contract, 'SHFE.au2610');
+});
+
+
