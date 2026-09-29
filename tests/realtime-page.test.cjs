@@ -269,4 +269,115 @@ test('realtime page renders cards from latest quotes and bands when stream boots
   assert.equal(appendedCards[0].dataset.contract, 'SHFE.au2610');
 });
 
+test('realtime page creates disconnected order segments with true gap when order is canceled and repriced', async () => {
+  const script = fs.readFileSync(path.join(__dirname, '../services/public-web/market/realtime.js'), 'utf8');
+  const nodes = new Map();
+  const node = (selector) => {
+    if (!nodes.has(selector)) nodes.set(selector, {textContent: '', innerHTML: '', hidden: false,
+      classList: {toggle() {}}, addEventListener() {}, querySelector: node});
+    return nodes.get(selector);
+  };
+  const seriesCreated = [];
+  const priceLinesCreated = [];
+  const createdSeriesMock = (type, options) => {
+    const s = {
+      type, options, data: [],
+      setData(d) { s.data = d; },
+      update(p) { s.data.push(p); },
+      createPriceLine(opt) {
+        const pl = { options: opt, applyOptions(o) { Object.assign(pl.options, o); } };
+        priceLinesCreated.push(pl);
+        return pl;
+      },
+      removePriceLine(pl) {
+        const idx = priceLinesCreated.indexOf(pl);
+        if (idx !== -1) priceLinesCreated.splice(idx, 1);
+      }
+    };
+    seriesCreated.push(s);
+    return s;
+  };
+  const LightweightCharts = {
+    LineSeries: 'LineSeries',
+    LineType: {Simple: 0, WithSteps: 1, Curved: 2},
+    createChart: () => ({
+      addSeries: (type, options) => createdSeriesMock(type, options),
+      remove() {}
+    })
+  };
+  const baseT = 1787638000;
+  // Quotes sequence:
+  // t=0..20: sell order at 904.0
+  // t=25..35: NO order (canceled, gap!)
+  // t=40..60: new sell order at 906.0
+  const quotes = [
+    { contract: 'SHFE.au2612', bucket_start_ms: (baseT + 0) * 1000, sell_order_price: 904.0, last_price: 902.0 },
+    { contract: 'SHFE.au2612', bucket_start_ms: (baseT + 10) * 1000, sell_order_price: 904.0, last_price: 902.2 },
+    { contract: 'SHFE.au2612', bucket_start_ms: (baseT + 20) * 1000, sell_order_price: 904.0, last_price: 902.5 },
+    // Gap: orders canceled due to price deviation
+    { contract: 'SHFE.au2612', bucket_start_ms: (baseT + 25) * 1000, sell_order_price: null, last_price: 903.0 },
+    { contract: 'SHFE.au2612', bucket_start_ms: (baseT + 30) * 1000, sell_order_price: null, last_price: 903.5 },
+    { contract: 'SHFE.au2612', bucket_start_ms: (baseT + 35) * 1000, sell_order_price: null, last_price: 904.0 },
+    // Replaced order at new price
+    { contract: 'SHFE.au2612', bucket_start_ms: (baseT + 40) * 1000, sell_order_price: 906.0, last_price: 904.2 },
+    { contract: 'SHFE.au2612', bucket_start_ms: (baseT + 50) * 1000, sell_order_price: 906.0, last_price: 904.5 },
+    { contract: 'SHFE.au2612', bucket_start_ms: (baseT + 60) * 1000, sell_order_price: 906.0, last_price: 904.8 },
+  ];
+  const base = {
+    run_id: 'run-gap-test',
+    quotes,
+    bands: [],
+    orders: [{ contract: 'SHFE.au2612', sell: { price: 906.0, status: 'EFFECTIVE' }, buy: null }],
+    series: { 'SHFE.au2612': { quotes, bands: [] } },
+    international: { strategy_allowed: true, status: 'READY｜国际参考可用',
+      xauusd: { price: 4000, age_seconds: 1 }, usdcnh: { price: 7, age_seconds: 1 } },
+    window_minutes: 5
+  };
+  node('#window-minutes').value = '5';
+  node('#contracts').append = () => {};
+  const document = { hidden: false, querySelector: node, addEventListener() {},
+    createElement() { return { className: '', dataset: {}, innerHTML: '', querySelector: node }; } };
+  const context = {
+    document,
+    window: { setTimeout: () => 1, clearTimeout() {}, addEventListener() {}, LightweightCharts },
+    performance: { now: () => 0 },
+    LightweightCharts,
+    MarketPage: { absorbLoginHandoff: async () => {}, request: async () => base },
+    URLSearchParams, Date, Number, Map, Set, AbortController, console
+  };
+  vm.runInNewContext(script, context);
+  for (let i = 0; i < 4; i++) await new Promise(setImmediate);
+
+  // Filter sell series (golden color #FFC772) with non-empty data
+  const sellSeriesList = seriesCreated.filter((s) => s.options?.color === '#FFC772' && s.data.length > 0);
+  assert.equal(sellSeriesList.length, 2, 'should create exactly 2 separate sell segments separated by a gap');
+
+  // Verify Segment 1: from t=baseT to t=baseT+20 at price 904.0
+  const seg1 = sellSeriesList[0];
+  assert.equal(seg1.data[0].time, baseT);
+  assert.equal(seg1.data[0].value, 904.0);
+  assert.equal(seg1.data[seg1.data.length - 1].time, baseT + 20);
+  assert.equal(seg1.data[seg1.data.length - 1].value, 904.0);
+
+  // Verify Segment 2: from t=baseT+40 to t=baseT+60 at price 906.0 (跳空新价位)
+  const seg2 = sellSeriesList[1];
+  assert.equal(seg2.data[0].time, baseT + 40);
+  assert.equal(seg2.data[0].value, 906.0);
+  assert.equal(seg2.data[seg2.data.length - 1].time, baseT + 60);
+  assert.equal(seg2.data[seg2.data.length - 1].value, 906.0);
+
+  // Assert that NO data point exists during the cancellation gap (baseT+21 to baseT+39)
+  const allSellTimes = [...seg1.data.map(p => p.time), ...seg2.data.map(p => p.time)];
+  for (let t = baseT + 21; t <= baseT + 39; t++) {
+    assert.equal(allSellTimes.includes(t), false, `time ${t} must be in the gap with NO line drawn`);
+  }
+
+  // Active PriceLine should be at 906.00
+  const activeSellPriceLine = priceLinesCreated.find((pl) => pl.options?.color === '#FFC772');
+  assert.ok(activeSellPriceLine, 'active sell price line should exist');
+  assert.equal(activeSellPriceLine.options.price, 906.0);
+  assert.match(activeSellPriceLine.options.title, /卖 906\.00/);
+});
+
+
 

@@ -19,7 +19,7 @@
     const number = Number(value);
     return Number.isFinite(number) ? number.toFixed(digits) : "—";
   };
-  const stamp = (row) => row.observed_at || row.captured_at || row.source_time;
+  const stamp = (row) => row?.observed_at || row?.captured_at || row?.source_time || (row?.bucket_start_ms != null ? new Date(Number(row.bucket_start_ms)).toISOString() : "");
   const point = (row) => { const time = Date.parse(stamp(row)) / 1000, value = Number(row.last_price); return Number.isFinite(time) && Number.isFinite(value) ? {time, value} : null; };
   const finite = (value) => value != null && value !== "" && Number.isFinite(Number(value));
   const seriesPoints = (rows, field) => [...new Map(rows.map((row) => {
@@ -85,39 +85,63 @@
     const items = rows.map((row) => `<tr><td>${esc(row.target_contract || "通用")}</td><td>${esc(row.contract || row.symbol || "—")}</td><td>${esc(row.rank ?? "—")}</td><td>${esc(row.activity_count_300s ?? "—")}</td><td>${esc(row.expected_net_cny ?? row.expected_cost_cny ?? "—")}</td><td>${esc(row.reason || row.status || "—")}</td></tr>`).join("");
     node.innerHTML = `<div class="table-wrap"><table><thead><tr><th>目标腿</th><th>候选合约</th><th>排序</th><th>300秒成交次数</th><th>预期收益/成本</th><th>资格状态</th></tr></thead><tbody>${items}</tbody></table></div>`;
   }
-  const orderSeriesPoints = (quotes, field, fallbackPrice) => {
-    if (!quotes.length && !finite(fallbackPrice)) return [];
-    const raw = [];
-    let lastVal = finite(fallbackPrice) ? Number(fallbackPrice) : null;
+  const extractOrderSegments = (quotes, field, fallbackPrice) => {
+    const segments = [];
+    let current = null;
     for (const q of quotes) {
       const t = q.bucket_start_ms != null ? Number(q.bucket_start_ms) / 1000 : Date.parse(stamp(q)) / 1000;
       if (!Number.isFinite(t)) continue;
       const v = q[field];
       if (finite(v)) {
-        lastVal = Number(v);
-        raw.push({ time: t, value: lastVal });
-      } else if (lastVal !== null) {
-        raw.push({ time: t, value: lastVal });
+        const p = Number(v);
+        if (current && Math.abs(current.price - p) < 1e-4) {
+          current.end = t;
+        } else {
+          if (current) segments.push(current);
+          current = { start: t, end: t, price: p, active: false };
+        }
+      } else {
+        if (current) {
+          segments.push(current);
+          current = null;
+        }
       }
     }
-    const firstT = quotes[0]?.bucket_start_ms != null ? Number(quotes[0].bucket_start_ms) / 1000 : Date.parse(stamp(quotes[0] || {})) / 1000;
-    const lastT = quotes[quotes.length - 1]?.bucket_start_ms != null ? Number(quotes[quotes.length - 1].bucket_start_ms) / 1000 : Date.parse(stamp(quotes[quotes.length - 1] || {})) / 1000;
-    if (raw.length === 0 && finite(fallbackPrice) && Number.isFinite(firstT) && Number.isFinite(lastT)) {
-      const val = Number(fallbackPrice);
-      raw.push({ time: firstT, value: val });
-      if (lastT > firstT) raw.push({ time: lastT, value: val });
-    } else if (raw.length > 0) {
-      if (Number.isFinite(firstT) && raw[0].time > firstT) {
-        raw.unshift({ time: firstT, value: raw[0].value });
-      }
-      if (Number.isFinite(lastT) && raw[raw.length - 1].time < lastT && lastVal !== null) {
-        raw.push({ time: lastT, value: lastVal });
+    if (current) {
+      current.active = true;
+      segments.push(current);
+    } else if (segments.length === 0 && finite(fallbackPrice) && quotes.length > 0) {
+      const firstT = quotes[0]?.bucket_start_ms != null ? Number(quotes[0].bucket_start_ms) / 1000 : Date.parse(stamp(quotes[0] || {})) / 1000;
+      const lastT = quotes[quotes.length - 1]?.bucket_start_ms != null ? Number(quotes[quotes.length - 1].bucket_start_ms) / 1000 : Date.parse(stamp(quotes[quotes.length - 1] || {})) / 1000;
+      if (Number.isFinite(firstT) && Number.isFinite(lastT)) {
+        segments.push({ start: firstT, end: lastT, price: Number(fallbackPrice), active: true });
       }
     }
-    const unique = new Map();
-    for (const pt of raw) unique.set(pt.time, pt);
-    return [...unique.values()].sort((a, b) => a.time - b.time);
+    return segments;
   };
+  function syncOrderSegments(chart, existingList, segments, color) {
+    if (!chart || typeof chart.addSeries !== "function") return existingList || [];
+    const pool = existingList || [];
+    while (pool.length < segments.length) {
+      const s = chart.addSeries(LightweightCharts.LineSeries, {
+        color, lineWidth: 2, lineType: LightweightCharts.LineType?.WithSteps ?? 1,
+        priceLineVisible: false, lastValueVisible: false
+      });
+      pool.push(s);
+    }
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      const series = pool[i];
+      const pts = seg.start === seg.end
+        ? [{ time: seg.start, value: seg.price }]
+        : [{ time: seg.start, value: seg.price }, { time: seg.end, value: seg.price }];
+      series.setData(pts);
+    }
+    for (let i = segments.length; i < pool.length; i++) {
+      pool[i].setData([]);
+    }
+    return pool;
+  }
   function syncOrderPriceLine(series, currentPriceLine, price, sideLabel, color) {
     if (!series || typeof series.createPriceLine !== "function") return currentPriceLine;
     if (!finite(price)) {
@@ -155,31 +179,29 @@
     if (window.LightweightCharts) {
       const chart = LightweightCharts.createChart(node, {autoSize: true, layout: {background:{color:"transparent"}, textColor:"#91a1af", attributionLogo:false}, timeScale:{timeVisible:true,secondsVisible:true}, grid:{vertLines:{visible:false},horzLines:{color:"#243244"}}, rightPriceScale: {visible: true}});
       const line = (color, options = {}) => chart.addSeries(LightweightCharts.LineSeries, {color, lineWidth:1, priceLineVisible:false, lastValueVisible:false, ...options});
-      const stepLine = (color, options = {}) => chart.addSeries(LightweightCharts.LineSeries, {
-        color, lineWidth: 1, lineType: LightweightCharts.LineType?.WithSteps ?? 1,
-        priceLineVisible: false, lastValueVisible: false, ...options
-      });
       item = {
         card, chart,
-        sellOrder: stepLine("#FFC772"),
+        sellSegments: [],
+        buySegments: [],
+        sellOrder: null,
+        buyOrder: null,
         upper: line("#84b8ef"),
         price: line("#ffffff", {lineWidth:2, lastValueVisible:true, priceLineVisible:false}),
         center: line("#f6c85f", {lineStyle:2}),
         lower: line("#84b8ef"),
-        buyOrder: stepLine("#F0AA70"),
         sellPriceLine: null,
         buyPriceLine: null,
-        lastTimes: {sellOrder: null, upper: null, price: null, center: null, lower: null, buyOrder: null}
+        lastTimes: {upper: null, price: null, center: null, lower: null}
       };
-    } else item = {card};
+    } else item = {card, sellSegments: [], buySegments: []};
     state.charts.set(contract, item); return item;
   }
   function updateChart(contract, data, quote, band, orders, ranking) {
     const item = chartFor(contract), record = state.rows.get(contract) || {quotes: new Map(), bands: new Map()};
     const order = orders.find((row) => row.contract === contract) || {};
     for (const row of data?.quotes || []) {
-      if (row.buy_order_price == null) row.buy_order_price = extractOrderPrice(row, "buy") ?? (finite(order.buy?.price) ? Number(order.buy.price) : null);
-      if (row.sell_order_price == null) row.sell_order_price = extractOrderPrice(row, "sell") ?? (finite(order.sell?.price) ? Number(order.sell.price) : null);
+      if (row.buy_order_price == null) row.buy_order_price = extractOrderPrice(row, "buy");
+      if (row.sell_order_price == null) row.sell_order_price = extractOrderPrice(row, "sell");
       record.quotes.set(`${stamp(row)}|${row.snapshot_sequence || ""}`, row);
     }
     for (const row of data?.bands || []) record.bands.set(`${stamp(row)}|${row.snapshot_sequence || ""}`, row);
@@ -213,10 +235,12 @@
     const pricePoints = seriesPoints(quotes, "last_price");
     item.price.setData(pricePoints);
     item.lastTimes.price = pricePoints.at(-1)?.time ?? null;
-    const sellPoints = orderSeriesPoints(quotes, "sell_order_price", order.sell?.price);
-    if (item.sellOrder) { item.sellOrder.setData(sellPoints); item.lastTimes.sellOrder = sellPoints.at(-1)?.time ?? null; }
-    const buyPoints = orderSeriesPoints(quotes, "buy_order_price", order.buy?.price);
-    if (item.buyOrder) { item.buyOrder.setData(buyPoints); item.lastTimes.buyOrder = buyPoints.at(-1)?.time ?? null; }
+    const sellSegments = extractOrderSegments(quotes, "sell_order_price", order.sell?.price);
+    item.sellSegments = syncOrderSegments(item.chart, item.sellSegments, sellSegments, "#FFC772");
+    item.sellOrder = item.sellSegments[0] || null;
+    const buySegments = extractOrderSegments(quotes, "buy_order_price", order.buy?.price);
+    item.buySegments = syncOrderSegments(item.chart, item.buySegments, buySegments, "#F0AA70");
+    item.buyOrder = item.buySegments[0] || null;
     for (const [series, field, name] of [[item.upper,"upper","upper"],[item.center,"center","center"],[item.lower,"lower","lower"]]) {
       const points = seriesPoints(bands, field);
       series.setData(points);
@@ -229,11 +253,11 @@
     state.rows.clear();
     state.charts.forEach((item) => {
       item.price?.setData([]);
-      item.sellOrder?.setData([]);
+      item.sellSegments?.forEach((s) => s.setData([]));
+      item.buySegments?.forEach((s) => s.setData([]));
       item.upper?.setData([]);
       item.center?.setData([]);
       item.lower?.setData([]);
-      item.buyOrder?.setData([]);
       if (item.sellPriceLine) {
         try { item.price?.removePriceLine(item.sellPriceLine); } catch (_) {}
         item.sellPriceLine = null;
@@ -242,7 +266,7 @@
         try { item.price?.removePriceLine(item.buyPriceLine); } catch (_) {}
         item.buyPriceLine = null;
       }
-      item.lastTimes = {sellOrder: null, upper: null, price: null, center: null, lower: null, buyOrder: null};
+      item.lastTimes = {upper: null, price: null, center: null, lower: null};
     });
   }
   function streamIso(value) {
@@ -327,12 +351,10 @@
     if (!item.chart) return result;
     const time = Number(event.bucket_start_ms) / 1000;
     const points = [
-      [item.sellOrder, "sellOrder", order.sell?.price],
       [item.upper, "upper", band.upper],
       [item.price, "price", event.price],
       [item.center, "center", band.center],
-      [item.lower, "lower", band.lower],
-      [item.buyOrder, "buyOrder", order.buy?.price]
+      [item.lower, "lower", band.lower]
     ];
     for (const [series, name, value] of points) {
       if (!series || !finite(value)) continue;
@@ -341,14 +363,19 @@
         series.update({time, value: Number(value)});
         item.lastTimes[name] = time;
       } else {
-        const isOrder = name.includes("Order");
-        const fallbackPrice = isOrder ? (name === "sellOrder" ? order.sell?.price : order.buy?.price) : null;
-        const field = name === "price" ? "last_price" : (name === "sellOrder" ? "sell_order_price" : (name === "buyOrder" ? "buy_order_price" : name));
-        const pts = isOrder ? orderSeriesPoints(projection.quotes, field, fallbackPrice) : seriesPoints(name === "price" ? projection.quotes : projection.bands, field);
+        const pts = seriesPoints(name === "price" ? projection.quotes : projection.bands, name === "price" ? "last_price" : name);
         series.setData(pts);
         item.lastTimes[name] = time;
       }
     }
+    const sellSegments = extractOrderSegments(projection.quotes, "sell_order_price", order.sell?.price);
+    item.sellSegments = syncOrderSegments(item.chart, item.sellSegments, sellSegments, "#FFC772");
+    item.sellOrder = item.sellSegments[0] || null;
+
+    const buySegments = extractOrderSegments(projection.quotes, "buy_order_price", order.buy?.price);
+    item.buySegments = syncOrderSegments(item.chart, item.buySegments, buySegments, "#F0AA70");
+    item.buyOrder = item.buySegments[0] || null;
+
     item.sellPriceLine = syncOrderPriceLine(item.price, item.sellPriceLine, order.sell?.price, "卖", "#FFC772");
     item.buyPriceLine = syncOrderPriceLine(item.price, item.buyPriceLine, order.buy?.price, "买", "#F0AA70");
     state.streamUpdates = (state.streamUpdates || 0) + 1;
