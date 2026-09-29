@@ -89,8 +89,22 @@ test('realtime page does not block domesticReady when domestic quotes are older 
     return nodes.get(selector);
   };
   const seriesCreated = [];
+  const priceLinesCreated = [];
   const createdSeriesMock = (type, options) => {
-    const s = {type, options, data: [], setData(d) { s.data = d; }, update(p) { s.data.push(p); }};
+    const s = {
+      type, options, data: [],
+      setData(d) { s.data = d; },
+      update(p) { s.data.push(p); },
+      createPriceLine(opt) {
+        const pl = { options: opt, applyOptions(o) { Object.assign(pl.options, o); } };
+        priceLinesCreated.push(pl);
+        return pl;
+      },
+      removePriceLine(pl) {
+        const idx = priceLinesCreated.indexOf(pl);
+        if (idx !== -1) priceLinesCreated.splice(idx, 1);
+      }
+    };
     seriesCreated.push(s);
     return s;
   };
@@ -158,5 +172,14 @@ test('realtime page does not block domesticReady when domestic quotes are older 
   assert.ok(buyStepSeries, 'stepped buy order series was created');
   assert.equal(sellStepSeries.data[0]?.value, 904.0);
   assert.equal(buyStepSeries.data[0]?.value, 901.0);
+  // Check that price lines for resting orders were created
+  const sellPriceLine = priceLinesCreated.find((pl) => pl.options?.color === '#FFC772');
+  const buyPriceLine = priceLinesCreated.find((pl) => pl.options?.color === '#F0AA70');
+  assert.ok(sellPriceLine, 'sell price line was created');
+  assert.ok(buyPriceLine, 'buy price line was created');
+  assert.equal(sellPriceLine.options?.price, 904.0);
+  assert.equal(buyPriceLine.options?.price, 901.0);
+  assert.match(sellPriceLine.options?.title, /卖 904\.00/);
+  assert.match(buyPriceLine.options?.title, /买 901\.00/);
 });
 

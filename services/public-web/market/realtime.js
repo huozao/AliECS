@@ -85,13 +85,74 @@
     const items = rows.map((row) => `<tr><td>${esc(row.target_contract || "通用")}</td><td>${esc(row.contract || row.symbol || "—")}</td><td>${esc(row.rank ?? "—")}</td><td>${esc(row.activity_count_300s ?? "—")}</td><td>${esc(row.expected_net_cny ?? row.expected_cost_cny ?? "—")}</td><td>${esc(row.reason || row.status || "—")}</td></tr>`).join("");
     node.innerHTML = `<div class="table-wrap"><table><thead><tr><th>目标腿</th><th>候选合约</th><th>排序</th><th>300秒成交次数</th><th>预期收益/成本</th><th>资格状态</th></tr></thead><tbody>${items}</tbody></table></div>`;
   }
+  const orderSeriesPoints = (quotes, field, fallbackPrice) => {
+    if (!quotes.length && !finite(fallbackPrice)) return [];
+    const raw = [];
+    let lastVal = finite(fallbackPrice) ? Number(fallbackPrice) : null;
+    for (const q of quotes) {
+      const t = q.bucket_start_ms != null ? Number(q.bucket_start_ms) / 1000 : Date.parse(stamp(q)) / 1000;
+      if (!Number.isFinite(t)) continue;
+      const v = q[field];
+      if (finite(v)) {
+        lastVal = Number(v);
+        raw.push({ time: t, value: lastVal });
+      } else if (lastVal !== null) {
+        raw.push({ time: t, value: lastVal });
+      }
+    }
+    const firstT = quotes[0]?.bucket_start_ms != null ? Number(quotes[0].bucket_start_ms) / 1000 : Date.parse(stamp(quotes[0] || {})) / 1000;
+    const lastT = quotes[quotes.length - 1]?.bucket_start_ms != null ? Number(quotes[quotes.length - 1].bucket_start_ms) / 1000 : Date.parse(stamp(quotes[quotes.length - 1] || {})) / 1000;
+    if (raw.length === 0 && finite(fallbackPrice) && Number.isFinite(firstT) && Number.isFinite(lastT)) {
+      const val = Number(fallbackPrice);
+      raw.push({ time: firstT, value: val });
+      if (lastT > firstT) raw.push({ time: lastT, value: val });
+    } else if (raw.length > 0) {
+      if (Number.isFinite(firstT) && raw[0].time > firstT) {
+        raw.unshift({ time: firstT, value: raw[0].value });
+      }
+      if (Number.isFinite(lastT) && raw[raw.length - 1].time < lastT && lastVal !== null) {
+        raw.push({ time: lastT, value: lastVal });
+      }
+    }
+    const unique = new Map();
+    for (const pt of raw) unique.set(pt.time, pt);
+    return [...unique.values()].sort((a, b) => a.time - b.time);
+  };
+  function syncOrderPriceLine(series, currentPriceLine, price, sideLabel, color) {
+    if (!series || typeof series.createPriceLine !== "function") return currentPriceLine;
+    if (!finite(price)) {
+      if (currentPriceLine) {
+        try { series.removePriceLine(currentPriceLine); } catch (_) {}
+      }
+      return null;
+    }
+    const numPrice = Number(price);
+    const title = `${sideLabel} ${numPrice.toFixed(2)}`;
+    if (!currentPriceLine) {
+      return series.createPriceLine({
+        price: numPrice,
+        color,
+        lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle?.Dashed ?? 2,
+        axisLabelVisible: true,
+        title,
+        axisLabelColor: color,
+        axisLabelTextColor: "#000000"
+      });
+    }
+    currentPriceLine.applyOptions({
+      price: numPrice,
+      title
+    });
+    return currentPriceLine;
+  }
   function chartFor(contract) {
     let item = state.charts.get(contract); if (item) return item;
     const card = document.createElement("article"); card.className = "market-card realtime-contract-card"; card.dataset.contract = contract;
     card.innerHTML = `<div class="realtime-card-head"><h2>${esc(contract)}</h2><div class="last">—</div></div><div class="realtime-parallel"><div><div class="realtime-extremes"><span>秒内最高 <b data-extreme="high">—</b></span><span>秒内最低 <b data-extreme="low">—</b></span></div><div class="chart" aria-label="${esc(contract)} 成交与 I 价格带"></div></div><div class="five-price" aria-label="${esc(contract)} 模型价格带与盘口"><span class="sell"><small>上方卖挂单</small><b data-tag="sell">—</b></span><span class="upper"><small>I 价格带上边缘</small><b data-tag="upper">—</b></span><span class="current"><small>真实成交价</small><b data-tag="current">—</b></span><span class="center"><small>I 价格带中心</small><b data-tag="center">—</b></span><span class="lower"><small>I 价格带下边缘</small><b data-tag="lower">—</b></span><span class="buy"><small>下方买挂单</small><b data-tag="buy">—</b></span></div></div><div class="muted"></div>`;
     root.append(card); const node = card.querySelector(".chart");
     if (window.LightweightCharts) {
-      const chart = LightweightCharts.createChart(node, {autoSize: true, layout: {background:{color:"transparent"}, textColor:"#91a1af", attributionLogo:false}, timeScale:{timeVisible:true,secondsVisible:true}, grid:{vertLines:{visible:false},horzLines:{color:"#243244"}}});
+      const chart = LightweightCharts.createChart(node, {autoSize: true, layout: {background:{color:"transparent"}, textColor:"#91a1af", attributionLogo:false}, timeScale:{timeVisible:true,secondsVisible:true}, grid:{vertLines:{visible:false},horzLines:{color:"#243244"}}, rightPriceScale: {visible: true}});
       const line = (color, options = {}) => chart.addSeries(LightweightCharts.LineSeries, {color, lineWidth:1, priceLineVisible:false, lastValueVisible:false, ...options});
       const stepLine = (color, options = {}) => chart.addSeries(LightweightCharts.LineSeries, {
         color, lineWidth: 1, lineType: LightweightCharts.LineType?.WithSteps ?? 1,
@@ -101,10 +162,12 @@
         card, chart,
         sellOrder: stepLine("#FFC772"),
         upper: line("#84b8ef"),
-        price: line("#ffffff", {lineWidth:2}),
+        price: line("#ffffff", {lineWidth:2, lastValueVisible:true, priceLineVisible:false}),
         center: line("#f6c85f", {lineStyle:2}),
         lower: line("#84b8ef"),
         buyOrder: stepLine("#F0AA70"),
+        sellPriceLine: null,
+        buyPriceLine: null,
         lastTimes: {sellOrder: null, upper: null, price: null, center: null, lower: null, buyOrder: null}
       };
     } else item = {card};
@@ -149,15 +212,17 @@
     const pricePoints = seriesPoints(quotes, "last_price");
     item.price.setData(pricePoints);
     item.lastTimes.price = pricePoints.at(-1)?.time ?? null;
-    const sellPoints = seriesPoints(quotes, "sell_order_price");
+    const sellPoints = orderSeriesPoints(quotes, "sell_order_price", order.sell?.price);
     if (item.sellOrder) { item.sellOrder.setData(sellPoints); item.lastTimes.sellOrder = sellPoints.at(-1)?.time ?? null; }
-    const buyPoints = seriesPoints(quotes, "buy_order_price");
+    const buyPoints = orderSeriesPoints(quotes, "buy_order_price", order.buy?.price);
     if (item.buyOrder) { item.buyOrder.setData(buyPoints); item.lastTimes.buyOrder = buyPoints.at(-1)?.time ?? null; }
     for (const [series, field, name] of [[item.upper,"upper","upper"],[item.center,"center","center"],[item.lower,"lower","lower"]]) {
       const points = seriesPoints(bands, field);
       series.setData(points);
       item.lastTimes[name] = points.at(-1)?.time ?? null;
     }
+    item.sellPriceLine = syncOrderPriceLine(item.price, item.sellPriceLine, order.sell?.price, "卖", "#FFC772");
+    item.buyPriceLine = syncOrderPriceLine(item.price, item.buyPriceLine, order.buy?.price, "买", "#F0AA70");
   }
   function clearStreamView() {
     state.rows.clear();
@@ -168,6 +233,14 @@
       item.center?.setData([]);
       item.lower?.setData([]);
       item.buyOrder?.setData([]);
+      if (item.sellPriceLine) {
+        try { item.price?.removePriceLine(item.sellPriceLine); } catch (_) {}
+        item.sellPriceLine = null;
+      }
+      if (item.buyPriceLine) {
+        try { item.price?.removePriceLine(item.buyPriceLine); } catch (_) {}
+        item.buyPriceLine = null;
+      }
       item.lastTimes = {sellOrder: null, upper: null, price: null, center: null, lower: null, buyOrder: null};
     });
   }
@@ -264,11 +337,16 @@
         series.update({time, value: Number(value)});
         item.lastTimes[name] = time;
       } else {
-        const fields = name === "price" ? "last_price" : (name === "sellOrder" ? "sell_order_price" : (name === "buyOrder" ? "buy_order_price" : name));
-        series.setData(seriesPoints(name === "price" || name.includes("Order") ? projection.quotes : projection.bands, fields));
+        const isOrder = name.includes("Order");
+        const fallbackPrice = isOrder ? (name === "sellOrder" ? order.sell?.price : order.buy?.price) : null;
+        const field = name === "price" ? "last_price" : (name === "sellOrder" ? "sell_order_price" : (name === "buyOrder" ? "buy_order_price" : name));
+        const pts = isOrder ? orderSeriesPoints(projection.quotes, field, fallbackPrice) : seriesPoints(name === "price" ? projection.quotes : projection.bands, field);
+        series.setData(pts);
         item.lastTimes[name] = time;
       }
     }
+    item.sellPriceLine = syncOrderPriceLine(item.price, item.sellPriceLine, order.sell?.price, "卖", "#FFC772");
+    item.buyPriceLine = syncOrderPriceLine(item.price, item.buyPriceLine, order.buy?.price, "买", "#F0AA70");
     state.streamUpdates = (state.streamUpdates || 0) + 1;
     if (state.streamUpdates % 120 === 0) {
       updateChart(event.contract, {quotes: projection.quotes, bands: projection.bands},
