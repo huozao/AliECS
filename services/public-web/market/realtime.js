@@ -26,6 +26,18 @@
     const time = row.bucket_start_ms != null ? Number(row.bucket_start_ms) / 1000 : Date.parse(stamp(row)) / 1000;
     return [time, Number.isFinite(time) && finite(row[field]) ? {time, value: Number(row[field])} : null];
   }).filter((entry) => entry[1])).values()].sort((a, b) => a.time - b.time);
+  const extractOrderPrice = (row, side) => {
+    if (!row) return null;
+    const orders = Array.isArray(row.orders) ? row.orders : (row.order ? [row.order] : []);
+    for (const order of orders) {
+      const orderSide = String(order.side || order.direction || "").toLowerCase();
+      if (orderSide.includes(side)) {
+        const price = order.price ?? order.price_cny_per_g;
+        if (finite(price)) return Number(price);
+      }
+    }
+    return null;
+  };
   const ageValue = (source) => source?.age_seconds == null ? null : Number(source.age_seconds);
   const ageText = (source) => Number.isFinite(ageValue(source)) ? `${Math.max(0, ageValue(source)).toFixed(2)}s` : "—";
   const timeText = (value) => {
@@ -42,20 +54,15 @@
       node.textContent = age == null ? "—" : `${age.toFixed(2)}s`;
       node.classList.toggle("quote-age-stale", age != null && age > 1);
     }
-    if (!state.hidden) state.ageTimer = window.setTimeout(updateInternationalAges, 100);
+    if (!state.hidden) state.ageTimer = window.setTimeout(updateInternationalAges, 1000);
   }
   function renderLayers(body, quotes) {
     const latest = quotes[quotes.length - 1] || {}, sources = latest.sources || {}, international = body.international || {};
     const xau = sources.xau || sources.xauusd || {}, fx = sources.fx || sources.usdcnh || {};
     const intlXau = international.xauusd || xau, intlFx = international.usdcnh || fx;
     const intlReady = international.strategy_allowed === true || (Number.isFinite(Number(latest.international_price)) && Number(intlXau.age_seconds) <= 30 && Number(intlFx.age_seconds) <= 30);
-    const freshQuotes = quotes.filter((quote) => {
-      const sourceTime = Date.parse(quote.source_time || "");
-      const age = (Date.now() - sourceTime) / 1000;
-      return Number.isFinite(age) && age >= -5 && age <= 30;
-    });
-    const domesticReady = quotes.length > 0 && freshQuotes.length === quotes.length;
-    const domesticAge = quotes.length ? Math.max(...quotes.map((quote) => (Date.now() - Date.parse(quote.source_time || "")) / 1000)) : null;
+    const domesticReady = body.domestic?.strategy_quotes_allowed ?? (quotes.length > 0);
+    const domesticAge = quotes.length ? Math.min(...quotes.map((quote) => (Date.now() - Date.parse(quote.source_time || quote.observed_at || "")) / 1000).filter(Number.isFinite)) : null;
     const intlStatus = body.international?.status || (intlReady ? "READY｜国际参考可用" : "REFERENCE_BLOCKED｜国际参考不可用");
     const overlap = body.overlap?.status || (domesticReady && intlReady ? "READY｜存在有效重叠" : domesticReady ? "DOMESTIC_ONLY｜仅国内行情可用" : intlReady ? "INTERNATIONAL_ONLY｜等待国内行情" : "BLOCKED｜两层行情均待确认");
     const strategy = body.strategy?.status || (domesticReady && intlReady ? "MARKET_READY｜行情重叠可用，策略状态待核对" : "BLOCKED｜等待有效重叠行情");
@@ -66,7 +73,7 @@
                                receivedAt: performance.now()};
     updateInternationalAges();
     document.querySelector("#domestic-status").textContent = body.domestic?.status || (domesticReady ? "FRESH｜国内行情新鲜" : "STALE｜国内行情待确认");
-    document.querySelector("#domestic-detail").textContent = `${freshQuotes.length}/${quotes.length} 个合约新鲜 · ${Number.isFinite(domesticAge) ? Math.max(0, domesticAge).toFixed(2) + "s" : "—"} · ${domesticReady ? "可参与行情计算" : "不参与新策略"}`;
+    document.querySelector("#domestic-detail").textContent = `${quotes.length}/${quotes.length} 个合约已接入 · ${Number.isFinite(domesticAge) ? Math.max(0, domesticAge).toFixed(2) + "s" : "—"} · ${domesticReady ? "可参与行情计算" : "不参与新策略"}`;
     document.querySelector("#overlap-status").textContent = overlap;
     document.querySelector("#overlap-detail").textContent = body.overlap?.reason || (domesticReady && intlReady ? "国内与国际行情均有新鲜报价" : domesticReady ? "等待国际参考" : "等待国内行情新鲜报价");
     document.querySelector("#strategy-status").textContent = strategy;
@@ -86,15 +93,45 @@
     if (window.LightweightCharts) {
       const chart = LightweightCharts.createChart(node, {autoSize: true, layout: {background:{color:"transparent"}, textColor:"#91a1af", attributionLogo:false}, timeScale:{timeVisible:true,secondsVisible:true}, grid:{vertLines:{visible:false},horzLines:{color:"#243244"}}});
       const line = (color, options = {}) => chart.addSeries(LightweightCharts.LineSeries, {color, lineWidth:1, priceLineVisible:false, lastValueVisible:false, ...options});
-      item = {card, chart, price:line("#ffffff", {lineWidth:2}), upper:line("#84b8ef"), center:line("#f6c85f", {lineStyle:2}), lower:line("#84b8ef"), lastTimes: {price: null, upper: null, center: null, lower: null}};
+      const stepLine = (color, options = {}) => chart.addSeries(LightweightCharts.LineSeries, {
+        color, lineWidth: 1, lineType: LightweightCharts.LineType?.WithSteps ?? 1,
+        priceLineVisible: false, lastValueVisible: false, ...options
+      });
+      item = {
+        card, chart,
+        sellOrder: stepLine("#FFC772"),
+        upper: line("#84b8ef"),
+        price: line("#ffffff", {lineWidth:2}),
+        center: line("#f6c85f", {lineStyle:2}),
+        lower: line("#84b8ef"),
+        buyOrder: stepLine("#F0AA70"),
+        lastTimes: {sellOrder: null, upper: null, price: null, center: null, lower: null, buyOrder: null}
+      };
     } else item = {card};
     state.charts.set(contract, item); return item;
   }
   function updateChart(contract, data, quote, band, orders, ranking) {
     const item = chartFor(contract), record = state.rows.get(contract) || {quotes: new Map(), bands: new Map()};
-    for (const row of data?.quotes || []) record.quotes.set(`${stamp(row)}|${row.snapshot_sequence || ""}`, row);
+    const order = orders.find((row) => row.contract === contract) || {};
+    for (const row of data?.quotes || []) {
+      if (row.buy_order_price == null) row.buy_order_price = extractOrderPrice(row, "buy") ?? (finite(order.buy?.price) ? Number(order.buy.price) : null);
+      if (row.sell_order_price == null) row.sell_order_price = extractOrderPrice(row, "sell") ?? (finite(order.sell?.price) ? Number(order.sell.price) : null);
+      record.quotes.set(`${stamp(row)}|${row.snapshot_sequence || ""}`, row);
+    }
     for (const row of data?.bands || []) record.bands.set(`${stamp(row)}|${row.snapshot_sequence || ""}`, row);
-    const left = Date.now() - state.windowMinutes * 60 * 1000;
+    let maxDataTime = 0;
+    for (const row of record.quotes.values()) {
+      const t = Date.parse(stamp(row));
+      if (Number.isFinite(t) && t > maxDataTime) maxDataTime = t;
+    }
+    for (const row of record.bands.values()) {
+      const t = Date.parse(stamp(row));
+      if (Number.isFinite(t) && t > maxDataTime) maxDataTime = t;
+    }
+    const windowMs = state.windowMinutes * 60 * 1000;
+    const now = Date.now();
+    const anchorTime = (maxDataTime > 0 && (now - maxDataTime > windowMs)) ? maxDataTime : now;
+    const left = anchorTime - windowMs;
     for (const [key,row] of record.quotes) if (Date.parse(stamp(row)) < left) record.quotes.delete(key);
     for (const [key,row] of record.bands) if (Date.parse(stamp(row)) < left) record.bands.delete(key);
     state.rows.set(contract, record);
@@ -102,7 +139,6 @@
     const bands = [...record.bands.values()].sort((a,b) => Date.parse(stamp(a))-Date.parse(stamp(b)));
     const latest = quote || quotes.at(-1) || {};
     const value = (field, source = latest) => finite(source?.[field]) ? Number(source[field]).toFixed(2) : "—";
-    const order = orders.find((row) => row.contract === contract) || {};
     item.card.querySelector(".last").textContent = value("last_price");
     item.card.querySelector('[data-extreme="high"]').textContent = value("high", latest.ohlc);
     item.card.querySelector('[data-extreme="low"]').textContent = value("low", latest.ohlc);
@@ -113,6 +149,10 @@
     const pricePoints = seriesPoints(quotes, "last_price");
     item.price.setData(pricePoints);
     item.lastTimes.price = pricePoints.at(-1)?.time ?? null;
+    const sellPoints = seriesPoints(quotes, "sell_order_price");
+    if (item.sellOrder) { item.sellOrder.setData(sellPoints); item.lastTimes.sellOrder = sellPoints.at(-1)?.time ?? null; }
+    const buyPoints = seriesPoints(quotes, "buy_order_price");
+    if (item.buyOrder) { item.buyOrder.setData(buyPoints); item.lastTimes.buyOrder = buyPoints.at(-1)?.time ?? null; }
     for (const [series, field, name] of [[item.upper,"upper","upper"],[item.center,"center","center"],[item.lower,"lower","lower"]]) {
       const points = seriesPoints(bands, field);
       series.setData(points);
@@ -121,9 +161,15 @@
   }
   function clearStreamView() {
     state.rows.clear();
-    state.charts.forEach((item) => item.chart?.remove());
-    state.charts.clear();
-    root.innerHTML = "";
+    state.charts.forEach((item) => {
+      item.price?.setData([]);
+      item.sellOrder?.setData([]);
+      item.upper?.setData([]);
+      item.center?.setData([]);
+      item.lower?.setData([]);
+      item.buyOrder?.setData([]);
+      item.lastTimes = {sellOrder: null, upper: null, price: null, center: null, lower: null, buyOrder: null};
+    });
   }
   function streamIso(value) {
     const time = Number(value);
@@ -149,10 +195,13 @@
       const source = streamIso(event.source_time_ms);
       const observed = streamIso(event.observed_at_ms);
       const ohlc = event.ohlc && typeof event.ohlc === "object" ? event.ohlc : {};
+      const buyPrice = extractOrderPrice(event, "buy");
+      const sellPrice = extractOrderPrice(event, "sell");
       quotes.push({contract, source_time: source, observed_at: observed, captured_at: observed,
         bucket_start_ms: event.bucket_start_ms, snapshot_sequence: event.source_sequence,
         last_price: event.price, ohlc: {high: ohlc.high, low: ohlc.low, close: ohlc.close,
-          bucket_start: streamIso(event.bucket_start_ms)}, orders: event.orders || []});
+          bucket_start: streamIso(event.bucket_start_ms)}, orders: event.orders || [],
+        buy_order_price: buyPrice, sell_order_price: sellPrice});
       bands.push({contract, source_time: source, observed_at: observed,
         bucket_start_ms: event.bucket_start_ms, snapshot_sequence: event.source_sequence,
         upper: event.band?.upper, center: event.band?.center, lower: event.band?.lower});
@@ -200,8 +249,14 @@
     item.card.querySelector(".muted").textContent = `买 ${order.buy?.price ?? "—"}（${order.buy?.status ?? "—"}） · 卖 ${order.sell?.price ?? "—"}（${order.sell?.status ?? "—"}） · 源时刻 ${latest.source_time || "—"}`;
     if (!item.chart) return result;
     const time = Number(event.bucket_start_ms) / 1000;
-    const points = [[item.price, "price", event.price], [item.upper, "upper", band.upper],
-      [item.center, "center", band.center], [item.lower, "lower", band.lower]];
+    const points = [
+      [item.sellOrder, "sellOrder", order.sell?.price],
+      [item.upper, "upper", band.upper],
+      [item.price, "price", event.price],
+      [item.center, "center", band.center],
+      [item.lower, "lower", band.lower],
+      [item.buyOrder, "buyOrder", order.buy?.price]
+    ];
     for (const [series, name, value] of points) {
       if (!series || !finite(value)) continue;
       const oldTime = item.lastTimes[name];
@@ -209,8 +264,8 @@
         series.update({time, value: Number(value)});
         item.lastTimes[name] = time;
       } else {
-        const fields = name === "price" ? "last_price" : name;
-        series.setData(seriesPoints(name === "price" ? projection.quotes : projection.bands, fields));
+        const fields = name === "price" ? "last_price" : (name === "sellOrder" ? "sell_order_price" : (name === "buyOrder" ? "buy_order_price" : name));
+        series.setData(seriesPoints(name === "price" || name.includes("Order") ? projection.quotes : projection.bands, fields));
         item.lastTimes[name] = time;
       }
     }
@@ -377,7 +432,7 @@
     void startStream().then((available) => { if (!available) load(true); });
   });
   try { await MarketPage.absorbLoginHandoff(); } catch (error) { status.textContent = error.message; }
-  if (!state.hidden) state.ageTimer = window.setTimeout(updateInternationalAges, 100);
+  if (!state.hidden) state.ageTimer = window.setTimeout(updateInternationalAges, 1000);
   if (!state.hidden) {
     void refreshHead();
     const streamAvailable = await startStream();

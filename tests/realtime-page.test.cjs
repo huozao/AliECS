@@ -79,3 +79,84 @@ test('realtime page shows subscribed and waiting while the source has no first o
   assert.match(node('#stream-status').textContent, /等待首条行情/);
   assert.deepEqual(requests, ['/api/v1/market/latest']);
 });
+
+test('realtime page does not block domesticReady when domestic quotes are older than 30s and plots stepped orders', async () => {
+  const script = fs.readFileSync(path.join(__dirname, '../services/public-web/market/realtime.js'), 'utf8');
+  const nodes = new Map();
+  const node = (selector) => {
+    if (!nodes.has(selector)) nodes.set(selector, {textContent: '', innerHTML: '', hidden: false,
+      classList: {toggle() {}}, addEventListener() {}, querySelector: node});
+    return nodes.get(selector);
+  };
+  const seriesCreated = [];
+  const createdSeriesMock = (type, options) => {
+    const s = {type, options, data: [], setData(d) { s.data = d; }, update(p) { s.data.push(p); }};
+    seriesCreated.push(s);
+    return s;
+  };
+  const LightweightCharts = {
+    LineSeries: 'LineSeries',
+    LineType: {Simple: 0, WithSteps: 1, Curved: 2},
+    createChart: () => ({
+      addSeries: (type, options) => createdSeriesMock(type, options),
+      remove() {}
+    })
+  };
+  const now = new Date();
+  // 120s old domestic quote (simulating sparse / far-month contract)
+  const oldDomesticTime = new Date(now.getTime() - 120000).toISOString();
+  const quote = {
+    contract: 'SHFE.au2612',
+    source_time: oldDomesticTime,
+    observed_at: oldDomesticTime,
+    last_price: 902.5,
+    ohlc: {high: 903, low: 901},
+    orders: [
+      {side: 'buy', price: 901.0, status: 'EFFECTIVE｜有效挂单'},
+      {side: 'sell', price: 904.0, status: 'EFFECTIVE｜有效挂单'}
+    ]
+  };
+  const band = {
+    contract: 'SHFE.au2612',
+    source_time: oldDomesticTime,
+    upper: 905.0,
+    center: 902.5,
+    lower: 900.0
+  };
+  const base = {
+    run_id: 'run-old-domestic',
+    quotes: [quote],
+    bands: [band],
+    orders: [{contract: 'SHFE.au2612', buy: {price: 901.0, status: 'EFFECTIVE'}, sell: {price: 904.0, status: 'EFFECTIVE'}}],
+    series: {'SHFE.au2612': {quotes: [quote], bands: [band]}},
+    international: {strategy_allowed: true, status: 'READY｜国际参考可用',
+      xauusd: {price: 4000, age_seconds: 1}, usdcnh: {price: 7, age_seconds: 1}},
+    window_minutes: 5
+  };
+  node('#window-minutes').value = '5';
+  node('#contracts').append = () => {};
+  const document = {hidden: false, querySelector: node, addEventListener() {},
+    createElement() { return {className: '', dataset: {}, innerHTML: '', querySelector: node}; }};
+  const context = {
+    document,
+    window: {setTimeout: () => 1, clearTimeout() {}, addEventListener() {}, LightweightCharts},
+    performance: {now: () => 0},
+    LightweightCharts,
+    MarketPage: {absorbLoginHandoff: async () => {}, request: async (url) => base},
+    URLSearchParams, Date, Number, Map, Set, AbortController, console
+  };
+  vm.runInNewContext(script, context);
+  for (let i = 0; i < 4; i++) await new Promise(setImmediate);
+  // Domestic must not be blocked despite age > 30s
+  assert.equal(node('#domestic-status').textContent, 'FRESH｜国内行情新鲜');
+  assert.match(node('#overlap-status').textContent, /^READY/);
+  assert.match(node('#strategy-status').textContent, /^MARKET_READY/);
+  // Check that stepped series were registered for sell and buy orders
+  const sellStepSeries = seriesCreated.find((s) => s.options?.color === '#FFC772' && s.options?.lineType === 1);
+  const buyStepSeries = seriesCreated.find((s) => s.options?.color === '#F0AA70' && s.options?.lineType === 1);
+  assert.ok(sellStepSeries, 'stepped sell order series was created');
+  assert.ok(buyStepSeries, 'stepped buy order series was created');
+  assert.equal(sellStepSeries.data[0]?.value, 904.0);
+  assert.equal(buyStepSeries.data[0]?.value, 901.0);
+});
+
