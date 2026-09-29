@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services" / "backend-api"))
-from app.market_review_source import LocalReviewSource, ReviewSourceUnavailable
+from app.market_review_source import LocalReviewSource, ReviewSourceInvalid, ReviewSourceUnavailable
 
 
 class Response:
@@ -73,3 +73,18 @@ def test_default_opener_is_callable_and_reaches_a_real_server():
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_bootstrap_has_its_own_larger_payload_cap():
+    body = json.dumps({"events": ["x" * 40]}).encode()
+    source = LocalReviewSource(url="https://devbox.example.test", token="secret",
+                               opener=lambda *_args, **_kwargs: Response(body),
+                               max_bytes=len(body) - 1, bootstrap_max_bytes=len(body))
+    assert source.get("/display/bootstrap") == {"events": ["x" * 40]}
+    with pytest.raises(ReviewSourceInvalid, match="exceeds limit"):
+        source.get("/latest")
+    source = LocalReviewSource(url="https://devbox.example.test", token="secret",
+                               opener=lambda *_args, **_kwargs: Response(body),
+                               bootstrap_max_bytes=len(body) - 1)
+    with pytest.raises(ReviewSourceInvalid, match="exceeds limit"):
+        source.get("/display/bootstrap")

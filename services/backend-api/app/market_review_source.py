@@ -29,7 +29,8 @@ class ReviewSourceInvalid(RuntimeError):
 class LocalReviewSource:
     def __init__(self, *, url: str | None = None, token: str | None = None,
                  opener=urllib.request.urlopen, connect_timeout: float = 2.0,
-                 total_timeout: float = 8.0, max_bytes: int = 8 * 1024 * 1024):
+                 total_timeout: float = 8.0, max_bytes: int = 8 * 1024 * 1024,
+                 bootstrap_max_bytes: int = 64 * 1024 * 1024):
         self.base_url = (url or os.getenv("MARKET_REVIEW_ARCHIVE_URL", "")).rstrip("/")
         self.token = token if token is not None else os.getenv("MARKET_REVIEW_ARCHIVE_TOKEN", "")
         # OpenerDirector itself is not callable; keep the same call shape as urlopen.
@@ -38,6 +39,10 @@ class LocalReviewSource:
         self.connect_timeout = connect_timeout
         self.total_timeout = total_timeout
         self.max_bytes = max_bytes
+        # Half-second display buckets cost about 1 KB per event: a busy 5-minute
+        # window already exceeds 8 MiB and a 15-minute window near the open is
+        # about 33 MB, so only the bootstrap window gets the larger cap.
+        self.bootstrap_max_bytes = bootstrap_max_bytes
         if not self.base_url.startswith(("http://", "https://")):
             raise ValueError("MARKET_REVIEW_ARCHIVE_URL must be an HTTP(S) URL")
         if not self.token:
@@ -48,6 +53,7 @@ class LocalReviewSource:
                    "/events/index", "/coverage"}
         if path not in allowed and not (path.startswith("/events/") and path.endswith("/detail")):
             raise ValueError("unsupported review source path")
+        max_bytes = self.bootstrap_max_bytes if path == "/display/bootstrap" else self.max_bytes
         request = urllib.request.Request(
             f"{self.base_url}/internal/review/v1{path}{query}",
             headers={"X-Review-Archive-Token": self.token, "Accept": "application/json"},
@@ -62,10 +68,10 @@ class LocalReviewSource:
                     raise ReviewSourceUnavailable("review source redirected unexpectedly")
                 if response.status != 200:
                     raise ReviewSourceUnavailable(f"source returned {response.status}")
-                payload = response.read(self.max_bytes + 1)
+                payload = response.read(max_bytes + 1)
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise ReviewSourceUnavailable("review source unavailable") from exc
-        if len(payload) > self.max_bytes:
+        if len(payload) > max_bytes:
             raise ReviewSourceInvalid("review source response exceeds limit")
         try:
             body = json.loads(payload)

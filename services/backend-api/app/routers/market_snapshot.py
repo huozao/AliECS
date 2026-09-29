@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+import gzip
 import hmac
 import json
 import logging
@@ -381,8 +382,25 @@ def market_realtime(after: str | None = Query(default=None, max_length=2000),
     return market_review.realtime_view(after=after, window_minutes=window_minutes)
 
 
+def _accepts_gzip(accept_encoding: str | None) -> bool:
+    for item in (accept_encoding or '').split(','):
+        coding, *params = [part.strip() for part in item.split(';')]
+        if coding.lower() != 'gzip':
+            continue
+        for param in params:
+            key, _, value = param.partition('=')
+            if key.strip().lower() == 'q':
+                try:
+                    return float(value) > 0
+                except ValueError:
+                    return False
+        return True
+    return False
+
+
 @router.get('/v1/market/bootstrap')
-def market_display_bootstrap(response: Response, window_minutes: int = Query(default=5),
+def market_display_bootstrap(window_minutes: int = Query(default=5),
+                             accept_encoding: str | None = Header(default=None),
                              _: dict = Depends(require_stream_reader)):
     if window_minutes not in (5, 10, 15):
         raise HTTPException(422, 'window_minutes must be one of 5, 10, 15')
@@ -396,9 +414,15 @@ def market_display_bootstrap(response: Response, window_minutes: int = Query(def
             or type(sourced.get('source_sequence')) is not int
             or type(sourced.get('continuous')) is not bool):
         raise HTTPException(503, detail={"code": "display_stream_invalid"})
-    response.headers['Cache-Control'] = 'no-store'
-    response.headers['Pragma'] = 'no-cache'
-    return sourced
+    # The edge proxy does not compress JSON; a busy window is several MB and
+    # compresses well, so encode it here instead of relying on the proxy.
+    body = json.dumps(sourced, ensure_ascii=False, allow_nan=False,
+                      separators=(',', ':')).encode('utf-8')
+    headers = {'Cache-Control': 'no-store', 'Pragma': 'no-cache', 'Vary': 'Accept-Encoding'}
+    if _accepts_gzip(accept_encoding):
+        body = gzip.compress(body, compresslevel=5)
+        headers['Content-Encoding'] = 'gzip'
+    return Response(content=body, media_type='application/json', headers=headers)
 
 
 @router.get('/v1/market/events/index')
