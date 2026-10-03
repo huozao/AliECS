@@ -1,0 +1,139 @@
+name: derp-deploy
+
+# 自建 Tailscale DERP 中继（txecs）的二进制构建与部署。
+#
+# 设备侧的配置、版本闸、健康判据和自动回滚都在 infra roles/server/derp；本 workflow
+# 只做 txecs 自己做不了的两件事，然后把产物送过去：
+#   - derper：txecs 访问不了 Go 模块代理，在这里按固定 tag 源码编译；
+#   - tailscale/tailscaled：官方静态包，按 deploy/ecs/derp-release.env 的 sha256 校验。
+#
+# 故意与 release-deploy.yml 分开：不触发任何业务镜像构建、不进 release-deploy 的
+# concurrency 队列，也不改变那边「push main 自动发布 / dispatch 选 target」的语义。
+# 修改前行为：没有这个 workflow，DERP 中继无法从 Git 部署。
+# 修改后行为：PR 改到本文件或清单时只构建（不部署）；手工 dispatch 构建并部署到 txecs。
+# 回退方式：删除本文件与 deploy/ecs/derp-release.env，无状态残留；设备侧按 infra 的 README 撤除。
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/derp-deploy.yml"
+      - "deploy/ecs/derp-release.env"
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "构建后部署到 txecs（取消勾选 = 只构建，产物留在 artifact）"
+        type: boolean
+        default: true
+
+concurrency:
+  group: derp-deploy
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load pinned versions
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . deploy/ecs/derp-release.env
+          : "${TAILSCALE_VERSION:?missing TAILSCALE_VERSION}"
+          : "${TAILSCALE_TGZ_SHA256:?missing TAILSCALE_TGZ_SHA256}"
+          echo "TAILSCALE_VERSION=$TAILSCALE_VERSION" >> "$GITHUB_ENV"
+          echo "TAILSCALE_TGZ_SHA256=$TAILSCALE_TGZ_SHA256" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Build derper from the pinned tag
+        env:
+          CGO_ENABLED: "0"
+          # tailscale 的 go.mod 若要求更新的 Go，自动拉对应工具链，不跟 runner 自带版本漂。
+          GOTOOLCHAIN: auto
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          GOBIN="$PWD/out" go install -trimpath -ldflags="-s -w" \
+            "tailscale.com/cmd/derper@v${TAILSCALE_VERSION}"
+          file out/derper
+          go version -m out/derper | head -3
+          ./out/derper --version
+
+      - name: Download and verify the official tailscale tarball
+        run: |
+          set -euo pipefail
+          tgz="tailscale_${TAILSCALE_VERSION}_amd64.tgz"
+          curl -fsSL --retry 3 -o "$tgz" "https://pkgs.tailscale.com/stable/$tgz"
+          echo "$TAILSCALE_TGZ_SHA256  $tgz" | sha256sum -c -
+          tar -xzf "$tgz"
+          install -m 0755 "tailscale_${TAILSCALE_VERSION}_amd64/tailscale" \
+            "tailscale_${TAILSCALE_VERSION}_amd64/tailscaled" out/
+          # 设备侧 derp-deploy 用同样的判据，这里先拦一次。
+          [ "$(out/tailscale version | head -1)" = "$TAILSCALE_VERSION" ]
+          [ "$(out/tailscaled --version | head -1)" = "$TAILSCALE_VERSION" ]
+
+      - name: Package bundle
+        run: |
+          set -euo pipefail
+          mkdir -p dist/derp-bundle
+          cp out/derper out/tailscale out/tailscaled dist/derp-bundle/
+          {
+            echo "TAILSCALE_VERSION=$TAILSCALE_VERSION"
+            echo "TAILSCALE_TGZ_SHA256=$TAILSCALE_TGZ_SHA256"
+            echo "DERPER_GO=$(go version -m out/derper | head -1 | awk '{print $2}')"
+            echo "SOURCE_COMMIT=$GITHUB_SHA"
+            echo "BUILT_BY=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > dist/derp-bundle/BUNDLE.env
+          tar -C dist -czf dist/derp-bundle.tgz derp-bundle
+          (cd dist && sha256sum derp-bundle.tgz > derp-bundle.tgz.sha256)
+          cat dist/derp-bundle/BUNDLE.env dist/derp-bundle.tgz.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: derp-bundle
+          path: |
+            dist/derp-bundle.tgz
+            dist/derp-bundle.tgz.sha256
+          retention-days: 30
+
+  deploy:
+    needs: build
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: derp-bundle
+          path: dist
+
+      - name: Upload bundle to txecs
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.TENCENT_HOST }}
+          username: ${{ secrets.TENCENT_USER }}
+          key: ${{ secrets.TENCENT_SSH_KEY }}
+          source: "dist/derp-bundle.tgz,dist/derp-bundle.tgz.sha256"
+          target: "/tmp/derp-${{ github.run_id }}"
+          strip_components: 1
+
+      - name: Install on txecs (version gate, health check, auto rollback)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.TENCENT_HOST }}
+          username: ${{ secrets.TENCENT_USER }}
+          key: ${{ secrets.TENCENT_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            set -euo pipefail
+            dir="/tmp/derp-${{ github.run_id }}"
+            trap 'rm -rf "$dir"' EXIT
+            sudo /usr/local/sbin/derp-deploy "$dir/derp-bundle.tgz"
