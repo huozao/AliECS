@@ -329,6 +329,11 @@ GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会�
   ⚠️ 端口双层限制：key 的 `permitlisten=` 和 `Match User webdock-tunnel` 的
   `PermitListen` 都要放行，只改一层报 `remote port forwarding failed`。
   ⚠️ `adventure-media` 的根路径不应答（backend 固有行为），探活用 `/api/`，别据此判故障。
+- **Tailscale DERP 中继（2026-10-03 起）**：`derp.hydwang.xyz`，TCP 18443（DERP over TLS，
+  derper 独占、不经 nginx）+ UDP 3478（STUN），UFW 与腾讯云轻量防火墙两层放行。本机
+  `tailscaled` 只跑 userspace-networking（无 `tailscale0`、不动路由/iptables），仅供
+  `derper --verify-clients` 校验来者是本 tailnet 节点。配置在 infra `roles/server/derp`，
+  二进制由本仓 `derp-deploy.yml` 送达（见 `docs/runbooks/deploy.md`）。
 - 排障：
   `sudo systemctl status webdock-failover-proxy`、
   `curl -i http://127.0.0.1:11800/healthz`、

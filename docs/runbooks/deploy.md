@@ -56,6 +56,22 @@ TCR 现在是唯一镜像来源，静默跳过同步只会把失败推迟到 txe
 
 下面的链路图描述的是 **legacy 那两条旁路**，作为应急时的参考保留。
 
+## DERP 中继：独立的 `derp-deploy.yml`（2026-10-03 新增）
+
+txecs 上的自建 Tailscale DERP 中继**不走 `release-deploy.yml`**，用独立 workflow
+`.github/workflows/derp-deploy.yml`：
+
+| 触发 | 做什么 |
+|---|---|
+| PR 改到该 workflow 或 `deploy/ecs/derp-release.env` | 只构建：按固定 tag 编译 `derper`、下载官方 tailscale 包并校验 sha256，产物传 artifact |
+| 手工 dispatch（`deploy` 默认勾选） | 构建 → scp 到 txecs → `sudo /usr/local/sbin/derp-deploy`（设备侧版本闸、本机 `/derp/probe` + STUN 健康判据、失败自动回滚） |
+
+分开的理由：不触发 6 个业务镜像构建，不排进 `release-deploy` 的 concurrency 队列，
+也不改变那边的触发语义。设备侧配置、证书、人工步骤（Tailscale 登录、腾讯云防火墙、
+tailnet `derpMap`）和升级顺序都在 infra `roles/server/derp/README.md`。
+升级时 `derp-release.env` 与 infra `roles/server/derp/files/release.env` 必须同一版本，
+不一致 `derp-deploy` 会拒绝安装。
+
 ## 链路图（⛔ 仅 `*-peer-legacy` 旁路，非日常路径）
 
 ```
