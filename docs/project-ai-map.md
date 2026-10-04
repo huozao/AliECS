@@ -128,6 +128,7 @@ MCP 编程路线（OAuth 已上线；⚠️ ECS nginx 域根的 OAuth 路由不�
 | 回滚 | `deploy/ecs/rollback.sh`、`deploy/ecs/emergency-rollback.sh` |
 | 构建与目标选择 | `.github/workflows/release-deploy.yml` |
 | bridge 切换 | `.github/workflows/bridge-cutover.yml` |
+| txecs DERP 中继构建与部署 | `.github/workflows/derp-deploy.yml`（清单 `deploy/ecs/derp-release.env`） |
 
 语法检查：`bash -n deploy/ecs/{deploy-role,migrate,healthcheck,rollback}.sh`。
 
