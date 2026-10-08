@@ -3938,6 +3938,18 @@ def diagnostic_message(
         f"诊断：OpenClaw -> openclaw-bridge 已联通；{reason}",
         f"停止点：{stop_at}。",
     ]
+    user_text = str((details or {}).get("user_text") or "").strip()
+    images = (details or {}).get("images") or []
+    if user_text or images:
+        input_desc: list[str] = []
+        if images:
+            input_desc.append(f"[含{len(images)}个附件/图片]")
+        if user_text:
+            snippet = user_text[:60].replace("\n", " ").strip()
+            if len(user_text) > 60:
+                snippet += "…"
+            input_desc.append(f'"{snippet}"')
+        lines.append(f"输入：{' '.join(input_desc)}")
     forensics: list[str] = []
     if error_code:
         forensics.append(f"错误码 {error_code}")

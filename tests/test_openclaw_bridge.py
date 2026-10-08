@@ -4399,7 +4399,12 @@ def test_diagnostic_message_carries_enough_to_locate_the_turn():
         error_code="RESPONSE_TIMEOUT",
         debug_dir="logs/debug/2026-07-27_085149",
         elapsed_seconds=191.4,
-        details={"webdock_footer": {"device": "webdock2"}, "request_id": "936ff6306e41"},
+        details={
+            "webdock_footer": {"device": "webdock2"},
+            "request_id": "936ff6306e41",
+            "user_text": "画一幅卡通可爱漫画@ChatGPT",
+            "images": ["img_1"],
+        },
     )
 
     assert "错误码 RESPONSE_TIMEOUT" in card
@@ -4407,6 +4412,7 @@ def test_diagnostic_message_carries_enough_to_locate_the_turn():
     assert "快照 logs/debug/2026-07-27_085149" in card
     assert "设备 webdock2" in card
     assert "请求 936ff630" in card  # truncated, full id is noise on a card
+    assert '输入：[含1个附件/图片] "画一幅卡通可爱漫画@ChatGPT"' in card
 
 
 def test_diagnostic_message_omits_unknown_fields():
