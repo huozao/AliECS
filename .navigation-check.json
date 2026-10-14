@@ -1,12 +1,19 @@
 {
+  "entrypoint_max_bytes": {
+    "AGENTS.md": 6000
+  },
   "documents": [
     "AGENTS.md",
     "README.md",
     "docs/project-ai-map.md",
+    "docs/development.md",
     "docs/fleet.md",
     "docs/runbooks/deploy.md",
     "docs/runbooks/feishu.md",
     "docs/runbooks/tplus.md",
+    "docs/runbooks/notify.md",
+    "docs/runbooks/formula.md",
+    "docs/constraints/browser-capture-evidence.md",
     "docs/constraints/doc-sync.md",
     "services/backend-api/README.md",
     "services/coding-executor/README.md",
@@ -16,6 +23,7 @@
     "services/tplus-sync-worker/README.md",
     "db/README.md",
     "deploy/README.md",
+    "CLAUDE.md",
     "docs/superpowers/plans/2026-09-28-market-streaming-sol-implementation.md"
   ],
   "paths": [
@@ -37,5 +45,9 @@
   "python_symbols": [],
   "optional_link_prefixes": [
     "../../ai-general"
+  ],
+  "document_globs": [
+    "docs/runbooks/*.md",
+    "docs/constraints/*.md"
   ]
 }

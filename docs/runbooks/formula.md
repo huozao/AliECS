@@ -1,7 +1,7 @@
 # Formula（系统配方 / 成本核算）Runbook
 
-页面：`https://hydwang.xyz/formula/`。出问题先读本文件，再动代码。
-接口契约与数据来源见 `docs/recipe-query.md`（英文，讲"是什么"）；本文件讲"踩过什么坑"。
+页面路径：`/formula/`。按本次问题读对应节后再动代码；通用浏览器验证见 [开发约束](../development.md#前端)。
+接口契约与数据来源见 [recipe-query](../recipe-query.md)；本文件维护配方业务约束。
 
 ## 代码入口
 
@@ -25,6 +25,7 @@
 - **`child_match=all`（全部包含）对同类子件必然为空。** 实测：关键字「硬脂酸」只有两个候选——硬脂酸锌（166 本）、硬脂酸钙（5 本），它们**互为替代品**，没有任何一本配方同时含两者，`all` 返回 0 本。`all` 只对跨类组合有意义。0 命中时页面必须说清原因，静默出一个空面板会被当成功能坏了。
 - **反查参数必须进 `_remember_recipe_query` 的上下文**，否则延迟生成的导出文件会退化成"按关键字查父件"，下载下来是空表。
 - 候选上限 `CHILD_SEARCH_LIMIT = 200`，超出返回 `truncated=true`，页面提示细化关键字。
+<!-- nav-check-python: services/backend-api/app/recipes/bom_query.py:CHILD_SEARCH_LIMIT -->
 
 **前端的单一来源**：`state.queryScope = {query, child_codes, child_match}`。反查模式下输入框里是**候选关键字**而不是配方编码——查询、成本核算、Excel 导出如果各自去读 `queryInput.value`，`child_codes` 必漏。新增任何用到"当前查了什么"的地方，都从 `queryScope` 取。
 
