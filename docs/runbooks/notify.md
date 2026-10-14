@@ -138,7 +138,7 @@ bridge 上出现不同渲染结果。
 | `quota-monitor` | `quota.*` | notify-center HTTP | 通用字段 | AI 额度日报与状态 |
 | `feishu-obsidian` | 快照/同步结果 | notify-center HTTP | 通用字段 | 文档快照同步 |
 | `doc-sync` | 文档同步/心跳 | worker outbox | 通用字段 | 服务端内部生产者 |
-| `devbox-traffic` | `traffic.*` | notify-center HTTP | 日报透传 JSON 2.0；启动/阈值用通用字段 | devbox 流量采集器与日报 |
+| `devbox-traffic` | `traffic.*`、`governance.daily` | notify-center HTTP | 日报透传 JSON 2.0；启动/阈值与引导体检用通用字段 | devbox 流量采集器与日报；工作区 AI 引导每日体检（AliECS-WebDock `scripts/governance_daily.py`，路由 id=20 `governance.*`） |
 | `txecs-traffic`、`aliecs-traffic`、`txecs-disk` | 流量/磁盘看护 | notify-center HTTP | 通用字段 | 主机看护 |
 
 OpenClaw 的 `/im/v1/messages` 调用仍保留在**会话传输适配器**内，用于回复指定
