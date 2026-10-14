@@ -1,134 +1,42 @@
 # AGENTS.md
 
-## ⛔ 最高优先级红线：ChatGPT「人工登录 → 自动化接管」流程（不得擅自更改）
+## 浏览器会话红线
 
-WebDock 的 ChatGPT 会话遵循固定设计，任何 AI 必须严格遵守：
+WebDock 必须先由人工完成 ChatGPT 登录与 Cloudflare 验证，期间自动化保持 detach；会话就绪后才 attach。未经用户明确授权，不改变顺序、驱动验证、重建/重启浏览器容器或打断已登录会话。操作规程正本在 WebDock 仓 `docs/runbooks/browser.md`；涉及跨仓时先取得该文档，缺少时停止相关浏览器操作。
 
-1. **ChatGPT 登录与 Cloudflare 人机验证，必须由人工在 noVNC 手动完成**；完成前，自动化（Playwright/CDP）**必须处于 detach 状态**（不连接 Chrome）。
-2. 原因（2026-05-30 实测）：Playwright 连着 CDP 会泄漏 `Runtime.enable`，Cloudflare 判定为自动化 → 人工点击也无限循环；detach 后人工即可通过。
-3. 正确顺序：**人工登录/过验证 → 会话养熟（cf_clearance）→ 自动化再 attach 接管**。
-4. AI 未经用户明确同意，**不得**：更改此顺序；让自动化在登录/验证阶段 attach 或驱动浏览器；重建/重启 WebDock 容器或改其浏览器启动/attach 逻辑而打断已养熟的会话；把纯人工登录改成自动登录。
-5. 涉及 WebDock 浏览器、ChatGPT 登录态、Cloudflare、attach/detach 的任何改动：**先读本条、先与用户确认、再动手**。
+## 工作边界
 
-## 项目定位与工作方式
+- 默认中文；先读相关文件，做最小、可回滚修改，不扩展无关范围；保留现有未提交改动。
+- 本仓是公开仓库。真实密钥、生产配置、账号标识、订阅 URL、代理节点参数、内网拓扑、浏览器数据及业务数据不得进代码、注释、测试或文档；测试用 `example.com`、`203.0.113.10`。
+- 保持服务职责、Compose、数据库迁移、健康检查和构建发布链路；必要改动同时维护调用脚本与说明。不得用修改历史迁移伪装新变更。
+- 未明确要求，不提交、推送、合并、创建 PR、发布、部署、重启、修改生产资源或发布触发语义。生产 env 是渲染产物，不直接改；部署职责与位置从下表进入后只读复核。
+- 本地测试只用本地测试值，不读取生产 env、不连接生产库。完成后报告改动文件、行为、验证及未验证项。
 
-AliECS 是以 AI 客户端协作为主要开发方式的 Docker 化 Web/API 项目。目标不是复杂架构，而是让业务功能、部署链路和维护对人和 AI 都清晰。
+## 按任务读取
 
-修改时必须：先读相关文件 → 判断影响范围 → 小步可回滚修改 → 不顺手重构无关模块 → 完成后说明改了什么/为什么/如何验证/有什么风险。需求不明确时做最小合理判断并说明假设。
+只读本次任务对应行和专项节，不要求通读所有 runbook。本仓独立克隆也适用，不依赖父工作区 `AGENTS.md`、Claude rules 自动加载或特定 AI 客户端。
 
-架构原则：业务主线显性化，避免过度抽象/封装/配置化；功能入口、主流程、数据来源、关键判断、输出、报错位置应一眼可辨。
-
-## 导航与领域约束（按任务加载，未读不得修改对应模块）
-
-| 任务涉及 | 必读 |
+| 任务涉及 | 本仓入口 |
 |---|---|
-| 设备/主备/端口/SSH | `docs/fleet.md`（单一事实源） |
-| 改哪个目录/入口文件 | `docs/project-ai-map.md`（2026-09-01 起是唯一一份，`project-navigation.md` 已并入并删除） |
-| doc-sync-worker / 同步表结构 | `docs/constraints/doc-sync.md` |
-| 飞书↔ChatGPT 链路 | `docs/runbooks/feishu.md` |
-| 部署/CI/回滚 | `docs/runbooks/deploy.md` |
-| 设备之间传文件/镜像、跨境推 TCR 失败 | `docs/fleet.md`「设备间既存通道」+ `docs/runbooks/deploy.md`「应急旁路」。已列出可复用通道、各主体拉 GHCR 的实测速率、以及**确认不通的连接**，不要重新逐条试探 |
-| T+ 同步 | `docs/runbooks/tplus.md` |
-| 出站通知（飞书/企微）、某个告警没收到 | `docs/runbooks/notify.md`。四处旧的各写各的飞书发送已收敛到 `app/notify/`；**接口返回 200 不等于对方收到**，判据看 `notify_deliveries` 不看 `notify_outbox` |
+| 找功能、代码、验证命令 | [项目地图](docs/project-ai-map.md) |
+| 设备/主备/端口/SSH/跨设备通道 | [设备事实源](docs/fleet.md)，只查相关设备和通道 |
+| 本地开发、验证、文档闭环 | [开发约束](docs/development.md) |
+| public-web / admin-ui / 浏览器 UI | [前端约束](docs/development.md#前端)；配方另读 [formula](docs/runbooks/formula.md) |
+| notify / notify_client / 通知没收到 | [通知开发约束](docs/development.md#通知) + [notify](docs/runbooks/notify.md) 对应目录项 |
+| tests / 测试失败或收集数对账 | [测试与隔离](docs/development.md#测试与隔离) |
+| 任一 .gitignore | [忽略规则](docs/development.md#忽略规则) |
+| doc-sync / 同步调度、表结构、同步中心 | [doc-sync 约束](docs/constraints/doc-sync.md) |
+| 飞书↔ChatGPT 链路 | [feishu](docs/runbooks/feishu.md) |
+| 部署/CI/回滚/迁移 | [deploy](docs/runbooks/deploy.md)；导航 CI 另读 [文档闭环](docs/development.md#文档闭环) |
+| T+ 同步 | [tplus](docs/runbooks/tplus.md) |
+| 浏览器抓取证据 | [采集证据契约](docs/constraints/browser-capture-evidence.md) |
 
-## 关键边界
-
-不得破坏：`public-web` / `admin-ui` / `backend-api` / `postgres` 四服务分工、Docker Compose 本地链路、ECS 生产部署链路、数据库迁移链路、健康检查链路、GitHub Actions 构建发布链路。必须修改时，同步检查相关配置、脚本、文档。
-
-修改原则：保持目录结构与入口文件稳定；新功能放最接近业务入口处；不引入无必要依赖；不提交调试代码、真实密钥、生产配置。
-
-**本仓是 PUBLIC 仓库**（`gh repo view huozao/AliECS` 可核实；工作区顶层表格只给 `infra` 和 `material_rnd` 标了私有，容易误判成本仓也是私有）。提交任何内容前先确认它可以公开：代理节点的地址/端口/传输与伪装参数/凭据、第三方服务的订阅 URL 与账号标识、内网拓扑细节，一律走环境变量（SOPS 渲染）或数据库，不进仓库、不进注释、不进测试 fixture、不进设计文档。测试一律用 `example.com`、`203.0.113.10`（RFC 5737）这类占位值。
-
-## 数据库与迁移
-
-不直接修改历史迁移文件伪装新变更；新迁移保持可重复执行、失败可定位；涉及数据删除、字段重命名、权限变化时明确写出风险。
-
-## GitHub Actions
-
-以稳定、可读、可排查为目标。未经明确要求，不改变"PR 合并后是否自动部署、手工触发是否必填版本号"等发布触发语义；必须调整时写出"修改前行为 / 修改后行为 / 回退方式"。修改 workflow 时同步检查其调用的脚本、环境变量、镜像命名。
-
-## 环境变量与部署路径
-
-- 新增/修改环境变量必须说明用途并同步示例配置；代码应处理缺失场景。真实生产值不进仓库。
-- 当前设备职责和部署路径只从 `docs/fleet.md` 与 `docs/runbooks/deploy.md` 进入，并在目标设备只读复核；不得把历史 `/root/AliECS` 当作所有角色的默认路径。
-
-## 文档闭环
-
-代码或配置验证通过后必须回查路径、符号、配置键、API、部署、回滚、备份和专项 runbook。PR 必须记录 `Nav-Impact: updated`，或同时记录 `Nav-Impact: none` 与 `Nav-Impact-Reason: <依据>`——⚠️ **判据落在 PR body 上，不是 commit message**（`ci.yml` 的「PR 导航影响记录」读的是`github.event.pull_request.body`）。commit 里带了、body 里没带，CI 一样红。而且**补进 body 之后 rerun 是没用的**：rerun 重放的是原事件载荷，里面还是旧 body；要么建 PR 前就写好，要么补完再推一个 commit 触发 `synchronize`（2026-09-09 实测）；最后从工作区顶层 `AGENTS.md` 重新进入并复验一条“功能 → 代码 → 验证命令 → 运行位置”链路。
-
-**⚠️ 这条记录必须写在 PR 正文里，写在 commit message 里不算。** `ci.yml` 的「PR 导航影响记录」步骤读的是 `github.event.pull_request.body`，本地 `check_nav_impact.py --range` 过了不代表 CI 会过（2026-08-16 PR#320 就是这样红的）。两处都写最稳。
-
-补救时注意：`ci.yml` 只在 `opened / synchronize / reopened / ready_for_review` 触发，**`edited` 不在列**，所以改完正文不会自动重跑；`gh run rerun` 也没用——它重放的是旧 event payload，读到的还是旧正文。要么再推一个 commit（`synchronize`），要么 `gh pr close && gh pr reopen`。
-
-### 断言判据
-
-治理文档正文中以反引号点名的、指向本仓 Python 定义的、非下划线开头的标识符，必须有对应断言：
-
-```
-<!-- nav-check-python: 相对路径.py:符号名 -->
-```
-
-标记放在点名它的那份文档里，**不写进 `.navigation-check.json`**——断言与它保护的句子脱钩后，CI 报红也定位不到该改哪句（原先 `main.py:app` 两处各写一份，已收敛为只留 inline）。
-
-判据只认“文档点了名”，不认“符号重要”：nav-check 防的是文档漂移，不是重构。文档没提的符号改名不关文档的事，不该红；文档点名的符号一改名，那句话立刻就错，必须红。
-
-三类**不要**断言：
-
-- 函数内的局部变量。校验器只认模块级与类级定义，断言局部变量会判红（这是刻意的）。
-- 文档里其实指数据库表名、JSON 字段、API 参数或环境变量，只是碰巧与某个无关文件里的模块级名字重名。例如 `sync_runs`、`sync_job_runs` 是表名，不是 Python 符号。
-- `docs/plans/`、`docs/migrations/` 等历史材料点名的符号。它们是时间点证据不是当前事实源，把治理耦合到归档材料上是反向依赖。
-
-判据示例本身必须写在代码围栏里——校验器只剥围栏，行内反引号挡不住标记正则，写在正文会被当成真断言。
-
-## 验证要求
-
-本地验证只用 `local/docker-compose.local.yml` + `local/.env.local`（只含本地测试值），不读取生产 env、不连生产库。优先 `scripts/local-smoke-test.ps1|sh`。
-
-- 通用测试：`python -m pytest tests`（CI 用的同一条）。
-  ⚠️ **2026-08-31 起不要再用 `python -m unittest discover -s tests` 当全量判据**：
-  它只收 `TestCase` 子类，`def test_x()` 这种裸函数式用例一个都不收。实测 discover
-  跑 1051 个全绿、pytest 收 1412 个其中 40 个失败——差的 **355 个分布在 18 个文件**里
-  从来没被跑过（含 `test_backend_gold_spread_alerts.py` 全部 20 个）。两个 runner 的
-  收集数对不上，就说明有测试没在跑。
-- **新增 `tests/` 文件时必须遵守既有的 `app` 包隔离协议**（仓里 42 个模块在用）：
-  `services/` 下有四个包都叫 `app`（backend-api / coding-executor / doc-sync-worker /
-  mcp-coding-server），谁先被 import 谁就占住 `sys.modules['app']`，之后模块里延迟到
-  测试体内的 `from app.x import y` 就会拿到**错的包**，报
-  `cannot import name 'app' from 'app.main' (…/doc-sync-worker/app/main.py)`。写法：
-
-  ```python
-  @classmethod
-  def setUpClass(cls):
-      for name in list(sys.modules):
-          if name == "app" or name.startswith("app."):
-              del sys.modules[name]
-      sys.path.insert(0, str(BACKEND_ROOT))
-
-  @classmethod
-  def tearDownClass(cls):
-      ...同样先 purge，再把 BACKEND_ROOT 从 sys.path 摘掉
-  ```
-
-  裸函数式文件没有这两个钩子，把隔离放进 `_module()` 那个 helper（见
-  `tests/test_backend_wecom_kf.py::_ensure_backend_app`），且**只在占位的不是本 service
-  时才清**——无条件清会让每次调用都重新 import、模块身份漂移，`patch` 会打空。
-- **测试里改 `os.environ` 必须还原**。`os.environ.setdefault(...)` 裸写在模块级或 helper
-  里会永久污染进程，后面的用例走进本不该走的分支（2026-08-31 实测：
-  `test_backend_wecom_assistant` 漏还原 `DATABASE_URL`，导致 `test_backend_wecom_kf`
-  两个用例去 `mkdir /app/wecom-kf-materials` 而失败，且**单独跑那个文件不复现**）。
-- shell 脚本：`bash -n deploy/ecs/{deploy,migrate,healthcheck,rollback}.sh`
-- Compose：`docker compose -f local/docker-compose.local.yml config > /dev/null`（含真实凭证时不粘贴完整输出）
-- 前端（尤其 `services/admin-ui/index.html` 内联脚本）：检查 JS 语法/作用域错误 + 至少一次核心入口 smoke（点击能触发网络请求）。
-
-无法验证时必须写明未验证原因和补救命令。
-
-## 输出要求
-
-完成后说明：改了哪些文件 / 解决什么问题 / 是否影响本地运行、部署、数据库 / 已执行与未执行的验证 / 如何回退。基于实际内容，不写空泛总结。完成修改后不自动打开差异或 PR 预览页面。
+任何 AI 在改动对应路径前都必须显式读取上表专项节；本地自动加载规则只是辅助，不代替这些约束。跨仓变更分别读取目标仓入口；父工作区只用于协调仓库边界。
 
 ## 提交与部署
 
-- AliECS 变更走分支 + PR，不直推 main。所有写 `.git` 的命令串行执行。
-- 用户明确授权提交/推送/部署后，完成 PR、CI、合并、Actions 和运行验证，不停在手工指令。
-- 提交前检查 status/分支/remote，并排除 `.env`、logs、browser_data、`_references`、真实密钥和生产数据。
-- 纯文档变更不触发生产 deploy；代码/workflow 变更按 `docs/runbooks/deploy.md` 闭环。
+AliECS 走分支 + PR，不直推 main。所有写 Git metadata 的命令串行执行；提交前核对 status、分支、remote、staged files/diff，并排除秘密与运行数据。用户明确授权对应阶段后自行完成该阶段的 PR、CI、合并、Actions、运行验证，授权不自动扩展到其他阶段。
+
+PR 正文必须有 `Nav-Impact: updated`，或 `Nav-Impact: none` 与 `Nav-Impact-Reason: <依据>`。正文修改会通过 `pull_request.edited` 触发新的 CI；旧 run 的 rerun 仍使用旧事件。纯文档变更不触发生产部署；代码/workflow 按部署 runbook 判断实际影响。
+
+历史规则和故障片段保留在 [2026-09-13 归档](docs/migrations/2026-09-13-guidance-history.md)，仅供追溯，不作为当前运行事实或执行指令。

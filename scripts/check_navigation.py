@@ -84,6 +84,19 @@ def main() -> int:
         config_path = root / config_path
     config = json.loads(config_path.read_text(encoding="utf-8"))
     errors: list[str] = []
+    unverified: set[str] = set()
+    documents = set(config.get("documents", []))
+    for pattern in config.get("document_globs", []):
+        matches = [path for path in root.glob(pattern) if path.is_file()]
+        if not matches:
+            errors.append(f"empty document glob: {pattern}")
+        documents.update(path.relative_to(root).as_posix() for path in matches)
+    for relative, limit in config.get("entrypoint_max_bytes", {}).items():
+        path = root / relative
+        if not path.is_file():
+            errors.append(f"missing entrypoint: {relative}")
+        elif path.stat().st_size > limit:
+            errors.append(f"entrypoint too large: {relative} ({path.stat().st_size} > {limit} bytes)")
     optional_prefixes = tuple(config.get("optional_link_prefixes", []))
     explicit_paths = list(config.get("paths", []))
     for relative in config.get("optional_paths", []):
@@ -91,7 +104,7 @@ def main() -> int:
             explicit_paths.append(relative)
     python_symbols = list(config.get("python_symbols", []))
 
-    for document in config.get("documents", []):
+    for document in sorted(documents):
         doc = root / document
         if not doc.exists():
             errors.append(f"missing document: {document}")
@@ -111,7 +124,8 @@ def main() -> int:
                  if link == prefix or link.startswith(prefix.rstrip("/") + "/")),
                 None,
             )
-            if optional and (optional.startswith("..") or not (root / optional).exists()):
+            if optional and not (doc.parent / optional).exists():
+                unverified.add(optional)
                 continue
             if any(token in link for token in ("*", "<", ">", "${")):
                 continue
@@ -119,6 +133,10 @@ def main() -> int:
             try:
                 target.relative_to(root)
             except ValueError:
+                if optional:
+                    if not target.exists():
+                        errors.append(f"broken link: {document} -> {link}")
+                    continue
                 errors.append(f"link escapes root: {document} -> {link}")
                 continue
             if not target.exists():
@@ -145,13 +163,15 @@ def main() -> int:
         if symbol not in names:
             errors.append(f"missing Python symbol: {relative}:{symbol}")
 
+    for prefix in sorted(unverified):
+        print(f"UNVERIFIED: external or absent repository prefix {prefix}")
     if errors:
         for error in errors:
             print(f"FAIL: {error}")
         return 1
     print(
         "navigation valid: "
-        f"documents={len(config.get('documents', []))} "
+        f"documents={len(documents)} "
         f"paths={len(explicit_paths)} symbols={len(python_symbols)}"
     )
     return 0

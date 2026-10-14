@@ -5,18 +5,17 @@
 某个渠道的原生载荷。中枢仍负责鉴权、路由、幂等、重试和投递记账，不允许原生载荷
 携带收件人、凭据或请求 URL。
 
-## 为什么不是别的方案
+## 按问题进入
 
-排除掉的三条路，理由留在这里免得再议一次：
+| 任务 | 专项节 |
+|---|---|
+| 没收到、重复、重试 | [排障](#排障消息没收到)、[孤儿领养](#坑worker-写的行是孤儿必须由-flush-领养) |
+| 新来源或字段 | [消息模型](#通用-notification-与渠道原生载荷新来源按这张表接入)、[新来源](#加一个新来源)、[跨镜像契约](#跨镜像契约) |
+| 改卡片 | [通道能力](#三个通道的能力差异不要试图抹平)、[投递约束](#当前-json-20-卡片的投递约束)、[验证](#改了卡片渲染怎么验本地测试挡不住这类问题) |
+| 流量日报/心跳 | 本文 aliecs、txecs 流量看护节 |
+| bridge 运维告警 | [bridge 契约](#openclaw-bridge-运维告警) |
 
-- **SSH 统一转发到某台机器**：SSH 是运维通道不是应用通道。没有重试/幂等语义，
-  返回码只说明 shell 退出了、不说明对方收没收到，日志散在各机。webdock2 还有
-  跨 shell 引号坑（见 AGENTS.md），JSON 写进去会静默变空值。而且 aliecs 停机、
-  入口迁 txecs 这件事本身就证明「把通道绑死在某台机器」是脆的。
-- **Apprise / ntfy / Gotify 之类**：只覆盖「简单文本推一条」这一档。这里实际要发的
-  是带 PNG 的飞书交互卡片、企微 markdown，复杂消息仍要自己写，等于多一个依赖
-  只省掉最简单的部分。
-- **邮箱做上行**：延迟不可控、无同步返回、鉴权弱、退信静默。
+先读对应节；代码改动同时遵守 [通知开发约束](../development.md#通知)。本文维护当前契约，首次调用、旧部署版本及方案取舍原文移至 [治理历史归档](../migrations/2026-09-13-guidance-history.md)。运行位置与配置值从 [fleet](../fleet.md) 进入并只读核对，旧记录不能补全当前状态。
 
 ## 数据流
 
@@ -41,14 +40,7 @@ doc-sync-worker ── notify_client.enqueue() ───────────
 互不可见（CI 的 context 是各自的 `services/<name>`），走 HTTP 会给 worker 平添一个
 「backend-api 必须活着」的依赖。两者连同一个库，所以都只做「往 outbox 写一行」。
 
-投递代码只有 backend-api 一份。触发两条：HTTP 入口同步投递；worker 的 `_poll_once`
-每轮调一次 `/v1/internal/notify/flush` 带走积压（**不是外层 while True**，理由见下文
-「冲刷频率跟 poll 走」）。所以 worker 写的通知最长延迟一个轮询周期
-（`DOC_SYNC_POLL_SECONDS`，默认 30s）——2026-08-31 上线实测 **34 秒**：
-写入 → 领养 → 投递到飞书。
-
-留下这个数字是为了以后判断得出「慢了」。只写「最长一个轮询周期」的话，
-延迟涨到几分钟也看不出异常。
+投递代码只有 backend-api 一份。HTTP 入口同步投递；worker 的 `_poll_once` 每轮调用 `/v1/internal/notify/flush` 带走积压，不能放在外层调度周期。正常路径的等待约为一个 poll 周期加上处理与渠道耗时；`DOC_SYNC_POLL_SECONDS` 是配置项，实际周期需读运行配置。历史耗时样本见归档，不构成时延上限。
 
 ## 四张表
 
@@ -76,43 +68,18 @@ doc-sync-worker ── notify_client.enqueue() ───────────
 | 交互回调（点赞/确认） | ❌ 中枢没有入站链路 | ❌ | ❌ |
 
 飞书那套上传移植自 `deploy/openclaw-bridge/openclaw_bridge.py`
-（`feishu_upload_image` / `build_feishu_card`）。代码目标是让两条发送路径统一使用
+（`feishu_upload_image` / `build_feishu_card`）。
+<!-- nav-check-python: deploy/openclaw-bridge/openclaw_bridge.py:feishu_upload_image -->
+<!-- nav-check-python: deploy/openclaw-bridge/openclaw_bridge.py:build_feishu_card -->
+代码目标是让两条发送路径统一使用
 JSON 2.0；卡片结构、图片字段和 Markdown 语义必须保持一致，避免同一条通知在中枢和
 bridge 上出现不同渲染结果。
 
-⚠️ **过时结论（2026-09-05，已被后续验收取代）**：早期真实客户端曾显示「请升级至最新版本客户端」，
-因此当时暂时保持 JSON 1.0。后续 `preview7` 至 `preview10` 在当前接收群已真实可见，
-并已按 JSON 2.0 正式部署；今后的切换门槛仍是 API 接受、真实消息肉眼可见和同 schema 的 PATCH 更新。
-
-### JSON 2.0 早期现场验证记录（2026-09-05，历史证据）
-
-- 未部署代码用 bridge 生产凭据向通用告警群发送 2.0 卡片：API 返回 `code=0`，消息 ID
-  `om_x100b668cda11f4a0c322ef1e3266394`。
-- 对同一条 2.0 卡片执行 PATCH：API 返回 `code=0`，读取结果 `updated=true`。
-- 两次 GET 的 `body.content` 都是「请升级至最新版本客户端，以查看内容」，没有出现卡片
-  正文。⚠️ 该结论后来确认是**取数方式错误**：当时没有带
-  `card_msg_content_type=user_card_content`，接口返回的是兼容展示结构，不是发送时的原始卡片，
-  不能据此判定客户端渲染失败。
-- 因此不要把这条历史 GET 结果当成低版本客户端证据，也不要据此回退到 JSON 1.0。
-
-### JSON 2.0 正式切换与 API 原始卡片验收（2026-09-05）
-
-- 用户确认生产飞书客户端为 **7.76**，手工收发回复正常。
-- `release-deploy.yml` run `33942500243`（business-cn）和 `33942655864`
-  （bridge-peer）均成功；backend-api、bridge 容器均 healthy。backend 当前镜像为
-  `backend-api:t-8dc4f32ca037`，business manifest 的 deployment 为
-  `224e6d24963c-33942500243-1`；bridge 当前运行镜像 digest 为
-  `sha256:7f17fd0543fd039f5c80e55de9d7e0d7bbf92fab237163eee2a0dd111b60bf0f`。
-- bridge 真实新消息 `om_x100b668d449d48acc2cfc5ec74c00e4`：发送 `code=0`，同一条卡片
-  PATCH 后读取 `updated=true`；带 `card_msg_content_type=user_card_content` 读取到原始卡片
-  `schema=2.0`，正文为 PATCH 后内容。
-- backend-api 真实新消息 `om_x100b668d5cd3d8a4ddab31c7f2af972`：发送 `code=0`；同样按
-  `user_card_content` 读取到原始 `schema=2.0`、header、body 和 markdown 元素。
-- 因而当前判据是：发送 API `code=0` + 原始卡片查询 `schema=2.0` + 同 schema PATCH
-  `updated=true`。不带 `user_card_content` 的 GET 只用于兼容展示，不用于判断卡片是否可见。
+卡片使用 JSON 2.0；验收应覆盖发送 API 接受、真实客户端可见以及同 schema PATCH。查询原始卡片必须带 `card_msg_content_type=user_card_content`；未带该参数的兼容展示结构不能证明客户端渲染失败。
 
 ## 通用 Notification 与渠道原生载荷（新来源按这张表接入）
 
+<!-- nav-check-python: services/backend-api/app/notify/models.py:Notification -->
 `Notification` 是所有渠道共同的业务语义；`channel_payloads` 是一个**可选覆盖层**。
 没有覆盖层时，所有渠道沿用下表的通用渲染；有覆盖层时，只有对应渠道使用原生载荷，
 其他渠道仍按通用字段降级。因此生产者不需要为每个渠道复制一套发送逻辑。
@@ -171,13 +138,12 @@ bridge 上出现不同渲染结果。
 | `quota-monitor` | `quota.*` | notify-center HTTP | 通用字段 | AI 额度日报与状态 |
 | `feishu-obsidian` | 快照/同步结果 | notify-center HTTP | 通用字段 | 文档快照同步 |
 | `doc-sync` | 文档同步/心跳 | worker outbox | 通用字段 | 服务端内部生产者 |
-| `devbox-traffic` | `traffic.*` | notify-center HTTP | 日报透传 JSON 2.0；启动/阈值用通用字段 | devbox 流量采集器与日报 |
+| `devbox-traffic` | `traffic.*`、`governance.daily` | notify-center HTTP | 日报透传 JSON 2.0；启动/阈值与引导体检用通用字段 | devbox 流量采集器与日报；工作区 AI 引导每日体检（AliECS-WebDock `scripts/governance_daily.py`，路由 id=20 `governance.*`） |
 | `txecs-traffic`、`aliecs-traffic`、`txecs-disk` | 流量/磁盘看护 | notify-center HTTP | 通用字段 | 主机看护 |
 
 OpenClaw 的 `/im/v1/messages` 调用仍保留在**会话传输适配器**内，用于回复指定
 飞书消息、上传附件和 PATCH 已发送卡片；它们没有广播通知的 `source/event/dedup`
-语义，不能误列为通知生产者。OpenClaw 运维告警只走 `notify-center`；中枢不可用时
-由 outbox/重试记录和补发，不再直连飞书，避免一条告警出现两次。
+语义，不能误列为通知生产者。OpenClaw 运维告警只走 `notify-center`；已入队消息由中枢重试，入队前失败只记日志，详见本文 bridge 契约。
 
 ### aliecs 流量日报卡片（2026-09-05 已确认）
 
@@ -198,15 +164,7 @@ OpenClaw 的 `/im/v1/messages` 调用仍保留在**会话传输适配器**内，
 完成肉眼验收并正式部署；后续调整仍须先发真实卡片再部署，不要回退到 JSON 1.0，也不要把
 三列改成等宽 `div.fields`。
 
-### 正式部署记录（2026-09-05）
-
-- AliECS 生产代码为 `27b7faa`（日报与 JSON 2.0 渲染）+ `e363c05`（bridge 同 schema、测试和渲染语义统一）。
-- `release-deploy.yml` run `33941286766` attempt `2` 的构建、TCR 镜像同步均成功，peer job 按当前路由为 `skipped`。
-- 该 run 的 GitHub runner 在 txecs 的 `docker compose` 重建 backend 瞬间取消了 SSH action；同一 run 上传的 release 已保留，随后在 txecs 现场用该 release 和同一 `deploy-role.sh` 完成部署。
-- txecs `/srv/business-cn/state/release-meta/current.json` 已记录 deployment `e363c0571cb4-33941286766-2`；backend 使用 `t-8dc4f32ca037`，容器 healthy，`/health/` 通过。后续 session 先核对这个 manifest 和容器 tag，不要因 Actions 总状态为 cancelled 而重复发布。
-- 收尾复核时发现另一条并行操作曾短暂把 `compose.env` 改回旧 backend tag `t-d12a5387870b`；已按 manifest 恢复 `t-8dc4f32ca037`，容器再次 healthy 且 15 秒观察未被覆盖。多 session 并行时，关闭前必须把 `compose.env`、容器 image 和 `current.json` 三者对账。
-- ⚠️ 上述 run `33941286766` 及其旧 deployment 记录是切换过程中的历史证据，不是当前版本权威。当前以 run
-  `33942500243` / `33942655864`、txecs 的 `current.json` 和容器实际 image digest 为准。
+### 主题和按钮样式
 
 `theme` 取值：`blue` `wathet` `turquoise` `green` `yellow` `orange` `red` `carmine`
 `violet` `purple` `indigo` `grey` `default`。
@@ -232,10 +190,6 @@ OpenClaw 的 `/im/v1/messages` 调用仍保留在**会话传输适配器**内，
 3. 图片使用 2.0 的 `scale_type: fit_horizontal`，不要与 `size` 同时出现；结构变更必须
    同时做 API 接收检查和真客户端肉眼验收。
 
-⚠️ **过时记录（不要照抄）**：2026-09-04 曾因只验证 HTTP 200、未做真实客户端验收，
-把 JSON 2.0 判定为不兼容并回退 1.0；2026-09-05 的 `preview7` 至 `preview10` 已在当前
-客户端真实可见，现行实现以本节约束为准。
-
 ### 做不到的（别答应业务）
 
 - **交互回调按钮**（点赞、点踩、确认、屏蔽）：需要公网入站端点 + 飞书验签 + 在开放
@@ -246,7 +200,7 @@ OpenClaw 的 `/im/v1/messages` 调用仍保留在**会话传输适配器**内，
 
 ### 改了卡片渲染怎么验（本地测试挡不住这类问题）
 
-本地单测只能证明「我按文档拼对了」，证明不了「飞书收不收」。两步都要做：
+本地单测只证明结构与逻辑；发布验收还需渠道与真实客户端证据。以下调用和真实发消息均须在用户授权范围内进行，尚未授权时先完成本地校验并明确待验项：
 
 1. **零噪音结构校验**：在卡片末尾追加一个必错哨兵元素再 POST。飞书只报第一个错误，
    所以报错路径指向哨兵 = 前面全部合法，而整张卡片仍被拒、群里不留消息。
@@ -336,6 +290,7 @@ flush 每轮（约 30 秒）把它重新领养一次、建不出记录、再记�
 
 ### 冲刷频率跟 poll 走，不跟 cycle 走
 
+<!-- nav-check-python: services/doc-sync-worker/app/notify_client.py:request_flush -->
 `worker_loop.py` 里 `request_flush()` 必须放在 **`_poll_once` 内**（约 30 秒一次，
 `DOC_SYNC_POLL_SECONDS`），不能放在外层 `while True` 开头——外层一轮 = 一个完整调度
 周期（`interval_seconds` 默认 86400），放那里等于**一天才冲刷一次**。
@@ -345,31 +300,18 @@ flush 每轮（约 30 秒）把它重新领养一次、建不出记录、再记�
 守着它，判据是「flush 次数 == poll 次数」而不是「flush 次数 > 0」——后者在错误层级下
 照样成立。
 
+<!-- nav-check-python: services/backend-api/app/notify/models.py:NotifyImage -->
 ## 已知限制
 
 - **重试出去的消息没有图**。`payload_json` 刻意不存 base64——一张 PNG 是几十万字符，
   会把这一列撑爆（`gold_spread_alerts` 的 `_strip_chart_bytes` 已经踩过）。所以首次
   投递有图，进了重试队列之后按无图纯文本降级：字还在，图没了。
-- **企微 B 没有自建应用 agentid**。SOPS 里 B 只有 `WECOM_COMPANY_B_GROUPBOT_ID/SECRET`
-  和 `APP_SECRET`，没有 agentid，所以 B 目前只能走群机器人。要用应用消息得先在企微
-  后台建应用并把 agentid 进 SOPS。
-
-  ⚠️ **「B 没有自建应用」这个说法自 2026-08-31 起确认不准确**：B 有自建应用
-  （`agentid=1000003`，名称 `AGI-达`），只是 agentid 没进 SOPS，容器里
-  `WECOM_COMPANY_B_gentId` 是空字符串。用 B 的 `APP_SECRET` 调
-  `agent/list` 就能读到。缺的是配置，不是应用。
+- 企微应用投递依赖正确的应用身份和 SOPS 渲染配置；缺少 agentid 不能推断没有应用，按本文「企微应用身份」核对。
 - 重试退避 `[60, 300, 1800, 7200]` 秒，四档全部用完判 `dead`，不再重试。
-  ⚠️ **2026-08-31 之前实际不是这个序列**：`mark_failed` 取的是
-  `BACKOFF_SECONDS[attempts]`，而 `attempts` 在取值前已自增，于是第一次失败等的是
-  **300 秒**而不是 60，首档 60 永远取不到，实际序列是 `300 → 1800 → 7200 → dead`。
-  生产实测过（2026-08-31 outbox 10：失败 02:49:30 → 重投 02:54:40，间隔 310 秒）。
-  已改成 `BACKOFF_SECONDS[attempts - 1]` 并把 `MAX_ATTEMPTS` 提到 `len+1`，
-  由 `tests/test_notify_center.py::RetryAccountingTests::test_backoff_uses_every_tier_starting_at_the_first`
-  守着——**那个测试断言的是具体秒数**，原来的测试只断言 `status=='pending'`，
-  在正确和错误索引下都成立，所以它没挡住。
-- **`send_feishu_text` / `send_feishu_alert` 的返回值语义变了**。收敛前 `False` 是
-  「飞书没收到」，收敛后是「没能写进 outbox」。写进去之后投递成没成，只有
-  `notify_deliveries` 知道——调用点如果拿这个返回值做业务判断，要重新审一遍。
+  退避索引和最终 dead 状态由 `tests/test_notify_center.py` 的重试用例覆盖，必须验证各档实际秒数及耗尽后的行为。
+- worker 的 `send_feishu_text`（`app/pipelines/sync_alert_notifier.py`）与 `send_feishu_alert`（`app/pipelines/tplus_parent_match.py`）返回值只表示写入中枢队列是否成功；实际投递看 `notify_deliveries`。不要套用到 bridge 的同名函数。
+  <!-- nav-check-python: services/doc-sync-worker/app/pipelines/sync_alert_notifier.py:send_feishu_text -->
+  <!-- nav-check-python: services/doc-sync-worker/app/pipelines/tplus_parent_match.py:send_feishu_alert -->
 - 图片只收 PNG，2MB 上限，在 `NotifyImage` 入口就校验（收敛前这层在 gold_spread 的
   `_upload_charts` 里）。2MB 取的是三家里最紧的企微群机器人限制，省得同一条消息
   发得出飞书发不出企微。
@@ -406,28 +348,9 @@ python3 scripts/seed_notify_routes.py --apply    # 写入
 - 飞书/企微卡片、图片上传、收件人路由、幂等、重试和投递记账仍然只在 `app/notify/`；
   业务适配器不直接调用任何 IM API，因此没有第二套消息平台。
 
-## 三个通道的首次真实调用（2026-08-31）
+## 响应、日志与凭据
 
-上线时只有飞书 + 服务端内部生产者这一条路真的跑过；其余是按「代码就绪」交付的。
-2026-08-31 逐条补验，结果记在这里，免得以后再问「这条路到底通没通」。
-
-| 路径 | 首次真实调用 | 结果 |
-|---|---|---|
-| `POST /v1/internal/notify/send`（外部入口 + `notify_sources` token 鉴权） | 2026-08-31 | 通。此前 `notify_sources` 是空表、nginx 全量日志 0 次请求，**任何调用都必然 401** |
-| `wecom_bot`（群机器人） | 2026-08-31 | 通，含 markdown、图片、4096 字节截断 |
-| `wecom_app`（自建应用） | 2026-08-31 | **通道代码通，但生产 env 的 agentid 是错的**，见下 |
-| 重试 → `dead` 全链路 | 2026-08-31 | 通，四次尝试全程实测 |
-
-`/send` 的四种返回都实测过：缺 header 401、错 token 401、`source` 与 header 不一致 403、
-无匹配路由 200 + `delivered:false`、正常 200 + `delivered:true`、重复提交 200 + `duplicate:true`。
-
-实测当天 `routers/notify.py` 里还留着一句「返回 202 而不是 200」的注释，与实际不符
-（装饰器没有 `status_code`，无路由时返回的是 **200**）；#342 已把那段重写掉，
-现在注释与行为一致。本文档上面「三种 200 要分开读」始终是对的。
-
-⚠️ 重复提交的返回在 #342 之后变了：以前一律 `duplicate:true` + `targets:0`，
-现在会带上该 outbox **当前真实的**投递汇总（`sent`/`pending`/`dead`），
-`sent>0` 时甚至报 `delivered:true`。所以「`duplicate` 就等于没发」这个旧理解不再成立。
+重复提交返回既有 outbox 的当前投递汇总（sent/pending/dead）；duplicate 不等于未投递。200 仍须区分无路由、成功和重复提交，不能直接视为送达。
 
 ### 422 在服务端留痕（2026-08-31 起）
 
@@ -446,53 +369,24 @@ ssh txecs "sudo docker logs business-cn-backend-api-1 2>&1 | grep 'request valid
 ⚠️ **只记 `type` 和 `loc`，故意不记 `input`/`msg`**——那两个会把请求体的值抄进日志，
 而这个处理器对全站所有端点生效（登录、密钥、回调都经过它）。改动前先想清楚这一点。
 
-⚠️ **`docker logs` 会在容器重启时清空**。要留证据就在部署前先捞出来。
-
-**待办（截至 2026-08-31 未完成）**：gold-spread-monitor 的 422 还没抓到真实样本——
-部署（17:03 CST）之后一直没有新的 gold 请求。已知的形状：
-`monitor` 每轮可能出现 3×422 + 200，**但不是每轮都有**（11:14 CST 那轮有、
-15:37 CST 那轮只有 200），所以它是间歇的、跟 payload 种类相关。
-根因机制已定位一半：`gold-spread-monitor` 的 `alerts.py::_try_post` 用
-`for attempt in range(3)` 把 422 当可重试错误重试 3 次——4xx 是确定性错误，
-重试必然全失败，只是把一次失败放大成三条。**缺的是「哪个字段」**，等上面那条日志。
+容器重建、日志轮转或清理可能丢失旧日志；部署前先采集所需证据。单纯 restart 不应被当成必然清空日志。
 
 ### 读 notify_outbox 时 id 会缺号，这是正常的
 
+<!-- nav-check-python: services/backend-api/app/notify/store.py:enqueue -->
 `enqueue` 用 `INSERT … ON CONFLICT (dedup_key) DO NOTHING`，而 Postgres 的序列
 **即使没有插入也会消耗掉一个值**。所以重复提交（生产者重试、网络重发）会在
 `notify_outbox.id` 里留下空洞。看到 id 不连续不要当成「有行被删了」去查。
 
-### ⚠️ 企微 agentid：env 里 A 的值是 B 的
+### 企微应用身份
 
-2026-08-31 用各自的 `APP_SECRET` 调 `agent/get` 实测：
-
-| profile | 正确 agentid | 应用名 | 容器 env 现状 |
-|---|---|---|---|
-| `COMPANY_A` | **1000005** | AGI | `WECOM_COMPANY_A_gentId=1000003` ← **错的** |
-| `COMPANY_B` | **1000003** | AGI-达 | `WECOM_COMPANY_B_gentId=` ← 空 |
-
-拿 A 的 token 去操作 1000003 会被拒：
-`301002 not allow operate another agent with this accesstoken`。
-也就是说**只要有任何路由指向 `wecom_app` + `COMPANY_A`，投递必然失败**（会走完
-四次重试判 dead）。注入正确的 1000005 后同一段代码真实发送成功。
-
-**正确的值其实一直躺在 SOPS 里**：还有一个从来没人读过的
-`WECOM_COMPANY_A_gentId_A=1000005`。同一个键被两种方式改残，compose 恰好只转发了
-错的那个（`gentId`），而 `app_credentials()` 的 typo 容错又刚好认它——三层各自「正常」，
-合起来就是 A 拿着 B 的 agentid。
-
-已修（2026-08-31）：SOPS 两个文件（`txecs.enc.env` / `txecs-production.enc.env`）各加
-`WECOM_COMPANY_A_AGENT_ID=1000005`、`WECOM_COMPANY_B_AGENT_ID=1000003`，compose 转发这两个
-规范键，`app_credentials()` 优先读它们。历史拼写 `gentId` / `gentId_A` 保留不动，只作回落。
-
-`tests/test_notify_center.py::WeComChannelTests::test_canonical_agent_id_wins_over_the_historical_typo_key`
-守着优先级——原来那个测试只验「typo 键能被读到」，**读到的是不是对的值它不关心**，
-所以这个错配从上线一直活到第一次真实调用。
+使用规范环境变量 `WECOM_COMPANY_A_AGENT_ID` / `WECOM_COMPANY_B_AGENT_ID`；历史 typo 键仅用于兼容回落。应用 ID 必须与 token 所属应用匹配，不能只验证变量能被读取。真实值从 SOPS 渲染并在授权验证时核对，历史归档里的值不能当作当前配置。
 
 ### 标题图标不叠加
 
 生产者自己写的标题图标（gold-spread-monitor 每一类都带：✅ ⛔ 🔴 🟢 🧾 🧪 ℹ️ ⚠️）
 优先于中枢的级别图标——它往往更具体（🧾 收盘复盘说的是「哪一类」不是「多严重」）。
+<!-- nav-check-python: services/backend-api/app/notify/models.py:display_title -->
 判断只有 `Notification.display_title()` 一处，飞书卡片头、企微 markdown 首行、
 纯文本兜底三处共用；各写一套迟早会出现两边标题不一致。
 
@@ -527,16 +421,9 @@ ssh txecs "sudo docker logs business-cn-backend-api-1 2>&1 | grep 'request valid
 
 设备侧的实现、档位依据与 vnstat 对账要求在 infra `roles/server/aliecs-traffic/README.md`。
 
-### 首次真实调用（2026-09-01）
+### 心跳验收
 
-| 项 | 结果 |
-|---|---|
-| 设备侧 `aliecs-traffic` → `/v1/internal/notify/send` | **通**。`delivered=True`，`notify_deliveries` 里 `status=sent, attempts=1`，用户在飞书运维群确认收到 |
-| 心跳缺席看护（接收端） | **代码已上生产**（`doc-sync-worker` 镜像 `t-fdc345c9d06f`），但**开关仍关闭**，因此这条路径**一次都没有被真实触发过** |
-
-⚠️ 按〈代码就绪 ≠ 这条路真被调用过〉，看护那一栏现在是空的。开开关之后必须造一次真实的
-「心跳缺席」（把 `notify_outbox` 里 aliecs-traffic 的最新一行时间改旧，或停设备侧 timer 满
-30 小时），确认它真的报出来，再把结果补进上表。**在那之前不要认为这条反向看护是可用的。**
+先只读核对接收端实际开关、最近设备心跳、来源及路由；不能用代码默认值或历史上线记录证明看护生效。缺席场景应在隔离测试环境验证；生产造故障、停 timer 或改业务时间戳另需明确授权。
 
 ## txecs 流量看护：同群但独立来源（2026-09-11）
 
@@ -548,27 +435,13 @@ ssh txecs "sudo docker logs business-cn-backend-api-1 2>&1 | grep 'request valid
 按 source 判断哪一台的心跳缺失。需要减少群消息时，只能在中枢侧另加总览摘要，不能替代
 两条设备侧日报和跨档告警。
 
-### 2026-09-11 首次上线验证
+### 账单与阈值验收
 
-AliECS PR #386 已合并为 `d74bfe9`，并由 release workflow `34551326608` 部署到
-`business-cn`；迁移 `0061_txecs_traffic_notify` 已应用。数据库回读确认
-`txecs-traffic` 来源、同群 `feishu` 路由均存在。txecs 首次 `traffic.daily_report` 返回
-`delivered=True`，对应 `notify_deliveries` 为 `status=sent`、`attempts=1`；设备 pending
-队列为空。用户已确认在飞书群收到消息。
+除日报投递凭证外，跨档告警应在真实跨档或隔离测试中验证；每个流量包周期结束后，将设备 TX 与云账单对账。某次日报成功不能证明所有档位或后续周期都正确。
 
-这次验证的是日报正常路径；没有人为伪造 50%/75%/90%/100% 档位，因此阈值消息仍应在
-真实跨档时观察。首个腾讯云套餐周期结束后，再将 vnstat 的 eth0 TX 与云账单对账。
+### 生产者 schema
 
-### 2026-09-06 日报漏发复盘
-
-2026-09-06 00:07（CST）设备 timer 正常运行，但日报在进入 `notify_outbox` 前被
-backend-api 返回 HTTP 422：`body.segments[0].fields[0]` 收到的是数组
-`["出方向", "**2.78 GB**"]`，而 `NotifyField` 契约要求对象
-`{"name": "出方向", "value": "**2.78 GB**"}`。这是 JSON 2.0 `section` 生产者与中枢
-模型的 schema 不一致，不是 Feishu 客户端兼容性问题。由于 422 被正确判定为 payload 永久
-非法，设备不会写 pending；补发时要重建原 dedup key，并同时检查 `notify_outbox` 和
-`notify_deliveries.status=sent`。以后修改卡片 schema，必须在设备脚本测试之外执行一次
-backend-api `Notification.model_validate()`，再做真实投递验证。
+卡片 fields 使用对象 `{"name": "指标", "value": "值"}`，不能传二元数组。修改设备生产者 schema 后，除脚本测试外还须用 backend-api 消息模型解析一次，再在授权范围内验证真实投递；422 的非法消息补发需重建原 dedup key 并检查实际 deliveries。
 
 ### 上线时踩到的三个「只有真实调用才会显形」的问题
 
@@ -638,61 +511,24 @@ VALUES ('my-device', '*', 'warn', 'feishu',
 | `feishu-obsidian` | [`docs/notify/feishu-obsidian.md`](../notify/feishu-obsidian.md) |
 
 消息本身能填哪些字段、飞书能渲染成什么样、哪些写法会让卡片被拒——见
-〈卡片能力与消息模型字段〉。新来源不需要了解飞书卡片 JSON，只填那张表里的字段。
+[通用消息模型](#通用-notification-与渠道原生载荷新来源按这张表接入)。新来源不需要了解飞书卡片 JSON，只填那张表里的字段。
 
 ## 跨镜像契约
 
 `services/doc-sync-worker/app/notify_client.py` 构造的 payload 必须能被
 `services/backend-api/app/notify/models.py` 的 `Notification` 解析。两边在不同镜像里，
 **没有编译期检查**，由 `tests/test_notify_center.py::CrossServiceContractTests` 守着。
+<!-- nav-check-python: tests/test_notify_center.py:CrossServiceContractTests -->
 改任一侧的 payload 结构都要跑那个测试——否则 worker 写进去的消息会在投递侧解析失败，
 而且失败是异步的、当场看不出来。
 
 ### openclaw-bridge 运维告警
 
-bridge 的多维表格配置变更和每日核对告警使用来源 openclaw-bridge、事件
-bridge.alert，优先走 POST /v1/internal/notify/send。txecs 上 bridge 是
-network_mode: host，因此 endpoint 使用 backend-api 发布的
-http://127.0.0.1:8000/v1/internal/notify/send，不要写 Docker 服务名。
+bridge 运维告警使用来源 `openclaw-bridge`、事件 `bridge.alert`，只走中枢 `POST /v1/internal/notify/send`；会话回复、附件和卡片 PATCH 仍属于会话传输。
 
-中枢请求设有短超时；连接失败、超时或配置类 HTTP 错误会静默回落现有 Feishu 直发，
-不能影响发现问题的线程。HTTP 502 表示 outbox 已建立并等待重试，不再直发，以免中枢
-恢复后重复发送。回落路径仍捕获所有异常。
+`send_feishu_alert()` 在中枢不可用时只记失败日志，不直发飞书。HTTP 502 且响应表明 outbox 已建立时，中枢负责重试；传输失败或配置错误不能当作已入队，也没有 bridge 本地持久补发队列保证。排障必须分别确认请求是否进入中枢和投递状态。
+<!-- nav-check-python: deploy/openclaw-bridge/openclaw_bridge.py:send_feishu_alert -->
 
-启用前按顺序完成：先写来源和路由，再渲染 bridge env，最后重建 bridge 容器。token
-明文只在执行 INSERT 时存在，数据库只保存 sha256，路由不保存任何凭据：
+新部署先登记来源及路由，再从 SOPS 渲染 `NOTIFY_CENTER_ENDPOINT`、`NOTIFY_CENTER_SOURCE`、`NOTIFY_CENTER_TOKEN`、`NOTIFY_CENTER_TIMEOUT_SECONDS`，最后按授权范围发布。endpoint 随网络模式核对，运行位置只查 [fleet](../fleet.md) 与 [deploy](deploy.md)。SQL 中使用目标占位符，不在文档复制真实群 ID。
 
-SQL：
-INSERT INTO notify_sources (source_key, token_sha256, note)
-VALUES (
-  'openclaw-bridge',
-  encode(sha256('<明文 token>'::bytea), 'hex'),
-  'openclaw-bridge 运维告警；token 在 infra secrets/txecs-bridge.enc.env'
-);
-
-INSERT INTO notify_routes
-  (source_key, event_pattern, min_level, channel, target_json, note)
-VALUES (
-  'openclaw-bridge',
-  'bridge.alert',
-  'info',
-  'feishu',
-  '{"profile":"COMPANY_A","receive_id":"oc_84d1130542509e374f7ea20c13d11ca4","receive_id_type":"chat_id"}',
-  'bridge 运维告警'
-);
-
-重复执行前先按 source_key 和 (source_key,event_pattern,channel,target_json)
-查重；数据库命令使用 psql -U app -d app。bridge 的 env 键为
-NOTIFY_CENTER_ENDPOINT、NOTIFY_CENTER_SOURCE、NOTIFY_CENTER_TOKEN 和
-NOTIFY_CENTER_TIMEOUT_SECONDS，其中 token 只从 SOPS 渲染。
-
-#### 当前生产状态（2026-09-05 收尾核对）
-
-- 代码已由 `eca3fa2` 合并到 `main` 并随 bridge 发布；`send_feishu_alert()` 现在优先走中枢，
-  失败时静默直发回落。
-- txecs 运行时已确认 endpoint 为
-  `http://127.0.0.1:8000/v1/internal/notify/send`，source 为 `openclaw-bridge`，timeout 为
-  2 秒；token 已渲染但不打印。
-- 数据库已确认 `notify_sources.source_key='openclaw-bridge'` 为 enabled，且存在
-  `bridge.alert` / `warn` / `feishu` / `COMPANY_A` 运维群路由。
-- 本次收尾没有人为制造一条运维告警，避免额外刷群；因此“中枢真实成功 + 断链回落”的运行日志仍应在下一次自然告警或专门维护窗口补一条端到端证据。代码单测已覆盖 HTTP 成功、502 入队不直发、网络失败回落。
+验证覆盖成功投递、502 已入队和中枢不可用三类；代码测试见 `tests/test_openclaw_bridge.py`，真实通知验证须有发送授权。

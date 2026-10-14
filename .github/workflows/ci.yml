@@ -2,7 +2,8 @@ name: 持续集成检查
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    # edited supplies the latest PR body to the navigation-impact check.
+    types: [opened, synchronize, reopened, ready_for_review, edited]
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
@@ -21,6 +22,7 @@ jobs:
       - name: 导航一致性与红绿测试
         run: |
           python scripts/check_navigation.py
+          python -m unittest discover -s tests -p test_guidance_contract.py
           python -m unittest discover -s tests -p "test_*navigation*.py"
 
       # 硬门：新增/删除 router、service 或迁移时，project-ai-map.md 必须同批更新。
