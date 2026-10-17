@@ -154,7 +154,7 @@ txecs 127.0.0.1:11800 failover-proxy
 | 主体 | 拉 GHCR | 备注 |
 |---|---|---|
 | aliecs | **12.97 MB/s** | 早已长期 `docker login ghcr.io`，`/root/.docker/config.json` 里有 |
-| webdock2 | 3.7 MB/s | 经 mihomo；出口是 aliecs。mihomo 已按国内/国外分流，**访问国内目标本来就直连**（实测出口=家宽 IP），不需要改 `NO_PROXY`，更不该为此重启 docker（会打断 ChatGPT 会话，触碰红线） |
+| webdock2 | 3.7 MB/s | 经 mihomo；出口是 aliecs。mihomo 已按国内/国外分流，**访问国内目标本来就直连**（实测出口=家宽 IP），不需要改 `NO_PROXY`，也不需要为此重启 docker。（原写「重启 docker 会打断 ChatGPT 会话」：用户 2026-10-17 指出已过期，现断电重启也不影响会话；本文未独立复测。）⚠️ 2026-10-17 实测：root 的 `ghcr.io` 登录是 gh CLI OAuth token、**无 `read:packages`**，只能拉公开镜像，私有包返回 403 |
 | txecs | 13.6 KB/s | 实质不可用，别把它当备选 |
 | GitHub runner → TCR | 劣化时 **0 B/s 冻结** | 判别与处置见 `runbooks/deploy.md` |
 
@@ -368,6 +368,12 @@ GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会�
 - 别名：新电脑、desktop；ssh alias `desktop` / `webdock2` / `WebDock02`；Windows 主机名 `DESKTOP-D0LV1TN`；用户 `Admin`。
 - 结构：**SSH 登录进的是 Windows（PowerShell）**，WebDock 跑在 WSL2 发行版 `Ubuntu-24.04-WebDock` 内的 docker 里。Linux 命令一律 `ssh webdock2 "wsl -d Ubuntu-24.04-WebDock -- <cmd>"`。
 - 运行：仅 `webdock` 容器（与 webdock1 同镜像同 tag）。Immich / AdventureLog / Gokapi 暂不部署（按需再拉）。
+- USB 手机（2026-10-17 起）：Redmi Note 7 Pro 直连本机，`usbipd-win` + 计划任务 `PhonedockUsbipAttach`
+  （Admin+S4U，开机常驻 `--auto-attach`）挂进 WSL；WSL 内 `phonedock` 容器（systemd `phonedock.service`）
+  独占 adb，noVNC `127.0.0.1:6083` 经 `console-phone-txecs-tunnel` 落 txecs `16095`
+  （`/console/webdock2/phone/`），控制口 `127.0.0.1:18003` 仅本机。部署声明在 infra
+  `roles/webdock/extras/phonedock/`，源码与行为边界见 `huozao/phonedock` README。
+  判据：`curl -s localhost:18003/healthz` 的 `adb` 为 `device`；txecs `ss -ltn` 有 `16095`。
 - 反向隧道：WSL 内 `webdock-business-tunnel` 将 WebDock 18000 映射到
   txecs 11810（当前生产）。
   ⚠️「旧 `webdock-ecs-tunnel` 已停，console 仍单独落 AliECS」这句自 2026-09-02 起
@@ -435,6 +441,7 @@ GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会�
 |---|---|---|
 | `huozao/AliECS` | txecs（aliecs 仅应急旁路） | push main → GHCR 源制品 + SBOM → 镜像同步到 TCR → txecs 直拉部署；改动走 PR。⚠️「aliecs 按 digest 预拉并经 peer-channel 分发、TCR 只作 fallback」自 2026-09-01 起失效，TCR 已是唯一日常来源 |
 | `huozao/webdock` | webdock1 + webdock2 | CI 构建 sha-tag 镜像 → 各机手动拉取重启；两机应保持同 tag；小改可直推 main |
+| `huozao/phonedock`（私有） | webdock2 | push main → CI 测试后构建 GHCR sha 镜像 → infra `PHONEDOCK_IMAGE` pin → 设备 render + `systemctl restart phonedock` |
 | `huozao/infra`（私有） | aliecs + txecs + webdock1/2 主机层 | 角色、SOPS、nginx、隧道、bridge/edge 配置；在线设备按各自 remote/deploy key 同步 |
 
 不属于任何仓库：openclaw 网关（上游镜像 + `/root/.openclaw` 主机配置）。

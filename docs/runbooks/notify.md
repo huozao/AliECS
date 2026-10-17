@@ -140,6 +140,7 @@ bridge 上出现不同渲染结果。
 | `doc-sync` | 文档同步/心跳 | worker outbox | 通用字段 | 服务端内部生产者 |
 | `devbox-traffic` | `traffic.*`、`governance.daily` | notify-center HTTP | 日报透传 JSON 2.0；启动/阈值与引导体检用通用字段 | devbox 流量采集器与日报；工作区 AI 引导每日体检（AliECS-WebDock `scripts/governance_daily.py`，路由 id=20 `governance.*`） |
 | `txecs-traffic`、`aliecs-traffic`、`txecs-disk` | 流量/磁盘看护 | notify-center HTTP | 通用字段 | 主机看护 |
+| `phonedock` | `attendance.*` | notify-center HTTP（webdock2 本机 18020） | 通用字段 | 海康互联考勤只读查看（周一至周六两次）；失败时 `attendance.check_failed`+截图；源码 `huozao/phonedock` |
 
 OpenClaw 的 `/im/v1/messages` 调用仍保留在**会话传输适配器**内，用于回复指定
 飞书消息、上传附件和 PATCH 已发送卡片；它们没有广播通知的 `source/event/dedup`
