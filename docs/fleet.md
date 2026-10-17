@@ -372,7 +372,7 @@ GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会�
   （Admin+S4U，开机常驻 `--auto-attach`）挂进 WSL；WSL 内 `phonedock` 容器（systemd `phonedock.service`）
   独占 adb，noVNC `127.0.0.1:6083` 经 `console-phone-txecs-tunnel` 落 txecs `16095`
   （`/console/webdock2/phone/`），控制口 `127.0.0.1:18003` 仅本机。部署声明在 infra
-  `roles/webdock/extras/phonedock/`，源码与行为边界见 `huozao/phonedock` README。
+  `roles/webdock/extras/phonedock/`，源码与说明见 `huozao/phonedock` README。
   判据：`curl -s localhost:18003/healthz` 的 `adb` 为 `device`；txecs `ss -ltn` 有 `16095`。
 - 反向隧道：WSL 内 `webdock-business-tunnel` 将 WebDock 18000 映射到
   txecs 11810（当前生产）。
