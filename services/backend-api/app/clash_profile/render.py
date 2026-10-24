@@ -87,6 +87,8 @@ PROVIDER_FILE_DIR = "./providers"
 PROFILE_DESKTOP = "desktop"
 PROFILE_WEBDOCK = "webdock"
 PROFILE_MOBILE = "mobile"
+TAILSCALE_NAME = "Tailscale"
+_TAILSCALE_CONFIG_FILE = Path("/run/secrets/clash-tailscale.b64")
 
 _PROVIDER_PROXY_SECTION = re.compile(
     r"^proxies:\s*\n(?P<body>.*?)(?=^\S|\Z)", re.MULTILINE | re.DOTALL
@@ -132,6 +134,45 @@ def load_self_nodes(raw: str | None = None) -> list[dict[str, Any]]:
         if not isinstance(node, dict) or "name" not in node or "server" not in node:
             raise ValueError("CLASH_SELF_NODES_B64 的每个元素都必须是含 name 与 server 的对象")
     return nodes
+
+
+def load_tailscale_config(raw: str | None = None) -> dict[str, Any]:
+    """Load private mobile enrollment and hostname mappings without echoing values."""
+    encoded = os.getenv("CLASH_TAILSCALE_B64", "") if raw is None else raw
+    if raw is None and not encoded.strip():
+        try:
+            encoded = _TAILSCALE_CONFIG_FILE.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            raise ValueError("Tailscale 私有配置未提供或无法读取") from None
+    try:
+        config = json.loads(base64.b64decode(encoded.strip(), validate=True).decode("utf-8"))
+    except (ValueError, UnicodeError, binascii.Error):
+        raise ValueError("CLASH_TAILSCALE_B64 未配置或不是有效的 base64 JSON") from None
+    return _validate_tailscale_config(config)
+
+
+def _validate_tailscale_config(config: Any) -> dict[str, Any]:
+    if not isinstance(config, dict):
+        raise ValueError("Tailscale 配置必须是对象")
+    hostname = config.get("hostname")
+    auth_key = config.get("auth-key")
+    hosts = config.get("hosts", {})
+    if not isinstance(hostname, str) or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9-]{0,62}", hostname):
+        raise ValueError("Tailscale hostname 必须是有效的设备名")
+    if not isinstance(auth_key, str) or not auth_key.strip() or any(c.isspace() for c in auth_key):
+        raise ValueError("Tailscale auth-key 未配置或格式无效")
+    if not isinstance(hosts, dict):
+        raise ValueError("Tailscale hosts 必须是主机名到 IP 的映射")
+    for name, address in hosts.items():
+        if not isinstance(name, str) or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9.-]*", name):
+            raise ValueError("Tailscale hosts 含无效主机名")
+        try:
+            if not isinstance(address, str):
+                raise ValueError
+            ipaddress.ip_address(address)
+        except ValueError:
+            raise ValueError("Tailscale hosts 含无效 IP 地址") from None
+    return {"hostname": hostname, "auth-key": auth_key, "hosts": dict(hosts)}
 
 
 def _base_text(target: str) -> str:
@@ -244,7 +285,12 @@ def render_profile(
     providers: list[dict],
     target: str = PROFILE_DESKTOP,
     provider_contents: dict[int, str] | None = None,
+    tailscale_config: dict[str, Any] | None = None,
 ) -> str:
+    if tailscale_config is not None:
+        if target != PROFILE_MOBILE:
+            raise ValueError("内置 Tailscale 仅支持手机配置")
+        tailscale_config = _validate_tailscale_config(tailscale_config)
     if not self_nodes:
         raise ValueError("自建节点定义为空，拒绝生成配置：AI服务 组会因此为空并导致 mihomo 启动失败")
 
@@ -274,6 +320,10 @@ def render_profile(
             raise ValueError("手机配置存在重复节点名（自建节点或订阅源之间），无法生成")
 
     parts: list[str] = [_base_text(target), ""]
+    if tailscale_config is not None:
+        if TAILSCALE_NAME in [*names, *inline_names]:
+            raise ValueError("节点名 Tailscale 已被占用，无法生成手机配置")
+        parts.extend(["hosts: " + _dump(tailscale_config["hosts"]), ""])
 
     if target == PROFILE_MOBILE:
         # Mobile clients should receive one portable file. Only the provider's
@@ -282,6 +332,14 @@ def render_profile(
         parts.append("proxies:")
         parts.extend(f"  - {_dump(node)}" for node in self_nodes)
         parts.extend(inline_blocks)
+        if tailscale_config is not None:
+            parts.append("  - " + _dump({
+                "name": TAILSCALE_NAME, "type": "tailscale",
+                "hostname": tailscale_config["hostname"],
+                "auth-key": tailscale_config["auth-key"],
+                "state-dir": "tailscale", "ephemeral": False,
+                "udp": True, "accept-routes": False,
+            }))
     else:
         parts.append("proxies: " + _dump(self_nodes))
     parts.append("")
@@ -429,6 +487,15 @@ def render_profile(
     if target == PROFILE_MOBILE:
         guard_servers.extend(inline_servers)
     parts.extend(_guard_rule(server) for server in dict.fromkeys(guard_servers))
-    parts.append(TEMPLATE_RULES.read_text(encoding="utf-8").lstrip("\n"))
+    rules = TEMPLATE_RULES.read_text(encoding="utf-8").lstrip("\n")
+    if tailscale_config is not None:
+        parts.extend(f"  - DOMAIN,{host},{TAILSCALE_NAME}" for host in tailscale_config["hosts"])
+        parts.append(f"  - DOMAIN-SUFFIX,ts.net,{TAILSCALE_NAME}")
+        parts.append(f"  - IP-CIDR6,fd7a:115c:a1e0::/48,{TAILSCALE_NAME},no-resolve")
+        rules = rules.replace(
+            "IP-CIDR,100.64.0.0/10,DIRECT,no-resolve",
+            f"IP-CIDR,100.64.0.0/10,{TAILSCALE_NAME},no-resolve",
+        )
+    parts.append(rules)
 
     return "\n".join(parts)

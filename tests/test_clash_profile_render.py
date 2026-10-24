@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import base64
 import sys
 import unittest
+import tempfile
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -92,6 +95,68 @@ class ClashProfileRenderTests(unittest.TestCase):
     def test_mobile_target_requires_every_enabled_snapshot(self) -> None:
         with self.assertRaisesRegex(ValueError, "没有可用快照"):
             self.render.render_profile([self.node], [self.provider], target="mobile", provider_contents={})
+
+    def test_mobile_tailscale_routes_both_hosts_and_keeps_internet_groups(self) -> None:
+        config = {"hostname": "phone-clash", "auth-key": "test-only-key", "hosts": {
+            "laptop.example.com": "203.0.113.20", "desktop.example.com": "203.0.113.21"}}
+        out = self.render.render_profile(
+            [self.node], [self.provider], target="mobile",
+            provider_contents={7: self.provider_content}, tailscale_config=config)
+        self.assertIn('"type": "tailscale"', out)
+        self.assertEqual(_section(out, "hosts"), config["hosts"])
+        for host in config["hosts"]:
+            self.assertIn(f"DOMAIN,{host},Tailscale", out)
+        self.assertIn("IP-CIDR,100.64.0.0/10,Tailscale,no-resolve", out)
+        self.assertNotIn("IP-CIDR,100.64.0.0/10,DIRECT", out)
+        self.assertIn("DOMAIN-SUFFIX,ts.net,Tailscale", out)
+        self.assertIn("IP-CIDR6,fd7a:115c:a1e0::/48,Tailscale,no-resolve", out)
+        self.assertIn("[机场甲] 机场香港", out)
+        self.assertNotIn("proxy-providers:", out)
+        for group in _section(out, "proxy-groups"):
+            self.assertNotIn("Tailscale", group.get("proxies", []))
+
+    def test_tailscale_is_mobile_only_and_name_collisions_are_rejected(self) -> None:
+        config = {"hostname": "phone", "auth-key": "test-only-key", "hosts": {}}
+        with self.assertRaisesRegex(ValueError, "手机"):
+            self.render.render_profile([self.node], [], tailscale_config=config)
+        with self.assertRaisesRegex(ValueError, "Tailscale"):
+            self.render.render_profile([{**self.node, "name": "Tailscale"}], [],
+                target="mobile", provider_contents={}, tailscale_config=config)
+
+    def test_tailscale_config_validates_without_disclosing_secrets(self) -> None:
+        config = {"hostname": "phone", "auth-key": "test-only-key", "hosts": {
+            "desktop.example.com": "203.0.113.21"}}
+        encoded = base64.b64encode(json.dumps(config).encode()).decode()
+        self.assertEqual(self.render.load_tailscale_config(encoded), config)
+        for bad in ["", "not-base64", base64.b64encode(b"secret-invalid-json").decode(),
+                    base64.b64encode(json.dumps({**config, "hosts": {"bad,rule": "203.0.113.21"}}).encode()).decode(),
+                    base64.b64encode(json.dumps({**config, "auth-key": ""}).encode()).decode()]:
+            with self.subTest(bad=bad), self.assertRaises(ValueError) as ctx:
+                self.render.load_tailscale_config(bad)
+            self.assertNotIn("secret-invalid-json", str(ctx.exception))
+
+    def test_plain_mobile_still_uses_direct_tailscale_range(self) -> None:
+        out = self.render.render_profile([self.node], [], target="mobile", provider_contents={})
+        self.assertIn("IP-CIDR,100.64.0.0/10,DIRECT,no-resolve", out)
+        self.assertNotIn('"type": "tailscale"', out)
+
+    def test_tailscale_secret_file_supports_hotpatch_without_container_recreation(self) -> None:
+        config = {"hostname": "phone", "auth-key": "test-only-key", "hosts": {}}
+        encoded = base64.b64encode(json.dumps(config).encode()).decode()
+        with tempfile.TemporaryDirectory() as tmp:
+            secret = Path(tmp) / "tailscale.b64"
+            secret.write_text(encoded)
+            with patch.dict("os.environ", {"CLASH_TAILSCALE_B64": ""}), patch.object(
+                self.render, "_TAILSCALE_CONFIG_FILE", secret, create=True
+            ):
+                self.assertEqual(self.render.load_tailscale_config(), config)
+                # An explicitly supplied malformed value must never silently fall back.
+                with self.assertRaises(ValueError):
+                    self.render.load_tailscale_config("invalid")
+            with patch.dict("os.environ", {"CLASH_TAILSCALE_B64": encoded}), patch.object(
+                self.render, "_TAILSCALE_CONFIG_FILE", Path(tmp) / "missing", create=True
+            ):
+                self.assertEqual(self.render.load_tailscale_config(), config)
 
     def test_mobile_target_accepts_four_space_provider_indentation(self) -> None:
         # Real airport exports use four spaces below ``proxies:``; the parser

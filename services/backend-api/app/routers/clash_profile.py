@@ -23,7 +23,7 @@ from pydantic import BaseModel
 
 from app.clash_profile import store
 from app.clash_profile.fetch import fetch_snapshot
-from app.clash_profile.render import load_self_nodes, provider_key, render_profile
+from app.clash_profile.render import load_self_nodes, load_tailscale_config, provider_key, render_profile
 from app.core import _conn, require_admin
 
 
@@ -57,7 +57,15 @@ def _rows() -> list[dict[str, Any]]:
             return [_row_to_dict(row) for row in cur.fetchall()]
 
 
-def _profile_text(target: Literal["desktop", "webdock", "mobile"] = "desktop") -> str:
+def _profile_text(target: Literal["desktop", "webdock", "mobile"] = "desktop", tailscale: bool = False) -> str:
+    config = None
+    if tailscale:
+        if target != "mobile":
+            raise HTTPException(status_code=422, detail="内置 Tailscale 仅支持手机配置")
+        try:
+            config = load_tailscale_config()
+        except ValueError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
     try:
         providers = _rows()
         contents = None
@@ -67,7 +75,8 @@ def _profile_text(target: Literal["desktop", "webdock", "mobile"] = "desktop") -
                 for provider in providers
                 if provider["enabled"]
             }
-        return render_profile(_load_self_nodes(), providers, target=target, provider_contents=contents)
+        return render_profile(_load_self_nodes(), providers, target=target,
+                              provider_contents=contents, tailscale_config=config)
     except ValueError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -128,21 +137,25 @@ def delete_provider(provider_id: int, _: dict = Depends(require_admin)) -> dict[
 def preview_profile(
     target: Literal["desktop", "webdock", "mobile"] = "desktop",
     _: dict = Depends(require_admin),
+    tailscale: bool = False,
 ) -> PlainTextResponse:
-    return PlainTextResponse(_profile_text(target), media_type="text/plain; charset=utf-8")
+    return PlainTextResponse(_profile_text(target, tailscale), media_type="text/plain; charset=utf-8",
+                             headers={"Cache-Control": "no-store"})
 
 
 @router.get("/download", response_class=PlainTextResponse)
 def download_profile(
     target: Literal["desktop", "webdock", "mobile"] = "desktop",
     _: dict = Depends(require_admin),
+    tailscale: bool = False,
 ) -> PlainTextResponse:
     return PlainTextResponse(
-        _profile_text(target),
+        _profile_text(target, tailscale),
         media_type="text/yaml; charset=utf-8",
         headers={
+            "Cache-Control": "no-store",
             "Content-Disposition": (
-                f'attachment; filename="clash-profile-{target}.yaml"'
+                f'attachment; filename="clash-profile-{target}{"-tailscale" if tailscale else ""}.yaml"'
                 if target != "desktop"
                 else 'attachment; filename="clash-profile.yaml"'
             )
