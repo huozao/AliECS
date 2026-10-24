@@ -28,6 +28,13 @@
 | `ADMIN_BOOTSTRAP_DISPLAY_NAME` | 初始化管理员展示名 | 可选 | 使用默认值 |
 | `CORS_ALLOWED_ORIGINS` | 额外允许跨域来源（逗号分隔） | 建议 | HTTPS 域名未加入时，浏览器可能拦截接口请求 |
 
+### Clash 配置下载
+
+Clash 配置合成器还读取 `CLASH_SELF_NODES_B64`（自建节点）与可选
+`CLASH_TAILSCALE_B64`（手机内置 Tailscale 的入网密钥、设备名、hosts 映射）。后者缺失或无效时，
+仅 `target=mobile&tailscale=true` 下载返回 503；普通配置不受影响。值由 infra SOPS 管理，
+格式、接口与离线验证见 [backend-api](../services/backend-api/README.md)。
+
 ## 3. Couple 功能入口控制
 
 | 变量名 | 作用 | 是否必填 | 缺失后果 |

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import sys
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -17,7 +19,7 @@ def _b64(text: str) -> str:
 class ClashProfileEnvTests(unittest.TestCase):
     def setUp(self) -> None:
         self._old_sys_path = list(sys.path)
-        self._old_env = {k: os.environ.get(k) for k in ("AUTH_TOKEN_SECRET", "CLASH_SELF_NODES_B64")}
+        self._old_env = {k: os.environ.get(k) for k in ("AUTH_TOKEN_SECRET", "CLASH_SELF_NODES_B64", "CLASH_TAILSCALE_B64")}
         for name in list(sys.modules):
             if name == "app" or name.startswith("app."):
                 del sys.modules[name]
@@ -97,6 +99,37 @@ class ClashProfileEnvTests(unittest.TestCase):
 
     def test_router_prefix_is_admin_scoped(self) -> None:
         self.assertEqual(self.module.router.prefix, "/v1/admin/clash-profile")
+
+    def test_tailscale_download_is_admin_only_and_not_cached(self) -> None:
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        app = FastAPI()
+        app.include_router(self.module.router)
+        os.environ["CLASH_SELF_NODES_B64"] = _b64(json.dumps([
+            {"name": "self", "server": "203.0.113.10", "type": "vless", "port": 443}]))
+        os.environ["CLASH_TAILSCALE_B64"] = _b64(json.dumps({
+            "hostname": "phone", "auth-key": "test-only-key", "hosts": {}}))
+        with TestClient(app) as client, patch.object(self.module, "_rows", return_value=[]):
+            self.assertIn(client.get("/v1/admin/clash-profile/download?target=mobile&tailscale=true").status_code, (401, 403))
+            app.dependency_overrides[self.module.require_admin] = lambda: {"id": 1}
+            response = client.get("/v1/admin/clash-profile/download?target=mobile&tailscale=true")
+            self.assertEqual(response.status_code, 200)
+            self.assertIn('"type": "tailscale"', response.text)
+            self.assertIn("mobile-tailscale.yaml", response.headers["content-disposition"])
+            self.assertEqual(response.headers["cache-control"], "no-store")
+            preview = client.get("/v1/admin/clash-profile/preview?target=mobile&tailscale=true")
+            self.assertEqual(preview.text, response.text)
+            self.assertEqual(preview.headers["cache-control"], "no-store")
+            os.environ.pop("CLASH_TAILSCALE_B64")
+            missing = client.get("/v1/admin/clash-profile/download?target=mobile&tailscale=true")
+            self.assertEqual(missing.status_code, 503)
+            self.assertNotIn("test-only-key", missing.text)
+            plain = client.get("/v1/admin/clash-profile/download?target=mobile")
+            self.assertEqual(plain.status_code, 200)
+            self.assertNotIn('"type": "tailscale"', plain.text)
+            invalid = client.get("/v1/admin/clash-profile/download?target=desktop&tailscale=true")
+            self.assertEqual(invalid.status_code, 422)
 
 
 if __name__ == "__main__":

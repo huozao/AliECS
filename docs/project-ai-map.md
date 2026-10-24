@@ -23,7 +23,7 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 | `app/routers/sync.py` | `/v1/sync/*` 统一同步中心，查询层为 `app/sync_read.py`，控制层为 `app/sync_control.py`；`app/document_locator.py` 统一资产下载、副本幂等登记与 docid 修复，响应不返回外部文档 ID |
 | `versions.py` | 版本看板 |
 | `backups.py` | 企微结构备份看板、镜像清理策略看板 |
-| `clash_profile.py` | Clash 配置合成器：订阅源 CRUD、配置下载；渲染在 `app/clash_profile/render.py`，自建节点由 env 注入。mobile 嵌入启用源的最新快照，desktop 提供客户端分组和 listener；跨仓接线查 infra 代理文档。验证：`python -m unittest discover -s tests -p "test_clash_profile_render.py"` |
+| `clash_profile.py` | Clash 配置合成器：订阅源 CRUD、配置下载；渲染在 `app/clash_profile/render.py`，自建节点由 env 注入。mobile 嵌入启用源的最新快照，可选 `tailscale=true` 内置 Tailscale 与设备名映射；配置及错误行为见 [backend-api](../services/backend-api/README.md)。desktop 提供客户端分组和 listener；跨仓接线查 infra 代理文档。验证：`python -m pytest tests/test_clash_profile_render.py tests/test_clash_profile_router.py tests/test_admin_frontend.py` |
 | `couple.py` | Couple 私密情侣空间：回忆、地图、纪念日、愿望清单，以及按用户 Immich API key 的个人库选片/家庭相册归档；AdventureLog 保持独立入口 |
 | `market_snapshot.py` | V6 市场审阅：只读增量行情、交易事件、双账仓位、历史游标和人工标注；基础迁移 `0055`–`0057`；用户已读、观察投影、事件缺序投影和在线投影写放大修复分别见 `db/migrations/0058_market_review_alert_reads.sql`、`0059_market_review_observations.sql`、`0060_market_review_event_gaps.sql`、`0062_market_review_projection_write_amplification.sql`。相关迁移的原子执行、备份与回读见 `docs/runbooks/deploy.md` 的 V6 迁移节 |
 
