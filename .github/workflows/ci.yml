@@ -19,6 +19,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      # 不用 runner 系统 Python：ubuntu-latest 由 GitHub 切换，2026-10-25 换成 26.04 后
+      # 系统 Python 变成 3.14，固定版本的依赖（psycopg 3.2.9、pandas 2.2.3）没有对应 wheel，
+      # 测试在安装阶段就失败。CI 必须与生产镜像同版本，下一步核对。
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: CI Python 与生产镜像一致
+        run: |
+          want="$(sed -n 's/^FROM python:\([0-9][0-9.]*\)-.*/\1/p' services/backend-api/Dockerfile)"
+          have="$(python -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+          test -n "$want" && test "$want" = "$have" \
+            || { echo "CI Python $have 与 services/backend-api/Dockerfile 的 python:$want 不一致，请同步修改"; exit 1; }
+
       - name: 导航一致性与红绿测试
         run: |
           python scripts/check_navigation.py
