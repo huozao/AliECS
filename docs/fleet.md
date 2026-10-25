@@ -456,7 +456,7 @@ GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会�
 - 每台主机一把 age 私钥（`~/.config/sops/age/keys.txt`），只解自己的文件；devbox 私钥可解全部（编辑入口）。
 - 改密钥 = devbox 上 `sops set` → commit/push infra → 目标设备 `git pull && ./scripts/render.sh <设备名>` → 按提示重建容器。
 - **`release-meta.env` / bridge `webdock.env` / openclaw `.env` / webdock 两节点 `.env` 都是渲染产物，不要在主机上直接长期修改**（应急热改后必须回灌 sops 源，否则下次 render 覆盖）。
-- 设备侧同步通道：各机本地 bare 仓（aliecs `/root/infra.git`、webdock1/2 `~/infra.git`），由 devbox `git push device-*` 推送（设备未配 GitHub 私仓访问；三把备用 deploy 公钥已生成在各机 `~/.ssh/github_infra_deploy.pub`，需要时人工添加）。
+- 设备侧同步通道（2026-10-25 起）：四台设备的 infra 工作树都用各自的只读 deploy key 直拉 GitHub（infra `render.sh` 的 `wire_infra_github` 固定 origin 与 sshCommand），以工作树属主执行 `git pull --ff-only`；原各机本地 bare 与 devbox 的 `device-*` remote 已退役（bare 改名 `*.deprecated-20261025`），GitHub 不可达时用 bundle 应急。详见 infra `roles/webdock/README.md`〈设备直拉 GitHub〉。
 - aliecs `/root/infra` 自 2026-07-02 起是真 git 克隆（旧手工拷贝备份在 `/root/infra.legacy-20260702`）。
 - bridge 换镜像：改 `deploy/openclaw-bridge/**` 并合入 main 后自动切换，txecs 从 TCR 直拉、自带健康检查和失败回滚；手工重发选 `release-deploy` 的 `bridge-peer`。运行状态在 `/srv/internal-stack/release.env`；禁止登机手改版本。
   ⚠️「自动生成独立 peer release」「`bridge-cutover` 仅为 TCR 手工备用」两句自 2026-09-01 起
