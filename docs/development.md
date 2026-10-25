@@ -73,6 +73,8 @@ def tearDownClass(cls):
 
 按实际行为变化回查路径、符号、配置键、API、部署/回滚、备份与专项 runbook；有影响直接更新原文，无影响记录依据，不另造一份重复说明。地图只维护功能到代码/验证入口，设备职责和运行位置留给 [fleet](fleet.md)，时间点材料留在 plans/migrations 并注明历史身份。
 
+CI 的 Python 版本与生产镜像一致：`ci.yml` 两个 job 都用 `actions/setup-python` 固定 3.12，validate 另有一步核对 `services/backend-api/Dockerfile` 的 `python:<版本>`；升级生产 Python 时同批修改两处。不要依赖 `ubuntu-latest` 自带的系统 Python（2026-10-25 runner 换成 26.04 后变为 3.14，所有 PR 在安装依赖时失败）。
+
 PR 正文写 `Nav-Impact: updated`，或同时写 `Nav-Impact: none` 和 `Nav-Impact-Reason: <依据>`；commit message 不能替代 PR body。`.github/workflows/ci.yml` 在 `opened / synchronize / reopened / ready_for_review / edited` 触发，修改正文会建立使用新正文的检查；旧 run rerun 仍保留原事件载荷，不需要为了更新正文推空提交或关闭重开 PR。
 
 治理文档在 `.navigation-check.json` 的 documents 注册。以反引号点名本仓 Python 的非下划线模块/类级定义时，在点名的文档旁写 inline 断言；不把符号清单与说明分开存。示意必须在围栏内：
