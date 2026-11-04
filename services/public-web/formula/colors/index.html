@@ -53,7 +53,7 @@
   </section>
   <section id="settingsPanel" class="settings-panel" hidden>
     <div class="settings-group" aria-label="观察视角"><h4>观察视角</h4><div class="stage-actions"><button id="resetCamera">复位</button><button id="topCamera">a*b* 俯视</button><button id="frontCamera">L*–a* 立面</button><button id="sideCamera">L*–b* 立面</button><button id="focusSelected">聚焦选中</button><button id="togglePan">单指平移</button></div></div>
-    <div class="settings-group" aria-label="显示开关"><h4>显示开关</h4><div class="stage-actions"><button id="toggleTolerance" class="active">隐藏容差盒</button><button id="toggleProducts" class="active">隐藏标准色点</button><button id="toggleReference">显示参考色域</button></div></div>
+    <div class="settings-group" aria-label="显示开关"><h4>显示开关</h4><div class="stage-actions"><button id="toggleTolerance" class="active">隐藏容差盒</button><button id="toggleProducts" class="active">隐藏标准色点</button><button id="toggleReference">显示参考色域</button><button id="toggleLLabels">显示 L* 刻度标签</button></div></div>
     <div class="settings-group" aria-label="容差盒"><h4>容差盒</h4><div class="reference-controls">
       <label>容差放大<select id="toleranceMagnify"><option value="1">×1 真实比例</option><option value="5">×5</option><option value="10">×10</option><option value="20">×20</option><option value="50">×50</option></select></label>
       <label>透明度 <span id="toleranceOpacityValue">30%</span><input id="toleranceOpacity" type="range" min="8" max="90" value="30"/></label>
@@ -281,7 +281,7 @@
   }
 
   const MAX_POINTS=512,MAX_BASELINES=16;
-  const state={dataset:'live',mode:'absolute',selected:null,hoveredId:null,points:[],query:'',resin:'',dosage:'',status:'',target:null,neighbors:[],showReference:false,showProducts:true,showTolerance:true,toleranceOpacity:.3,toleranceEdges:true,toleranceMagnify:1,overlapOnly:false,panMode:false,deltaAnchor:null,referenceMode:'overlay',referenceStyle:'surface',referenceOpacity:.32,sliceEnabled:false,sliceL:50,referencePinned:null,labelFields:new Set(['formula','resin','dosage']),showAllLabels:false,labelFocal:12};
+  const state={dataset:'live',mode:'absolute',selected:null,hoveredId:null,points:[],query:'',resin:'',dosage:'',status:'',target:null,neighbors:[],showReference:false,showProducts:true,showTolerance:true,showLLabels:false,toleranceOpacity:.3,toleranceEdges:true,toleranceMagnify:1,overlapOnly:false,panMode:false,deltaAnchor:null,referenceMode:'overlay',referenceStyle:'surface',referenceOpacity:.32,sliceEnabled:false,sliceL:50,referencePinned:null,labelFields:new Set(['formula','resin','dosage']),showAllLabels:false,labelFocal:12};
   const SCALE=.23;
   const $=(id)=>document.getElementById(id);
   const round=(value,digits=2)=>Number(value).toFixed(digits);
@@ -377,7 +377,7 @@
   const GROUND_Y=-50*SCALE,grid=new THREE.GridHelper(60,30,0x9b8a76,0xd9d1c7);grid.position.y=GROUND_Y;scene.add(grid);
   // 轴柱与文字标签尺寸是固定的世界单位，凑到容差盒尺度（约 0.09 单位）时会盖住整个视野，
   // 因此统一归组，按相机距离整体开关。
-  const axisGroup=new THREE.Group(),gridLabelGroup=new THREE.Group();scene.add(axisGroup);scene.add(gridLabelGroup);
+  const axisGroup=new THREE.Group(),gridLabelGroup=new THREE.Group(),lLabelGroup=new THREE.Group();scene.add(axisGroup);scene.add(gridLabelGroup);scene.add(lLabelGroup);
   function addAxisSegment(start,end,color,radius=.065,group=axisGroup){
     const direction=end.clone().sub(start),mesh=new THREE.Mesh(new THREE.CylinderGeometry(radius,radius,direction.length(),6),new THREE.MeshBasicMaterial({color,depthTest:false}));mesh.position.copy(start).add(end).multiplyScalar(.5);mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),direction.clone().normalize());mesh.renderOrder=9;group.add(mesh);return mesh;
   }
@@ -401,7 +401,7 @@
     addAxisSegment(new THREE.Vector3(x,GROUND_Y+.09,-half),new THREE.Vector3(x,GROUND_Y+.09,half),aColor,radius);addAxisSegment(new THREE.Vector3(x,GROUND_Y+.09,0),new THREE.Vector3(x,GROUND_Y+.09+half,0),aColor,radius);addAxisSegment(new THREE.Vector3(x,-half,0),new THREE.Vector3(x,half,0),aColor,radius);addAxisSegment(new THREE.Vector3(x,0,-half),new THREE.Vector3(x,0,half),aColor,radius);
     addAxisSegment(new THREE.Vector3(-half,GROUND_Y+.09,z),new THREE.Vector3(half,GROUND_Y+.09,z),bColor,radius);addAxisSegment(new THREE.Vector3(0,GROUND_Y+.09,z),new THREE.Vector3(0,GROUND_Y+.09+half,z),bColor,radius);addAxisSegment(new THREE.Vector3(-half,0,z),new THREE.Vector3(half,0,z),bColor,radius);addAxisSegment(new THREE.Vector3(0,-half,z),new THREE.Vector3(0,half,z),bColor,radius);
   }const aLabel=makeTextSprite(`${value}`,value>0?'#b52b2b':value<0?'#198442':'#4f473e');aLabel.position.set(x,GROUND_Y+.35,1.45);aLabel.scale.set(3.1,1.12,1);gridLabelGroup.add(aLabel);if(value!==0){const bLabel=makeTextSprite(`${value}`,value>0?'#9d7900':'#245fbd');bLabel.position.set(1.45,GROUND_Y+.35,z);bLabel.scale.set(3.1,1.12,1);gridLabelGroup.add(bLabel);}}
-  for(const lightness of [0,25,50,75,100]){const y=(lightness-50)*SCALE;addAxisSegment(new THREE.Vector3(-.55,y,0),new THREE.Vector3(.55,y,0),0x514a43,.04);const lLabel=makeTextSprite(`L* ${lightness}`,lightness===0?'#171717':'#5a5148');lLabel.position.set(1.8,y,0);lLabel.scale.set(4,1.45,1);gridLabelGroup.add(lLabel);}
+  for(const lightness of [0,25,50,75,100]){const y=(lightness-50)*SCALE,major=lightness%50===0,half=major?.72:.38,radius=major?.052:.035,lColor=0x514a43;addAxisSegment(new THREE.Vector3(-half,y,0),new THREE.Vector3(half,y,0),lColor,radius);addAxisSegment(new THREE.Vector3(0,y,-half),new THREE.Vector3(0,y,half),lColor,radius);const lLabel=makeTextSprite(`L* ${lightness}`,lightness===0?'#171717':'#5a5148');lLabel.position.set(1.8,y,0);lLabel.scale.set(4,1.45,1);lLabelGroup.add(lLabel);}
   const labBounds=new THREE.Box3(new THREE.Vector3(-128*SCALE,-50*SCALE,-128*SCALE),new THREE.Vector3(127*SCALE,50*SCALE,127*SCALE));const boundsHelper=new THREE.Box3Helper(labBounds,0xc9bba9);scene.add(boundsHelper);
   const GAMUT_STEPS=20,referenceGroup=new THREE.Group();scene.add(referenceGroup);let referenceMeshes=[];
   function makeGamutSamples(space,style,differenceOnly=false){
@@ -650,8 +650,8 @@
     state.points.forEach((item,index)=>color.set(item.display.hex).toArray(instanceColors,index*3));
     pointMesh.count=state.points.length;hitMesh.count=state.points.length;pointGeometry.setAttribute('instanceColor',new THREE.InstancedBufferAttribute(instanceColors,3));updatePointScale();rebuildBaselines();rebuildTrajectories();rebuildTolerance();const delta=Boolean(state.deltaAnchor);
     // Δ 视图有自己的一套坐标装饰，全局那套（轴、网格、参考色域、包围盒）全部让位。
-    deltaAxisGroup.visible=delta;axisGroup.visible=!delta&&!closeUp;gridLabelGroup.visible=!delta&&!closeUp;grid.visible=!delta&&!closeUp;
-    const showReference=state.showReference&&state.mode!=='relative'&&!closeUp&&!delta,showProducts=state.showProducts;referenceGroup.visible=showReference;boundsHelper.visible=showReference;pointMesh.visible=showProducts;hitMesh.visible=showProducts;baselineMesh.visible=showProducts;trajectoryGroup.visible=showProducts;neighborLineGroup.visible=showProducts;$('toggleReference').disabled=state.mode==='relative';$('toggleReference').textContent=state.showReference?'隐藏参考色域':'显示参考色域';$('toggleReference').classList.toggle('active',showReference);$('toggleProducts').textContent=showProducts?'隐藏标准色点':'显示标准色点';$('toggleProducts').classList.toggle('active',showProducts);$('toggleTolerance').textContent=state.showTolerance?'隐藏容差盒':'显示容差盒';$('toggleTolerance').classList.toggle('active',state.showTolerance&&state.mode!=='relative');$('toggleTolerance').disabled=state.mode==='relative';renderTarget();syncLabels();updateCoverage();
+    deltaAxisGroup.visible=delta;axisGroup.visible=!delta&&!closeUp;gridLabelGroup.visible=!delta&&!closeUp;grid.visible=!delta&&!closeUp;lLabelGroup.visible=Boolean(state.showLLabels)&&!delta&&!closeUp;
+    const showReference=state.showReference&&state.mode!=='relative'&&!closeUp&&!delta,showProducts=state.showProducts;referenceGroup.visible=showReference;boundsHelper.visible=showReference;pointMesh.visible=showProducts;hitMesh.visible=showProducts;baselineMesh.visible=showProducts;trajectoryGroup.visible=showProducts;neighborLineGroup.visible=showProducts;$('toggleReference').disabled=state.mode==='relative';$('toggleReference').textContent=state.showReference?'隐藏参考色域':'显示参考色域';$('toggleReference').classList.toggle('active',showReference);$('toggleProducts').textContent=showProducts?'隐藏标准色点':'显示标准色点';$('toggleProducts').classList.toggle('active',showProducts);$('toggleTolerance').textContent=state.showTolerance?'隐藏容差盒':'显示容差盒';$('toggleTolerance').classList.toggle('active',state.showTolerance&&state.mode!=='relative');$('toggleTolerance').disabled=state.mode==='relative';$('toggleLLabels').textContent=state.showLLabels?'隐藏 L* 刻度标签':'显示 L* 刻度标签';$('toggleLLabels').classList.toggle('active',Boolean(state.showLLabels));renderTarget();syncLabels();updateCoverage();
     $('visibleCount').textContent=state.points.length;$('formulaCount').textContent=state.points.filter((item)=>item.tolerance).length;
     // 放大后的盒子不是真实比例，必须在读数上写明，否则重叠会被误读。
     $('toleranceMetricLabel').textContent=state.toleranceMagnify>1?`容差盒 ×${state.toleranceMagnify}`:'容差盒';$('resinCount').textContent=new Set(state.points.map((item)=>item.resin_code).filter(Boolean)).size;rebuildLabels();updateReferenceReadout();
@@ -786,6 +786,7 @@
   $('dosageFilter').onchange=(event)=>{state.dosage=event.target.value;filtersChanged();};
   $('statusFilter').onchange=(event)=>{state.status=event.target.value;filtersChanged();};
   $('toggleTolerance').onclick=()=>{state.showTolerance=!state.showTolerance;renderScene();};
+  $('toggleLLabels').onclick=()=>{state.showLLabels=!state.showLLabels;renderScene();};
   $('toleranceOpacity').oninput=(event)=>{state.toleranceOpacity=Number(event.target.value)/100;$('toleranceOpacityValue').textContent=`${event.target.value}%`;renderScene();};
   $('toleranceMagnify').onchange=(event)=>{state.toleranceMagnify=Number(event.target.value);renderScene();};
   $('toggleToleranceEdges').onchange=(event)=>{state.toleranceEdges=event.target.checked;renderScene();};

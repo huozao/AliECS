@@ -79,6 +79,10 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
         self.assertIn("[0,25,50,75,100]", self.html)
         self.assertIn("`L* ${lightness}`", self.html)
         self.assertIn("(lightness-50)*SCALE", self.html)
+        self.assertIn('id="toggleLLabels"', self.html)
+        self.assertIn("showLLabels:false", self.html)
+        self.assertIn("lLabelGroup", self.html)
+        self.assertIn("half=major?.72:.38", self.html)
 
     def test_mobile_layout_keeps_filters_in_two_columns_and_metrics_in_one_row(self) -> None:
         self.assertIn("grid-template-columns:repeat(2,minmax(0,1fr))", self.html)
