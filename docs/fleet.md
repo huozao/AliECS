@@ -20,6 +20,7 @@
 | `txecs` | 当前生产唯一写端 / business-cn 主栈 / 公网中心边界 | 腾讯云轻量 / Ubuntu 24.04，4C4G | `ssh txecs`（ubuntu@106.52.51.67） | 主站、PostgreSQL、SSO、OpenClaw、bridge、worker、nginx |
 | `webdock1` | webdock 算力节点（**当前备用**） | 旧 Ubuntu 笔记本 | `ssh webdock1`（Tailscale 100.97.176.57） | webdock 镜像 + 第三方自托管服务 |
 | `webdock2` | webdock 算力节点（**当前主力**）+ gold 归档/备份边界 | 新台式机 Windows 11 + WSL2 | `ssh webdock2`（Tailscale 100.67.38.52） | webdock 镜像；**`D:\gold-spread-monitor` 由 GitHub Actions 自动部署**，见下节 |
+| `webdock3` | webdock 算力节点（基础基座已就绪 / 独立验证） | 物理机 Windows 10 + WSL2（Ubuntu-24.04-WebDock） | `ssh webdock3`（Tailscale 100.94.153.127） | 阶段一、二已通过 12 项基线验收；待阶段三密钥与隧道；端口 11812 / 16110 / 16111 |
 | `nina` | 受控便携笔记本 / 移动终端 | 笔记本 Windows 11 24H2 | `ssh nina`（Tailscale 100.122.244.79） | 专属 Ed25519 鉴权；运维与避坑见 `ai-general/docs/runbooks/windows-device-provisioning-and-control.md` |
 
 ### gold-spread-monitor 的部署位置（2026-09-23 实测补记）
@@ -400,6 +401,28 @@ GitHub Actions 走 Azure 动态段（同期 3 个不同 IP）。收白名单会�
   - 恢复：`Start-ScheduledTask -TaskName 'WebDock2WSLKeepAlive'`，确认 `State=Running`。
   - ⚠️ 08-20 那次退出码 1 的直接原因**未取证**：TaskScheduler/Operational 里查不到该任务的
     事件，WSL journal 只留到 08-30。别当作已定案。
+
+### webdock3（Windows 10 宿主机，算力节点/独立验证）
+
+- 别名：webdock3、WebDock03；ssh alias `webdock3` / `WebDock03`；Windows 主机名 `XS-202604112022`；用户 `Administrator`。
+- 网络入口：Tailscale 虚拟内网 `100.94.153.127`；devbox 可直接 `ssh webdock3` 登入 Windows PowerShell（使用 devbox `~/.ssh/id_ed25519` 免密）。
+- 硬件/OS：Windows 10 22H2（NT 10.0.19045.0）；管理公钥为 devbox `~/.ssh/id_ed25519.pub`。
+- 架构约定：与 webdock2 同为 `windows-wsl` 机型，SSH 登录落在 Windows（PowerShell），Linux 命令通过 `wsl -d Ubuntu-24.04-WebDock -- <cmd>` 下发。
+- 端口规划（权威：infra `roles/webdock/README.md`）：生产业务隧道 `11812`（txecs，加入 failover 池前仅独立验证），Console ChatGPT 浏览器 `16110`，Console 宿主桌面 `16111`，版本采集错峰 `05:30`。
+- 当前验收状态（2026-10-29 实测）：
+  - **阶段一（入网与受控打通）已完成**：Tailscale 无人值守常驻，OpenSSH 服务自启且密钥权限严格继承 SYSTEM，devbox 验证 `ssh webdock3 whoami` 毫秒级直通。
+  - **阶段二（宿主基础基线对账）已完成**：
+    - Windows 底层虚拟化与 WSL 功能已开启并完成冷重启自愈验证（无人工干预 45s 内自动恢复上线，零失联）；
+    - 实例 `Ubuntu-24.04-WebDock`（WSL2）已完成离线导入，`/etc/wsl.conf` 固化 `systemd=true` 与 `default=root`；
+    - 免密 TightVNC 2.8.85 运行中（端口 5900，`UseVncAuthentication=0`，静默托盘图标，防火墙仅向 WSL 与 Tailscale 放行）；
+    - `WebDockWSLKeepAlive` 开机保活计划任务已建立且处于 Running 状态；
+    - 运行 `apply-windows-host.ps1 -CheckOnly` 达成 **12/12 全部合规（`compliant=12 changed=0`）**。
+- **后续接手入口（阶段三：密钥链与配置单源）**：
+  1. WSL 内建立 `webdock` 用户：`ssh webdock3 'wsl -d Ubuntu-24.04-WebDock -u root -- useradd -m -s /bin/bash webdock'`；
+  2. WSL 内生成 SOPS age 密钥并在 devbox 侧更新 `infra/.sops.yaml`、生成 `secrets/webdock3.enc.env`；
+  3. WSL 内生成专用隧道 ed25519 密钥（供 txecs 反向隧道打通使用）；
+  4. 推进阶段四（依赖、Docker 与 systemd 渲染）与阶段五（txecs 隧道打通）；
+  5. ⚠️ **决策约束**：本设备仅做基础平台与远控接入，取消阶段六具体业务配置（如 ChatGPT/额度容器不跑）。
 
 ### WebDock 双向加密备份
 
