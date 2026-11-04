@@ -88,6 +88,9 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
         self.assertIn("grid-template-columns:repeat(2,minmax(0,1fr))", self.html)
         self.assertIn("flex-wrap:nowrap", self.html)
         self.assertNotIn("<br/>现有产品点", self.html)
+        self.assertIn(">主页</a>", self.html)
+        self.assertIn(".toolbar .field label{display:none}", self.html)
+        self.assertIn(".actions .btn,.actions button{flex:1 1 0", self.html)
 
     def test_view_controls_live_in_a_top_panel_not_over_the_canvas(self) -> None:
         # 浮层压在画布上会挡住三维图；改为顶部横幅面板，展开时挤压画布高度。
