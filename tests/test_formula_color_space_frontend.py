@@ -330,6 +330,8 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
 
     def test_reference_gamut_uses_dense_toggleable_instanced_voxels(self) -> None:
         self.assertIn('id="toggleReference"', self.html)
+        self.assertIn('id="datasetMock">参考示例</button><button id="toggleReference"', self.html)
+        self.assertIn(".mode-row button{flex:1 1 0", self.html)
         # 标准型号是主角，参考色域默认关闭，避免体素方块遮住容差盒。
         self.assertIn("showReference:false", self.html)
         self.assertIn("const GAMUT_STEPS=20", self.html)
