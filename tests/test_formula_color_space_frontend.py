@@ -345,6 +345,8 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
 
     def test_reference_gamut_supports_p3_comparison_styles_and_device_hint(self) -> None:
         self.assertIn("function displayP3ToLab", self.html)
+        self.assertIn("referenceMode:'p3'", self.html)
+        self.assertIn('value="p3" selected', self.html)
         self.assertIn('value="overlay"', self.html)
         self.assertIn('value="difference"', self.html)
         self.assertIn('value="solid"', self.html)
