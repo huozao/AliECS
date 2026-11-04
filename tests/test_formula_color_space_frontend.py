@@ -79,11 +79,18 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
         self.assertIn("[0,25,50,75,100]", self.html)
         self.assertIn("`L* ${lightness}`", self.html)
         self.assertIn("(lightness-50)*SCALE", self.html)
+        self.assertIn('id="toggleLLabels"', self.html)
+        self.assertIn("showLLabels:false", self.html)
+        self.assertIn("lLabelGroup", self.html)
+        self.assertIn("half=major?.72:.38", self.html)
 
     def test_mobile_layout_keeps_filters_in_two_columns_and_metrics_in_one_row(self) -> None:
         self.assertIn("grid-template-columns:repeat(2,minmax(0,1fr))", self.html)
         self.assertIn("flex-wrap:nowrap", self.html)
         self.assertNotIn("<br/>现有产品点", self.html)
+        self.assertIn(">主页</a>", self.html)
+        self.assertIn(".toolbar .field label{display:none}", self.html)
+        self.assertIn(".actions .btn,.actions button{flex:1 1 0", self.html)
 
     def test_view_controls_live_in_a_top_panel_not_over_the_canvas(self) -> None:
         # 浮层压在画布上会挡住三维图；改为顶部横幅面板，展开时挤压画布高度。
@@ -326,6 +333,8 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
 
     def test_reference_gamut_uses_dense_toggleable_instanced_voxels(self) -> None:
         self.assertIn('id="toggleReference"', self.html)
+        self.assertIn('id="datasetMock">参考示例</button><button id="toggleReference"', self.html)
+        self.assertIn(".mode-row button{flex:1 1 0", self.html)
         # 标准型号是主角，参考色域默认关闭，避免体素方块遮住容差盒。
         self.assertIn("showReference:false", self.html)
         self.assertIn("const GAMUT_STEPS=20", self.html)
@@ -336,6 +345,8 @@ class FormulaColorSpaceFrontendTests(unittest.TestCase):
 
     def test_reference_gamut_supports_p3_comparison_styles_and_device_hint(self) -> None:
         self.assertIn("function displayP3ToLab", self.html)
+        self.assertIn("referenceMode:'p3'", self.html)
+        self.assertIn('value="p3" selected', self.html)
         self.assertIn('value="overlay"', self.html)
         self.assertIn('value="difference"', self.html)
         self.assertIn('value="solid"', self.html)
