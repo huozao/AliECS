@@ -10,13 +10,15 @@ notify_deliveries 里，由 flush 带走重试。
 
 from __future__ import annotations
 
+import json
 import logging
+import secrets
 from typing import Any
 
 from app.core import _conn
 from app.notify import store
 from app.notify.channels import sender_for
-from app.notify.models import Notification
+from app.notify.models import Notification, NotifyButton
 
 logger = logging.getLogger("aliecs.notify")
 
@@ -37,6 +39,68 @@ def _attempt(conn, delivery: dict[str, Any], notification: Notification) -> str:
     return "sent"
 
 
+def attach_decision_buttons_to_native(
+    channel_payloads: dict[str, Any],
+    decision_buttons: list[NotifyButton],
+) -> None:
+    """把决策按钮插入 channel_payloads 原生卡片（追加到 body.elements 末尾）。
+
+    若原生载荷无法插入（不支持的渠道或结构不匹配），显式报错，不能静默丢掉按钮。
+    """
+    if not channel_payloads:
+        return
+    for channel, payload in channel_payloads.items():
+        if channel == "feishu":
+            content = payload.content
+            is_str = isinstance(content, str)
+            if is_str:
+                try:
+                    content_obj = json.loads(content)
+                except Exception as exc:
+                    raise ValueError(f"feishu native payload content is not valid JSON: {exc}") from None
+            elif isinstance(content, dict):
+                content_obj = content
+            else:
+                raise ValueError("feishu native payload content must be dict or JSON string")
+
+            if not isinstance(content_obj, dict):
+                raise ValueError("feishu native payload content must be a JSON object")
+
+            body = content_obj.get("body")
+            if not isinstance(body, dict) or "elements" not in body or not isinstance(body["elements"], list):
+                raise ValueError("feishu native payload missing 'body.elements' list for decision buttons")
+
+            btn_columns = [
+                {
+                    "tag": "column",
+                    "width": "auto",
+                    "elements": [
+                        {
+                            "tag": "button",
+                            "text": {"tag": "plain_text", "content": btn.text},
+                            "type": btn.style,
+                            "width": "default",
+                            "behaviors": [{"type": "open_url", "default_url": btn.url}],
+                        }
+                    ],
+                }
+                for btn in decision_buttons
+            ]
+            button_element = {
+                "tag": "column_set",
+                "flex_mode": "flow",
+                "horizontal_spacing": "8px",
+                "columns": btn_columns,
+            }
+            body["elements"].append(button_element)
+            if is_str:
+                payload.content = json.dumps(content_obj, ensure_ascii=False)
+            else:
+                payload.content = content_obj
+        else:
+            raise ValueError(f"cannot attach decision buttons to native channel {channel!r}: unsupported channel")
+
+
 def deliver(notification: Notification, *, conn=None) -> dict[str, Any]:
     """入队并立即投递。
 
@@ -48,11 +112,37 @@ def deliver(notification: Notification, *, conn=None) -> dict[str, Any]:
     owns_conn = conn is None
     connection = conn or _conn()
     try:
+        decision_summary: dict[str, Any] | None = None
+        if notification.decision is not None:
+            token = secrets.token_urlsafe(24)
+            decision_id, decision_status, token = store.upsert_decision(
+                connection, notification.source, notification.decision, token
+            )
+            decision_summary = {
+                "id": decision_id,
+                "key": notification.decision.key,
+                "status": decision_status,
+            }
+            base_url = store.get_public_base_url()
+            decision_buttons = [
+                NotifyButton(
+                    text=opt.label,
+                    url=f"{base_url}/api/v1/notify/decisions/{decision_id}?t={token}&opt={opt.key}",
+                    style=opt.style,
+                )
+                for opt in notification.decision.options
+            ]
+            notification.buttons.extend(decision_buttons)
+            attach_decision_buttons_to_native(notification.channel_payloads, decision_buttons)
+
         outbox_id, is_new = store.enqueue(connection, notification)
         if not is_new:
             summary = store.delivery_summary(connection, outbox_id)
             connection.commit()
-            return {"outbox_id": outbox_id, "duplicate": True, **summary}
+            res = {"outbox_id": outbox_id, "duplicate": True, **summary}
+            if decision_summary:
+                res["decision"] = decision_summary
+            return res
 
         routes = store.matching_routes(
             connection, notification.source, notification.event, notification.level
@@ -80,7 +170,7 @@ def deliver(notification: Notification, *, conn=None) -> dict[str, Any]:
                 "notify has no matching route source=%s event=%s level=%s",
                 notification.source, notification.event, notification.level,
             )
-        return {
+        res = {
             "outbox_id": outbox_id,
             "duplicate": False,
             "targets": len(deliveries),
@@ -89,6 +179,9 @@ def deliver(notification: Notification, *, conn=None) -> dict[str, Any]:
             "dead": dead,
             "failed": pending + dead,
         }
+        if decision_summary:
+            res["decision"] = decision_summary
+        return res
     finally:
         if owns_conn:
             connection.close()

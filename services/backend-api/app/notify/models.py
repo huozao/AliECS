@@ -184,6 +184,43 @@ class NotifyButton(BaseModel):
         return self
 
 
+_OPTION_KEY_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
+_DECISION_KEY_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+
+
+class NotifyDecisionOption(BaseModel):
+    """决策选项。2–5 个，按钮文字即 label，点击进入决策确认页。"""
+
+    key: str = Field(min_length=1, max_length=32)
+    label: str = Field(min_length=1, max_length=32)
+    style: str = "default"
+
+    @model_validator(mode="after")
+    def _check_fields(self) -> "NotifyDecisionOption":
+        if not _OPTION_KEY_RE.fullmatch(self.key):
+            raise ValueError(f"invalid decision option key: {self.key!r}")
+        if self.style not in BUTTON_STYLES:
+            raise ValueError(f"unknown button style: {self.style}")
+        return self
+
+
+class NotifyDecision(BaseModel):
+    """消息挂载的决策卡片信息。"""
+
+    key: str = Field(min_length=1, max_length=128)
+    question: str = Field(min_length=1, max_length=200)
+    options: list[NotifyDecisionOption] = Field(min_length=2, max_length=5)
+
+    @model_validator(mode="after")
+    def _check_fields(self) -> "NotifyDecision":
+        if not _DECISION_KEY_RE.fullmatch(self.key):
+            raise ValueError(f"invalid decision key: {self.key!r}")
+        keys = [opt.key for opt in self.options]
+        if len(keys) != len(set(keys)):
+            raise ValueError("decision option keys must be unique")
+        return self
+
+
 MAX_CHANNEL_PAYLOAD_BYTES = 256 * 1024
 _CHANNEL_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 _MESSAGE_TYPE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
@@ -254,6 +291,7 @@ class Notification(BaseModel):
     images: list[NotifyImage] = Field(default_factory=list, max_length=12)
     link: NotifyLink | None = None
     buttons: list[NotifyButton] = Field(default_factory=list, max_length=5)
+    decision: NotifyDecision | None = None
     # 统一字段始终保留，供企微和不支持原生载荷的渠道降级；此字段只允许覆盖指定渠道。
     channel_payloads: dict[str, NotifyChannelPayload] = Field(default_factory=dict, max_length=8)
     dedup_key: str = Field(default="", max_length=200)
@@ -265,6 +303,11 @@ class Notification(BaseModel):
             self.occurred_at = datetime.now(timezone.utc)
         if self.theme and self.theme not in HEADER_TEMPLATES:
             raise ValueError(f"unknown header theme: {self.theme}")
+        total_buttons = len(self.buttons) + (1 if self.link is not None else 0) + (
+            len(self.decision.options) if self.decision is not None else 0
+        )
+        if total_buttons > 5:
+            raise ValueError(f"total buttons ({total_buttons}) exceeds limit of 5")
         invalid_channels = [name for name in self.channel_payloads if not _CHANNEL_NAME_RE.fullmatch(name)]
         if invalid_channels:
             raise ValueError(f"invalid native channel name: {invalid_channels[0]!r}")
@@ -283,6 +326,12 @@ class Notification(BaseModel):
         digest.update(self.title.encode())
         digest.update(self.summary.encode())
         digest.update(self.subtitle.encode())
+        if self.decision is not None:
+            digest.update(self.decision.key.encode())
+            digest.update(self.decision.question.encode())
+            for opt in self.decision.options:
+                digest.update(opt.key.encode())
+                digest.update(opt.label.encode())
         for segment in self.segments:
             digest.update(segment.kind.encode())
             digest.update(segment.text.encode())

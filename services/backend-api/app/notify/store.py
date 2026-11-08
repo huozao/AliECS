@@ -5,12 +5,14 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import hmac
+import json
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from app.notify.models import Notification, level_at_least
+from app.notify.models import Notification, NotifyDecision, level_at_least
 
 # 重试退避：第 n 次失败后等 BACKOFF_SECONDS[n-1]，四档全部用完才判 dead。
 # ⚠️ 索引是 n-1 不是 n。2026-08-31 修：原来写 BACKOFF_SECONDS[attempts]，而 attempts
@@ -351,3 +353,246 @@ def claim_pending(conn, limit: int = 50) -> list[dict[str, Any]]:
         }
         for row in rows
     ]
+
+
+def get_public_base_url() -> str:
+    """公网基址。优先读 NOTIFY_PUBLIC_BASE_URL，回退到 APP_BASE_URL，默认 https://hydwang.xyz。"""
+    url = (
+        os.getenv("NOTIFY_PUBLIC_BASE_URL")
+        or os.getenv("APP_BASE_URL")
+        or "https://hydwang.xyz"
+    ).strip()
+    return url.rstrip("/")
+
+
+def _parse_json(val: Any) -> Any:
+    if val is None:
+        return None
+    if isinstance(val, (dict, list)):
+        return val
+    if hasattr(val, "obj"):
+        return val.obj
+    if isinstance(val, str):
+        try:
+            return json.loads(val)
+        except Exception:
+            return val
+    return val
+
+
+def _format_iso(dt: Any) -> str | None:
+    if dt is None:
+        return None
+    if isinstance(dt, datetime):
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.isoformat()
+    if isinstance(dt, str):
+        return dt
+    return str(dt)
+
+
+def upsert_decision(
+    conn: Any, source_key: str, decision: NotifyDecision, token: str
+) -> tuple[int, str, str]:
+    """落库或幂等复用决策。
+    
+    返回 (decision_id, status, token)。
+    同 source_key + key 幂等：不新建决策，不清空已有选择与历史。
+    """
+    token_hash = token_digest(token)
+    options_data = [opt.model_dump(mode="json") for opt in decision.options]
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, status FROM notify_decisions
+            WHERE source_key = %s AND decision_key = %s
+            """,
+            (source_key, decision.key),
+        )
+        existing = cur.fetchone()
+        if existing is not None:
+            decision_id = int(existing[0])
+            status = str(existing[1])
+            cur.execute(
+                """
+                UPDATE notify_decisions
+                SET token_sha256 = %s, question = %s, options_json = %s, updated_at = now()
+                WHERE id = %s
+                """,
+                (token_hash, decision.question, Jsonb(options_data), decision_id),
+            )
+            return decision_id, status, token
+
+        cur.execute(
+            """
+            INSERT INTO notify_decisions
+                (source_key, decision_key, token_sha256, question, options_json, status, created_at, updated_at)
+            VALUES
+                (%s, %s, %s, %s, %s, 'pending', now(), now())
+            RETURNING id
+            """,
+            (source_key, decision.key, token_hash, decision.question, Jsonb(options_data)),
+        )
+        row = cur.fetchone()
+        decision_id = int(row[0])
+        return decision_id, "pending", token
+
+
+def get_decision_by_id(conn: Any, decision_id: int) -> dict[str, Any] | None:
+    """按主键获取决策，用于公网确认页。"""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, source_key, decision_key, token_sha256, question, options_json,
+                   status, chosen_option, chosen_label, chosen_at, created_at, updated_at
+            FROM notify_decisions
+            WHERE id = %s
+            """,
+            (decision_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "id": int(row[0]),
+        "source_key": str(row[1]),
+        "key": str(row[2]),
+        "token_sha256": str(row[3]),
+        "question": str(row[4]),
+        "options": _parse_json(row[5]),
+        "status": str(row[6]),
+        "chosen_option": row[7] if row[7] is not None else None,
+        "chosen_label": row[8] if row[8] is not None else None,
+        "chosen_at": row[9],
+        "created_at": row[10],
+        "updated_at": row[11],
+    }
+
+
+def record_decision_choice(
+    conn: Any,
+    decision_id: int,
+    option_key: str,
+    option_label: str,
+    client_ip: str = "",
+    user_agent: str = "",
+) -> datetime:
+    """记录一次决策选择（追加事件，并更新最新选择状态）。"""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO notify_decision_events
+                (decision_id, option_key, option_label, client_ip, user_agent, created_at)
+            VALUES (%s, %s, %s, %s, %s, now())
+            RETURNING created_at
+            """,
+            (decision_id, option_key, option_label, client_ip, user_agent),
+        )
+        event_row = cur.fetchone()
+        created_at = event_row[0] if event_row else datetime.now(timezone.utc)
+
+        cur.execute(
+            """
+            UPDATE notify_decisions
+            SET status = 'answered',
+                chosen_option = %s,
+                chosen_label = %s,
+                chosen_at = %s,
+                updated_at = now()
+            WHERE id = %s
+            """,
+            (option_key, option_label, created_at, decision_id),
+        )
+    return created_at
+
+
+def get_decision_by_key(conn: Any, source_key: str, decision_key: str) -> dict[str, Any] | None:
+    """按来源和 key 获取决策详情，带选择历史。"""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, source_key, decision_key, token_sha256, question, options_json,
+                   status, chosen_option, chosen_label, chosen_at, created_at, updated_at
+            FROM notify_decisions
+            WHERE source_key = %s AND decision_key = %s
+            """,
+            (source_key, decision_key),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        decision_id = int(row[0])
+
+        cur.execute(
+            """
+            SELECT option_key, created_at
+            FROM notify_decision_events
+            WHERE decision_id = %s
+            ORDER BY created_at ASC, id ASC
+            """,
+            (decision_id,),
+        )
+        events = cur.fetchall() or []
+
+    return {
+        "id": decision_id,
+        "key": str(row[2]),
+        "question": str(row[4]),
+        "options": _parse_json(row[5]),
+        "status": str(row[6]),
+        "chosen_option": row[7] if row[7] is not None else None,
+        "chosen_label": row[8] if row[8] is not None else None,
+        "chosen_at": _format_iso(row[9]),
+        "history": [{"option": str(ev[0]), "at": _format_iso(ev[1])} for ev in events],
+        "created_at": _format_iso(row[10]),
+    }
+
+
+def list_decisions(
+    conn: Any, source_key: str, status: str | None = None, limit: int = 50
+) -> list[dict[str, Any]]:
+    """列出指定来源的决策。"""
+    with conn.cursor() as cur:
+        if status:
+            cur.execute(
+                """
+                SELECT id, decision_key, question, options_json, status,
+                       chosen_option, chosen_label, chosen_at, created_at
+                FROM notify_decisions
+                WHERE source_key = %s AND status = %s
+                ORDER BY created_at DESC, id DESC
+                LIMIT %s
+                """,
+                (source_key, status, limit),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT id, decision_key, question, options_json, status,
+                       chosen_option, chosen_label, chosen_at, created_at
+                FROM notify_decisions
+                WHERE source_key = %s
+                ORDER BY created_at DESC, id DESC
+                LIMIT %s
+                """,
+                (source_key, limit),
+            )
+        rows = cur.fetchall() or []
+
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        result.append(
+            {
+                "id": int(row[0]),
+                "key": str(row[1]),
+                "question": str(row[2]),
+                "options": _parse_json(row[3]),
+                "status": str(row[4]),
+                "chosen_option": row[5] if row[5] is not None else None,
+                "chosen_label": row[6] if row[6] is not None else None,
+                "chosen_at": _format_iso(row[7]),
+                "created_at": _format_iso(row[8]),
+            }
+        )
+    return result
