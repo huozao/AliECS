@@ -48,6 +48,12 @@ TCR 现在是唯一镜像来源，静默跳过同步只会把失败推迟到 txe
 
 抖动不是罕见事件（上线首日即撞上），日常部署要预留「可能重跑一次」的心理预期。
 
+**2026-11-08 起业务镜像同步改为两段搬运**：`mirror-built-to-tcr` 先 `skopeo copy` 到 runner
+本地 `dir:` 目录，再从目录推 TCR，推完比对源与目标原始清单的 sha256。起因是 backend-api
+连续两次 25 分钟超时卡在同一 blob，日志 `Reading blob body from https://ghcr.io/... failed
+(unexpected EOF)`——与 09-10 supersync 同因（跨境写 TCR 经 backpressure 拖断读 GHCR），
+那次改两段后通过。两段各最多 3 次、每次 20 分钟；仍失败才按上文 rerun。
+
 **连带的一个既有缺陷也一并修了**：`deploy-business-cn` 原来只 `needs: mirror-third-party`
 （第三方镜像），6 个自建业务镜像的 `mirror-built-to-tcr` 不在 needs 里、还带
 `continue-on-error: true`。以前 TCR 只是异步 fallback，无所谓；现在它是唯一来源，
