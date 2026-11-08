@@ -12,6 +12,7 @@
 | 没收到、重复、重试 | [排障](#排障消息没收到)、[孤儿领养](#坑worker-写的行是孤儿必须由-flush-领养) |
 | 新来源或字段 | [消息模型](#通用-notification-与渠道原生载荷新来源按这张表接入)、[新来源](#加一个新来源)、[跨镜像契约](#跨镜像契约) |
 | 改卡片 | [通道能力](#三个通道的能力差异不要试图抹平)、[投递约束](#当前-json-20-卡片的投递约束)、[验证](#改了卡片渲染怎么验本地测试挡不住这类问题) |
+| 决策按钮 / 卡片决策 | [决策按钮](#决策按钮) |
 | 流量日报/心跳 | 本文 aliecs、txecs 流量看护节 |
 | bridge 运维告警 | [bridge 契约](#openclaw-bridge-运维告警) |
 
@@ -192,11 +193,70 @@ OpenClaw 的 `/im/v1/messages` 调用仍保留在**会话传输适配器**内，
 3. 图片使用 2.0 的 `scale_type: fit_horizontal`，不要与 `size` 同时出现；结构变更必须
    同时做 API 接收检查和真客户端肉眼验收。
 
+## 决策按钮
+
+2026-11-08 选定方案一（链接按钮）：飞书卡片底部放 2–5 个链接按钮，点击打开中枢公网确认页，POST 确认后记录选择；生产者用来源令牌查询结果。不依赖飞书原生回调、不改飞书开放平台配置、不新增入站端口。
+
+### 契约摘要
+
+- **生产者发卡**（`POST /api/v1/internal/notify/send`）：
+  - `Notification` 包含可选 `decision: {"key": "...", "question": "...", "options": [...]}`。
+  - `key`：1–128 字符，正则 `^[A-Za-z0-9_.:-]+$`；同一来源内唯一。同 key 幂等：不新建决策，不改问题与选项（以首次为准），不清空已有选择与历史。
+  - `question`：1–200 字符。
+  - `options`：2–5 个选项，key 匹配 `[a-z0-9_-]{1,32}` 且互不重复，label 1–32 字符，style 取现有 `BUTTON_STYLES`。
+  - `decision` 与 `buttons`/`link` 合计按钮数不超过 5，超出入口 422 拒绝。
+  - 令牌：每次发卡用 `secrets.token_urlsafe(24)` 生成一个，登记到 `notify_decision_tokens`（库内只存 sha256，校验用 `hmac.compare_digest`）。令牌只增不覆盖：同一决策重试或再次提醒时，已发出的旧卡片按钮仍然有效。
+  - 回归：`tests/test_notify_decision.py`（模拟库）与 `tests/test_notify_decision_integration.py`（真实 PostgreSQL，CI 设 `NOTIFY_DECISION_INTEGRATION_DATABASE_URL` 后运行）。
+  - `/send` 响应新增 `decision: {"id": <int>, "key": "...", "status": "pending|answered"}`。
+  - 原生卡片（`channel_payloads.feishu`）会自动将决策按钮插入至 `body.elements` 末尾；结构不匹配时显式报错拒绝。
+- **公网确认与提交**（不经统一登录）：
+  - `GET /api/v1/notify/decisions/{id}?t=&opt=`：令牌错误或决策不存在返回 404；令牌有效时返回手机友好的 HTML 确认页。**GET 绝对只读不修改任何状态**，防止链接预取误记。
+  - `POST /api/v1/notify/decisions/{id}`：表单字段 `t`、`opt`。校验通过后在 `notify_decision_events` 追加一条选择事件，并更新 `notify_decisions` 最新选择，返回结果页“已记录：<label>（时刻）”。允许改选，以最后一次为准，历史全部保留。
+  - 安全约束：页面纯内联 CSS、不加载任何外部资源；HTML 输出一律转义防 XSS。
+- **生产者内部查询**（来源令牌鉴权，复用 `_require_source`）：
+  - `GET /api/v1/internal/notify/decisions/by-key?key=<key>`：返回详情 `{id, key, question, options, status, chosen_option, chosen_label, chosen_at, history:[{option, at}], created_at}`。不存在或属于其他来源一律 404。
+  - `GET /api/v1/internal/notify/decisions?status=pending&limit=50`：列出本来源的决策（按创建时间倒序）。
+  - 时刻一律用带时区的 ISO8601 表示。
+
+### 生产需设项
+
+- `NOTIFY_PUBLIC_BASE_URL`：决策链接公网基址，用于拼接按钮 URL `<公网基址>/api/v1/notify/decisions/<决策ID>?t=<令牌>&opt=<option.key>`。
+- 生产环境建议值：`https://hydwang.xyz`。
+- 回退逻辑：未设时回退至 `APP_BASE_URL`；若两者均未设，默认使用 `https://hydwang.xyz`（理由：生产者当前生产公网地址即 `https://hydwang.xyz/api/v1/internal/notify/send`，且生产环境统一域名即 `hydwang.xyz`）。
+
+### Nginx 路由结论与证据
+
+只读核对配置证据：
+- `AliECS-WebDock/infra/roles/server/tencent/files/30-public-site-https.conf:33-40`：
+  ```nginx
+  location /api/ {
+      proxy_pass http://127.0.0.1:8000/;
+      proxy_http_version 1.1;
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+  }
+  ```
+- `AliECS-WebDock/infra/server/nginx/aliecs.conf:30-37`：
+  配置了完全相同的 `location /api/` 前缀代理至 `http://127.0.0.1:8000/`。
+- Authelia 配置：Authelia 的 `auth_request` 仅存在于 `console-proxy.conf`（针对 `/console/`）和 `90-market-dashboard-https.conf`，在 `/api/` 路由下未配置任何身份验证拦截。
+- **结论**：`/api/v1/notify/decisions/` 从公网直接可达后端，且不经 Authelia 拦截。**生产环境无需修改 nginx 配置**。
+
+### 排障
+
+| 现象 / 报错 | 根因 | 处理方式 |
+|---|---|---|
+| 404 `decision not found` | 决策 ID 不存在，或令牌 `t` 校验失败（故意不区分），或内部查询跨来源访问 | 检查按钮 URL 是否被截断、令牌是否完整，或检查查询请求头的 `X-Notify-Source` 是否与创建决策时的来源一致 |
+| 422 `total buttons exceeds limit of 5` | `decision.options` 数量加上原本的 `buttons` 与 `link` 超过 5 个 | 飞书交互卡片单行按钮总上限为 5；减少自定义 buttons 或 options 数量 |
+| 422 `invalid decision key` / `invalid decision option key` | 键名字符超出白名单 | 决策 key 仅支持 `[A-Za-z0-9_.:-]`，选项 key 仅支持小写 `[a-z0-9_-]` |
+| 422 原生载荷插入按钮失败 | `channel_payloads.feishu` 不是 interactive 卡片或缺少 `body.elements` 列表 | 调整原生卡片结构，提供标准 JSON 2.0 的 `body.elements` 供中枢追加决策按钮 |
+
 ### 做不到的（别答应业务）
 
-- **交互回调按钮**（点赞、点踩、确认、屏蔽）：需要公网入站端点 + 飞书验签 + 在开放
+- **交互回调按钮**（点赞、点踩、屏蔽等依赖平台原生回调的场景）：需要公网入站端点 + 飞书验签 + 在开放
   平台配「消息卡片请求网址」。中枢现在是纯出站管道（`notify_outbox → notify_deliveries`），
-  没有反方向的链路。
+  没有反方向的入站回调链路；业务若需要点击选择，统一改用上述「决策按钮（链接按钮）」。
 - **复制 / 朗读按钮**：飞书 AI 回复气泡上那三个是**客户端原生 UI**，不是卡片组件，
   机器人发的卡片渲染不出来。
 
