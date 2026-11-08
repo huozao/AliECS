@@ -311,6 +311,9 @@ class StateMockDb:
     def __init__(self) -> None:
         self.decisions: dict[int, dict[str, Any]] = {}
         self.events: list[dict[str, Any]] = []
+        # 令牌表：(decision_id, token_sha256)。测试直接预置的决策可在字典里带 token_sha256，
+        # 读取时与本表合并，等价于该决策发过一次卡。
+        self.tokens: list[tuple[int, str]] = []
         self.sources: dict[str, str] = {
             "gold-spread-monitor": hashlib.sha256(b"correct_token").hexdigest(),
             "other-source": hashlib.sha256(b"other_token").hexdigest(),
@@ -385,9 +388,8 @@ class StateMockCursor:
                 "id": d_id,
                 "source_key": params[0],
                 "decision_key": params[1],
-                "token_sha256": params[2],
-                "question": params[3],
-                "options_json": params[4],
+                "question": params[2],
+                "options_json": params[3],
                 "status": "pending",
                 "chosen_option": None,
                 "chosen_label": None,
@@ -397,21 +399,23 @@ class StateMockCursor:
             }
             self._last_row = (d_id,)
 
-        elif "UPDATE notify_decisions SET token_sha256 = %s" in norm:
-            token_sha256, question, options_json, d_id = params[0], params[1], params[2], params[3]
-            if d_id in self.db.decisions:
-                d = self.db.decisions[d_id]
-                d["token_sha256"] = token_sha256
-                d["question"] = question
-                d["options_json"] = options_json
-                d["updated_at"] = datetime.now(timezone.utc)
+        elif "INSERT INTO notify_decision_tokens" in norm:
+            self.db.tokens.append((int(params[0]), params[1]))
 
-        elif "SELECT id, source_key, decision_key, token_sha256, question, options_json, status, chosen_option, chosen_label, chosen_at, created_at, updated_at FROM notify_decisions WHERE id = %s" in norm:
+        elif "SELECT token_sha256 FROM notify_decision_tokens WHERE decision_id = %s" in norm:
+            d_id = int(params[0])
+            rows = [(h,) for (dec, h) in self.db.tokens if dec == d_id]
+            seeded = self.db.decisions.get(d_id, {}).get("token_sha256")
+            if seeded:
+                rows.insert(0, (seeded,))
+            self._last_rowset = rows
+
+        elif "SELECT id, source_key, decision_key, question, options_json, status, chosen_option, chosen_label, chosen_at, created_at, updated_at FROM notify_decisions WHERE id = %s" in norm:
             d_id = int(params[0])
             d = self.db.decisions.get(d_id)
             if d:
                 self._last_row = (
-                    d["id"], d["source_key"], d["decision_key"], d["token_sha256"],
+                    d["id"], d["source_key"], d["decision_key"],
                     d["question"], d["options_json"], d["status"], d["chosen_option"],
                     d["chosen_label"], d["chosen_at"], d["created_at"], d["updated_at"],
                 )
@@ -443,13 +447,13 @@ class StateMockCursor:
                 d["chosen_at"] = chosen_at
                 d["updated_at"] = datetime.now(timezone.utc)
 
-        elif "SELECT id, source_key, decision_key, token_sha256, question, options_json, status, chosen_option, chosen_label, chosen_at, created_at, updated_at FROM notify_decisions WHERE source_key = %s AND decision_key = %s" in norm:
+        elif "SELECT id, source_key, decision_key, question, options_json, status, chosen_option, chosen_label, chosen_at, created_at, updated_at FROM notify_decisions WHERE source_key = %s AND decision_key = %s" in norm:
             source_key, dec_key = params[0], params[1]
             found = None
             for d in self.db.decisions.values():
                 if d["source_key"] == source_key and d["decision_key"] == dec_key:
                     found = (
-                        d["id"], d["source_key"], d["decision_key"], d["token_sha256"],
+                        d["id"], d["source_key"], d["decision_key"],
                         d["question"], d["options_json"], d["status"], d["chosen_option"],
                         d["chosen_label"], d["chosen_at"], d["created_at"], d["updated_at"],
                     )

@@ -115,7 +115,7 @@ def deliver(notification: Notification, *, conn=None) -> dict[str, Any]:
         decision_summary: dict[str, Any] | None = None
         if notification.decision is not None:
             token = secrets.token_urlsafe(24)
-            decision_id, decision_status, token = store.upsert_decision(
+            decision_id, decision_status = store.upsert_decision(
                 connection, notification.source, notification.decision, token
             )
             decision_summary = {

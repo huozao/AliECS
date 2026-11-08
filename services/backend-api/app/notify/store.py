@@ -394,13 +394,13 @@ def _format_iso(dt: Any) -> str | None:
 
 def upsert_decision(
     conn: Any, source_key: str, decision: NotifyDecision, token: str
-) -> tuple[int, str, str]:
-    """落库或幂等复用决策。
-    
-    返回 (decision_id, status, token)。
-    同 source_key + key 幂等：不新建决策，不清空已有选择与历史。
+) -> tuple[int, str]:
+    """落库或幂等复用决策，并为本次发卡登记一个新令牌。
+
+    返回 (decision_id, status)。
+    同 source_key + key 幂等：不新建决策，不改问题与选项，不清空已有选择与历史。
+    令牌只增不覆盖：重试或再次提醒生成的新卡片与已发出的旧卡片按钮都保持有效。
     """
-    token_hash = token_digest(token)
     options_data = [opt.model_dump(mode="json") for opt in decision.options]
     with conn.cursor() as cur:
         cur.execute(
@@ -414,29 +414,42 @@ def upsert_decision(
         if existing is not None:
             decision_id = int(existing[0])
             status = str(existing[1])
+        else:
             cur.execute(
                 """
-                UPDATE notify_decisions
-                SET token_sha256 = %s, question = %s, options_json = %s, updated_at = now()
-                WHERE id = %s
+                INSERT INTO notify_decisions
+                    (source_key, decision_key, question, options_json, status, created_at, updated_at)
+                VALUES
+                    (%s, %s, %s, %s, 'pending', now(), now())
+                RETURNING id
                 """,
-                (token_hash, decision.question, Jsonb(options_data), decision_id),
+                (source_key, decision.key, decision.question, Jsonb(options_data)),
             )
-            return decision_id, status, token
-
+            decision_id = int(cur.fetchone()[0])
+            status = "pending"
         cur.execute(
             """
-            INSERT INTO notify_decisions
-                (source_key, decision_key, token_sha256, question, options_json, status, created_at, updated_at)
-            VALUES
-                (%s, %s, %s, %s, %s, 'pending', now(), now())
-            RETURNING id
+            INSERT INTO notify_decision_tokens (decision_id, token_sha256, created_at)
+            VALUES (%s, %s, now())
             """,
-            (source_key, decision.key, token_hash, decision.question, Jsonb(options_data)),
+            (decision_id, token_digest(token)),
         )
-        row = cur.fetchone()
-        decision_id = int(row[0])
-        return decision_id, "pending", token
+    return decision_id, status
+
+
+def verify_decision_token(conn: Any, decision_id: int, token: str) -> bool:
+    """令牌是否属于该决策（任一次发卡生成的令牌均有效），常量时间比较。"""
+    supplied = token_digest(token)
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT token_sha256 FROM notify_decision_tokens WHERE decision_id = %s",
+            (decision_id,),
+        )
+        rows = cur.fetchall() or []
+    matched = False
+    for row in rows:
+        matched = hmac.compare_digest(str(row[0]), supplied) or matched
+    return matched
 
 
 def get_decision_by_id(conn: Any, decision_id: int) -> dict[str, Any] | None:
@@ -444,7 +457,7 @@ def get_decision_by_id(conn: Any, decision_id: int) -> dict[str, Any] | None:
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT id, source_key, decision_key, token_sha256, question, options_json,
+            SELECT id, source_key, decision_key, question, options_json,
                    status, chosen_option, chosen_label, chosen_at, created_at, updated_at
             FROM notify_decisions
             WHERE id = %s
@@ -458,15 +471,14 @@ def get_decision_by_id(conn: Any, decision_id: int) -> dict[str, Any] | None:
         "id": int(row[0]),
         "source_key": str(row[1]),
         "key": str(row[2]),
-        "token_sha256": str(row[3]),
-        "question": str(row[4]),
-        "options": _parse_json(row[5]),
-        "status": str(row[6]),
-        "chosen_option": row[7] if row[7] is not None else None,
-        "chosen_label": row[8] if row[8] is not None else None,
-        "chosen_at": row[9],
-        "created_at": row[10],
-        "updated_at": row[11],
+        "question": str(row[3]),
+        "options": _parse_json(row[4]),
+        "status": str(row[5]),
+        "chosen_option": row[6] if row[6] is not None else None,
+        "chosen_label": row[7] if row[7] is not None else None,
+        "chosen_at": row[8],
+        "created_at": row[9],
+        "updated_at": row[10],
     }
 
 
@@ -512,7 +524,7 @@ def get_decision_by_key(conn: Any, source_key: str, decision_key: str) -> dict[s
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT id, source_key, decision_key, token_sha256, question, options_json,
+            SELECT id, source_key, decision_key, question, options_json,
                    status, chosen_option, chosen_label, chosen_at, created_at, updated_at
             FROM notify_decisions
             WHERE source_key = %s AND decision_key = %s
@@ -538,14 +550,14 @@ def get_decision_by_key(conn: Any, source_key: str, decision_key: str) -> dict[s
     return {
         "id": decision_id,
         "key": str(row[2]),
-        "question": str(row[4]),
-        "options": _parse_json(row[5]),
-        "status": str(row[6]),
-        "chosen_option": row[7] if row[7] is not None else None,
-        "chosen_label": row[8] if row[8] is not None else None,
-        "chosen_at": _format_iso(row[9]),
+        "question": str(row[3]),
+        "options": _parse_json(row[4]),
+        "status": str(row[5]),
+        "chosen_option": row[6] if row[6] is not None else None,
+        "chosen_label": row[7] if row[7] is not None else None,
+        "chosen_at": _format_iso(row[8]),
         "history": [{"option": str(ev[0]), "at": _format_iso(ev[1])} for ev in events],
-        "created_at": _format_iso(row[10]),
+        "created_at": _format_iso(row[9]),
     }
 
 

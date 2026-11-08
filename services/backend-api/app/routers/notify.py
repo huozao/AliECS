@@ -271,7 +271,6 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hel
 
 
 @router.get("/v1/notify/decisions/{decision_id}", response_class=HTMLResponse)
-@router.get("/api/v1/notify/decisions/{decision_id}", response_class=HTMLResponse, include_in_schema=False)
 def get_decision_page(
     decision_id: int,
     t: str = "",
@@ -283,17 +282,16 @@ def get_decision_page(
         raise HTTPException(status_code=404, detail="decision not found")
     with closing(_conn()) as conn:
         decision = store.get_decision_by_id(conn, decision_id)
-    if decision is None:
-        raise HTTPException(status_code=404, detail="decision not found")
-    if not hmac.compare_digest(decision["token_sha256"], store.token_digest(token)):
-        raise HTTPException(status_code=404, detail="decision not found")
+        if decision is None:
+            raise HTTPException(status_code=404, detail="decision not found")
+        if not store.verify_decision_token(conn, decision_id, token):
+            raise HTTPException(status_code=404, detail="decision not found")
 
     content = _render_decision_page(decision, token=token, selected_opt=opt.strip())
     return HTMLResponse(content=content, status_code=200)
 
 
 @router.post("/v1/notify/decisions/{decision_id}", response_class=HTMLResponse)
-@router.post("/api/v1/notify/decisions/{decision_id}", response_class=HTMLResponse, include_in_schema=False)
 async def post_decision_choice(
     decision_id: int,
     request: Request,
@@ -328,7 +326,7 @@ async def post_decision_choice(
         decision = store.get_decision_by_id(conn, decision_id)
         if decision is None:
             raise HTTPException(status_code=404, detail="decision not found")
-        if not hmac.compare_digest(decision["token_sha256"], store.token_digest(token)):
+        if not store.verify_decision_token(conn, decision_id, token):
             raise HTTPException(status_code=404, detail="decision not found")
 
         options = decision.get("options") or []
@@ -353,7 +351,6 @@ async def post_decision_choice(
 
 
 @router.get("/v1/internal/notify/decisions/by-key")
-@router.get("/api/v1/internal/notify/decisions/by-key", include_in_schema=False)
 def get_decision_by_key_endpoint(
     key: str,
     source_key: str = Depends(_require_source),
@@ -370,7 +367,6 @@ def get_decision_by_key_endpoint(
 
 
 @router.get("/v1/internal/notify/decisions")
-@router.get("/api/v1/internal/notify/decisions", include_in_schema=False)
 def list_decisions_endpoint(
     status: str | None = None,
     limit: int = 50,

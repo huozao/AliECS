@@ -201,11 +201,12 @@ OpenClaw 的 `/im/v1/messages` 调用仍保留在**会话传输适配器**内，
 
 - **生产者发卡**（`POST /api/v1/internal/notify/send`）：
   - `Notification` 包含可选 `decision: {"key": "...", "question": "...", "options": [...]}`。
-  - `key`：1–128 字符，正则 `^[A-Za-z0-9_.:-]+$`；同一来源内唯一。同 key 幂等，不新建决策，不清空已有选择与历史。
+  - `key`：1–128 字符，正则 `^[A-Za-z0-9_.:-]+$`；同一来源内唯一。同 key 幂等：不新建决策，不改问题与选项（以首次为准），不清空已有选择与历史。
   - `question`：1–200 字符。
   - `options`：2–5 个选项，key 匹配 `[a-z0-9_-]{1,32}` 且互不重复，label 1–32 字符，style 取现有 `BUTTON_STYLES`。
   - `decision` 与 `buttons`/`link` 合计按钮数不超过 5，超出入口 422 拒绝。
-  - 令牌：每个决策使用 `secrets.token_urlsafe(24)` 生成，库内只存 sha256，校验用 `hmac.compare_digest`。
+  - 令牌：每次发卡用 `secrets.token_urlsafe(24)` 生成一个，登记到 `notify_decision_tokens`（库内只存 sha256，校验用 `hmac.compare_digest`）。令牌只增不覆盖：同一决策重试或再次提醒时，已发出的旧卡片按钮仍然有效。
+  - 回归：`tests/test_notify_decision.py`（模拟库）与 `tests/test_notify_decision_integration.py`（真实 PostgreSQL，CI 设 `NOTIFY_DECISION_INTEGRATION_DATABASE_URL` 后运行）。
   - `/send` 响应新增 `decision: {"id": <int>, "key": "...", "status": "pending|answered"}`。
   - 原生卡片（`channel_payloads.feishu`）会自动将决策按钮插入至 `body.elements` 末尾；结构不匹配时显式报错拒绝。
 - **公网确认与提交**（不经统一登录）：
