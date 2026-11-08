@@ -49,10 +49,15 @@ TCR 现在是唯一镜像来源，静默跳过同步只会把失败推迟到 txe
 抖动不是罕见事件（上线首日即撞上），日常部署要预留「可能重跑一次」的心理预期。
 
 **2026-11-08 起业务镜像同步改为两段搬运**：`mirror-built-to-tcr` 先 `skopeo copy` 到 runner
-本地 `dir:` 目录，再从目录推 TCR，推完比对源与目标原始清单的 sha256。起因是 backend-api
-连续两次 25 分钟超时卡在同一 blob，日志 `Reading blob body from https://ghcr.io/... failed
-(unexpected EOF)`——与 09-10 supersync 同因（跨境写 TCR 经 backpressure 拖断读 GHCR），
-那次改两段后通过。两段各最多 3 次、每次 20 分钟；仍失败才按上文 rerun。
+本地 `dir:` 目录，再从目录推 TCR，推完比对源与目标原始清单的 sha256；两段各最多 3 次、每次 20 分钟。
+它只消除 **backpressure 形态**（流式 copy 下写端变慢拖断读端，日志为
+`Reading blob body from https://ghcr.io/... failed (unexpected EOF)`，09-10 supersync 即此）。
+
+⚠️ 它**不解决写端冻结**（下文 08-05 形态）。11-08 实证：流式 copy 三次都报 GHCR 读
+`unexpected EOF`，改两段后读段 3 秒完成，写段在同一新 blob（`8563ed9b…`）上连续 3 次
+20 分钟 0 进度——前面的 GHCR EOF 只是写端冻结经 backpressure 的表象。判别：两段日志里
+`(push) attempt N failed` 而 pull 已完成 = 写端冻结，处置只有等线路恢复后 rerun 或走应急旁路，
+不要再放宽超时或改搬运方式。
 
 **连带的一个既有缺陷也一并修了**：`deploy-business-cn` 原来只 `needs: mirror-third-party`
 （第三方镜像），6 个自建业务镜像的 `mirror-built-to-tcr` 不在 needs 里、还带
