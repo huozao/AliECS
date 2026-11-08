@@ -245,7 +245,32 @@ jobs:
           printf '%s' "$TCR_PASSWORD" | skopeo login --authfile "$auth_file" -u "$TCR_USERNAME" --password-stdin "${TCR_BASE%%/*}"
           source="docker://ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.tree.outputs.tag }}"
           target="docker://${TCR_BASE}/${{ matrix.image }}:${{ steps.tree.outputs.tag }}"
-          timeout 25m skopeo copy --all --preserve-digests --retry-times 3 --authfile "$auth_file" "$source" "$target"
+          # 两段搬运（与 deploy/ecs/mirror-images-to-tcr.sh 的 MIRROR_VIA_DIR 同一做法）：
+          # 流式 copy 下跨境写 TCR 变慢会经 backpressure 拖住读 GHCR，直到 GHCR 断开，
+          # 日志表现为 `Reading blob body from https://ghcr.io/... failed (unexpected EOF)`。
+          # 2026-11-08 backend-api 连续两次 25 分钟超时卡在同一 blob；supersync 09-10 同因、
+          # 改两段后通过。先在 runner 上完整落盘（美国内部，快），再从目录推 TCR，读写解耦。
+          stage="$(mktemp -d)"
+          trap 'rm -rf "$auth_dir" "$stage"' EXIT
+          copy_with_retry() { # src dst label
+            local attempt
+            for attempt in 1 2 3; do
+              if timeout 20m skopeo copy --all --preserve-digests --retry-times 3 \
+                --authfile "$auth_file" "$1" "$2"; then
+                return 0
+              fi
+              echo "[mirror] $3 attempt $attempt failed or timed out" >&2
+              [[ "$attempt" == 3 ]] && return 1
+              sleep 20
+            done
+          }
+          copy_with_retry "$source" "dir:$stage" "${{ matrix.image }}(pull)"
+          copy_with_retry "dir:$stage" "$target" "${{ matrix.image }}(push)"
+          # --preserve-digests 下目标的原始清单应与源逐字节一致；比对原始清单摘要。
+          source_digest="sha256:$(skopeo inspect --raw --authfile "$auth_file" "$source" | sha256sum | cut -d' ' -f1)"
+          target_digest="sha256:$(skopeo inspect --raw --authfile "$auth_file" "$target" | sha256sum | cut -d' ' -f1)"
+          echo "[mirror] source=$source_digest target=$target_digest"
+          [[ "$source_digest" == "$target_digest" ]] || { echo "[mirror] digest mismatch" >&2; exit 1; }
 
   # bridge 的日常发布路径（2026-09-01 起）。原来 push main 会自动走
   # stage-openclaw-bridge-peer（经 aliecs peer-channel 中转镜像），那条每次约
