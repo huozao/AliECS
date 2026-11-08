@@ -49,6 +49,10 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 <!-- nav-check-python: services/backend-api/app/notify/models.py:display_title -->
 标题图标只在 `Notification.display_title()` 一处决定，飞书卡片头 / 企微 markdown 首行 /
 纯文本兜底三处共用；生产者自带图标时不再叠加级别图标。
+决策按钮：`Notification.decision`（问题＋2–5 选项）由 `dispatch.deliver` 落库并追加链接按钮，
+公网 `GET/POST /v1/notify/decisions/{id}` 确认页（GET 只读、POST 记录、可改选），生产者用
+`/v1/internal/notify/decisions/by-key` 按来源查询；令牌每次发卡一个、只存 sha256。契约与排障见
+`docs/runbooks/notify.md` 的“决策按钮”节，真实库回归 `tests/test_notify_decision_integration.py`。
 
 ## services/doc-sync-worker
 
@@ -132,7 +136,8 @@ MCP 编程路线；OAuth 与执行器入口分别见 [mcp-coding-server](../serv
 
 迁移 SQL。写成幂等；`0061_txecs_traffic_notify.sql` 为 txecs 流量看护注册独立通知来源并
 复用 txecs-disk 的飞书目标路由（不复制明文 token）；`0062_market_review_projection_write_amplification.sql`
-将市场观察当前投影改为每个包内键只写一次，保留原始观察历史。数据库操作与授权、备份及回读见 [deploy](runbooks/deploy.md)。
+将市场观察当前投影改为每个包内键只写一次，保留原始观察历史。`0064_notify_decisions.sql`
+新增决策按钮三表（决策、令牌、选择事件）。数据库操作与授权、备份及回读见 [deploy](runbooks/deploy.md)。
 
 ## local
 
