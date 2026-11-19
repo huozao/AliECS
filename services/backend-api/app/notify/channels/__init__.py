@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from app.notify.channels import feishu, wecom
+from app.notify.channels import email, feishu, wecom
 from app.notify.models import Notification
 
 Sender = Callable[[Notification, dict[str, Any]], None]
@@ -17,6 +17,7 @@ SENDERS: dict[str, Sender] = {
     "feishu": feishu.send,
     "wecom_bot": wecom.send_bot,
     "wecom_app": wecom.send_app,
+    "email": email.send,
 }
 
 
