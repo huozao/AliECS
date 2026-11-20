@@ -17,6 +17,8 @@ class JobSyncAllTests(unittest.TestCase):
             patch.object(job_sync_all, "export_inventory", return_value="inventory.xlsx"),
             patch.object(job_sync_all, "sync_partner", return_value=[]),
             patch.object(job_sync_all, "export_partner", return_value="partner.xlsx"),
+            patch.object(job_sync_all, "sync_current_stock", return_value=[]),
+            patch.object(job_sync_all, "export_current_stock", return_value="current_stock.xlsx"),
             patch.object(
                 job_sync_all,
                 "VERIFIED_BASE_ARCHIVE_QUERY_ENDPOINTS",
@@ -80,6 +82,8 @@ class JobSyncAllTests(unittest.TestCase):
             patch.object(job, "export_inventory", return_value=Path("/x/current_stock_20260624_100752.xlsx")),
             patch.object(job, "sync_partner", return_value=[]),
             patch.object(job, "export_partner", return_value=Path("/x/partner_20260624_100753.xlsx")),
+            patch.object(job, "sync_current_stock", return_value=[]),
+            patch.object(job, "export_current_stock", return_value=Path("/x/current_stock_20260624_100756.xlsx")),
             patch.object(job, "VERIFIED_BASE_ARCHIVE_QUERY_ENDPOINTS", {}, create=True),
             patch.object(job, "VERIFIED_VOUCHER_LIST_ENDPOINTS", {}, create=True),
             patch.object(job, "sync_purchase_price", return_value=[]),
@@ -91,7 +95,7 @@ class JobSyncAllTests(unittest.TestCase):
         self.assertEqual(0, result.exit_code)
         self.assertIn("bom_20260624_100751.xlsx", result.export_files)
         self.assertIn("current_stock_20260624_100752.xlsx", result.export_files)
-        self.assertEqual(5, len(result.export_files))
+        self.assertEqual(6, len(result.export_files))
         self.assertEqual(7, result.full_snapshot_id)
 
 
@@ -112,6 +116,8 @@ class JobSyncAllModuleIsolationTests(unittest.TestCase):
             "persist_inventory_records": patch.object(job, "persist_inventory_records"),
             "sync_partner": patch.object(job, "sync_partner", return_value=[]),
             "export_partner": patch.object(job, "export_partner", return_value="partner.xlsx"),
+            "sync_current_stock": patch.object(job, "sync_current_stock", return_value=[]),
+            "export_current_stock": patch.object(job, "export_current_stock", return_value="current_stock.xlsx"),
             "VERIFIED_BASE_ARCHIVE_QUERY_ENDPOINTS": patch.object(
                 job, "VERIFIED_BASE_ARCHIVE_QUERY_ENDPOINTS", {}, create=True
             ),

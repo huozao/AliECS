@@ -122,16 +122,28 @@ def _remember_recipe_query(file_id: str, body: RecipeQueryRequest) -> None:
 
 
 def _latest_bom_sync_run() -> dict[str, Any] | None:
-    """产出当前 BOM 文件的那次同步：最近一次成功且会导出 bom 的 run（scheduled_full 或手动 bom）。
-    locate_recipe_source 取 mtime 最新文件 ⇔ 最近一次成功 bom 同步，故二者对应。任何异常降级为 None。"""
+    """产出当前 BOM 文件的那次同步：最近一次成功产出 bom 的 run（scheduled_full 或手动 bom）。
+    若全量任务中个别非 BOM 边缘模块报错，只要 BOM 自身成功导出，依然关联该次实际产出 run。任何异常降级为 None。"""
     try:
         with closing(_conn()) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT id, module, mode, status, finished_at
+                    SELECT id, module, mode, status, finished_at, detail_json
                     FROM integration_sync_runs
-                    WHERE provider = 'chanjet' AND status = 'success' AND module IN ('all', 'bom')
+                    WHERE provider = 'chanjet'
+                      AND (
+                          status = 'success'
+                          OR (
+                              detail_json IS NOT NULL
+                              AND NOT (COALESCE(detail_json->'failed_modules', '[]'::jsonb) ? 'bom')
+                              AND EXISTS (
+                                  SELECT 1 FROM jsonb_array_elements_text(COALESCE(detail_json->'export_files', '[]'::jsonb)) AS f
+                                  WHERE f LIKE 'bom_%.xlsx'
+                              )
+                          )
+                      )
+                      AND module IN ('all', 'bom')
                     ORDER BY finished_at DESC NULLS LAST, id DESC
                     LIMIT 1
                     """
@@ -139,11 +151,15 @@ def _latest_bom_sync_run() -> dict[str, Any] | None:
                 row = cur.fetchone()
                 if not row:
                     return None
+                run_status = row[3]
+                # 若 BOM 模块自身成功产出，前台呈现的 BOM 来源状态为 success
+                if run_status != "success":
+                    run_status = "success"
                 return {
                     "id": row[0],
                     "module": row[1],
                     "mode": row[2],
-                    "status": row[3],
+                    "status": run_status,
                     "finished_at": str(row[4]) if row[4] else None,
                 }
     except Exception:

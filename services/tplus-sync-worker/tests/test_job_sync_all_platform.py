@@ -79,6 +79,8 @@ class JobSyncAllPlatformTests(unittest.TestCase):
             "persist_inventory_records": patch.object(job_sync_all, "persist_inventory_records"),
             "sync_partner": patch.object(job_sync_all, "sync_partner", return_value=[]),
             "export_partner": patch.object(job_sync_all, "export_partner", return_value="partner.xlsx"),
+            "sync_current_stock": patch.object(job_sync_all, "sync_current_stock", return_value=[]),
+            "export_current_stock": patch.object(job_sync_all, "export_current_stock", return_value="current_stock.xlsx"),
             "VERIFIED_BASE_ARCHIVE_QUERY_ENDPOINTS": patch.object(
                 job_sync_all,
                 "VERIFIED_BASE_ARCHIVE_QUERY_ENDPOINTS",
@@ -158,12 +160,13 @@ class JobSyncAllPlatformTests(unittest.TestCase):
             (1, "bom", "success", 2),
             (2, "inventory", "failed", 3),
             (3, "partner", "success", 1),
-            (4, "warehouse", "success", 4),
-            (5, "sale_order_list", "success", 2),
-            (6, "purchase_price", "success", 2),
-            (7, "sales_price", "success", 1),
+            (4, "current_stock", "success", 0),
+            (5, "warehouse", "success", 4),
+            (6, "sale_order_list", "success", 2),
+            (7, "purchase_price", "success", 2),
+            (8, "sales_price", "success", 1),
         ]
-        self.assertEqual(14, len(platform.steps))
+        self.assertEqual(16, len(platform.steps))
         for seq, name, terminal_status, items in expected:
             module_steps = [step for step in platform.steps if step["name"] == name]
             self.assertEqual(2, len(module_steps), name)
@@ -193,7 +196,7 @@ class JobSyncAllPlatformTests(unittest.TestCase):
 
         self.assertEqual(0, result.exit_code)
         self.assertEqual(
-            ["bom.xlsx", "inventory.xlsx", "partner.xlsx", "warehouse.xlsx", "purchase_price.xlsx", "sales_price.xlsx"],
+            ["bom.xlsx", "inventory.xlsx", "partner.xlsx", "current_stock.xlsx", "warehouse.xlsx", "purchase_price.xlsx", "sales_price.xlsx"],
             result.export_files,
         )
         self.assertIsNone(result.platform_run_id)
@@ -270,7 +273,7 @@ class JobSyncAllPlatformTests(unittest.TestCase):
 
         self.assertEqual(0, result.exit_code)
         self.assertEqual(77, result.platform_run_id)
-        self.assertEqual(6, len(result.export_files))
+        self.assertEqual(7, len(result.export_files))
 
     def test_config_error_finishes_platform_as_failed_and_preserves_legacy_result(self):
         platform = RecordingPlatform()

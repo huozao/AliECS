@@ -11,6 +11,8 @@ from tplus_datahub.modules.base_archive.export_base_archive import export_base_a
 from tplus_datahub.modules.base_archive.sync_base_archive import sync_base_archive
 from tplus_datahub.modules.bom.export_bom import export_bom
 from tplus_datahub.modules.bom.sync_bom import sync_bom
+from tplus_datahub.modules.current_stock.export_current_stock import export_current_stock
+from tplus_datahub.modules.current_stock.sync_current_stock import sync_current_stock
 from tplus_datahub.modules.inventory.export_stock import export_inventory
 from tplus_datahub.modules.inventory.sync_stock import sync_inventory
 from tplus_datahub.modules.partner.export_partner import export_partner
@@ -258,6 +260,16 @@ def run(*, trigger: str = "manual", platform: Any | None = None) -> SyncAllResul
         voucher_path = export_voucher_list(module_name, voucher_rows, settings=settings, timestamp=timestamp)
         record_export(voucher_path); logger.info("%s Excel exported: %s", module_name, voucher_path)
 
+    def _current_stock():
+        stock_rows = sync_current_stock(settings=settings, timestamp=timestamp)
+        module_items["current_stock"] = len(stock_rows)
+        stock_path = export_current_stock(stock_rows, settings=settings, timestamp=timestamp)
+        if stock_path:
+            record_export(stock_path)
+            logger.info("current_stock Excel exported: %s", stock_path)
+        else:
+            logger.warning("current_stock produced no export file (empty or skipped)")
+
     def _purchase_price():
         purchase_price_rows = sync_purchase_price(settings=settings, timestamp=timestamp)
         module_items["purchase_price"] = len(purchase_price_rows)
@@ -273,6 +285,7 @@ def run(*, trigger: str = "manual", platform: Any | None = None) -> SyncAllResul
     stage("bom", _bom)
     stage("inventory", _inventory)
     stage("partner", _partner)
+    stage("current_stock", _current_stock)
     for module_name, endpoint in VERIFIED_BASE_ARCHIVE_QUERY_ENDPOINTS.items():
         stage(module_name, lambda name=module_name, ep=endpoint: _archive(name, ep))
     for module_name, config in VERIFIED_VOUCHER_LIST_ENDPOINTS.items():

@@ -246,6 +246,7 @@ _STOCK_COLUMNS = {
     "UnitName": "单位",
     "ExistingQuantity": "现存量",
     "AvailableQuantity": "可用量",
+    "ProduceDispatchQuantity": "生产锁定",
 }
 
 
@@ -368,8 +369,9 @@ def inventory_current_stock(
         )
         df = df[mask]
 
-    for column in ("ExistingQuantity", "AvailableQuantity"):
-        df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0)
+    for column in ("ExistingQuantity", "AvailableQuantity", "ProduceDispatchQuantity"):
+        if column in df.columns:
+            df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0)
 
     total = int(len(df))
     if limit is not None:
