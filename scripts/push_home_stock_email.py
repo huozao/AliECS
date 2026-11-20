@@ -52,19 +52,29 @@ def _resolve_recipients(cli_arg: str | None) -> list[str]:
 def fetch_current_stock_rows() -> list[dict]:
     """从 T+ OpenAPI 或本地最新现存量导出中拉取原始行。"""
     try:
+        from tplus_datahub.modules.current_stock.sync_current_stock import sync_current_stock
+
+        logger.info("正在通过畅捷通官方现存量报表引擎 (ST_CurrentStockRpt) 查询现存量...")
+        rows = sync_current_stock()
+        logger.info("畅捷通现存量报表查询成功，获取到 %d 条记录", len(rows))
+        return rows
+    except Exception as exc:
+        logger.warning("通过 ST_CurrentStockRpt 查询失败 (%s)，尝试回退至基础档案接口...", exc)
+
+    try:
         from config.endpoints import VERIFIED_BASE_ARCHIVE_QUERY_ENDPOINTS
         from tplus_datahub.modules.base_archive.sync_base_archive import sync_base_archive
 
         endpoint = VERIFIED_BASE_ARCHIVE_QUERY_ENDPOINTS["current_stock"]
-        logger.info("正在通过畅捷通 OpenAPI 查询现存量...")
+        logger.info("正在通过畅捷通 OpenAPI 基础接口查询现存量...")
         rows = sync_base_archive(
             module_name="current_stock",
             endpoint=endpoint,
         )
-        logger.info("畅捷通现存量查询成功，获取到 %d 条记录", len(rows))
+        logger.info("畅捷通基础现存量查询成功，获取到 %d 条记录", len(rows))
         return rows
     except Exception as exc:
-        logger.warning("通过 T+ OpenAPI 直连获取失败 (%s)，尝试回退至最新导出文件...", exc)
+        logger.warning("通过基础 OpenAPI 直连获取失败 (%s)，尝试回退至最新导出文件...", exc)
 
     # 回退尝试读取本地最新 export 文件
     try:
