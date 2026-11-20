@@ -12,7 +12,7 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 |---|---|
 | `recipes.py` | formula 配方查询、按子件反查、成本核算（坑见 `docs/runbooks/formula.md`） |
 | `formula_colors.py` | 标准型号色彩空间只读数据（企微「标准型号0117」+ T+ 当前有效 BOM 父件名称） |
-| `exports.py` | 对比表导出（真 xlsx，`compare_export.py`） |
+| `exports.py` | 对比表导出（真 xlsx，`compare_export.py`）以及 `/v1/inventory/current-stock` 现存量查询（对接最新 `current_stock_*.xlsx`，支持 raw/finished 范围、仓库过滤、模糊搜索） |
 | `tplus_bom.py` | BOM builder（写回 T+ 经独立 write-worker） |
 | `auth_admin.py` / `auth_oidc.py` | 本地登录 + SSO(Authelia OIDC) |
 | `miniapp_accounts.py` | 微信小程序账号 |
@@ -69,14 +69,18 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 
 ## services/tplus-sync-worker
 
-畅捷通 T+ 只读拉取（BOM/存货/价格）。排障：`docs/runbooks/tplus.md`。
+畅捷通 T+ 只读拉取（BOM/存货/价格/现存量）。排障：`docs/runbooks/tplus.md`。
+- 模块入口：`src/tplus_datahub/modules/`（`bom/`、`inventory/`、`current_stock/` 等）；
+- 现存量由 `modules/current_stock/sync_current_stock.py` 经官方报表引擎 `ST_CurrentStockRpt` 拉取，集成生产待发与销售订单锁定量，导出脚本 `export_current_stock.py` 自带空数据防清空保护；
+- 独立现存量同步作业：`src/tplus_datahub/jobs/job_sync_current_stock.py`，全量作业 `job_sync_all.py`；
 统一同步作业双写入口：`src/tplus_datahub/jobs/sync_job_platform.py`。
 调度候选内核在 `src/tplus_datahub/jobs/sync_scheduler.py`，与 doc-sync 副本字节相同；候选配置、legacy 回滚和真实 scheduled run 上的 shadow 证据语义与上节一致。
 在本服务目录用 `PYTHONPATH=src:. python -m unittest discover -s tests`（Linux；Windows 路径分隔符用分号）；根 CI 同时运行该子项目测试。
 
 ## services/public-web
 
-公网首页（纯 nginx 静态）：功能卡片、登录、formula 入口、工具分区（灰分计算器）。
+公网首页（纯 nginx 静态）：功能卡片、登录、formula 入口、库存查询（`/inventory/raw-materials/` 与 `/inventory/finished-goods/`）、工具分区（灰分计算器）。
+- `/inventory/raw-materials/` 与 `/inventory/finished-goods/`：原材料与成品库存查询，按 T+ 现存量报表动态展示存货、规格、单位、现存量、可用量及生产/销售锁定量，首列提供 `#` 序号及总数统计；成品/原材由服务端自动按仓库和特征分类。
 `services/public-web/market/index.html` 与 `market/market.js` 是保留的 V6 旧市场人工审阅页；1 秒刷新循环带 `document.hidden` 守卫，后台标签页不再打市场接口；页面只读交易证据，读取 `/v1/market/latest|series|events|positions|annotations`，历史请求使用运行编号和复合游标，标注独立写入。验证：市场 API/认证测试、Chromium 浏览器 smoke、`node --check services/public-web/market/market.js`。
 `market/realtime/index.html` + `realtime.js` 是轻量实时页，只读 `/v1/market/realtime` 的 5/10/15 分钟窗口（默认 5 分钟），按旧观察台的目标合约卡片并列展示秒内最高/最低、成交价、模型 I 价格带和有效挂单，同时保留对冲候选与数据时刻。窗口右端按请求时刻重算，**每轮是独立请求、不带游标**：`next_cursor` 恒为 null，带 `after` 会因窗口已变被本机归档源判 422、经后端统一翻成 `503 source_unavailable`。稳态轮询带服务端 `next_since` 与已消费 `revision`；来源修订变化时服务端回 `revision_reset=true`，页面清缓存并整窗重取。Gold 源 packet sequence 跳号会作为 `sequence_gap_alerts` 原样透传并显示在状态栏；补齐所有缺失 packet 后 Gold 返回 `sequence_gap_resolutions`，页面只在没有活动缺口时显示“已补齐”，整窗重取不等于源缺口已经修复。服务端按窗口做秒级降采样并只回图表/卡片用到的列，稳态每轮约 19KB，轮询节拍 500ms（与 Gold 快照的 0.5s 一致）。秒内最高/最低取 `quotes[].ohlc.high|low`，挂单取 `quotes[].orders[]`，对冲候选按 `hedge_ranking[].target_contract` 归到目标合约卡片（`contract` 是对冲腿）——`market-review.v1` 没有 `buy_order`/`sell_order`/顶层 `hedge_ranking` 字段。`market/today/index.html` 与 `market/history/index.html` 通过 `review-detail.js` 首屏只读事件索引，选择一笔后才读详情并画目标/对冲曲线。三页公用 `page-common.js` 处理 OIDC 浏览器绑定交接、token 过期和 403｜无权限。详情响应只含图表所需价格/I 价格带字段、最多 200 条生命周期和账本摘要；原始观测证据留在数据库。验收、生产版本 SHA-256、负载证据和剩余浏览器验收见 `docs/superpowers/plans/2026-09-10-market-three-page-acceptance.md`。
 实时页消息流（2026-09-28 接线）：`realtime.js` 先调 `GET /v1/market/stream-token`（`app/routers/market_stream.py`，仅对仍有 `market.read` 的用户签发 60 秒 Centrifugo JWT，服务端订阅 `gold:market`，audience `gold-market-stream`、issuer `aliecs-market`，密钥 `GSM_CENTRIFUGO_TOKEN_SECRET` 与登录密钥分开，缺失回 503），经同源 `/connection/websocket` 连 WSL broker，订阅后再取 `GET /v1/market/bootstrap?window_minutes=5|10|15` 原子快照（`market_snapshot.py` 转发 Gold `/display/bootstrap`），`realtime-state.js` 按 `stream_epoch`+`source_sequence` 去重/判缺口，epoch 变化或缺口即重取快照；`realtime-stream.js` 是传输层，SDK 为 `vendor/centrifuge-5.7.4.js`。尚无首条观测时，空窗口只进入等待状态并停止 HTTP 窗口轮询，状态摘要继续更新；第一条发布到来才重新取快照，不能把无运行身份的空窗口误报为连续行情。消息流不可用时退回 `since` 增量 HTTP 轮询（2 秒），状态栏 `#stream-status` 显示当前模式。验证：`node --test tests/realtime-*.test.cjs`、`tests/test_market_stream_auth.py`、`tests/test_market_frontend.py`。

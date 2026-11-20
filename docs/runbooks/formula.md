@@ -95,6 +95,12 @@ chrome --headless --disable-gpu --window-size=1600,1000 \
   python3 -m unittest tests/test_formula_color_space_frontend.py
   ```
 
+## 配方同步来源绑定与 run 状态校准（2026-11-20）
+
+页面顶部显示的「来源：`bom_YYYYMMDD_HHMMSS.xlsx · 同步 #<id> (YYYY/MM/DD HH:MM:SS · <status>)`」由 `services/backend-api/app/routers/recipes.py` 的 `_latest_bom_sync_run` 提供：
+- **匹配机制**：以当前使用的 BOM 文件名（或最后一次成功的 BOM 同步时刻）去反查 `integration_sync_runs` 表中的 `module='all'` 或 `module='bom'` 的批次记录。
+- **状态容错**：在全量同步中，若因边缘模块（如未配置的 `expense`、`income` 等单据）导致整轮 status 记为 `failed` 时，**只要本次 BOM 模块自身成功产出物料清单**，系统依然将该 run 作为配方的真实同步来源绑定，不再退化回历史的旧 run（如 9 月底的 `#661`），确保用户在页面上始终看到配方最近一次被 T+ 成功同步的真实状态与时间戳。
+
 ## 热更新
 
 `public-web` 是 nginx 静态；热更新前从 [fleet](../fleet.md) 核对目标和容器，从 [deploy](deploy.md) 读取发布、重建与回灌要求。操作须在用户授权范围内；涉及共享脚本时同时发布依赖。

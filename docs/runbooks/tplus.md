@@ -58,6 +58,10 @@
 | 定时全量**每天同一时刻**失败、`error_json` 里 bom/inventory 都是 `status=999 EXERROR0001 网络异常`，白天手动跑却全通 | 失败时刻的分布：`SELECT to_char(started_at AT TIME ZONE 'Asia/Shanghai','MM-DD HH24:MI'), status FROM integration_sync_runs WHERE module='all' ORDER BY id DESC LIMIT 20;` | **T+ 服务端那侧在该时段不可用**，不是我们的链路。`EXERROR0001` 是畅捷通云网关转发不到 T+ 服务器时返回的。`inventory`（扁平档案，正常 9s）也一起挂就能排除慢查询超时。2026-08-06~08-10 连续 5 天 02:01 全挂、08-01~08-03 连续 3 天 23:30 全挂，而 12:22 / 18:38 / 07:3x 全部成功；08-10 09:08 白天只读探测三接口全 200。**处置是把执行时刻挪到 T+ 可用的时段**，不是改代码。凌晨不可用的具体原因与窗口边界至今未取证。2026-08-30 同族复发一次（详见下一行 10107） |
 | 同步中心 T+ ERP 页 19 个资产**各挂一条**「需要处理的表」，看起来像 19 个故障 | `SELECT seq,name,status,message FROM sync_job_steps WHERE run_id=<该次 run>;` | **是一次运行里的一条级联，不是 19 个独立故障**——19 个资产共用 `chanjet.full` 一个作业，页面按资产逐行展示同一条告警。2026-08-30 01:02 CST 实测形态：步骤 1 `bom` 耗时 30s 读超时，其后 18 个步骤在 6 秒内全部返回 `{"code":"10107","messages":"T+ Server is not found."}`（10107 与上一行的 `EXERROR0001` 同源，都是畅捷通云网关转发不到 T+ 服务器）。判别「是不是我们这侧的问题」用白天只读探测，不落库：`docker exec business-cn-tplus-sync-worker-1 sh -c 'cd /app && PYTHONPATH=/app:/app/src python -c "…ChanjetClient().post(\"/tplus/api/v2/inventory/QueryPage\", {\"param\":{\"PageIndex\":1,\"PageSize\":1}})"'`——2026-08-30 08:56 CST 实测 inventory 2.31s / bom 0.66s 全 200，openToken 有效。前 6 天（08-23~08-28）连续成功、08-22 同一时刻出过同样的 10107，可据此排除「本次部署引入」 |
 | `/formula/colors/` 冒出一批「编码失联」，但父件在 T+ 里确实存在 | worker 日志 `Module failed, continuing with the rest: module=inventory`；`integration_sync_runs` 最后一条 `scheduled_full` 的 `detail_json.failed_modules` | 存货档案**只在定时全量里落库**（`job_sync_all` → `persist_inventory_records`）。纯存货父件（无 BOM）全靠它匹配；那一轮没跑成，页面就误判失联（2026-08-07 实测 41 条） |
+| `/inventory/` 原材库/成品库查不到现存量或返回 0 条 | 查看现存量数据源是否仍走废弃的 `/tplus/api/v2/currentStock/Query` | **专有接口在未核算基础库时恒返 0 条**。已升级为官方报表引擎 `ST_CurrentStockRpt`（`/tplus/api/v2/reportQuery/GetReportData`，2026-11-20）；带空数据保护：行数为 0 时拒绝覆盖已有 Excel |
+| `/inventory/raw-materials/` 原材可用量全是 0 | 原材是否有大量未领料的生产加工单 | **T+ 底层可用量公式**：可用量 = 现存量 − 锁定量（生产待发 + 销售待发）+ 预计入库。排产已将现存原料全部分配锁死为 `producefordispatchbasequantity`（生产锁定），故自由可用量为 0，物理在库正常 |
+| `/inventory/finished-goods/` 搜特定成品（如 1755）无结果 | 该存货是否挂在销售订单待发且报表未标仓库 | 报表行未带 `WarehouseCode` 时，若挂有销售待发（`forsaleorderBaseQuantity` / `saleDeliveryBaseQuantity`）或编码为产成品（4/301/HYD-），必须自动路由到 `002 成品库`，否则会被原材过滤器误排除（2026-11-20 修） |
+| `/formula/` 配方来源一直显示旧编号（如 `#661`）不更新 | `integration_sync_runs` 最新 run 是否因边缘模块报 failed | `_latest_bom_sync_run` 已修正（2026-11-20）：即使全量同步因边缘单据报错导致 status=failed，只要本次 BOM 模块产出物料清单，即正常关联最新 run |
 
 ## 定时全量的失败边界与告警
 
@@ -185,6 +189,17 @@
 `/v1/tplus/inventory-create-options` 返回 502（`tplus_bom.py` 把 urllib 的 HTTPError 统一包成 502）。
 链路本身当时已恢复可达，缺的只是开放平台侧重置。**以后任何涉及公网入口的迁移/停机，
 事后都要回查这条 webhook 是否仍在收。**
+
+## 现存量同步与报表引擎（2026-11-20 上线）
+
+- **数据源迁移**：废弃返回 0 行的专有查询接口 `/tplus/api/v2/currentStock/Query`，改用官方报表引擎 `ST_CurrentStockRpt`（`/tplus/api/v2/reportQuery/GetReportData`）。
+- **字段映射与业务口径**：
+  - 物理在库现存量：账面物理现存量 `BaseQuantity` 若为 0，以实际锁定量（`producefordispatchbasequantity` 生产待发 + `forsaleorderBaseQuantity` 销售订单待发 + `saleDeliveryBaseQuantity` 销货待发）作为在库现存量依据；
+  - 生产/销售锁定：聚合生产待发量与销售占用量，对应前端表格【生产锁定】列；
+  - 可用量：取 `canuseBaseQuantity`。在生产旺季/大量排产下，原料现存量等于生产待发量，故可用量计算为 0，属正常业务现象。
+- **仓库与存货智能路由**：报表行未指定 `WarehouseCode` 时，若含销售待发占用或存货编码特征为成品（4/301/HYD-），自动分配为 `002 成品库`，其余物料分配为 `001 原材库`，穿透前端与后端的仓库范围过滤。
+- **空数据保护**：`export_current_stock.py` 在拉取行数为 0 时放弃导出并记录 WARNING，避免偶发网络或服务异常将本地历史有效库存文件清空。
+- **前端体验**：`/inventory/raw-materials/` 与 `/inventory/finished-goods/` 均已加入 `#` 序号列和总条数统计。
 
 ## 诊断 SQL（phantom BOM）
 
