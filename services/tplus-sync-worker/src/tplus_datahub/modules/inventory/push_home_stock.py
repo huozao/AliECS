@@ -63,6 +63,65 @@ def filter_finished_stock(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return finished_items
 
 
+def build_finished_and_bom_stock(
+    stock_rows: list[dict[str, Any]],
+    inventory_rows: list[dict[str, Any]] | None = None,
+    warehouse_label: str = "成品库",
+) -> list[dict[str, Any]]:
+    """以物料清单和成品分类为基底，左连接现存量生成全量家里库存清单。
+
+    若未传入 inventory_rows，则回退为仅筛选 stock_rows 中的成品记录。
+    """
+    if not inventory_rows:
+        return filter_finished_stock(stock_rows)
+
+    stock_map: dict[str, float] = {}
+    for r in stock_rows:
+        c = str(r.get("InventoryCode") or "").strip()
+        qty_val = r.get("ExistingQuantity")
+        if qty_val is not None:
+            try:
+                qty = float(qty_val)
+            except (ValueError, TypeError):
+                qty = 0.0
+            stock_map[c] = stock_map.get(c, 0.0) + qty
+
+    target_classes = {"物料清单", "成品"}
+    items: list[dict[str, Any]] = []
+    seen_codes: set[str] = set()
+
+    for r in inventory_rows:
+        cls_name = str(r.get("InventoryClass.Name") or r.get("InventoryClassName") or "").strip()
+        code = str(r.get("Code") or r.get("InventoryCode") or "").strip()
+        if not code or code in seen_codes:
+            continue
+
+        if cls_name in target_classes or code.startswith(("4", "301", "HYD-")):
+            seen_codes.add(code)
+            name = str(r.get("Name") or r.get("InventoryName") or "").strip()
+            spec = str(r.get("Specification") or "").strip()
+            if spec == "nan":
+                spec = ""
+            unit = str(r.get("BaseUnitName") or r.get("UnitName") or "kg").strip()
+            if unit == "nan":
+                unit = "kg"
+
+            qty_num = stock_map.get(code, 0.0)
+            qty_str = f"{qty_num:.4f}".rstrip("0").rstrip(".") if "." in f"{qty_num:.4f}" else str(int(qty_num))
+
+            items.append({
+                "仓库": warehouse_label,
+                "存货编码": code,
+                "存货名称": name,
+                "规格型号": spec,
+                "主计量": unit,
+                "主数量": qty_str,
+            })
+
+    items.sort(key=lambda x: x["存货编码"])
+    return items
+
+
 def render_stock_html_table(items: list[dict[str, Any]], timestamp_str: str = "") -> str:
     """渲染为 meidi-auto 020 步骤能够直接通过 BeautifulSoup 解析提取的标准 HTML 表格。"""
     rows_html = []
@@ -133,12 +192,20 @@ def push_home_stock_email(
     rows: list[dict[str, Any]],
     recipients: list[str],
     *,
+    inventory_rows: list[dict[str, Any]] | None = None,
+    warehouse_label: str = "成品库",
     dry_run: bool = False,
     date_str: str | None = None,
     smtp_client_factory: Any = None,
 ) -> dict[str, Any]:
-    """执行成品库筛选、HTML 渲染与邮件投递。"""
-    finished_items = filter_finished_stock(rows)
+    """执行成品库及物料清单品类筛选、HTML 渲染与邮件投递。"""
+    if inventory_rows:
+        finished_items = build_finished_and_bom_stock(
+            rows, inventory_rows, warehouse_label=warehouse_label
+        )
+    else:
+        finished_items = filter_finished_stock(rows)
+
     if not finished_items:
         raise ValueError("筛选后成品库记录为 0 条，为防止误覆盖拒绝推送！")
 

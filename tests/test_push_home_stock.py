@@ -22,6 +22,7 @@ os.environ.setdefault("EMAIL_PASSWORD_QQ", "dummy_pass")
 
 from tplus_datahub.modules.inventory.push_home_stock import (
     filter_finished_stock,
+    build_finished_and_bom_stock,
     render_stock_html_table,
     build_home_stock_notification,
     push_home_stock_email,
@@ -113,6 +114,22 @@ class PushHomeStockTests(unittest.TestCase):
         self.assertEqual(res["status"], "dry-run")
         self.assertEqual(res["count"], 2)
         self.assertIn("等待您查看", res["subject"])
+
+    def test_build_finished_and_bom_stock(self) -> None:
+        mock_inv = [
+            {"Code": "40000038", "Name": "13375-耐候PS 透光 陶沙杏色母", "InventoryClass.Name": "物料清单", "Specification": "0.04", "BaseUnitName": "kg"},
+            {"Code": "30122", "Name": "30122-BX3027海灰色母", "InventoryClass.Name": "成品", "Specification": "PP", "BaseUnitName": "kg"},
+            {"Code": "01000009", "Name": "绢云母料", "InventoryClass.Name": "原材料", "Specification": "", "BaseUnitName": "kg"},
+        ]
+        items = build_finished_and_bom_stock(self.mock_rows, mock_inv, warehouse_label="成品库")
+        self.assertEqual(len(items), 2)  # 只保留物料清单与成品
+        # 30122在 mock_rows 中存在数量 100
+        item_30122 = next(it for it in items if it["存货编码"] == "30122")
+        self.assertEqual(item_30122["主数量"], "100")
+        # 13375不在 mock_rows 中，数量自动补 0
+        item_13375 = next(it for it in items if it["存货编码"] == "40000038")
+        self.assertEqual(item_13375["主数量"], "0")
+        self.assertEqual(item_13375["仓库"], "成品库")
 
 
 if __name__ == "__main__":

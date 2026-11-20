@@ -201,6 +201,24 @@
 - **空数据保护**：`export_current_stock.py` 在拉取行数为 0 时放弃导出并记录 WARNING，避免偶发网络或服务异常将本地历史有效库存文件清空。
 - **前端体验**：`/inventory/raw-materials/` 与 `/inventory/finished-goods/` 均已加入 `#` 序号列和总条数统计。
 
+## 美的家里库存全量推送与对账契约（2026-11-20 上线）
+
+- **业务背景与目标**：
+  - 美的存量对账流水线（`meidi-auto`）需要每日从收件箱读取家里库存邮件。此前由人工发送或外部生成，现改为由统一消息中枢（`backend-api`）与 T+ 同步服务每日定时自动发送。
+  - 统一发件主体：采用 `1195299529@qq.com`（SMTP 587 STARTTLS），作为 SSO 验证码与系统各业务通知的统一基础设施。
+- **物料清单与产成品分类机制**：
+  - T+ 物理仓库共有 7 个（成品库、原材库等），无“物料清单”物理仓库；
+  - T+ 存货分类中存在分类名称为 **“物料清单”**（编码 `4`，279 种产成品/父件品类）与 **“成品”**（编码 `6`，54 种），共 333 种产成品；美的对账单涉及的 49 款产品全部归属于“物料清单”分类。
+- **数据组装与防断层不变量**：
+  - 模块：`services/tplus-sync-worker/src/tplus_datahub/modules/inventory/push_home_stock.py` 中的 `build_finished_and_bom_stock`；
+  - **核心逻辑**：以全量存货档案（`inventory_*.xlsx`）中的“物料清单”与“成品”作为底表，**左连接**最新现存量报表（`current_stock_*.xlsx`）。有现存量的填入真实物理量，无现存量的精准填入 `0`；
+  - 邮件格式契约：主题格式严格遵循 `存量查询_YYYYMMDD_HHMMSS等待您查看`，正文为标准 6 列 HTML 表格（仓库、存货编码、存货名称、规格型号、主计量、主数量），仓库列填“成品库”；
+  - 下游 `meidi-auto` 的 `030 Warehousing at home.py` 双向兼容 `warehouse_keep_values = ["成品库", "物料清单"]`。
+- **12995 等历史存量事实**：
+  - `40012995 12995-耐候ABS山脉灰` 归属于“物料清单”分类，历史在 2026-09-29 曾有成品库库存 2,375.0 kg，后续已被出库清零，11-20 底层现存量确为 0，回填为 0 属于真实反映账面。
+- **服务部署与定时任务**：
+  - 生产机定时任务部署于 `/usr/local/bin/push-home-stock-daily.sh`，在 `business-cn-backend-api-1` 容器内调用，推送至 `RECIPIENT_EMAILS`（如 `ishell168@qq.com`）。
+
 ## 诊断 SQL（phantom BOM）
 
 ```sql
