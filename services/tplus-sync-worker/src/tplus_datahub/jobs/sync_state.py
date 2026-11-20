@@ -6,6 +6,7 @@ import os
 from collections.abc import Mapping
 from contextlib import closing
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 try:
@@ -248,20 +249,293 @@ def _mark_missing_records(cur: Any, mode: str, normalized: list[dict[str, Any]])
     )
 
 
+def calculate_bom_business_hash(raw: Any) -> str:
+    """计算配方核心业务特征指纹（排除成品率、损耗率、制单/审核时间等系统元数据）。"""
+    if not isinstance(raw, Mapping):
+        return _stable_hash(raw)
+
+    code = str(raw.get("Code") or raw.get("code") or "").strip()
+    version = str(raw.get("Version") or raw.get("version") or "").strip()
+    try:
+        produce_qty = str(Decimal(str(raw.get("ProduceQuantity") or 100)).normalize())
+    except Exception:
+        produce_qty = "100"
+
+    children_raw = raw.get("BOMChildDTOs") or raw.get("BOMChilds") or []
+    normalized_children = []
+    if isinstance(children_raw, list):
+        for ch in children_raw:
+            if not isinstance(ch, Mapping):
+                continue
+            inv = ch.get("Inventory") or {}
+            c_code = str(ch.get("Code") or inv.get("Code") or "").strip()
+            u = ch.get("Unit") or {}
+            u_name = str(ch.get("UnitName") or (u.get("Name") if isinstance(u, Mapping) else u) or "kg").strip()
+            req_qty = ch.get("RequiredQuantity") if ch.get("RequiredQuantity") is not None else ch.get("Quantity")
+            try:
+                qty_str = str(Decimal(str(req_qty if req_qty is not None else 0)).normalize())
+            except Exception:
+                qty_str = str(req_qty)
+            normalized_children.append({
+                "code": c_code,
+                "qty": qty_str,
+                "unit": u_name,
+            })
+    normalized_children.sort(key=lambda x: x["code"])
+
+    payload = {
+        "code": code,
+        "version": version,
+        "produce_quantity": produce_qty,
+        "children": normalized_children,
+    }
+    body = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def compute_bom_diff(old_raw: Any, new_raw: Any) -> tuple[list[dict[str, Any]], str, str]:
+    """比对新老配方的子件差异，返回 (diff_items, change_type, notes)。"""
+    old_raw = old_raw if isinstance(old_raw, Mapping) else {}
+    new_raw = new_raw if isinstance(new_raw, Mapping) else {}
+
+    def extract_child_map(raw: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+        result = {}
+        children = raw.get("BOMChildDTOs") or raw.get("BOMChilds") or []
+        if isinstance(children, list):
+            for ch in children:
+                if not isinstance(ch, Mapping):
+                    continue
+                inv = ch.get("Inventory") or {}
+                c_code = str(ch.get("Code") or inv.get("Code") or "").strip()
+                c_name = str(ch.get("Name") or inv.get("Name") or "").strip()
+                u = ch.get("Unit") or {}
+                u_name = str(ch.get("UnitName") or (u.get("Name") if isinstance(u, Mapping) else u) or "kg").strip()
+                req_qty = ch.get("RequiredQuantity") if ch.get("RequiredQuantity") is not None else ch.get("Quantity")
+                try:
+                    q_dec = Decimal(str(req_qty if req_qty is not None else 0)).normalize()
+                except Exception:
+                    q_dec = Decimal(0)
+                result[c_code] = {"code": c_code, "name": c_name, "unit": u_name, "qty": q_dec}
+        return result
+
+    old_map = extract_child_map(old_raw)
+    new_map = extract_child_map(new_raw)
+
+    diff_items = []
+    all_codes = sorted(set(old_map.keys()) | set(new_map.keys()))
+
+    has_added = False
+    has_removed = False
+    has_qty_change = False
+    only_precision_tweak = True
+
+    for c_code in all_codes:
+        in_old = c_code in old_map
+        in_new = c_code in new_map
+        if not in_old and in_new:
+            has_added = True
+            only_precision_tweak = False
+            item_new = new_map[c_code]
+            diff_items.append({
+                "child_code": c_code,
+                "child_name": item_new["name"],
+                "unit": item_new["unit"],
+                "action": "ADDED",
+                "old_qty": None,
+                "new_qty": str(item_new["qty"]),
+                "diff": str(item_new["qty"]),
+            })
+        elif in_old and not in_new:
+            has_removed = True
+            only_precision_tweak = False
+            item_old = old_map[c_code]
+            diff_items.append({
+                "child_code": c_code,
+                "child_name": item_old["name"],
+                "unit": item_old["unit"],
+                "action": "REMOVED",
+                "old_qty": str(item_old["qty"]),
+                "new_qty": None,
+                "diff": str(-item_old["qty"]),
+            })
+        else:
+            item_old = old_map[c_code]
+            item_new = new_map[c_code]
+            if item_old["qty"] == item_new["qty"] and item_old["unit"] == item_new["unit"]:
+                continue
+            delta = item_new["qty"] - item_old["qty"]
+            if delta == 0 and item_old["unit"] == item_new["unit"]:
+                continue
+            has_qty_change = True
+            is_precision = abs(delta) < Decimal("0.05")
+            if not is_precision:
+                only_precision_tweak = False
+            diff_items.append({
+                "child_code": c_code,
+                "child_name": item_new["name"] or item_old["name"],
+                "unit": item_new["unit"],
+                "action": "MODIFIED",
+                "old_qty": str(item_old["qty"]),
+                "new_qty": str(item_new["qty"]),
+                "diff": str(delta),
+            })
+
+    if not diff_items:
+        return [], "NONE", "无实质差异"
+
+    if has_added or has_removed:
+        change_type = "CHILD_COMPOSITION_CHANGED"
+        notes = "检测到配方子件组成变更（新增或删减子件）"
+    elif has_qty_change:
+        if only_precision_tweak:
+            change_type = "PRECISION_UPDATE"
+            notes = "检测到配方子件高精度小数更新"
+        else:
+            change_type = "QUANTITY_MODIFIED"
+            notes = "检测到配方子件需用数量调整"
+    else:
+        change_type = "METADATA_CHANGED"
+        notes = "检测到基础生产数量或单位调整"
+
+    return diff_items, change_type, notes
+
+
 def _upsert_tplus_bom_records(cur: Any, records: list[dict[str, Any]]) -> None:
     for record in records:
+        raw = record["raw"] if isinstance(record["raw"], Mapping) else {}
+        rec_key = record["record_key"]
+        rec_hash = record["record_hash"]
+        code = str(raw.get("Code") or raw.get("code") or "").strip()
+        name = str(raw.get("Name") or raw.get("name") or "").strip()
+        version = str(raw.get("Version") or raw.get("version") or "").strip()
+        tplus_id = raw.get("ID") or raw.get("id")
+        if tplus_id is not None:
+            try:
+                tplus_id = int(tplus_id)
+            except Exception:
+                tplus_id = None
+
+        new_b_hash = calculate_bom_business_hash(raw)
+
+        # 检查是否已存在当前记录（优先按 record_key，次选按业务主键 Code + Version）
         cur.execute(
             """
-            INSERT INTO tplus_bom_records(record_key, record_hash, raw_json, last_seen_at, missing_since)
-            VALUES (%s, %s, %s, NOW(), NULL)
-            ON CONFLICT(record_key) DO UPDATE
-            SET record_hash = EXCLUDED.record_hash,
-                raw_json = EXCLUDED.raw_json,
-                last_seen_at = NOW(),
-                missing_since = NULL
+            SELECT record_key, business_hash, current_revision, history_id, raw_json
+            FROM tplus_bom_records
+            WHERE (record_key = %s)
+               OR (raw_json->>'Code' = %s AND raw_json->>'Version' = %s AND missing_since IS NULL)
+            ORDER BY (record_key = %s) DESC, last_seen_at DESC NULLS LAST
+            LIMIT 1
             """,
-            (record["record_key"], record["record_hash"], Jsonb(record["raw"])),
+            (rec_key, code, version, rec_key),
         )
+        existing = cur.fetchone()
+
+        if existing is None:
+            # 分支 1：全新记录首次入库
+            cur.execute(
+                """
+                INSERT INTO tplus_bom_history (
+                    bom_code, bom_name, bom_version, tplus_bom_id,
+                    revision, business_hash, raw_json, change_type,
+                    diff_summary, notes, is_active, created_at
+                ) VALUES (
+                    %s, %s, %s, %s,
+                    1, %s, %s, 'INITIAL',
+                    '[]'::jsonb, '首次同步入库', true, NOW()
+                ) RETURNING id
+                """,
+                (code, name, version, tplus_id, new_b_hash, Jsonb(raw)),
+            )
+            hist_id = int(cur.fetchone()[0])
+
+            cur.execute(
+                """
+                INSERT INTO tplus_bom_records (
+                    record_key, record_hash, raw_json, last_seen_at, missing_since,
+                    business_hash, current_revision, history_id
+                ) VALUES (
+                    %s, %s, %s, NOW(), NULL,
+                    %s, 1, %s
+                )
+                """,
+                (rec_key, rec_hash, Jsonb(raw), new_b_hash, hist_id),
+            )
+
+        else:
+            existing_key = existing[0]
+            old_b_hash = existing[1]
+            old_rev = existing[2] or 1
+            old_hist_id = existing[3]
+            old_raw = existing[4]
+
+            if old_b_hash == new_b_hash:
+                # 分支 2：业务指纹完全一致，无实质变动，仅刷新心跳与全量 hash (如 key 变了则平滑更新 key)
+                cur.execute(
+                    """
+                    UPDATE tplus_bom_records
+                    SET last_seen_at = NOW(),
+                        missing_since = NULL,
+                        record_key = %s,
+                        record_hash = %s,
+                        raw_json = %s
+                    WHERE record_key = %s
+                    """,
+                    (rec_key, rec_hash, Jsonb(raw), existing_key),
+                )
+            else:
+                # 分支 3：业务指纹不一致，发生实质变动，归档旧版本并生成新版本
+                diff_items, change_type, notes = compute_bom_diff(old_raw, raw)
+                next_rev = old_rev + 1
+
+                # 归档老版本
+                if old_hist_id:
+                    cur.execute(
+                        """
+                        UPDATE tplus_bom_history
+                        SET is_active = false, archived_at = NOW()
+                        WHERE id = %s
+                        """,
+                        (old_hist_id,),
+                    )
+
+                # 插入新版本
+                cur.execute(
+                    """
+                    INSERT INTO tplus_bom_history (
+                        bom_code, bom_name, bom_version, tplus_bom_id,
+                        revision, business_hash, raw_json, change_type,
+                        diff_summary, notes, is_active, created_at
+                    ) VALUES (
+                        %s, %s, %s, %s,
+                        %s, %s, %s, %s,
+                        %s, %s, true, NOW()
+                    ) RETURNING id
+                    """,
+                    (
+                        code, name, version, tplus_id,
+                        next_rev, new_b_hash, Jsonb(raw), change_type,
+                        Jsonb(diff_items), notes,
+                    ),
+                )
+                new_hist_id = int(cur.fetchone()[0])
+
+                # 更新当前生效表指向新版本
+                cur.execute(
+                    """
+                    UPDATE tplus_bom_records
+                    SET record_key = %s,
+                        record_hash = %s,
+                        raw_json = %s,
+                        last_seen_at = NOW(),
+                        missing_since = NULL,
+                        business_hash = %s,
+                        current_revision = %s,
+                        history_id = %s
+                    WHERE record_key = %s
+                    """,
+                    (rec_key, rec_hash, Jsonb(raw), new_b_hash, next_rev, new_hist_id, existing_key),
+                )
 
 
 def _normalize_row(row: Any) -> dict[str, Any]:

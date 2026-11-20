@@ -263,3 +263,66 @@ class InventoryRecordTests(unittest.TestCase):
         self.assertEqual([], called)
         mark_missing_inventory_records(FakeCur(), "scheduled_full", [{"record_key": "A"}])
         self.assertEqual(1, len(called))
+
+    def test_calculate_bom_business_hash_ignores_loss_and_yield_rate(self):
+        from tplus_datahub.jobs.sync_state import calculate_bom_business_hash
+        bom_a = {
+            "Code": "HYD-9522F",
+            "Version": "V1",
+            "YieldRate": 1.0,
+            "LossRate": 0.05,
+            "BOMChilds": [{"Code": "C1", "RequiredQuantity": 1.5, "Unit": {"Name": "kg"}}],
+        }
+        bom_b = {
+            "Code": "HYD-9522F",
+            "Version": "V1",
+            "YieldRate": 0.98,
+            "LossRate": 0.12,
+            "BOMChilds": [{"Code": "C1", "RequiredQuantity": 1.5, "Unit": {"Name": "kg"}}],
+        }
+        self.assertEqual(calculate_bom_business_hash(bom_a), calculate_bom_business_hash(bom_b))
+
+    def test_calculate_bom_business_hash_ignores_child_ordering(self):
+        from tplus_datahub.jobs.sync_state import calculate_bom_business_hash
+        bom_a = {
+            "Code": "HYD-9522F",
+            "Version": "V1",
+            "BOMChilds": [
+                {"Code": "C2", "RequiredQuantity": 2.0, "Unit": {"Name": "kg"}},
+                {"Code": "C1", "RequiredQuantity": 1.0, "Unit": {"Name": "kg"}},
+            ],
+        }
+        bom_b = {
+            "Code": "HYD-9522F",
+            "Version": "V1",
+            "BOMChilds": [
+                {"Code": "C1", "RequiredQuantity": 1.0, "Unit": {"Name": "kg"}},
+                {"Code": "C2", "RequiredQuantity": 2.0, "Unit": {"Name": "kg"}},
+            ],
+        }
+        self.assertEqual(calculate_bom_business_hash(bom_a), calculate_bom_business_hash(bom_b))
+
+    def test_compute_bom_diff_detects_precision_update(self):
+        from tplus_datahub.jobs.sync_state import compute_bom_diff
+        old_bom = {
+            "Code": "HYD-9522F",
+            "Version": "260826 100份200g",
+            "BOMChilds": [
+                {"Code": "20004", "Name": "炭黑100B", "RequiredQuantity": 0.06, "Unit": {"Name": "kg"}},
+                {"Code": "900017", "Name": "L-8730绿", "RequiredQuantity": 0.04, "Unit": {"Name": "kg"}},
+            ],
+        }
+        new_bom = {
+            "Code": "HYD-9522F",
+            "Version": "260826 100份200g",
+            "BOMChilds": [
+                {"Code": "20004", "Name": "炭黑100B", "RequiredQuantity": 0.064, "Unit": {"Name": "kg"}},
+                {"Code": "900017", "Name": "L-8730绿", "RequiredQuantity": 0.044, "Unit": {"Name": "kg"}},
+            ],
+        }
+        diff_items, change_type, notes = compute_bom_diff(old_bom, new_bom)
+        self.assertEqual("PRECISION_UPDATE", change_type)
+        self.assertEqual(2, len(diff_items))
+        self.assertIn("高精度", notes)
+        self.assertEqual("0.004", diff_items[0]["diff"])
+
