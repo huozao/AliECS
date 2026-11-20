@@ -83,12 +83,19 @@ def sync_current_stock(
             spec = str(r.get("Specification") or "").strip()
             unit_name = str(r.get("BaseUnit") or "").strip()
 
-            wh_code = str(r.get("WarehouseCode") or "").strip() or "001"
-            wh_name = str(r.get("Warehouse") or "").strip() or "原材库"
-
             raw_base_qty = number(r.get("BaseQuantity")) or 0.0
             raw_avail_qty = number(r.get("canuseBaseQuantity")) or 0.0
             raw_dispatch_qty = number(r.get("producefordispatchbasequantity")) or 0.0
+            raw_sale_order_qty = (
+                number(r.get("[ForSaleHeadColumn-销售待发量][forsaleorderBaseQuantity-订单占用量]"))
+                or number(r.get("forsaleorderBaseQuantity"))
+                or 0.0
+            )
+            raw_sale_delivery_qty = (
+                number(r.get("[ForSaleHeadColumn-销售待发量][saleDeliveryBaseQuantity-销货待出量]"))
+                or number(r.get("saleDeliveryBaseQuantity"))
+                or 0.0
+            )
             raw_onway_qty = (
                 number(r.get("[PurchaseOnWayHeadColumn-采购在途量][purchaseorderonwayBaseQuantity-订单在途量]"))
                 or number(r.get("purchaseorderonwayBaseQuantity"))
@@ -96,16 +103,35 @@ def sync_current_stock(
             )
             raw_produce_onway = number(r.get("onproducingbasequantity")) or 0.0
 
-            # 现存量：若有账面物理现存量则取账面量；若账面为0但有生产待发，则以生产待发量代表实际在库原料
-            existing_qty = float(raw_base_qty if raw_base_qty > 0 else (raw_dispatch_qty if raw_dispatch_qty > 0 else 0.0))
+            total_produce_locked = float(raw_dispatch_qty)
+            total_sale_locked = float(raw_sale_order_qty + raw_sale_delivery_qty)
+            total_locked = total_produce_locked + total_sale_locked
+
+            # 判定是否属于成品：有销售待发占用、或编码特征、或存货分类标记为产成品/物料清单
+            is_finished = (
+                total_sale_locked > 0
+                or inv_code.startswith(("4", "301", "HYD-"))
+                or (inventory_class_map and "物料清单" in inventory_class_map.get(inv_code, ""))
+            )
+
+            wh_code = str(r.get("WarehouseCode") or "").strip()
+            wh_name = str(r.get("Warehouse") or "").strip()
+            if not wh_code:
+                wh_code = "002" if is_finished else "001"
+                wh_name = "成品库" if is_finished else "原材库"
+
+            # 现存量：若有账面物理现存量则取账面量；若账面为0但有生产/销售锁定待发，则以锁定量代表实际在库物资
+            existing_qty = float(raw_base_qty if raw_base_qty > 0 else (total_locked if total_locked > 0 else raw_avail_qty))
             avail_qty = float(raw_avail_qty)
-            dispatch_qty = float(raw_dispatch_qty)
+            dispatch_qty = float(total_locked)
             onway_qty = float(raw_onway_qty)
 
             # 存货分类映射
             class_name = ""
             if inventory_class_map and inv_code in inventory_class_map:
                 class_name = inventory_class_map[inv_code]
+            elif is_finished:
+                class_name = "产成品"
             elif inv_code.startswith(("01", "10", "20", "30", "02", "03", "04")):
                 class_name = "原材料"
 

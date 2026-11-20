@@ -31,8 +31,8 @@
     <section class="panel">
       <div class="table-wrap">
         <table>
-          <thead><tr><th>仓库</th><th>存货编码</th><th>存货名称</th><th>分类</th><th>规格型号</th><th>单位</th><th class="num">现存量</th><th class="num">可用量</th><th class="num">生产锁定</th></tr></thead>
-          <tbody id="stockBody"><tr><td colspan="9" class="muted">请登录后查询。</td></tr></tbody>
+          <thead><tr><th style="width:52px">#</th><th>仓库</th><th>存货编码</th><th>存货名称</th><th>分类</th><th>规格型号</th><th>单位</th><th class="num">现存量</th><th class="num">可用量</th><th class="num">生产锁定</th></tr></thead>
+          <tbody id="stockBody"><tr><td colspan="10" class="muted">请登录后查询。</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -81,7 +81,7 @@
           if([...select.options].some((o)=>o.value===DEFAULT_WAREHOUSE)&&!select.dataset.userTouched){select.value=DEFAULT_WAREHOUSE;await search();return;}
         }
         const items=data.items||[];
-        $('stockBody').innerHTML=items.map((r)=>`<tr><td>${esc(r.WarehouseName)}</td><td>${esc(r.InventoryCode)}</td><td>${esc(r.InventoryName)}</td><td>${esc(r.InventoryClassName)}</td><td>${esc(r.Specification)}</td><td>${esc(r.UnitName)}</td><td class="num">${qty(r.ExistingQuantity)}</td><td class="num">${qty(r.AvailableQuantity)}</td><td class="num">${qty(r.ProduceDispatchQuantity)}</td></tr>`).join('')||'<tr><td colspan="9" class="muted">没有匹配的库存记录。</td></tr>';
+        $('stockBody').innerHTML=items.map((r,i)=>`<tr><td class="muted">${i+1}</td><td>${esc(r.WarehouseName)}</td><td>${esc(r.InventoryCode)}</td><td>${esc(r.InventoryName)}</td><td>${esc(r.InventoryClassName)}</td><td>${esc(r.Specification)}</td><td>${esc(r.UnitName)}</td><td class="num">${qty(r.ExistingQuantity)}</td><td class="num">${qty(r.AvailableQuantity)}</td><td class="num">${qty(r.ProduceDispatchQuantity)}</td></tr>`).join('')||'<tr><td colspan="10" class="muted">没有匹配的库存记录。</td></tr>';
         $('countHint').textContent=`${data.total||0} 条`;
         $('metaLine').textContent=`数据文件 ${data.source_file||'-'} · 同步于 ${data.synced_at?String(data.synced_at).slice(0,19).replace('T',' '):'-'} (UTC)`;
       }catch(error){showError(error.message);}
@@ -91,7 +91,7 @@
     document.addEventListener('DOMContentLoaded',()=>{
       document.title=`AliECS · ${PAGE_TITLE}`;$('pageTitle').textContent=PAGE_TITLE;$('allOption').textContent=ALL_LABEL;
       $('loginBtn').onclick=ssoLogin;
-      $('logoutBtn').onclick=()=>{clearAuthToken();syncAuth();$('stockBody').innerHTML='<tr><td colspan="9" class="muted">请登录后查询。</td></tr>';};
+      $('logoutBtn').onclick=()=>{clearAuthToken();syncAuth();$('stockBody').innerHTML='<tr><td colspan="10" class="muted">请登录后查询。</td></tr>';};
       $('searchBtn').onclick=()=>search();
       $('qInput').onkeydown=(e)=>{if(e.key==='Enter')search();};
       $('warehouseSelect').onchange=()=>{$('warehouseSelect').dataset.userTouched='1';search();};
