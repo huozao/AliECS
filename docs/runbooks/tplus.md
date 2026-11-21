@@ -217,7 +217,16 @@
 - **12995 等历史存量事实**：
   - `40012995 12995-耐候ABS山脉灰` 归属于“物料清单”分类，历史在 2026-09-29 曾有成品库库存 2,375.0 kg，后续已被出库清零，11-20 底层现存量确为 0，回填为 0 属于真实反映账面。
 - **服务部署与定时任务**：
-  - 生产机定时任务部署于 `/usr/local/bin/push-home-stock-daily.sh`，在 `business-cn-backend-api-1` 容器内调用，推送至 `RECIPIENT_EMAILS`（如 `ishell168@qq.com`）。
+  - 生产机定时任务脚本位于 `/usr/local/bin/push-home-stock-daily.sh`，在 `business-cn-backend-api-1` 容器内调用，推送至 `RECIPIENT_EMAILS`（如 `ishell168@qq.com`）。
+  - **【2026-11-21 运行状态更新：暂时停用自动推送】**：
+    - **停用原因**：由于目前仓管人员尚未常态化及时在 T+ 中录入实际出入库单据，导致系统账面存量无法准确反映家里真实物理库存。为防误导生产决策与美的流水线对账，已暂时停用自动推送功能。
+    - **当前关闭状态**：
+      1. `txecs` 服务器 root crontab 已注释原定时计划（早 07:00 与晚 17:30，标记为 `# [PAUSED-20261121]`）；
+      2. 脚本 `/usr/local/bin/push-home-stock-daily.sh` 头部已注入安全开关 `PUSH_HOME_STOCK_ENABLED`，默认非 `1` 退出，防止任何误触发。
+    - **后续重新启用操作指引**：
+      待仓管人员完成准确信息录入并确认账面真实性后，按以下两步即可一键恢复：
+      1. 将 `/usr/local/bin/push-home-stock-daily.sh` 中 `PUSH_HOME_STOCK_ENABLED="0"` 改为 `"1"`；
+      2. 运行 `sudo crontab -e`，去除包含 `push-home-stock-daily.sh` 两行前的 `# [PAUSED-20261121]` 注释。
 
 ## 诊断 SQL（phantom BOM）
 
