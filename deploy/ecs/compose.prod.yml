@@ -49,8 +49,6 @@ services:
       # 统一消息中枢。投递代码只在 backend-api 一份，所以三家的凭据都要在这里可见。
       # 路由表（notify_routes）只存 profile / env 变量名，密钥仍旧只在 SOPS。
       NOTIFY_FLUSH_TOKEN: ${NOTIFY_FLUSH_TOKEN:-}
-      NOTIFY_WECHAT_PAYLOAD_KEY: ${NOTIFY_WECHAT_PAYLOAD_KEY:-}
-      NOTIFY_WECHAT_AGENT_TOKENS: ${NOTIFY_WECHAT_AGENT_TOKENS:-}
       FEISHU_COMPANY_A_APP_ID: ${FEISHU_COMPANY_A_APP_ID:-}
       FEISHU_COMPANY_A_APP_SECRET: ${FEISHU_COMPANY_A_APP_SECRET:-}
       # 规范键。app_credentials() 优先读 *_AGENT_ID，读不到才回落到下面的历史拼写。
