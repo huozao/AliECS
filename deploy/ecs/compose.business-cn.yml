@@ -15,6 +15,9 @@ services:
     extends:
       file: compose.prod.yml
       service: backend-api
+    env_file:
+      - path: ${NOTIFY_WECHAT_ENV_FILE:-/srv/business-cn/config/notify-wechat.env}
+        required: false
   doc-sync-worker:
     extends:
       file: compose.prod.yml

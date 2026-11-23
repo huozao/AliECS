@@ -40,6 +40,7 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 汇聚点是 `notify_outbox` 表而不是 HTTP：doc-sync-worker 是另一个镜像、构建上下文
 互不可见，它只写库（`app/notify_client.py`），投递代码只在 backend-api 这一份。
 坑与判据见 `docs/runbooks/notify.md`；飞书那套上传与卡片移植自 `deploy/openclaw-bridge`。
+个人微信候选渠道的文本、PNG、来源权限、目标别名和回执见[接入手册](runbooks/notify.md#个人微信出站渠道)。
 `app/routers/gold_spread_alerts.py` 是黄金价差的业务适配器：校验错单/复盘字段后构造统一
 `Notification`，不直接发送飞书；复盘进度使用结构化 `fields` 展示分区分母、运行时间、
 预计剩余时间和正式报告指标。重复 `dedup_key` 必须从既有 `notify_deliveries` 回读当前状态；
