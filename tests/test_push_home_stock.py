@@ -9,7 +9,7 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BACKEND_ROOT = REPO_ROOT / "services" / "backend-api"
 WORKER_ROOT = REPO_ROOT / "services" / "tplus-sync-worker"
-MEIDI_AUTO_ROOT = REPO_ROOT.parent / "meidi-auto"
+MEIDI_AUTO_ROOT = Path(os.environ.get("MEIDI_AUTO_ROOT", REPO_ROOT.parent / "meidi-auto"))
 MEIDI_AUTO_VENV_PKGS = MEIDI_AUTO_ROOT / ".venv" / "lib" / "python3.12" / "site-packages"
 
 for p in (str(BACKEND_ROOT), str(WORKER_ROOT / "src"), str(WORKER_ROOT), str(MEIDI_AUTO_ROOT), str(MEIDI_AUTO_VENV_PKGS)):
@@ -72,6 +72,10 @@ class PushHomeStockTests(unittest.TestCase):
         self.assertEqual(finished[1]["主数量"], "100")
 
     def test_render_html_matches_meidi_auto_020_parser(self) -> None:
+        script_020_path = MEIDI_AUTO_ROOT / "script" / "020 Email download.py"
+        if not script_020_path.is_file() and "MEIDI_AUTO_ROOT" not in os.environ:
+            self.skipTest("需要同级 meidi-auto 仓库，或通过 MEIDI_AUTO_ROOT 指定检出路径")
+
         finished = filter_finished_stock(self.mock_rows)
         html_table = render_stock_html_table(finished, timestamp_str="2026-11-19 16:30:00")
 
@@ -80,7 +84,6 @@ class PushHomeStockTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             with mock.patch.object(sys, "argv", ["020 Email download.py", tmp_dir]):
-                script_020_path = MEIDI_AUTO_ROOT / "script" / "020 Email download.py"
                 loader = SourceFileLoader("script_020", str(script_020_path))
                 mod_020 = loader.load_module()
 
