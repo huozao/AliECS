@@ -597,6 +597,63 @@ bridge 运维告警使用来源 `openclaw-bridge`、事件 `bridge.alert`，只�
 
 ## 个人微信出站渠道
 
+### 业务项目接入
+
+此节对应个人微信候选渠道。接入前由维护人提供已发布的中枢基址、通知来源、来源令牌和目标别名。若基址已包含 `/api` 代理前缀，调用时保留。试运行的执行器入口仅供设备领取任务。
+
+1. 由维护人登记来源、事件和群或联系人的别名，将别名绑定到唯一的微信内部接收 ID 和执行器。业务调用方只传别名。
+2. 用 `X-Notify-Source` 和 `X-Notify-Token` 调用 `POST {base}/v1/internal/notify/send-wechat`。
+3. 从响应取得 `outbox_id`，用同一来源凭据调用 `GET {base}/v1/internal/notify/deliveries/{outbox_id}`。
+
+```python
+import os
+from datetime import datetime, timedelta, timezone
+
+import requests
+
+base = os.environ["NOTIFY_BASE_URL"].rstrip("/")
+headers = {
+    "X-Notify-Source": os.environ["NOTIFY_SOURCE"],
+    "X-Notify-Token": os.environ["NOTIFY_TOKEN"],
+}
+payload = {
+    "event": "invoice.review_ready",
+    "dedup_key": "invoice:example-batch:review-ready",
+    "target": "wechat-invoice-review",
+    "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
+    "content": [{"type": "text", "text": "发票已完成解析，请复核。"}],
+}
+response = requests.post(
+    f"{base}/v1/internal/notify/send-wechat",
+    headers=headers, json=payload, timeout=10, allow_redirects=False,
+)
+response.raise_for_status()
+outbox_id = response.json()["outbox_id"]
+receipt = requests.get(
+    f"{base}/v1/internal/notify/deliveries/{outbox_id}",
+    headers=headers, timeout=10, allow_redirects=False,
+)
+receipt.raise_for_status()
+```
+
+PNG 可作为下一段，格式为 `{"type":"image","ref":"sample-chart","png_base64":"<已编码的 PNG>"}`。
+每张解码后最多 2 MiB，全部图片的 base64 字符数合计最多 4,000,000，一次最多 8 段。
+图片随请求一起提交，进入独立加密载荷并按顺序投递。`ref` 是请求内标识，首期没有单独的附件上传 API。
+
+| 结果 | 调用方处理 |
+|---|---|
+| 202，含 `outbox_id`、`delivery_id`、`status`、`duplicate` | 已受理或为重复提交。用回执查询实际状态。 |
+| 401 / 403 | 核对来源凭据、目标授权、别名唯一性及路由开关。 |
+| 409 | 去重键冲突。核对已有任务，避免换键造成重复发送。 |
+| 413 / 422 | 核对内容大小、格式和截止时间。 |
+| 请求超时 / 5xx | 如需重试，保留同一业务键和整个原请求，包括截止时间。 |
+
+`deliveries[].parts` 按从零开始的段序号记状态及服务端消息 ID。
+`wechat_pending`、`wechat_leased`、`wechat_sending` 表示处理中。`sent` 表示所有段获明确回执。
+部分成功时保留已发送段，`unknown` 只对账。协议回执、会话回读、手机收到分别核验。
+
+### 实现与运维
+
 `POST /v1/internal/notify/send-wechat` 使用现有来源鉴权和投递账本。仅匹配
 `personal_wechat` 渠道及与请求来源完全相同的已启用路由。目标 JSON 包含 `alias`、
 `agent`、`username`，只有显式设置 `sensitive: true` 的路由才允许短时敏感文本。
