@@ -73,7 +73,7 @@ def enqueue(conn, notification: Notification) -> tuple[int, bool]:
     return int(existing[0]), False
 
 
-def matching_routes(conn, source_key: str, event: str, level: str) -> list[dict[str, Any]]:
+def matching_routes(conn, source_key: str, event: str, level: str, *, channel: str | None = None) -> list[dict[str, Any]]:
     """匹配路由。source_key 与 event_pattern 都支持 glob（'*' 即全部）。
 
     过滤放在 Python 而不是 SQL：event_pattern 是 glob 不是 LIKE，而且路由表规模
@@ -97,6 +97,10 @@ def matching_routes(conn, source_key: str, event: str, level: str) -> list[dict[
                 row,
             )
         )
+        if channel is not None and route["channel"] != channel:
+            continue
+        if channel is None and route["channel"] == "personal_wechat":
+            continue
         if not fnmatch.fnmatchcase(source_key, str(route["source_key"])):
             continue
         if not fnmatch.fnmatchcase(event, str(route["event_pattern"])):
@@ -196,9 +200,18 @@ def delivery_receipt(conn, outbox_id: int, source_key: str) -> dict[str, Any] | 
         }
         for row in rows
     ]
+    with conn.cursor() as cur:
+        for delivery in deliveries:
+            if delivery["channel"] == "personal_wechat":
+                cur.execute("SELECT receipts FROM notify_wechat_payloads WHERE delivery_id=%s",
+                            (delivery["delivery_id"],))
+                detail = cur.fetchone()
+                delivery["parts"] = detail[0] if detail else {}
     counts = {"sent": 0, "pending": 0, "dead": 0}
     for delivery in deliveries:
         status = str(delivery["status"])
+        if status in {"wechat_pending", "wechat_leased", "wechat_sending"}:
+            status = "pending"
         if status in counts:
             counts[status] += 1
     return {

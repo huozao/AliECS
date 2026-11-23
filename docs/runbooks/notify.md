@@ -594,3 +594,31 @@ bridge 运维告警使用来源 `openclaw-bridge`、事件 `bridge.alert`，只�
 新部署先登记来源及路由，再从 SOPS 渲染 `NOTIFY_CENTER_ENDPOINT`、`NOTIFY_CENTER_SOURCE`、`NOTIFY_CENTER_TOKEN`、`NOTIFY_CENTER_TIMEOUT_SECONDS`，最后按授权范围发布。endpoint 随网络模式核对，运行位置只查 [fleet](../fleet.md) 与 [deploy](deploy.md)。SQL 中使用目标占位符，不在文档复制真实群 ID。
 
 验证覆盖成功投递、502 已入队和中枢不可用三类；代码测试见 `tests/test_openclaw_bridge.py`，真实通知验证须有发送授权。
+
+## 个人微信出站渠道
+
+`POST /v1/internal/notify/send-wechat` 使用现有来源鉴权和投递账本。仅匹配
+`personal_wechat` 渠道及与请求来源完全相同的已启用路由。目标 JSON 包含 `alias`、
+`agent`、`username`，只有显式设置 `sensitive: true` 的路由才允许短时敏感文本。
+路由与具体身份在目标环境配置。元数据排入原有 outbox，每个目标继续使用原有投递凭证接口。
+
+请求含 `event`、`dedup_key`、`target`、带时区的 `expires_at` 和有序 `content`。
+文本段为 `{"type":"text","text":"示例"}`。PNG 段包含 `type: image`、
+`ref` 和 `png_base64`，原生图像仍遵守现有 PNG 格式与大小限制。
+敏感通知使用 `sensitive: true`，只接受单段文本，且有效期至多 30 分钟。
+普通通知的有效期至多 24 小时。相同来源和键的重试返回同一投递，内容不同时返回 409。
+202 表示入账。查询实际结果使用原有 `/v1/internal/notify/deliveries/<id>`，个人微信
+投递包含逐段 `parts` 回执。
+
+先应用 `db/migrations/0066_notify_personal_wechat.sql`。配置
+`NOTIFY_WECHAT_PAYLOAD_KEY`（32 字节随机值的 base64 编码）与
+`NOTIFY_WECHAT_AGENT_TOKENS`（执行器 ID 到独立令牌的 JSON 映射）。
+两个配置由部署侧私密配置交付。更新密钥前先暂停路由并处理积压，否则旧载荷无法解密。
+敏感明文只在发送请求、解密及执行期间使用。备份中的密文仍需按密钥和留存规则保护。
+
+执行器用 `X-Notify-Wechat-Agent` 和 `X-Notify-Wechat-Token` 调用
+`/v1/internal/notify/wechat/claim`，领取后对具体投递调用 `/begin`，最后通过 `/receipt`
+提交逐段回执。只有 begin 成功才获取内容。禁用来源、禁用群路由或修改目标配置后，
+尚未 begin 的任务无法得到内容。关停验收要运行一次既有 flush 并确认
+待发项已取消后才能重新开启。可能已提交到微信的任务进入 unknown，需对账。
+个人微信状态独立于飞书和企微的重试状态，旧 flush 不会向微信直接发送。

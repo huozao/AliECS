@@ -14,10 +14,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import HTMLResponse, JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from app.core import _conn
-from app.notify import dispatch, store
+from app.notify import dispatch, personal_wechat, store
 from app.notify.models import Notification
 
 router = APIRouter()
@@ -82,6 +84,58 @@ def send_notification(
     return {"ok": True, "delivered": True, **result}
 
 
+
+def _wechat_agent(
+    x_notify_wechat_agent: str = Header(default=""),
+    x_notify_wechat_token: str = Header(default=""),
+) -> str:
+    return personal_wechat.require_agent(x_notify_wechat_agent, x_notify_wechat_token)
+
+
+@router.post("/v1/internal/notify/send-wechat", status_code=202)
+async def send_wechat(request: Request, source: str = Depends(_require_source)):
+    buffer = bytearray()
+    async for chunk in request.stream():
+        buffer.extend(chunk)
+        if len(buffer) > 4_100_000:
+            raise HTTPException(413, "wechat notification too large")
+    try:
+        body = personal_wechat.Submission.model_validate_json(buffer)
+    except ValueError:
+        raise HTTPException(422, "invalid wechat notification") from None
+    def save():
+        with closing(_conn()) as conn:
+            result = personal_wechat.submit(conn, source, body)
+            conn.commit()
+        return result
+
+    return await run_in_threadpool(save)
+
+
+@router.post("/v1/internal/notify/wechat/claim")
+def claim_wechat(agent: str = Depends(_wechat_agent)):
+    with closing(_conn()) as conn:
+        task = personal_wechat.claim(conn, agent)
+        conn.commit()
+    return {"task": task}
+
+
+@router.post("/v1/internal/notify/wechat/{delivery_id}/begin")
+def begin_wechat(delivery_id: int, body: personal_wechat.Lease, agent: str = Depends(_wechat_agent)):
+    with closing(_conn()) as conn:
+        result = personal_wechat.begin(conn, agent, delivery_id, body.lease)
+        conn.commit()
+    return JSONResponse(jsonable_encoder(result), headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/internal/notify/wechat/{delivery_id}/receipt")
+def finish_wechat(delivery_id: int, body: personal_wechat.Receipt, agent: str = Depends(_wechat_agent)):
+    with closing(_conn()) as conn:
+        result = personal_wechat.finish(conn, agent, delivery_id, body)
+        conn.commit()
+    return result
+
+
 @router.get("/v1/internal/notify/deliveries/{outbox_id}")
 def get_delivery_receipt(
     outbox_id: int,
@@ -101,6 +155,10 @@ def flush_pending(
     limit: int = 50,
     _: None = Depends(_require_flush_token),
 ) -> dict[str, Any]:
+    if os.getenv("NOTIFY_WECHAT_PAYLOAD_KEY"):
+        with closing(_conn()) as conn:
+            personal_wechat.cleanup(conn)
+            conn.commit()
     return {"ok": True, **dispatch.flush(limit=max(1, min(limit, 200)))}
 
 
