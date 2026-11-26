@@ -301,12 +301,11 @@ class TestWechatRecoveryNativeCards(unittest.TestCase):
                     "FEISHU_TEST_APP_SECRET": "sec_mock",
                 },
             ),
-            mock.patch("app.notify.dispatch._conn", return_value=FakeConn()),
-            mock.patch("app.notify.dispatch.store.enqueue", return_value=(501, True)),
-            mock.patch("app.notify.dispatch.store.upsert_decision", return_value=(77, "pending")) as upsert_mock,
-            mock.patch("app.notify.dispatch.store.get_public_base_url", return_value="https://notify.example.com"),
-            mock.patch(
-                "app.notify.dispatch.store.matching_routes",
+            mock.patch.object(dispatch, "_conn", return_value=FakeConn()),
+            mock.patch.object(dispatch.store, "enqueue", return_value=(501, True)),
+            mock.patch.object(dispatch.store, "upsert_decision", return_value=(77, "pending")) as upsert_mock,
+            mock.patch.object(dispatch.store, "get_public_base_url", return_value="https://notify.example.com"),
+            mock.patch.object(dispatch.store, "matching_routes",
                 return_value=[
                     {
                         "channel": "feishu",
@@ -318,9 +317,9 @@ class TestWechatRecoveryNativeCards(unittest.TestCase):
                     }
                 ],
             ),
-            mock.patch("app.notify.dispatch.store.create_deliveries", return_value=[{"id": 9001, "channel": "feishu", "target_json": {"profile": "TEST", "receive_id": "oc_example_group", "receive_id_type": "chat_id"}}]),
-            mock.patch("app.notify.dispatch.store.mark_sent") as mark_sent_mock,
-            mock.patch("app.notify.dispatch.sender_for", return_value=lambda n, t: feishu.send(n, t, opener=fake_opener)),
+            mock.patch.object(dispatch.store, "create_deliveries", return_value=[{"id": 9001, "channel": "feishu", "target_json": {"profile": "TEST", "receive_id": "oc_example_group", "receive_id_type": "chat_id"}}]),
+            mock.patch.object(dispatch.store, "mark_sent") as mark_sent_mock,
+            mock.patch.object(dispatch, "sender_for", return_value=lambda n, t: feishu.send(n, t, opener=fake_opener)),
         ):
             result = dispatch.deliver(notif)
 
@@ -358,12 +357,11 @@ class TestWechatRecoveryNativeCards(unittest.TestCase):
                     "FEISHU_TEST_APP_SECRET": "sec_mock",
                 },
             ),
-            mock.patch("app.notify.dispatch._conn", return_value=FakeConn()),
-            mock.patch("app.notify.dispatch.store.enqueue", return_value=(502, True)),
-            mock.patch("app.notify.dispatch.store.upsert_decision", return_value=(78, "pending")),
-            mock.patch("app.notify.dispatch.store.get_public_base_url", return_value="https://notify.example.com"),
-            mock.patch(
-                "app.notify.dispatch.store.matching_routes",
+            mock.patch.object(dispatch, "_conn", return_value=FakeConn()),
+            mock.patch.object(dispatch.store, "enqueue", return_value=(502, True)),
+            mock.patch.object(dispatch.store, "upsert_decision", return_value=(78, "pending")),
+            mock.patch.object(dispatch.store, "get_public_base_url", return_value="https://notify.example.com"),
+            mock.patch.object(dispatch.store, "matching_routes",
                 return_value=[
                     {
                         "channel": "feishu",
@@ -375,8 +373,7 @@ class TestWechatRecoveryNativeCards(unittest.TestCase):
                     }
                 ],
             ),
-            mock.patch(
-                "app.notify.dispatch.store.create_deliveries",
+            mock.patch.object(dispatch.store, "create_deliveries",
                 return_value=[
                     {
                         "id": 9002,
@@ -389,8 +386,8 @@ class TestWechatRecoveryNativeCards(unittest.TestCase):
                     }
                 ],
             ),
-            mock.patch("app.notify.dispatch.store.mark_sent"),
-            mock.patch("app.notify.dispatch.sender_for", return_value=lambda n, t: feishu.send(n, t, opener=fake_opener)),
+            mock.patch.object(dispatch.store, "mark_sent"),
+            mock.patch.object(dispatch, "sender_for", return_value=lambda n, t: feishu.send(n, t, opener=fake_opener)),
         ):
             result = dispatch.deliver(notif)
 
