@@ -9,20 +9,31 @@ from __future__ import annotations
 import html
 import hmac
 import os
-from contextlib import closing
+from contextlib import asynccontextmanager, closing
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
-from app.core import _conn
-from app.notify import dispatch, personal_wechat, store
+from app.core import _conn, _database_url
+from app.notify.channels import feishu
+from app.notify import decision_realtime, dispatch, personal_wechat, store
 from app.notify.models import Notification
 
-router = APIRouter()
+
+@asynccontextmanager
+async def _notify_lifespan(_app: Any):
+    try:
+        yield
+    finally:
+        await decision_realtime.shutdown_decision_streams()
+
+
+router = APIRouter(lifespan=_notify_lifespan)
 
 
 def _require_source(
@@ -392,11 +403,24 @@ async def post_decision_choice(
         if target_opt is None:
             raise HTTPException(status_code=422, detail="invalid option")
 
+        if (
+            feishu.is_wechat_recovery_native_cards_enabled()
+            and decision_realtime.should_emit_decision_wake(decision["source_key"], decision["key"], opt)
+        ):
+            prefix = decision["key"].split(":", 1)[0]
+            current = store.get_current_wechat_recovery_decision(conn, prefix=prefix)
+            if not current or current["id"] != decision_id:
+                raise HTTPException(status_code=409, detail="recovery card is no longer current")
+            if current["status"] == "answered":
+                return HTMLResponse(_render_decision_result_page(
+                    current, option_label=current["chosen_label"], chosen_at=current["chosen_at"],
+                ))
+            decision = current
         client_ip = request.client.host if request.client else ""
         user_agent = request.headers.get("user-agent", "")
-        chosen_at = store.record_decision_choice(
+        chosen_at = store.record_decision_choice_with_wake(
             conn,
-            decision_id=decision_id,
+            decision=decision,
             option_key=target_opt["key"],
             option_label=target_opt["label"],
             client_ip=client_ip,
@@ -406,6 +430,156 @@ async def post_decision_choice(
 
     content = _render_decision_result_page(decision, option_label=target_opt["label"], chosen_at=chosen_at)
     return HTMLResponse(content=content, status_code=200)
+
+
+def _require_feishu_recovery_token(
+    x_notify_feishu_action_token: str | None = Header(default=None),
+) -> None:
+    """原生飞书恢复动作独立服务间令牌校验（fail-closed）。"""
+    expected = decision_realtime.feishu_recovery_gateway_token()
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="feishu recovery gateway token is not configured",
+        )
+    supplied = (x_notify_feishu_action_token or "").strip()
+    if not supplied or not hmac.compare_digest(expected, supplied):
+        raise HTTPException(status_code=401, detail="invalid feishu action token")
+
+
+class FeishuDecisionChoiceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    decision_key: str = Field(min_length=1, max_length=128)
+    option_key: str = Field(min_length=1, max_length=32)
+    operator_open_id: str = Field(min_length=1, max_length=128)
+    chat_id: str = Field(min_length=1, max_length=128)
+
+    @field_validator("decision_key", "option_key", "operator_open_id", "chat_id")
+    @classmethod
+    def _strip_non_empty(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("field must not be empty")
+        return stripped
+
+
+@router.get("/v1/internal/notify/decisions/stream")
+async def stream_decision_wakes(
+    source_key: str = Depends(_require_source),
+) -> StreamingResponse:
+    """来源授权的实时决策唤醒 SSE（基于 PostgreSQL LISTEN/NOTIFY）。"""
+    db_url = _database_url()
+    try:
+        initial_conn = await decision_realtime.start_decision_listen(db_url)
+    except Exception as exc:
+        decision_realtime.logger.warning(
+            "decision stream listen init failed source=%s error=%s",
+            source_key,
+            type(exc).__name__,
+        )
+        raise HTTPException(status_code=503, detail="decision stream unavailable") from None
+
+    handle: decision_realtime.StreamHandle | None = None
+    try:
+        handle = decision_realtime.register_stream(initial_conn)
+        heartbeat_sec = decision_realtime.heartbeat_seconds()
+        reconnect_init, reconnect_max = decision_realtime.reconnect_bounds()
+        stream = decision_realtime.decision_wake_stream(
+            source_key=source_key,
+            database_url=db_url,
+            initial_conn=initial_conn,
+            handle=handle,
+            heartbeat_interval=heartbeat_sec,
+            reconnect_initial=reconnect_init,
+            reconnect_max=reconnect_max,
+        )
+        return StreamingResponse(
+            stream,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-store",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    except Exception:
+        if handle is not None:
+            decision_realtime._active_streams.discard(handle)
+        await decision_realtime.close_listen_connection(initial_conn)
+        raise
+
+
+@router.post("/v1/internal/notify/decisions/feishu-choice")
+def post_feishu_decision_choice(
+    body: FeishuDecisionChoiceRequest,
+    request: Request,
+    _: None = Depends(_require_feishu_recovery_token),
+) -> dict[str, Any]:
+    """原生飞书卡片恢复动作入口：仅限 wechat-digest 当前 QR 决策，fail-closed 授权。"""
+    allowed_chats = decision_realtime.feishu_recovery_allowed_chats()
+    if not allowed_chats:
+        raise HTTPException(
+            status_code=503,
+            detail="feishu recovery chat allowlist is not configured",
+        )
+    allowed_operators = decision_realtime.feishu_recovery_allowed_operators()
+    if not allowed_operators:
+        raise HTTPException(
+            status_code=503,
+            detail="feishu recovery operator allowlist is not configured",
+        )
+    if not decision_realtime.matches_allowlist(body.chat_id, allowed_chats):
+        raise HTTPException(status_code=403, detail="chat_id not allowed")
+    if not decision_realtime.matches_allowlist(body.operator_open_id, allowed_operators):
+        raise HTTPException(status_code=403, detail="operator_open_id not allowed")
+    if not decision_realtime.is_wechat_recovery_decision_key(body.decision_key):
+        raise HTTPException(
+            status_code=403,
+            detail="only wechat-digest QR recovery decisions are allowed",
+        )
+
+    client_ip = request.client.host if request.client else ""
+    with closing(_conn()) as conn:
+        current = store.get_current_wechat_recovery_decision(
+            conn, for_update=True, **({"prefix": "telegram-login"} if body.decision_key.startswith("telegram-login:") else {})
+        )
+        if current is None:
+            raise HTTPException(status_code=404, detail="current recovery decision not found")
+        if current["key"] != body.decision_key:
+            raise HTTPException(status_code=409, detail="decision is not the current QR decision")
+        options = current.get("options") or []
+        target_opt = next((o for o in options if o.get("key") == body.option_key), None)
+        if target_opt is None or body.option_key not in decision_realtime.WECHAT_RECOVERY_OPTIONS:
+            raise HTTPException(status_code=422, detail="invalid option")
+        if (
+            current.get("status") == "answered"
+            and current.get("chosen_option") == target_opt["key"]
+        ):
+            conn.commit()
+            return {
+                "ok": True,
+                "decision_key": body.decision_key,
+                "option_key": target_opt["key"],
+                "newly_recorded": False,
+            }
+        if current.get("status") == "answered":
+            raise HTTPException(status_code=409, detail="recovery choice already recorded")
+        store.record_decision_choice_with_wake(
+            conn,
+            decision=current,
+            option_key=target_opt["key"],
+            option_label=target_opt["label"],
+            client_ip=client_ip,
+            user_agent="feishu-choice",
+        )
+        conn.commit()
+
+    return {
+        "ok": True,
+        "decision_key": body.decision_key,
+        "option_key": target_opt["key"],
+        "newly_recorded": True,
+    }
 
 
 @router.get("/v1/internal/notify/decisions/by-key")

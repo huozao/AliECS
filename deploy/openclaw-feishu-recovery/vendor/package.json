@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@larksuite/openclaw-lark": "2026.7.16",
+    "@larksuiteoapi/node-sdk": "1.77.0"
+  }
+}
