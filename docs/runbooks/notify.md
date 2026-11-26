@@ -223,6 +223,34 @@ OpenClaw 的 `/im/v1/messages` 调用仍保留在**会话传输适配器**内，
 - `NOTIFY_PUBLIC_BASE_URL`：决策链接公网基址，用于拼接按钮 URL `<公网基址>/api/v1/notify/decisions/<决策ID>?t=<令牌>&opt=<option.key>`。
 - 生产环境建议值：`https://hydwang.xyz`。
 - 回退逻辑：未设时回退至 `APP_BASE_URL`；若两者均未设，默认使用 `https://hydwang.xyz`（理由：生产者当前生产公网地址即 `https://hydwang.xyz/api/v1/internal/notify/send`，且生产环境统一域名即 `hydwang.xyz`）。
+- `NOTIFY_WECHAT_RECOVERY_NATIVE_CARDS`：是否由卡片渲染侧为 `wechat-digest` 微信登录恢复决策启用原生回调按钮；默认未设/关闭，保留旧链接确认页模式。
+- `NOTIFY_FEISHU_RECOVERY_GATEWAY_TOKEN`：`POST /api/v1/internal/notify/decisions/feishu-choice` 专用独立服务间凭据（请求头 `X-Notify-Feishu-Action-Token`），未配置时接口 fail-closed 拒绝（503）。
+- `NOTIFY_FEISHU_RECOVERY_CHAT_ID`：允许触发原生恢复动作的飞书群白名单（单个或逗号分隔），未配置或含 `*` 时 fail-closed 拒绝（503）。
+- `NOTIFY_FEISHU_RECOVERY_OPERATORS`：允许触发原生恢复动作的飞书操作者 `open_id` 白名单（逗号分隔），未配置或含 `*` 时 fail-closed 拒绝（503）。
+- `NOTIFY_DECISION_STREAM_HEARTBEAT_SECONDS`：决策 SSE 空闲注释心跳间隔（默认 `20` 秒，低于 Nginx 默认 `60s` 读取超时）。
+
+### 实时唤醒 SSE 与微信恢复原生入口
+
+[飞书恢复插件与无副作用测试卡](../../deploy/openclaw-feishu-recovery/README.md)单独安装。保留 OpenClaw 2026.6.5 时，飞书官方插件可同步返回受理提示，内置通道走原有固定命令和异步回复。原生卡片只覆盖微信和 Telegram 登录恢复。启用前先在测试群验证真实回调、操作者和群白名单。原生按钮与网页确认页使用同一个实时唤醒通道。迁移 `0067_notify_recovery_card_receipts.sql` 记录投递回执，用于在旧卡显示最终发送状态。中枢业务角色从受保护的 `notify-recovery.env` 获取开关与专用授权配置。
+
+<!-- nav-check-python: services/backend-api/app/notify/decision_realtime.py:notify_decision_wake -->
+<!-- nav-check-python: services/backend-api/app/notify/decision_realtime.py:decision_wake_stream -->
+<!-- nav-check-python: services/backend-api/app/routers/notify.py:stream_decision_wakes -->
+<!-- nav-check-python: services/backend-api/app/routers/notify.py:post_feishu_decision_choice -->
+<!-- nav-check-python: services/backend-api/app/notify/store.py:get_current_wechat_recovery_decision -->
+<!-- nav-check: tests/test_notify_recovery_realtime.py -->
+
+- **同事务 PostgreSQL NOTIFY**：无论是确认页 `POST /api/v1/notify/decisions/{id}` 还是原生卡片入口 `POST /api/v1/internal/notify/decisions/feishu-choice`，仅当决策属于 `source=wechat-digest`、键匹配 `wechat-login:<掉线ID>:<尝试号>` 或 `telegram-login:<掉线ID>:<尝试号>` 且选择为 `regen` 或 `skip` 时，才会在同一数据库事务内（`conn.commit()` 之前）执行 `SELECT pg_notify('notify_decision_wake', 'wechat-digest')`。通道载荷只传来源名，不携带账号、掉线 ID、尝试号或验证码；事务回滚不触发唤醒；旧普通决策行为不变。
+- **来源授权 SSE（`GET /api/v1/internal/notify/decisions/stream`）**：
+  - 复用 `_require_source`（`X-Notify-Source` / `X-Notify-Token`）鉴权，错误或禁用来源立即 401。
+  - 先建立独立 `autocommit=True` 的 PostgreSQL `LISTEN notify_decision_wake` 连接，成功后再返回 `text/event-stream`（带 `Cache-Control: no-cache, no-store`、`X-Accel-Buffering: no`）并立即输出 `event: wake` / `data: {}`；初始建连或 `LISTEN` 失败返回 503。
+  - 消费者（如 WebDock2）收到 `wake` 后仅读取自身状态文件中的当前 `decision_key`，并调用既有 `GET /api/v1/internal/notify/decisions/by-key` 查询事实源（从而天然覆盖早于 `LISTEN` 提交的选择，且不执行历史或其他来源决策；启动/重连主动查一次，300s 健康检查作为退避兜底，唯一执行入口幂等）。
+  - 空闲期间仅输出 SSE 注释心跳 `: heartbeat`；忽略非本来源的 `NOTIFY` 信号；PG 断线后执行真实指数退避 `LISTEN` 重连并在重连就绪时立即发送 `event: wake` / `data: {}` 覆盖断线窗口；客户端断开或路由关闭生命周期触发时自动关闭释放 PG `LISTEN` 连接（`uvicorn` 若存在长连接 SSE 需快速优雅停机，可在部署侧按需配置 `--timeout-graceful-shutdown`）。
+- **原生卡片选择入口（`POST /api/v1/internal/notify/decisions/feishu-choice`）**：
+  - 仅接受精确 4 个 JSON 字段：`decision_key`、`option_key`、`operator_open_id`、`chat_id`（拒绝额外或空白字段），请求头 `X-Notify-Feishu-Action-Token`。
+  - 全部授权与白名单 fail-closed：仅允许 `wechat-digest` **当前最新** `wechat-login:<掉线ID>:<尝试号>` QR 决策（被新尝试替代的旧 key 返回 409）、该决策已知的 `regen|skip` 选项（否则 422）、以及白名单内的 `chat_id` 和 `operator_open_id`（否则 403/503）。
+  - 走同一持久化与历史记录路径；当前 QR 决策若已为同一 `option_key`，重投或并发均在行锁下幂等返回 `{"ok": true, "decision_key": "...", "option_key": "..."}`，不重复记事件或重复唤醒。
+- **回归验证**：`tests/test_notify_recovery_realtime.py`（离线模拟事务提交/回滚、早于 LISTEN 提交、无效连接、PG 断线重连、其他来源隔离、关闭释放、并发与重投幂等、fail-closed 授权与旧普通决策回归；设 `NOTIFY_DECISION_INTEGRATION_DATABASE_URL` 时附带运行真实 PostgreSQL 端到端集成测试）。
 
 ### Nginx 路由结论与证据
 
@@ -251,12 +279,14 @@ OpenClaw 的 `/im/v1/messages` 调用仍保留在**会话传输适配器**内，
 | 422 `total buttons exceeds limit of 5` | `decision.options` 数量加上原本的 `buttons` 与 `link` 超过 5 个 | 飞书交互卡片单行按钮总上限为 5；减少自定义 buttons 或 options 数量 |
 | 422 `invalid decision key` / `invalid decision option key` | 键名字符超出白名单 | 决策 key 仅支持 `[A-Za-z0-9_.:-]`，选项 key 仅支持小写 `[a-z0-9_-]` |
 | 422 原生载荷插入按钮失败 | `channel_payloads.feishu` 不是 interactive 卡片或缺少 `body.elements` 列表 | 调整原生卡片结构，提供标准 JSON 2.0 的 `body.elements` 供中枢追加决策按钮 |
+| 401 `invalid feishu action token` | `X-Notify-Feishu-Action-Token` 缺失或与 `NOTIFY_FEISHU_RECOVERY_GATEWAY_TOKEN` 不一致 | 核对桥接适配器的独立网关凭据配置（不能混用 `X-Notify-Token`） |
+| 403 `chat_id not allowed` / `operator_open_id not allowed` | 群 ID 或操作者 `open_id` 不在白名单 | 核对 `NOTIFY_FEISHU_RECOVERY_CHAT_ID` 与 `NOTIFY_FEISHU_RECOVERY_OPERATORS` |
+| 409 `decision is not the current QR decision` | 点击了已被新尝试替代的历史 QR 卡片 | 提示使用最新卡片或改用确认页，禁止向旧尝试再次执行 |
+| 503 `decision stream unavailable` / 未配置白名单或凭据 | `DATABASE_URL` 不可用 / 初次 `LISTEN` 失败，或网关凭据/白名单未配置（或含 `*`） | 核对后端数据库连接及 `NOTIFY_FEISHU_RECOVERY_*` 必填环境变量 |
 
 ### 做不到的（别答应业务）
 
-- **交互回调按钮**（点赞、点踩、屏蔽等依赖平台原生回调的场景）：需要公网入站端点 + 飞书验签 + 在开放
-  平台配「消息卡片请求网址」。中枢现在是纯出站管道（`notify_outbox → notify_deliveries`），
-  没有反方向的入站回调链路；业务若需要点击选择，统一改用上述「决策按钮（链接按钮）」。
+- **通用交互回调按钮**（点赞、点踩、屏蔽等通用业务场景）：仍需飞书公网入站回调及普通业务验签架构；当前除上述限 `wechat-digest` 微信登录恢复经过独立服务间令牌与严格白名单转发的 `feishu-choice` 受控入口外，普通业务决策统一使用「决策按钮（链接按钮）」确认页通道。
 - **复制 / 朗读按钮**：飞书 AI 回复气泡上那三个是**客户端原生 UI**，不是卡片组件，
   机器人发的卡片渲染不出来。
 

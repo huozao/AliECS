@@ -16,8 +16,8 @@ import secrets
 from typing import Any
 
 from app.core import _conn
-from app.notify import store
-from app.notify.channels import sender_for
+from app.notify import recovery_cards, store
+from app.notify.channels import feishu, sender_for
 from app.notify.models import Notification, NotifyButton
 
 logger = logging.getLogger("aliecs.notify")
@@ -26,7 +26,7 @@ logger = logging.getLogger("aliecs.notify")
 def _attempt(conn, delivery: dict[str, Any], notification: Notification) -> str:
     """发一条。返回 'sent' / 'pending'（待重试）/ 'dead'（重试用尽）。"""
     try:
-        sender_for(str(delivery["channel"]))(notification, dict(delivery["target_json"] or {}))
+        receipt = sender_for(str(delivery["channel"]))(notification, dict(delivery["target_json"] or {}))
     except Exception as exc:  # noqa: BLE001 - 任何投递失败都只是这一条的事，不该炸掉整批
         reason = f"{type(exc).__name__}: {exc}"
         status = store.mark_failed(conn, int(delivery["id"]), reason)
@@ -36,12 +36,16 @@ def _attempt(conn, delivery: dict[str, Any], notification: Notification) -> str:
         )
         return status
     store.mark_sent(conn, int(delivery["id"]))
+    if delivery["channel"] == "feishu":
+        recovery_cards.record_receipt(conn, int(delivery["id"]), notification, receipt)
     return "sent"
 
 
 def attach_decision_buttons_to_native(
     channel_payloads: dict[str, Any],
     decision_buttons: list[NotifyButton],
+    *,
+    native_button_elements: list[dict[str, Any]] | None = None,
 ) -> None:
     """把决策按钮插入 channel_payloads 原生卡片（追加到 body.elements 末尾）。
 
@@ -70,21 +74,27 @@ def attach_decision_buttons_to_native(
             if not isinstance(body, dict) or "elements" not in body or not isinstance(body["elements"], list):
                 raise ValueError("feishu native payload missing 'body.elements' list for decision buttons")
 
+            rendered_buttons = (
+                native_button_elements
+                if native_button_elements is not None
+                else [
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": btn.text},
+                        "type": btn.style,
+                        "width": "default",
+                        "behaviors": [{"type": "open_url", "default_url": btn.url}],
+                    }
+                    for btn in decision_buttons
+                ]
+            )
             btn_columns = [
                 {
                     "tag": "column",
                     "width": "auto",
-                    "elements": [
-                        {
-                            "tag": "button",
-                            "text": {"tag": "plain_text", "content": btn.text},
-                            "type": btn.style,
-                            "width": "default",
-                            "behaviors": [{"type": "open_url", "default_url": btn.url}],
-                        }
-                    ],
+                    "elements": [btn_el],
                 }
-                for btn in decision_buttons
+                for btn_el in rendered_buttons
             ]
             button_element = {
                 "tag": "column_set",
@@ -133,7 +143,11 @@ def deliver(notification: Notification, *, conn=None) -> dict[str, Any]:
                 for opt in notification.decision.options
             ]
             notification.buttons.extend(decision_buttons)
-            attach_decision_buttons_to_native(notification.channel_payloads, decision_buttons)
+            attach_decision_buttons_to_native(
+                notification.channel_payloads,
+                decision_buttons,
+                native_button_elements=feishu.native_decision_button_elements(notification),
+            )
 
         outbox_id, is_new = store.enqueue(connection, notification)
         if not is_new:
@@ -255,6 +269,8 @@ def flush(limit: int = 50, *, conn=None) -> dict[str, Any]:
                 dead += 1
             else:
                 failed += 1
+        if feishu.is_wechat_recovery_native_cards_enabled():
+            recovery_cards.refresh_cards(connection, min(limit, 5))
         return {
             "claimed": len(pending),
             "adopted": adopted["adopted"],

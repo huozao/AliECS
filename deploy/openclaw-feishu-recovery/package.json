@@ -1,0 +1,18 @@
+{
+  "name": "@aliecs/openclaw-feishu-recovery",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone optional OpenClaw 2026.6.5 command adapter for wechat-digest Feishu recovery cards (non-LLM, fail-closed).",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.mjs"
+    ]
+  },
+  "scripts": {
+    "test": "node --test ./feishu-recovery.test.mjs ./openclaw-2026.6.5-probe.test.mjs"
+  }
+}

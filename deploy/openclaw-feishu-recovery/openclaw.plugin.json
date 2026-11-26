@@ -1,0 +1,52 @@
+{
+  "id": "feishu-recovery",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Feishu WeChat Recovery Card Bridge",
+  "description": "Fixed non-LLM command bridge for AliECS wechat-digest Feishu recovery cards.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "probeOnly": {
+        "type": "boolean",
+        "default": false,
+        "description": "Only acknowledge test cards in allowed chats. All decision submissions are blocked."
+      },
+      "aliecsBaseUrl": {
+        "type": "string",
+        "minLength": 1,
+        "description": "AliECS backend base URL (or env NOTIFY_FEISHU_RECOVERY_BASE_URL)."
+      },
+      "actionToken": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Shared service token sent via X-Notify-Feishu-Action-Token (or env NOTIFY_FEISHU_RECOVERY_GATEWAY_TOKEN)."
+      },
+      "allowedChatIds": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": "Allowed Feishu group chat_id list (or env NOTIFY_FEISHU_RECOVERY_CHAT_ID)."
+      },
+      "allowedOperators": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": "Allowed Feishu operator_open_id list (or env NOTIFY_FEISHU_RECOVERY_OPERATORS)."
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 500,
+        "maximum": 30000,
+        "default": 5000,
+        "description": "HTTP timeout in milliseconds for AliECS feishu-choice. Native card callbacks cap this at 1800 ms."
+      }
+    }
+  }
+}

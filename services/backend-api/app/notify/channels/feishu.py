@@ -18,6 +18,7 @@ import re
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from typing import Any
@@ -93,7 +94,7 @@ def tenant_access_token(profile: str, *, opener=urllib.request.urlopen) -> str:
 
 
 def _post_json(
-    profile: str, path: str, payload: dict[str, Any], token: str, *, opener=urllib.request.urlopen
+    profile: str, path: str, payload: dict[str, Any], token: str, *, opener=urllib.request.urlopen, method="POST"
 ) -> dict[str, Any]:
     request = urllib.request.Request(
         api_base(profile) + path,
@@ -102,7 +103,7 @@ def _post_json(
             "Content-Type": "application/json; charset=utf-8",
             "Authorization": "Bearer " + token,
         },
-        method="POST",
+        method=method,
     )
     try:
         with opener(request, timeout=20) as response:
@@ -277,14 +278,155 @@ def _fields_columns(fields: list[Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def _button(text: str, url: str, style: str, *, width: str) -> dict[str, Any]:
+WECHAT_RECOVERY_NATIVE_CARDS_ENV = "NOTIFY_WECHAT_RECOVERY_NATIVE_CARDS"
+WECHAT_RECOVERY_COMMAND = "wechat_recovery"
+WECHAT_RECOVERY_ALLOWED_OPTIONS = frozenset({"regen", "skip"})
+_WECHAT_RECOVERY_DECISION_KEY_RE = re.compile(
+    r"^(?:wechat|telegram)-login:(?!test:)([A-Za-z0-9._-]+):([A-Za-z0-9._-]+)$"
+)
+_DECISION_URL_PATH_RE = re.compile(r"/api/v1/notify/decisions/\d+$")
+_TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def is_wechat_recovery_native_cards_enabled() -> bool:
+    """是否显式开启 wechat-digest 恢复原生按钮卡片（默认关闭，回退旧链接）。"""
+    return os.getenv(WECHAT_RECOVERY_NATIVE_CARDS_ENV, "").strip().lower() in _TRUTHY_ENV_VALUES
+
+
+def is_wechat_recovery_decision(notification: Notification) -> bool:
+    """仅对 wechat-digest 的真实 QR 恢复决策（regen/skip）放行原生回调卡。"""
+    if notification.source != "wechat-digest" or notification.decision is None:
+        return False
+    if not _WECHAT_RECOVERY_DECISION_KEY_RE.match(notification.decision.key):
+        return False
+    options = notification.decision.options
+    if not options:
+        return False
+    option_keys = {opt.key for opt in options}
+    return option_keys.issubset(WECHAT_RECOVERY_ALLOWED_OPTIONS)
+
+
+def build_wechat_recovery_callback_value(decision_key: str, option_key: str) -> dict[str, Any]:
+    """构造官方飞书插件的交互命名空间和内置通道的 ocf1 固定命令。
+
+    不写入 chat_id（c.h）或操作者（c.u），仅声明 c.t='group' 避免 OpenClaw 在
+    im.chat.get 失败或缺少权限时回退为 p2p 而丢失可信群上下文 chat:<oc_id>。
+    """
+    if not _WECHAT_RECOVERY_DECISION_KEY_RE.match(decision_key):
+        raise ValueError(f"unsupported wechat recovery decision_key: {decision_key!r}")
+    if option_key not in WECHAT_RECOVERY_ALLOWED_OPTIONS:
+        raise ValueError(f"unsupported wechat recovery option_key: {option_key!r}")
+    return {
+        "action": f"wechat-recovery:choose {decision_key} {option_key}",
+        "oc": "ocf1",
+        "k": "quick",
+        "a": f"wechat-recovery:{option_key}",
+        "q": f"/{WECHAT_RECOVERY_COMMAND} choose {decision_key} {option_key}",
+        "c": {"t": "group"},
+    }
+
+
+def _button_element(
+    text: str,
+    style: str,
+    *,
+    width: str,
+    behavior: dict[str, Any],
+) -> dict[str, Any]:
     return {
         "tag": "button",
         "text": {"tag": "plain_text", "content": text},
         "type": style,
         "width": width,
-        "behaviors": [{"type": "open_url", "default_url": url}],
+        "behaviors": [behavior],
     }
+
+
+def _button(text: str, url: str, style: str, *, width: str) -> dict[str, Any]:
+    return _button_element(
+        text,
+        style,
+        width=width,
+        behavior={"type": "open_url", "default_url": url},
+    )
+
+
+def _callback_button(
+    text: str,
+    value: dict[str, Any],
+    style: str,
+    *,
+    width: str,
+) -> dict[str, Any]:
+    return _button_element(
+        text,
+        style,
+        width=width,
+        behavior={"type": "callback", "value": value},
+    )
+
+
+def native_decision_button_elements(notification: Notification) -> list[dict[str, Any]] | None:
+    """开关开启且命中 wechat-digest 恢复决策时返回原生 callback 按钮元素列表。"""
+    if not (is_wechat_recovery_native_cards_enabled() and is_wechat_recovery_decision(notification)):
+        return None
+    assert notification.decision is not None
+    return [
+        _callback_button(
+            opt.label,
+            build_wechat_recovery_callback_value(notification.decision.key, opt.key),
+            opt.style,
+            width="default",
+        )
+        for opt in notification.decision.options
+    ]
+
+
+def _extract_decision_fallback_url(url: str, option_keys: set[str]) -> str | None:
+    parsed = urllib.parse.urlsplit(url)
+    if not _DECISION_URL_PATH_RE.search(parsed.path):
+        return None
+    query_pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    has_token = any(k == "t" and bool(v.strip()) for k, v in query_pairs)
+    opt_values = [v for k, v in query_pairs if k == "opt"]
+    if not (has_token and len(opt_values) == 1 and opt_values[0] in option_keys):
+        return None
+    filtered_query = [(k, v) for k, v in query_pairs if k != "opt"]
+    return urllib.parse.urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            urllib.parse.urlencode(filtered_query),
+            parsed.fragment,
+        )
+    )
+
+
+def _append_button_specs(
+    elements: list[dict[str, Any]],
+    specs: list[tuple[str, str, dict[str, Any]]],
+) -> None:
+    if len(specs) == 1:
+        text, style, behavior = specs[0]
+        elements.append(_button_element(text, style, width="fill", behavior=behavior))
+        return
+    if specs:
+        elements.append(
+            {
+                "tag": "column_set",
+                "flex_mode": "flow",
+                "horizontal_spacing": "8px",
+                "columns": [
+                    {
+                        "tag": "column",
+                        "width": "auto",
+                        "elements": [_button_element(text, style, width="default", behavior=behavior)],
+                    }
+                    for text, style, behavior in specs
+                ],
+            }
+        )
 
 
 def build_card(notification: Notification, image_keys: dict[str, str]) -> dict[str, Any]:
@@ -366,23 +508,42 @@ def build_card(notification: Notification, image_keys: dict[str, str]) -> dict[s
             elements.extend(other_elements)
 
     buttons = notification.all_buttons()
-    if len(buttons) == 1:
-        elements.append(_button(buttons[0].text, buttons[0].url, buttons[0].style, width="fill"))
-    elif buttons:
+    fallback_confirm_url: str | None = None
+    if is_wechat_recovery_native_cards_enabled() and is_wechat_recovery_decision(notification):
+        assert notification.decision is not None
+        option_keys = {opt.key for opt in notification.decision.options}
+        button_specs: list[tuple[str, str, dict[str, Any]]] = [
+            (
+                opt.label,
+                opt.style,
+                {
+                    "type": "callback",
+                    "value": build_wechat_recovery_callback_value(
+                        notification.decision.key, opt.key
+                    ),
+                },
+            )
+            for opt in notification.decision.options
+        ]
+        for button in buttons:
+            extracted = _extract_decision_fallback_url(button.url, option_keys)
+            if extracted is not None:
+                if fallback_confirm_url is None:
+                    fallback_confirm_url = extracted
+                continue
+            button_specs.append(
+                (button.text, button.style, {"type": "open_url", "default_url": button.url})
+            )
+    else:
+        button_specs = [
+            (button.text, button.style, {"type": "open_url", "default_url": button.url})
+            for button in buttons
+        ]
+
+    _append_button_specs(elements, button_specs)
+    if fallback_confirm_url:
         elements.append(
-            {
-                "tag": "column_set",
-                "flex_mode": "flow",
-                "horizontal_spacing": "8px",
-                "columns": [
-                    {
-                        "tag": "column",
-                        "width": "auto",
-                        "elements": [_button(button.text, button.url, button.style, width="default")],
-                    }
-                    for button in buttons
-                ],
-            }
+            _notation(f"若原生按钮无响应，可使用[网页确认页（旧链接回退）]({fallback_confirm_url})")
         )
 
     elements.append(_notation(f"{notification.source} · {notification.event}"))
@@ -408,6 +569,18 @@ def build_card(notification: Notification, image_keys: dict[str, str]) -> dict[s
         "header": header,
         "body": {"direction": "vertical", "elements": elements},
     }
+
+
+def update_recovery_card(profile: str, message_id: str, title: str, status: str) -> None:
+    token = tenant_access_token(profile)
+    card = {
+        "schema": "2.0",
+        "config": {"update_multi": True},
+        "header": {"title": {"tag": "plain_text", "content": title}},
+        "body": {"elements": [{"tag": "markdown", "content": status}]},
+    }
+    _post_json(profile, "/im/v1/messages/" + message_id,
+               {"content": json.dumps(card, ensure_ascii=False)}, token, method="PATCH")
 
 
 def _native_content_json(content: Any) -> str:
@@ -448,7 +621,7 @@ def _send_native(
     return True
 
 
-def send(notification: Notification, target: dict[str, Any], *, opener=urllib.request.urlopen) -> None:
+def send(notification: Notification, target: dict[str, Any], *, opener=urllib.request.urlopen) -> dict[str, Any] | None:
     """投递一条通知。失败抛异常，由 dispatch 记账重试。
 
     target: {"profile": "COMPANY_A", "receive_id": "oc_xxx", "receive_id_type": "chat_id"}
@@ -491,7 +664,7 @@ def send(notification: Notification, target: dict[str, Any], *, opener=urllib.re
 
     try:
         card = build_card(notification, image_keys)
-        _post_json(
+        result = _post_json(
             profile,
             path,
             {
@@ -502,7 +675,7 @@ def send(notification: Notification, target: dict[str, Any], *, opener=urllib.re
             token,
             opener=opener,
         )
-        return
+        return {"message_id": (result.get("data") or {}).get("message_id"), "qr_attached": "qr" in image_keys}
     except Exception:
         # 卡片被拒（结构、字段长度、权限都可能）时退回纯文本：图丢了但字还在。
         # 与 gold_spread_alerts 现有的降级策略同口径。

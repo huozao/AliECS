@@ -12,6 +12,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
+from app.notify import decision_realtime
 from app.notify.models import Notification, NotifyDecision, level_at_least
 
 # 重试退避：第 n 次失败后等 BACKOFF_SECONDS[n-1]，四档全部用完才判 dead。
@@ -530,6 +531,71 @@ def record_decision_choice(
             (option_key, option_label, created_at, decision_id),
         )
     return created_at
+
+
+def record_decision_choice_with_wake(
+    conn: Any,
+    *,
+    decision: dict[str, Any],
+    option_key: str,
+    option_label: str,
+    client_ip: str = "",
+    user_agent: str = "",
+) -> datetime:
+    """持久化选择并在同一事务内按条件发送 PostgreSQL NOTIFY 唤醒。"""
+    created_at = record_decision_choice(
+        conn,
+        decision_id=int(decision["id"]),
+        option_key=option_key,
+        option_label=option_label,
+        client_ip=client_ip,
+        user_agent=user_agent,
+    )
+    decision_realtime.notify_decision_wake(
+        conn,
+        source_key=str(decision.get("source_key") or ""),
+        decision_key=str(decision.get("key") or ""),
+        option_key=option_key,
+    )
+    return created_at
+
+
+def get_current_wechat_recovery_decision(
+    conn: Any, *, for_update: bool = True, prefix: str = "wechat-login"
+) -> dict[str, Any] | None:
+    """读取当前服务最新的登录恢复决策。"""
+    lock_clause = " FOR UPDATE" if for_update else ""
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT id, source_key, decision_key, question, options_json,
+                   status, chosen_option, chosen_label, chosen_at, created_at, updated_at
+            FROM notify_decisions
+            WHERE source_key = %s AND decision_key LIKE %s
+            ORDER BY created_at DESC, id DESC
+            LIMIT 20{lock_clause}
+            """,
+            (decision_realtime.WECHAT_DIGEST_SOURCE, prefix + ":%"),
+        )
+        rows = cur.fetchall() or []
+    for row in rows:
+        key = str(row[2])
+        if not decision_realtime.is_wechat_recovery_decision_key(key):
+            continue
+        return {
+            "id": int(row[0]),
+            "source_key": str(row[1]),
+            "key": key,
+            "question": str(row[3]),
+            "options": _parse_json(row[4]),
+            "status": str(row[5]),
+            "chosen_option": row[6] if row[6] is not None else None,
+            "chosen_label": row[7] if row[7] is not None else None,
+            "chosen_at": row[8],
+            "created_at": row[9],
+            "updated_at": row[10],
+        }
+    return None
 
 
 def get_decision_by_key(conn: Any, source_key: str, decision_key: str) -> dict[str, Any] | None:

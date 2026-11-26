@@ -1,0 +1,82 @@
+{
+  "_comment": "用于隔离环境核验飞书回调，不生成二维码。",
+  "card": {
+    "schema": "2.0",
+    "config": {
+      "width_mode": "fill",
+      "update_multi": true
+    },
+    "header": {
+      "title": {
+        "tag": "plain_text",
+        "content": "微信恢复原生卡片离线测试卡（无副作用）"
+      },
+      "subtitle": {
+        "tag": "plain_text",
+        "content": "仅验证飞书回调与可信上下文，不改状态、不发真实 QR"
+      },
+      "template": "wathet",
+      "text_tag_list": [
+        {
+          "tag": "text_tag",
+          "text": {
+            "tag": "plain_text",
+            "content": "无副作用测试"
+          },
+          "color": "turquoise"
+        }
+      ]
+    },
+    "body": {
+      "direction": "vertical",
+      "elements": [
+        {
+          "tag": "markdown",
+          "content": "点击下方按钮只会触发 `/wechat_recovery test-card`，在 OpenClaw 2026.6.5 插件层回执可信群与操作者诊断信息，不请求 `feishu-choice` 也不生成第二张卡片。"
+        },
+        {
+          "tag": "column_set",
+          "flex_mode": "flow",
+          "horizontal_spacing": "8px",
+          "columns": [
+            {
+              "tag": "column",
+              "width": "auto",
+              "elements": [
+                {
+                  "tag": "button",
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "测试原生回调（无副作用）"
+                  },
+                  "type": "primary",
+                  "width": "default",
+                  "behaviors": [
+                    {
+                      "type": "callback",
+                      "value": {
+                        "action": "wechat-recovery:test-card default",
+                        "oc": "ocf1",
+                        "k": "quick",
+                        "a": "wechat-recovery:test-card",
+                        "q": "/wechat_recovery test-card default",
+                        "c": {
+                          "t": "group"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "markdown",
+          "text_size": "notation",
+          "content": "wechat-digest · test-card（示例卡片，严禁向生产群直接发送或写入真实凭据）"
+        }
+      ]
+    }
+  }
+}
