@@ -54,6 +54,7 @@ FastAPI 总后端。`app/main.py` 只做装配，业务在 `app/core.py` + `app/
 公网 `GET/POST /v1/notify/decisions/{id}` 确认页（GET 只读、POST 记录、可改选），生产者用
 `/v1/internal/notify/decisions/by-key` 按来源查询；令牌每次发卡一个、只存 sha256。契约与排障见
 `docs/runbooks/notify.md` 的“决策按钮”节，真实库回归 `tests/test_notify_decision_integration.py`。
+微信和 Telegram 登录恢复使用 `decision_realtime.py` 与 `recovery_cards.py`。迁移 `0067_notify_recovery_card_receipts.sql` 为飞书卡片和同群带图送达保存回执。
 
 ## services/doc-sync-worker
 
