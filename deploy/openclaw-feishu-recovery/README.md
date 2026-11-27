@@ -5,7 +5,7 @@
 
 ## 固定版本与接手
 
-- 中枢与网关适配器以 [AliECS 合并提交](https://github.com/huozao/AliECS/commit/acf00b476c87a406d4fa4d859afe5e60a7fe2e07) 为准。业务中枢的正式发布查看 [GitHub 发布执行](https://github.com/huozao/AliECS/actions/runs/45828246969) 并核对设备的发布 SHA、原生按钮开关和网关插件状态。
+- 中枢与网关适配器以 [AliECS 合并提交](https://github.com/huozao/AliECS/commit/acf00b476c87a406d4fa4d859afe5e60a7fe2e07) 为准。业务中枢已从该固定提交通过[应急发布通道](https://github.com/huozao/AliECS/actions/runs/45844386124)切换，以成功的 stage-business-cn-peer 回执为准。常规 TCR 路径的后端镜像上传曾连续超时，详情见[交接记录](https://github.com/nihil7/wechat-digest/issues/1#issuecomment-7195949418)。接手时核对设备发布 SHA、原生按钮开关与网关插件状态。
 - WebDock2 的 [wechat-digest 固定提交](https://github.com/nihil7/wechat-digest/commit/7970a17cfe16c4d6d85ad7c554b5a3a34e896246) 已发布。微信 watcher、Telegram 定时器和待人工观察项见 [业务进度](https://github.com/nihil7/wechat-digest/issues/1)。
 - 真人点击首次验证原生弹窗，重复点击由官方插件去重。正式业务关注同一次决策是否只受理一次、旧卡是否立即移除按钮，以及收到带图回执才标记「新二维码已发出」。生产受限配置保留在环境中。
 
